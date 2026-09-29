@@ -36,16 +36,49 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AdminApi from "./AdminApi.ts";
 import * as ImpersonationRecords from "./ImpersonationRecords.ts";
 
+/**
+ * IDS-001/MTI-006: the gate sees BOTH sides of the act, so a host can refuse
+ * impersonating a more privileged (or another tenant's) account. Both subjects
+ * are identity-only (see `subjectOf`); a host needing roles/tenant looks them
+ * up itself by id.
+ */
+export interface ImpersonationGateInput {
+  readonly admin: AuthSubject;
+  readonly target: AuthSubject;
+}
+
+/** IDS-001: the per-episode form of the gate used by `forceStop` and `list`. */
+export interface EpisodeGateInput {
+  readonly admin: AuthSubject;
+  readonly episode: ImpersonationRecords.ImpersonationRecord;
+}
+
 export interface AdminConfigShape {
   /** BEH-EA-210: the hard expiry every impersonation session gets at issuance. */
   readonly maxDuration: Duration.Duration;
   /** BEH-EA-212: fail-closed by default — an application that installs this plugin but never configures a gate denies every attempt. */
-  readonly canImpersonate: (subject: AuthSubject) => Effect.Effect<boolean>;
+  readonly canImpersonate: (input: ImpersonationGateInput) => Effect.Effect<boolean>;
+  /**
+   * IDS-001: may `admin` end (`forceStop`) or see (`list`) this episode?
+   * `config` defaults it to `canImpersonate` evaluated against the episode's
+   * target, so a host scoping impersonation by privilege/tenant gets the same
+   * scoping on stop/list without writing a second predicate.
+   */
+  readonly canManageEpisode: (input: EpisodeGateInput) => Effect.Effect<boolean>;
 }
+
+/** IDS-001: the identity-only subject for a bare user id (the episode's target). */
+const subjectOfUserId = (id: string): AuthSubject => makeSubject({ id });
+
+const episodeGateFrom =
+  (canImpersonate: AdminConfigShape["canImpersonate"]): AdminConfigShape["canManageEpisode"] =>
+  ({ admin, episode }) =>
+    canImpersonate({ admin, target: subjectOfUserId(episode.targetUserId) });
 
 const defaultAdminConfig: AdminConfigShape = {
   maxDuration: Duration.hours(1),
   canImpersonate: () => Effect.succeed(false),
+  canManageEpisode: episodeGateFrom(() => Effect.succeed(false)),
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -55,7 +88,13 @@ export const AdminConfig: Context.Reference<AdminConfigShape> = Context.Referenc
 );
 
 export const config = (partial: Partial<AdminConfigShape>) =>
-  Layer.succeed(AdminConfig, { ...defaultAdminConfig, ...partial });
+  Layer.succeed(AdminConfig, {
+    ...defaultAdminConfig,
+    ...partial,
+    canManageEpisode:
+      partial.canManageEpisode ??
+      episodeGateFrom(partial.canImpersonate ?? defaultAdminConfig.canImpersonate),
+  });
 
 export interface IssuedSession {
   readonly session: Sessions.SessionView;
@@ -74,9 +113,11 @@ export interface AdminShape {
   /**
    * BEH-EA-213/214/218: validates self/nested-impersonation first (neither
    * ever reaches the gate or publishes `impersonationDenied`), then the
-   * configured gate, then issues a dual-identity session for `targetUserId`
-   * and records a durable audit row — `caller`'s own session is never
-   * touched.
+   * configured gate over `{ admin, target }` (IDS-001), then the target's
+   * existence (IDS-003, after the gate so a non-admin cannot use 404-vs-403
+   * as a user-id oracle), then issues a dual-identity session for
+   * `targetUserId` and records a durable audit row — `caller`'s own session
+   * is never touched.
    */
   readonly impersonate: (input: {
     readonly caller: Api.UserPrincipal;
@@ -87,24 +128,22 @@ export interface AdminShape {
     | AdminApi.AdminImpersonationDenied
     | AdminApi.AdminSelfImpersonationRefused
     | AdminApi.AdminAlreadyImpersonating
+    | AdminApi.AdminTargetNotFound
   >;
   /** BEH-EA-216: `caller`'s own session must itself carry `actingAs`, or there is nothing to stop. */
   readonly stopImpersonating: (
     caller: Api.UserPrincipal,
   ) => Effect.Effect<void, AdminApi.AdminImpersonationNotFound>;
-  /** BEH-EA-217: gated by the same predicate as `impersonate`; `sessionId` names the episode to end, not `caller`'s own. */
+  /** BEH-EA-217: gated per episode by `canManageEpisode` (IDS-001); `sessionId` names the episode to end, not `caller`'s own. */
   readonly forceStop: (
     caller: Api.UserPrincipal,
     sessionId: string,
   ) => Effect.Effect<void, AdminApi.AdminImpersonationDenied | AdminApi.AdminImpersonationNotFound>;
-  /** BEH-EA-219: gated by the same predicate; full history by default, `active` narrows to unended episodes. */
+  /** BEH-EA-219: rows are filtered through `canManageEpisode` (IDS-001); full history by default, `active` narrows to unended episodes. */
   readonly list: (
     caller: Api.UserPrincipal,
     input?: { readonly active?: boolean },
-  ) => Effect.Effect<
-    ReadonlyArray<ImpersonationRecords.ImpersonationRecord>,
-    AdminApi.AdminImpersonationDenied
-  >;
+  ) => Effect.Effect<ReadonlyArray<ImpersonationRecords.ImpersonationRecord>>;
 }
 
 const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
@@ -259,7 +298,16 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const sessions = yield* Sessions.Sessions;
       const events = yield* AuthEvents.AuthEvents;
       const records = yield* ImpersonationRecords.ImpersonationRecords;
+      const users = yield* Users.Users;
       const adminConfig = yield* AdminConfig;
+
+      const deny = Effect.fnUntraced(function* (caller: Api.UserPrincipal) {
+        yield* events.publish({
+          _tag: "auth.admin.impersonationDenied",
+          adminUserId: Users.UserId(caller.ref.id),
+        });
+        return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
+      });
 
       const impersonate: AdminShape["impersonate"] = Effect.fnUntraced(function* ({
         caller,
@@ -275,14 +323,18 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           return yield* Effect.fail(new AdminApi.AdminAlreadyImpersonating());
         }
 
-        const allowed = yield* adminConfig.canImpersonate(subjectOf(caller));
-        if (!allowed) {
-          yield* events.publish({
-            _tag: "auth.admin.impersonationDenied",
-            adminUserId: Users.UserId(caller.ref.id),
-          });
-          return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
-        }
+        const allowed = yield* adminConfig.canImpersonate({
+          admin: subjectOf(caller),
+          target: subjectOfUserId(targetUserId),
+        });
+        if (!allowed) return yield* deny(caller);
+
+        // IDS-003: only a gate-passing caller learns whether the target exists.
+        yield* users
+          .findById(targetUserId)
+          .pipe(
+            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
+          );
 
         const issued = yield* sessions
           .issue({
@@ -330,14 +382,17 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       );
 
       const forceStop: AdminShape["forceStop"] = Effect.fnUntraced(function* (caller, sessionId) {
-        const allowed = yield* adminConfig.canImpersonate(subjectOf(caller));
-        if (!allowed) {
-          yield* events.publish({
-            _tag: "auth.admin.impersonationDenied",
-            adminUserId: Users.UserId(caller.ref.id),
-          });
-          return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
+        // IDS-001: the row is the only proof `sessionId` is an impersonation
+        // session, and the per-episode gate needs its target.
+        const episode = yield* records.findBySessionId(sessionId);
+        if (Option.isNone(episode)) {
+          return yield* Effect.fail(new AdminApi.AdminImpersonationNotFound());
         }
+        const allowed = yield* adminConfig.canManageEpisode({
+          admin: subjectOf(caller),
+          episode: episode.value,
+        });
+        if (!allowed) return yield* deny(caller);
         yield* records
           .endEpisode(sessionId, "forcedByAdmin")
           .pipe(
@@ -354,15 +409,14 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       });
 
       const list: AdminShape["list"] = Effect.fnUntraced(function* (caller, input) {
-        const allowed = yield* adminConfig.canImpersonate(subjectOf(caller));
-        if (!allowed) {
-          yield* events.publish({
-            _tag: "auth.admin.impersonationDenied",
-            adminUserId: Users.UserId(caller.ref.id),
-          });
-          return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
-        }
-        return yield* records.list(input);
+        const admin = subjectOf(caller);
+        const rows = yield* records.list(input);
+        // IDS-001: per-row gate — a deny-all/unconfigured host exposes nothing.
+        return yield* Effect.filter(
+          rows,
+          (episode) => adminConfig.canManageEpisode({ admin, episode }),
+          { concurrency: 8 },
+        );
       });
 
       return Admin.of({ impersonate, stopImpersonating, forceStop, list });

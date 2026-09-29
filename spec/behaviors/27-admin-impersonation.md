@@ -68,7 +68,8 @@ _Previous: [BEH-EA-210](27-admin-impersonation.md#beh-ea-210-a-session-carrying-
 ```ts
 interface AdminConfigShape {
   readonly maxDuration: Duration.Duration
-  readonly canImpersonate: (subject: AuthSubject) => Effect.Effect<boolean>
+  readonly canImpersonate: (input: { admin: AuthSubject; target: AuthSubject }) => Effect.Effect<boolean>
+  readonly canManageEpisode: (input: { admin: AuthSubject; episode: ImpersonationRecord }) => Effect.Effect<boolean>
 }
 const AdminConfig: Context.Reference<AdminConfigShape>  // defaultValue: canImpersonate always false
 ```
@@ -76,12 +77,18 @@ const AdminConfig: Context.Reference<AdminConfigShape>  // defaultValue: canImpe
 ```text
 REQUIREMENT: `Admin` MUST NOT declare a `dependsOn` on any other plugin to
              gate impersonation. The check MUST be a config-supplied
-             predicate over the caller's own resolved `AuthSubject`, with a
-             fail-closed default (always denies) when the host application
-             supplies none.
+             predicate over BOTH the caller's and the target's resolved
+             `AuthSubject` (identity-only subjects; a host needing roles or
+             tenant looks them up itself by id), with a fail-closed default
+             (always denies) when the host application supplies none.
+             `forceStop` and `list` MUST be gated per episode by
+             `canManageEpisode`, which defaults to `canImpersonate`
+             evaluated against the episode's target.
 ```
 
 A hard dependency on `@awthaq/roles` specifically would force every consumer onto that one authorization mechanism, and would repeat the exact `dependsOn`-is-for-plugins-only mistake `@awthaq/passkey`'s own ticket 06 already found and corrected — `Sessions`/`Users` are core services a plugin reaches with a plain `yield*`, not something `dependsOn` exists for, and the same reasoning extends to "another plugin's role check," which `Admin` never needs to see as a plugin at all. A host that authorizes via `@awthaq/roles`, a qadi policy, or any other mechanism supplies `canImpersonate` itself. The fail-closed default gives `archive/PRD.md` §18's "impersonation off by default" two independent guarantees: the plugin must be installed, and it must be explicitly configured with a real predicate, before impersonation is ever reachable.
+
+**IDS-001/MTI-006**: a caller-only predicate cannot refuse impersonating a more privileged (or another tenant's) account — the one decision an impersonation gate most needs to make — so the predicate receives the target too. Because stopping and listing episodes is the same privilege over the same target, they reuse that decision per episode (`canManageEpisode`, overridable) instead of a second, drift-prone predicate. `list` therefore filters rows rather than rejecting the call: a caller who may manage no episode sees an empty history (fail-closed without an existence oracle).
 
 _Previous: [BEH-EA-211](27-admin-impersonation.md#beh-ea-211-resolveprincipal-closes-the-loop-to-userprincipalactingas) | Next: [BEH-EA-213](27-admin-impersonation.md#beh-ea-213-impersonate-issues-a-new-dual-identity-session-for-the-target)_
 
@@ -98,7 +105,11 @@ REQUIREMENT: `impersonate` MUST reject a `reason` that is empty after
              trimming, or longer than 1000 characters. It MUST reject the
              call entirely (before issuing any session) when
              `AdminConfig.canImpersonate` resolves `false` for the caller's
-             own subject. On success, it MUST issue a new session for the
+             and target's subjects. After the gate passes, it MUST fail with
+             `AdminTargetNotFound` (404) when the target user does not
+             exist, issuing no session and writing no audit row (IDS-003;
+             the gate runs first so a caller who fails it cannot use
+             404-versus-403 to probe which user ids exist). On success, it MUST issue a new session for the
              target user with `actingAs` set to the caller's own identity,
              and MUST leave the caller's own existing session untouched —
              both sessions are valid and live at once.
@@ -176,11 +187,13 @@ yield* client.admin.forceStop({ params: { sessionId } })
 ```
 
 ```text
-REQUIREMENT: `forceStop` MUST be gated by the identical `canImpersonate`
-             predicate `impersonate` uses. On success it MUST revoke the
-             named session (which MUST carry `actingAs`, or the call fails
-             with `AdminImpersonationNotFound`) and set the matching
-             `admin_impersonation` row's `endedAt`/`endedBy:
+REQUIREMENT: `forceStop` MUST look the episode up by the named session id
+             (an unknown id, which cannot be an impersonation session, fails
+             with `AdminImpersonationNotFound`) and MUST then be gated by
+             `canManageEpisode` for that episode (IDS-001; by default the
+             same `canImpersonate` decision over the episode's target).
+             On success it MUST revoke the named session and set the
+             matching `admin_impersonation` row's `endedAt`/`endedBy:
              "forcedByAdmin"`.
 ```
 
@@ -215,8 +228,8 @@ yield* client.admin.list({ urlParams: { active: "true" } })  // endedAt IS NULL 
 
 ```text
 REQUIREMENT: `Admin` MUST expose a listing endpoint over `admin_impersonation`,
-             gated by the same `canImpersonate` predicate, returning full
-             history ordered newest-first by default, with an `active`
+             filtering each row through `canManageEpisode` (IDS-001),
+             returning full history ordered newest-first by default, with an `active`
              filter narrowing to rows whose `endedAt` is still null.
 ```
 

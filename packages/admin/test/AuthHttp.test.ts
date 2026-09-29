@@ -7,7 +7,7 @@
 // codes, a real session cookie — mirroring `@awthaq/passkey`'s own
 // `AuthHttp.test.ts`.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -59,10 +59,11 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory).pipe(
+const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -70,11 +71,11 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
-const buildAppLayer = (canImpersonate: Admin.AdminConfigShape["canImpersonate"]) =>
+const buildAppLayer = (config: Partial<Admin.AdminConfigShape>) =>
   Layer.mergeAll(
     AuthHttp.routes(AdminApi.AdminApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Admin.Admin.layer),
-      Layer.provide(Admin.config({ canImpersonate })),
+      Layer.provide(Admin.config(config)),
       Layer.provide(AuthenticationLive),
     ),
     AuthHttp.docs(AdminApi.AdminApi),
@@ -91,8 +92,12 @@ const ORIGIN = "http://localhost:3000";
 const allow = () => Effect.succeed(true);
 const deny = () => Effect.succeed(false);
 
-const buildHandler = (canImpersonate: Admin.AdminConfigShape["canImpersonate"]) => {
-  const AppLayer = buildAppLayer(canImpersonate);
+const buildHandler = (
+  configOrGate: Partial<Admin.AdminConfigShape> | Admin.AdminConfigShape["canImpersonate"],
+) => {
+  const AppLayer = buildAppLayer(
+    typeof configOrGate === "function" ? { canImpersonate: configOrGate } : configOrGate,
+  );
   const memoMap = Layer.makeMemoMapUnsafe();
   const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
 
@@ -117,7 +122,26 @@ const buildHandler = (canImpersonate: Admin.AdminConfigShape["canImpersonate"]) 
       ),
     );
 
-  return { handler, issueSessionCookieHeader };
+  /**
+   * IDS-003: `impersonate` now refuses a nonexistent target, so a target must be
+   * a real `Users` row; resolves to its generated id.
+   */
+  const seedUser = (name: string): Promise<string> =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
+          return yield* Effect.gen(function* () {
+            const users = yield* Users.Users;
+            const created = yield* users.create({ email: `${name}@example.com`, name });
+            return created.id;
+          }).pipe(Effect.provide(context));
+        }),
+      ),
+    );
+
+  return { handler, issueSessionCookieHeader, seedUser };
 };
 
 const post = (
@@ -150,11 +174,17 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-213: a full impersonate call answers 200 with a session cookie for the target",
     () =>
       Effect.gen(function* () {
-        const { handler, issueSessionCookieHeader } = buildHandler(allow);
+        const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
         const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
         const response = yield* Effect.promise(() =>
-          post(handler, "/admin/impersonate/target-1", { reason: "reproducing a bug" }, { cookie }),
+          post(
+            handler,
+            `/admin/impersonate/${targetId}`,
+            { reason: "reproducing a bug" },
+            { cookie },
+          ),
         );
         assert.strictEqual(response.status, 200);
         assert.match(cookieFrom(response), /^__Host-session=/);
@@ -163,11 +193,17 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-212/218: a denied gate answers 403", () =>
     Effect.gen(function* () {
-      const { handler, issueSessionCookieHeader } = buildHandler(deny);
+      const { handler, issueSessionCookieHeader, seedUser } = buildHandler(deny);
       const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
       const response = yield* Effect.promise(() =>
-        post(handler, "/admin/impersonate/target-1", { reason: "reproducing a bug" }, { cookie }),
+        post(
+          handler,
+          `/admin/impersonate/${targetId}`,
+          { reason: "reproducing a bug" },
+          { cookie },
+        ),
       );
       assert.strictEqual(response.status, 403);
     }),
@@ -175,11 +211,12 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-213: an empty reason answers 400", () =>
     Effect.gen(function* () {
-      const { handler, issueSessionCookieHeader } = buildHandler(allow);
+      const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
       const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
       const response = yield* Effect.promise(() =>
-        post(handler, "/admin/impersonate/target-1", { reason: "   " }, { cookie }),
+        post(handler, `/admin/impersonate/${targetId}`, { reason: "   " }, { cookie }),
       );
       assert.strictEqual(response.status, 400);
     }),
@@ -199,11 +236,12 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-214: nested impersonation answers 409", () =>
     Effect.gen(function* () {
-      const { handler, issueSessionCookieHeader } = buildHandler(allow);
+      const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
       const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
       const first = yield* Effect.promise(() =>
-        post(handler, "/admin/impersonate/target-1", { reason: "first" }, { cookie }),
+        post(handler, `/admin/impersonate/${targetId}`, { reason: "first" }, { cookie }),
       );
       const impersonatingCookie = cookieFrom(first);
 
@@ -223,11 +261,17 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-216/217: stopImpersonating and forceStop both answer 204; forceStop answers 404 once ended",
     () =>
       Effect.gen(function* () {
-        const { handler, issueSessionCookieHeader } = buildHandler(allow);
+        const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
         const adminCookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
         const started = yield* Effect.promise(() =>
-          post(handler, "/admin/impersonate/target-1", { reason: "test" }, { cookie: adminCookie }),
+          post(
+            handler,
+            `/admin/impersonate/${targetId}`,
+            { reason: "test" },
+            { cookie: adminCookie },
+          ),
         );
         const impersonatingCookie = cookieFrom(started);
 
@@ -239,7 +283,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         const startedAgain = yield* Effect.promise(() =>
           post(
             handler,
-            "/admin/impersonate/target-1",
+            `/admin/impersonate/${targetId}`,
             { reason: "test2" },
             { cookie: adminCookie },
           ),
@@ -267,11 +311,17 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-219: list answers the audit rows over real HTTP, unfiltered and with ?active=true",
     () =>
       Effect.gen(function* () {
-        const { handler, issueSessionCookieHeader } = buildHandler(allow);
+        const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
         const adminCookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
         const started = yield* Effect.promise(() =>
-          post(handler, "/admin/impersonate/target-1", { reason: "test" }, { cookie: adminCookie }),
+          post(
+            handler,
+            `/admin/impersonate/${targetId}`,
+            { reason: "test" },
+            { cookie: adminCookie },
+          ),
         );
         const impersonatingCookie = cookieFrom(started);
         yield* Effect.promise(() =>
@@ -280,7 +330,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         yield* Effect.promise(() =>
           post(
             handler,
-            "/admin/impersonate/target-1",
+            `/admin/impersonate/${targetId}`,
             { reason: "test2" },
             { cookie: adminCookie },
           ),
@@ -300,6 +350,48 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         const activeRows = (yield* Effect.promise(() => active.json())) as ReadonlyArray<unknown>;
         assert.strictEqual(activeRows.length, 1);
       }),
+  );
+
+  it.effect("IDS-003: an unknown target answers 404 for a gate-passing admin, 403 otherwise", () =>
+    Effect.gen(function* () {
+      const allowed = buildHandler(allow);
+      const adminCookie = yield* Effect.promise(() => allowed.issueSessionCookieHeader("admin-1"));
+      const missing = yield* Effect.promise(() =>
+        post(
+          allowed.handler,
+          "/admin/impersonate/does-not-exist",
+          { reason: "x" },
+          { cookie: adminCookie },
+        ),
+      );
+      assert.strictEqual(missing.status, 404);
+
+      const denied = buildHandler(deny);
+      const deniedCookie = yield* Effect.promise(() => denied.issueSessionCookieHeader("admin-1"));
+      const oracle = yield* Effect.promise(() =>
+        post(
+          denied.handler,
+          "/admin/impersonate/does-not-exist",
+          { reason: "x" },
+          { cookie: deniedCookie },
+        ),
+      );
+      assert.strictEqual(oracle.status, 403);
+    }),
+  );
+
+  // The router itself caps a path param's length (RouteNotFound past ~100 chars), so
+  // the schema's 255 bound is defence in depth; the observable contract is "refused,
+  // never processed".
+  it.effect("IDS-003/APS-009: an over-long path id is refused with a 4xx", () =>
+    Effect.gen(function* () {
+      const { handler, issueSessionCookieHeader } = buildHandler(allow);
+      const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const response = yield* Effect.promise(() =>
+        post(handler, `/admin/impersonate/${"x".repeat(256)}`, { reason: "x" }, { cookie }),
+      );
+      assert.isTrue(response.status === 400 || response.status === 404);
+    }),
   );
 
   it.effect(

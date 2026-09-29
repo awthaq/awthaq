@@ -570,13 +570,28 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
-  When(
-    'a signed-in user calls "admin.forceStop" naming any session id',
+  Given(
+    "an active impersonation episode that a second admin's gate refuses",
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const response = yield* request("POST", "/admin/force-stop/any-session-id", {
+      // IDS-001: forceStop evaluates the gate against the episode's target; only
+      // "admin-1" passes, so "admin-2" is refused for an episode that exists.
+      yield* configureApp({
+        canImpersonate: ({ admin }) => Effect.succeed(admin.id === "admin-1"),
+      });
+      const adminCookie = yield* signIn("admin-1");
+      const response = yield* impersonate(adminCookie, "target-1", "support ticket #4821");
+      yield* setOutcome("sessionId", cookieFrom(response).split("=")[1]!.split(".")[0]!);
+    }),
+  );
+
+  When(
+    'that second admin calls "admin.forceStop" naming that episode\'s session id',
+    Effect.fn(function* () {
+      const secondAdminCookie = yield* signIn("admin-2");
+      const sessionId = (yield* getOutcome("sessionId")) as string;
+      const response = yield* request("POST", `/admin/force-stop/${sessionId}`, {
         body: {},
-        headers: { cookie: adminCookie },
+        headers: { cookie: secondAdminCookie },
       });
       yield* setOutcome("forceStopResponse", response);
     }),
@@ -752,6 +767,59 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
           "expected the target's own session to still authenticate (401 means it doesn't)",
         );
       }
+    }),
+  );
+
+  // ---- IDS-001 / IDS-003: target-aware gate, unknown target ----
+
+  Given(
+    '"Admin" configured with a "canImpersonate" predicate that refuses the target {string}',
+    Effect.fn(function* (protectedId: string) {
+      yield* configureApp({
+        canImpersonate: ({ target }) => Effect.succeed(target.id !== protectedId),
+      });
+      const cookie = yield* signIn("caller-1");
+      yield* setOutcome("adminCookie", cookie);
+    }),
+  );
+
+  When(
+    'a signed-in user calls "admin.impersonate" naming the protected target {string}',
+    Effect.fn(function* (protectedId: string) {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const response = yield* impersonate(adminCookie, protectedId, "reproducing a bug");
+      yield* setOutcome("impersonateResponse", response);
+    }),
+  );
+
+  When(
+    "the admin calls {string} for an unknown user id",
+    Effect.fn(function* (_endpoint: string) {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const response = yield* impersonate(adminCookie, "unknown-user", "reproducing a bug");
+      yield* setOutcome("impersonateResponse", response);
+    }),
+  );
+
+  Then(
+    'the call is rejected with "404 Not Found" and the typed error "AdminTargetNotFound"',
+    Effect.fn(function* () {
+      const response = (yield* getOutcome("impersonateResponse")) as Response;
+      if (response.status !== 404) throw new Error(`expected 404, got ${response.status}`);
+      const body = (yield* Effect.promise(() => response.json())) as { _tag?: string };
+      if (body._tag !== undefined && body._tag !== "AdminTargetNotFound") {
+        throw new Error(`expected AdminTargetNotFound, got ${body._tag}`);
+      }
+    }),
+  );
+
+  Then(
+    "the impersonation audit trail is still empty",
+    Effect.fn(function* () {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const rows = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<unknown>;
+      if (rows.length !== 0) throw new Error(`expected an empty audit trail, got ${rows.length}`);
     }),
   );
 });

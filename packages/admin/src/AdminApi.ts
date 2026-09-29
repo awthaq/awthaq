@@ -41,6 +41,13 @@ export class AdminImpersonationNotFound extends Schema.TaggedError<AdminImperson
   { httpApiStatus: 404 },
 ) {}
 
+/** IDS-003/BEH-EA-218: a gate-passing caller named a user id that does not exist — an ordinary validation failure, never `impersonationDenied`. */
+export class AdminTargetNotFound extends Schema.TaggedError<AdminTargetNotFound>()(
+  "AdminTargetNotFound",
+  {},
+  { httpApiStatus: 404 },
+) {}
+
 /** BEH-EA-213: non-empty after trimming, capped at 1000 characters (`archive/PRD.md` §18's "reason required"). */
 export const ReasonSchema = Schema.String.pipe(
   Schema.check(
@@ -55,10 +62,21 @@ export const ReasonSchema = Schema.String.pipe(
 export const ImpersonatePayload = Schema.Struct({ reason: ReasonSchema });
 export type ImpersonatePayload = typeof ImpersonatePayload.Type;
 
-export const UserIdParams = Schema.Struct({ userId: Schema.String });
+/** IDS-003/APS-009: non-empty and bounded; no UUID shape assumed since `UserId` is application-supplied. */
+const PathIdSchema = Schema.String.pipe(
+  Schema.check(
+    Schema.makeFilter((value: string) =>
+      value.length > 0 && value.length <= 255
+        ? undefined
+        : "a non-empty id of at most 255 characters",
+    ),
+  ),
+);
+
+export const UserIdParams = Schema.Struct({ userId: PathIdSchema });
 export type UserIdParams = typeof UserIdParams.Type;
 
-export const SessionIdParams = Schema.Struct({ sessionId: Schema.String });
+export const SessionIdParams = Schema.Struct({ sessionId: PathIdSchema });
 export type SessionIdParams = typeof SessionIdParams.Type;
 
 /** `GET /admin`'s own query params. */
@@ -85,7 +103,12 @@ export const AdminGroup = HttpApiGroup.make("admin")
       params: UserIdParams,
       payload: ImpersonatePayload,
       success: SessionContract.SessionDto,
-      error: [AdminImpersonationDenied, AdminSelfImpersonationRefused, AdminAlreadyImpersonating],
+      error: [
+        AdminImpersonationDenied,
+        AdminSelfImpersonationRefused,
+        AdminAlreadyImpersonating,
+        AdminTargetNotFound,
+      ],
     }),
   )
   .add(
@@ -105,7 +128,6 @@ export const AdminGroup = HttpApiGroup.make("admin")
     HttpApiEndpoint.get("list", "/admin", {
       query: ListQuery,
       success: Schema.Array(ImpersonationRecordDto),
-      error: AdminImpersonationDenied,
     }),
   )
   // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`

@@ -22,11 +22,12 @@ import type { Api } from "@awthaq/api";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
-import type { AuthSubject } from "@qadi/core";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
@@ -42,7 +43,39 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
+/**
+ * IDS-003: `Admin.impersonate` refuses a nonexistent target. The scenarios name
+ * their targets by literal ids ("target-1", "admin-1"), so this World treats
+ * every id as an existing account except those prefixed `unknown-`, which the
+ * unknown-target scenario uses.
+ */
+const UsersLive = Layer.effect(
+  Users.Users,
+  Effect.gen(function* () {
+    const real = yield* Users.Users;
+    return Users.Users.of({
+      ...real,
+      findById: (id) =>
+        real.findById(id).pipe(
+          Effect.catchTag("UserNotFound", (notFound) =>
+            id.startsWith("unknown-")
+              ? Effect.fail(notFound)
+              : Effect.succeed({
+                  id,
+                  email: `${id}@example.com`,
+                  emailVerified: false,
+                  name: id,
+                  metadata: Option.none(),
+                  createdAt: DateTime.makeUnsafe(0),
+                  updatedAt: DateTime.makeUnsafe(0),
+                }),
+          ),
+        ),
+    });
+  }),
+).pipe(Layer.provide(Users.layerMemory));
+
+const CoreLive = Layer.mergeAll(Sessions.layerMemory, UsersLive).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Hooks.HooksLive),
@@ -60,7 +93,7 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 
 export interface AppOptions {
   /** Omitted entirely means `AdminConfig`'s own fail-closed default (`() => false`) applies — REQ-EA-382/400's own point. */
-  readonly canImpersonate?: (subject: AuthSubject) => Effect.Effect<boolean>;
+  readonly canImpersonate?: Admin.AdminConfigShape["canImpersonate"];
 }
 
 const buildAppLayer = (

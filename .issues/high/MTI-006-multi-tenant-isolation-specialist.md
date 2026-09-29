@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `Admin.ts:42` matches the evidence verbatim: `canImpersonate: (subject: AuthSubject) => Effect.Effect<boolean>`. All three call sites (`impersonate` ~line 213, `forceStop` ~line 268, `list` ~line 291) invoke `adminConfig.canImpersonate(subjectOf(caller))` — the admin's own identity only, never the target. `targetUserId` is checked only for self/nested cases before an unrestricted session is issued. Extending the predicate's signature to also receive the target is a well-scoped, if API-breaking, mechanical change. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `admin-impersonation-gate-target`. Duplicate of `IDS-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/admin/src/Admin.ts:43`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `IDS-001-impersonation-delegation-specialist` — closed by its fix (see that issue's Resolved comment).

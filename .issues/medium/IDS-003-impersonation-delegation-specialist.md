@@ -3,7 +3,7 @@ ID: "IDS-003"
 Title: "Impersonating a nonexistent user succeeds: session and audit row minted for a phantom target"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/Admin.ts:223"
 Auditor: "impersonation-delegation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `admin` · reported by **Impersonation & Delegation Specialist** (`impersonation-delegation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Validate target existence before the gate (Users.findByEmail-style lookup or a S
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `admin-impersonation-gate-target`. Evidence at HEAD ec065a7: `packages/admin/src/Admin.ts:287`. Fix: Refuse impersonation of a nonexistent target with a typed 404, after the gate, and tighten the path-param schemas. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/admin: AdminApi.AdminTargetNotFound (404) added to the impersonate error list; Admin.make acquires Users.Users and, AFTER the gate passes, findById -> UserNotFound => AdminTargetNotFound (no session, audit row or event; no 404-vs-403 oracle for gate-refused callers). UserIdParams/SessionIdParams constrained to 1..255 chars (the router already caps param length so the schema is defence in depth). Tests red first: Admin.test.ts 'IDS-003: impersonating a nonexistent user fails AdminTargetNotFound...' (succeeded before), AuthHttp.test.ts 'IDS-003: an unknown target answers 404 for a gate-passing admin, 403 otherwise'. BDD: REQ-EA-629 (unknown target refused, no audit row); the BDD World's Users layer now synthesises accounts for every id except unknown-*. Spec BEH-EA-213 amended. Empty path param answers 404 (router RouteNotFound), not the 400 the dossier guessed. Gates as IDS-001.

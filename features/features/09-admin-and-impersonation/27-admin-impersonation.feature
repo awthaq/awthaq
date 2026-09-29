@@ -68,6 +68,13 @@ Feature: Admin and Impersonation
       Then the call is denied with "403 Forbidden"
       And no new session is issued for the target user
 
+    @REQ-EA-628
+    Scenario: The gate sees the target, so a host can protect an account
+      Given "Admin" configured with a "canImpersonate" predicate that refuses the target "superadmin-1"
+      When a signed-in user calls "admin.impersonate" naming the protected target "superadmin-1"
+      Then the call is denied with "403 Forbidden"
+      And no new session is issued for the target user
+
   # BEH-EA-213 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-213
   Rule: impersonate issues a new, dual-identity session for the target
@@ -90,6 +97,14 @@ Feature: Admin and Impersonation
       Given a signed-in admin permitted to impersonate
       When the admin calls "admin.impersonate" for a target user with a reason over 1000 characters long
       Then the call is rejected with "400 Bad Request"
+
+    @REQ-EA-629
+    Scenario: Impersonating an unknown user id is refused as not found
+      Given a signed-in admin permitted to impersonate
+      When the admin calls "admin.impersonate" for an unknown user id
+      Then the call is rejected with "404 Not Found" and the typed error "AdminTargetNotFound"
+      And no new session is issued for the target user
+      And the impersonation audit trail is still empty
 
   # BEH-EA-214 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-214
@@ -161,9 +176,9 @@ Feature: Admin and Impersonation
       Then the call fails with "404 Not Found" and the typed error "AdminImpersonationNotFound"
 
     @REQ-EA-620
-    Scenario: forceStop is gated by the identical canImpersonate predicate impersonate uses
-      Given "Admin" configured with a "canImpersonate" predicate that always resolves "false"
-      When a signed-in user calls "admin.forceStop" naming any session id
+    Scenario: forceStop is gated per episode by the impersonate predicate
+      Given an active impersonation episode that a second admin's gate refuses
+      When that second admin calls "admin.forceStop" naming that episode's session id
       Then the call is denied with "403 Forbidden", the same gate "admin.impersonate" itself is held to
 
   # BEH-EA-218 — spec/behaviors/27-admin-impersonation.md
