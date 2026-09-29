@@ -64,7 +64,7 @@ describe("Jwt.introspectComposed (TIR-007)", () => {
         const issued = yield* sessions.issue({ userId: Users.UserId("user-1") });
         const token = yield* jwt.sign(caller("user-1", issued.session.id));
         assert.isTrue((yield* jwt.introspectComposed(token)).active);
-        yield* sessions.revoke(issued.session.id);
+        yield* sessions.revoke(issued.session.id, "admin");
         assert.isFalse((yield* jwt.introspectComposed(token)).active);
         // bare introspect (denylist only) and verify keep the documented lag until exp
         assert.isTrue((yield* jwt.introspect(token)).active);

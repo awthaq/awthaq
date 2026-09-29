@@ -3,7 +3,7 @@ ID: "ESS-005"
 Title: "Sessions.list silently truncates at 200 rows and discards the repository's nextCursor"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:570"
 Auditor: "effect-stream-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Effect Stream Specialist** (`effect-stream-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Either drain all pages through a Stream.unfold/successor loop bounded by a sane 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-list-correctness`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:641`. Fix: Make Sessions.list return exactly the user's live (non-tombstoned, non-expired) sessions, newest-activity first, in both layers, and stop server handlers from using list for keyed lookups. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Sessions.list is now exactly the live sessions (not tombstoned, past neither expiry) newest-activity first in both layers (Sessions.ts: isLiveAt/newestActivityFirst helpers); layerSql drains every repository page (bounded by LIST_LIMIT=1000 with a logged warning) instead of one 200-row page. Repository: listByUser(userId, now, cursor?, limit?) applies the expiry predicates. Handlers no longer use list for keyed lookups: new Sessions.findOwned (server Session.ts current, passkey requireFreshSession, qadi reauthHandler) and Sessions.revokeOwned (server revoke). Spec: BEH-EA-054 states list = live only and the keyed-lookup rule. Tests: core/test/Sessions.test.ts (both layers: idle-expired/absolute-expired not listed, ordering + current flag; layerSql: 250 live sessions all listed, findOwned resolves the newest, revokeOwned beyond page 1) and server/test/AuthHttp.test.ts (GET /session and POST /session/revoke succeed with a Sessions whose list omits the caller). Red by construction (findOwned/revokeOwned and the drain did not exist; old list returned the oldest 200 incl. expired). Gates green. BDD scenario not added (the sessions feature's list steps are not wired for expiry).

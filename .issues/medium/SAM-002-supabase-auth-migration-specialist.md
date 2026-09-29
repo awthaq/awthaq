@@ -3,7 +3,7 @@ ID: "SAM-002"
 Title: "BcryptHasher.layer is the architecture's named escape hatch but nothing ships it or the recipe"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/decisions/010-plugins-require-ports-never-provide.md:23"
 Auditor: "supabase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **Supabase Auth Migration Specialist** (`supabase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Add a migration guide chapter (or a packages/ports layer, e.g. PasswordHasher.la
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `password-hasher-legacy-recipes`. Already fixed by commit 60947ff (partial). Evidence at HEAD ec065a7: `packages/migrate-auth0/src/BcryptVerifier.ts:30`. Fix: Correct ADR-010's example to the shipped LegacyPasswordVerifiers mechanism and publish a GoTrue/Supabase migration recipe that reuses the bcrypt verifier. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/decisions/010 revised to 1.1: the phantom BcryptHasher.layer is replaced by the shipped verify-only LegacyPasswordVerifiers mechanism; migrate-auth0 README gains a Supabase/GoTrue recipe (SAM-001); spec/overview.md ports table mentions LegacyPasswordVerifiers and the worker-pool variants.

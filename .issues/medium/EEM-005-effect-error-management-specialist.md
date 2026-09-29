@@ -3,7 +3,7 @@ ID: "EEM-005"
 Title: "ReauthRequired typed error never crosses the wire — the documented 'confirm your password' client prompt is unimplementable"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/Resolvers.ts:93"
 Auditor: "effect-error-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `qadi` · reported by **Effect Typed Error Management Specialist** (`effect-error-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Give obligation outcomes a typed wire representation — e.g. a ReauthRequired S
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-bridge-hardening`. Evidence at HEAD ec065a7: `packages/qadi/src/Resolvers.ts:100`. Fix: Give the reauth obligation a shared, wire-decodable error in @awthaq/api and use it from qadi's handler (Path A); document Path B's qadi-owned mapping. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** @awthaq/api gains Api.ReauthRequired (Schema.TaggedError, {maxAgeSeconds}, 403) and Api.isReauthRequired; ObligationHandlers.reauth fails with it (Resolvers.ReauthRequired is re-exported under the old name); BEH-EA-165 documents that a Path A endpoint declares it in error: and that Path B keeps qadi's UndischargedObligation mapping. Test: new packages/qadi/test/ReauthHttp.test.ts (real HTTP: a stale session answers 403 whose body decodes via Schema to ReauthRequired{maxAgeSeconds: 0}; a fresh one discharges). DEFERRED (touches passkey, owned by another program): unifying PasskeyReauthRequired onto the shared error, so clients still see two tags for now. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 915 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

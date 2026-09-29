@@ -22,7 +22,7 @@ Passkey is WebAuthn-based, phishing-resistant sign-in: the browser mints a publi
 ## Status
 | Property | Value |
 |---|---|
-| Status | Planned-MVP |
+| Status | Shipped |
 | Priority | P1 |
 | Enabler(s) | E2 — External provider/port abstraction |
 | Breaking? | Additive on top of core `Sessions`/`Users` and the `Accounts` invariant that the last credential cannot be unlinked (`archive/PRD.md` §13) — a passkey is simply another credential kind under that same rule, nothing earlier needs to change. |
@@ -67,9 +67,14 @@ yield* client.passkey.remove({ params: { id } })      // refuses to remove the l
 Reproduced from `archive/design/usage-examples-v4.md` §8, fence changed to `ts`. "Challenges are single-use verification rows with a two-minute TTL; attestation defaults to `none`" is stated alongside it in the source and matches `research/06-webauthn-passkeys.md`'s recommendation to default to `attestation: "none"`.
 
 ## What is missing
-Everything beyond the one-line mention in the plugin tuple: no `Passkey` class, no `WebAuthn` port implementation, no `passkey_credential` table or migration, no challenge/replay handling, and none of the origin-validation or CVE-class pitfalls `research/06-webauthn-passkeys.md` names (CVE-2026-30964, YSA-2026-02, both "application-level identity/origin confusion around an otherwise-correct library") have been designed against yet, let alone implemented or tested.
+The plugin (`Passkey`, `PasskeyApi`, `ChallengeStore`, `PasskeyCredentials`, `PasskeyUserHandles`), the `WebAuthn` port with `layerSimpleWebAuthn`, the `passkey_credential`/`passkey_challenge`/`passkey_user_handle` migrations, challenge single-use/replay handling and the origin-validation pitfalls `research/06-webauthn-passkeys.md` names (CVE-2026-30964, YSA-2026-02) are implemented. What remains, and is documented in `packages/passkey/README.md` under "Limits":
+
+- FIDO Metadata Service (MDS3) attestation validation — `attestationPolicy` is an AAGUID allow-list, not MDS (BEH-EA-135).
+- Passkey-first sign-up: a passkey is only ever added to an existing, freshly-authenticated account.
+- Self-service recovery when a passkey is a user's only credential: pair passkeys with a second credential type (see the README's "Recovery").
+- Credentials registered before the stable user handle shipped carry a random stored handle that no authenticator holds, so their discoverable assertions fail the `userHandle` cross-check; those users re-register.
 
 ## Verification
-None yet — no test exists.
+`packages/passkey/test/*` (ceremony policy, counter anomaly, enumeration safety, attestation policy, user handle, and `PasskeyRealPort.test.ts` over the real `layerSimpleWebAuthn`), `packages/ports/test/WebAuthn.test.ts`, `packages/client/test/PasskeyClient.test.ts`, and the `17-passkey.feature` scenarios (`features/`); see `spec/traceability.md` for the per-file map.
 
 _Related: [00 — Adoption Matrix](00-adoption-matrix.md)_

@@ -3,7 +3,7 @@ ID: "ACS-005"
 Title: "RFC 2104 HMAC-SHA256 hand-rolled and duplicated across plugins"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Csrf.ts:55"
 Auditor: "applied-cryptography-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `server` · reported by **Applied Cryptography Specialist** (`applied-cryptography-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Hoist hmacSha256, constantTimeEqual, and toHex into one internal shared module (
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hmac-secret-hygiene`. Evidence at HEAD ec065a7: `packages/server/src/Csrf.ts:59`. Fix: Hoist HMAC-SHA256, constant-time equality and hex encoding into one tested module in @awthaq/ports, and use it from server, passkey and core. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/ports/src/Hmac.ts (exported as Ports.Hmac): hmacSha256, constantTimeEqualBytes/String (UTF-8 bytes, replaces Csrf's codePointAt variant), toHex, plus requireMinSecretBytes/WeakSigningSecret for ACS-007. Copies replaced in server Csrf.ts, passkey ChallengeStore.ts (touched outside my packages, tiny), core Sessions.ts and Verification.ts, password Password.ts (toHex only). Tests: packages/ports/test/Hmac.test.ts -- RFC 4231 cases 1,2 pinned to published outputs, cases 3,4,6,7 and a size-class sweep against node:crypto createHmac as oracle, constant-time helpers vs timingSafeEqual. Existing CSRF/passkey/session tests unchanged and green. Not done: fast-check property test (no fast-check dependency; used a deterministic size-class sweep instead). Verification.consume's own !== comparison is ACS-002 (another program).

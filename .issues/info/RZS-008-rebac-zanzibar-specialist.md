@@ -3,7 +3,7 @@ ID: "RZS-008"
 Title: "Zanzibar-grade consistency machinery absent by explicit delegation — the seam to fill is the resolver port"
 Level: info
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/decisions/009-authorization-delegated-to-qadi.md:19"
 Auditor: "rebac-zanzibar-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `—` · reported by **ReBAC / Zanzibar-style Specialist** (`rebac-zanzibar-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Keep the delegation, but document the consistency contract at the seam: state in
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `qadi-decision-cache-invalidation`. Evidence at HEAD ec065a7: `spec/decisions/009-authorization-delegated-to-qadi.md:19`. Fix: Document the consistency contract at the resolver seam alongside the cache fix: relationship answers are as fresh as the records layer; a request-scoped cache preserves that, an app-scoped one needs the invalidation bridge; swapping in a Zanzibar engine = replacing OrganizationQadi.relationships. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Consistency contract written down at the resolver seam: BEH-EA-162 gained a non-normative 'Consistency' paragraph (relationship answers are as fresh as the records layer; a request-scoped cache preserves that, an app-scoped one needs DecisionCacheInvalidationLive; replacing OrganizationQadi.relationships with an OpenFGA/SpiceDB-backed layer is the graph-engine seam, membership tuples exported from AfterAddMember/AfterRemoveMember, no adapter shipped); the same 'Consistency and bringing your own graph engine' section is in packages/qadi/README.md and packages/organization/README.md. Docs-only; spec:verify:strict PASS.

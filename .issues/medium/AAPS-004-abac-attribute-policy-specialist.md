@@ -3,7 +3,7 @@ ID: "AAPS-004"
 Title: "One store round trip per attribute reference, no per-evaluation memoization"
 Level: medium
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/Resolvers.ts:65"
 Auditor: "abac-attribute-policy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `qadi` · reported by **ABAC Attribute-Based Policy Specialist** (`abac-attribute-policy-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Hydrate once: have the SubjectResolver (or a wrapping AttributeResolver) bulk-lo
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-bridge-hardening`. Evidence at HEAD ec065a7: `packages/qadi/src/Resolvers.ts:73`. Fix: Memoize the user record per request (not across requests), so N attribute reads cost one lookup without introducing cross-request staleness. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** UserAttributes memoizes the user lookup per request, keyed on the ambient HttpServerRequest's identity (WeakMap, the same per-request key Authentication.ts's session cache uses — no middleware/wiring, works for Path A and B; no memo outside an HTTP request). Concurrent reads share one Effect.cached lookup. Tests: Resolvers.test.ts 'one Users.findById per request for many attribute reads; a new request re-reads' (counting Users layer; red: 3 lookups) and 'outside any HTTP request there is no memo'. Deviation from the dossier: no UserRecordMemo Context.Reference — the request-identity WeakMap needs no provider in either bridge. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 915 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

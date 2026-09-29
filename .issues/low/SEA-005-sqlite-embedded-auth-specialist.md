@@ -3,7 +3,7 @@ ID: "SEA-005"
 Title: "TEXT timestamp ordering correctness rests on an implicit fixed-width ISO encoding invariant"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:386"
 Auditor: "sqlite-embedded-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `sql` · reported by **SQLite Embedded Auth Specialist** (`sqlite-embedded-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Declare STRICT tables in the SQLite DDL (SQLite >= 3.37) to pin column types, an
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-contract-test-coverage`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:440`. Fix: Pin the encoding invariant with contract tests. STRICT tables are rejected: they enforce only the TEXT type, not the format, and need table rebuilds. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Repositories.test.ts pins the encoding invariant: every persisted SQLite timestamp column (18 columns across every write path) matches /^\d{4}-\d{2}-\d{2}T..:..:..\.\d{3}Z$/, and keyset listByUser order equals epoch order across ms/second/minute rollovers. markReused now goes through a Request schema (one encoder) instead of a hand-encoded parameter.

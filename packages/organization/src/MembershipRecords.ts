@@ -6,6 +6,8 @@
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
 import { Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
+import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -20,7 +22,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-export interface MembershipRecord {
+interface MembershipFields {
   readonly id: string;
   readonly userId: Users.UserId;
   readonly organizationId: string;
@@ -28,7 +30,25 @@ export interface MembershipRecord {
   readonly createdAt: DateTime.Utc;
 }
 
+/**
+ * MTI-001: branded, and the constructor below is module-private, so the only
+ * way to hold a `MembershipRecord` is to have read it from (or created it in)
+ * this records layer. `ActiveContextRecords.setOrganization` takes one as its
+ * witness that the caller really is a member — an active-organization write
+ * for a non-member is unrepresentable, not merely unchecked.
+ */
+export type MembershipRecord = Brand.Branded<MembershipFields, "MembershipRecord">;
+const brandMembership = Brand.nominal<MembershipRecord>();
+
 export class MembershipRecordNotFound extends Data.TaggedError("MembershipRecordNotFound")<{
+  readonly userId: string;
+  readonly organizationId: string;
+}> {}
+
+/** MTI-003: `(userId, organizationId)` is unique — a second `create` for the same pair is refused, never an overwrite. */
+export class MembershipRecordAlreadyExists extends Data.TaggedError(
+  "MembershipRecordAlreadyExists",
+)<{
   readonly userId: string;
   readonly organizationId: string;
 }> {}
@@ -45,7 +65,7 @@ export interface MembershipRecordsShape {
     readonly userId: Users.UserId;
     readonly organizationId: string;
     readonly role: ReadonlyArray<string>;
-  }) => Effect.Effect<MembershipRecord>;
+  }) => Effect.Effect<MembershipRecord, MembershipRecordAlreadyExists>;
   readonly findByUserAndOrg: (
     userId: Users.UserId,
     organizationId: string,
@@ -115,17 +135,29 @@ export const layerMemory = Layer.effect(
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
-      const record: MembershipRecord = {
+      const record = brandMembership({
         id,
         userId: input.userId,
         organizationId: input.organizationId,
         role: input.role,
         createdAt: now,
-      };
-      yield* Ref.update(state, (s) =>
-        HashMap.set(s, keyOf(input.userId, input.organizationId), record),
-      );
-      return record;
+      });
+      const key = keyOf(input.userId, input.organizationId);
+      return yield* Ref.modify(
+        state,
+        (s): readonly [Result.Result<MembershipRecord, MembershipRecordAlreadyExists>, State] =>
+          HashMap.has(s, key)
+            ? ([
+                Result.fail(
+                  new MembershipRecordAlreadyExists({
+                    userId: input.userId,
+                    organizationId: input.organizationId,
+                  }),
+                ),
+                s,
+              ] as const)
+            : ([Result.succeed(record), HashMap.set(s, key, record)] as const),
+      ).pipe(Effect.flatMap(Effect.fromResult));
     });
 
     const findByUserAndOrg: MembershipRecordsShape["findByUserAndOrg"] = (userId, organizationId) =>
@@ -224,28 +256,35 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const MembershipRow = Schema.Struct({
-  id: Schema.String,
-  userId: Schema.String,
-  organizationId: Schema.String,
-  role: Schema.String,
-  createdAt: Schema.DateTimeUtcFromString,
-});
+const makeMembershipRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    userId: Schema.String,
+    organizationId: Schema.String,
+    role: Schema.String,
+    createdAt: wire.dateTime,
+  });
+
+type MembershipRow = ReturnType<typeof makeMembershipRow>["Type"];
 
 const parseRoleArray = (json: string): ReadonlyArray<string> => JSON.parse(json);
 
-const toRecord = (row: typeof MembershipRow.Type): MembershipRecord => ({
-  id: row.id,
-  userId: Users.UserId(row.userId),
-  organizationId: row.organizationId,
-  role: parseRoleArray(row.role),
-  createdAt: row.createdAt,
-});
+const toRecord = (row: MembershipRow): MembershipRecord =>
+  brandMembership({
+    id: row.id,
+    userId: Users.UserId(row.userId),
+    organizationId: row.organizationId,
+    role: parseRoleArray(row.role),
+    createdAt: row.createdAt,
+  });
 
 export const layerSql = Layer.effect(
   MembershipRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const MembershipRow = makeMembershipRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -254,11 +293,11 @@ export const layerSql = Layer.effect(
         userId: Schema.String,
         organizationId: Schema.String,
         role: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
       }),
       Result: MembershipRow,
       execute: (r) => sql`
-          INSERT INTO organization_membership (id, userId, organizationId, role, createdAt)
+          INSERT INTO organization_membership (id, "userId", "organizationId", role, "createdAt")
           VALUES (${r.id}, ${r.userId}, ${r.organizationId}, ${r.role}, ${r.createdAt})
           RETURNING *
         `,
@@ -268,20 +307,20 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ userId: Schema.String, organizationId: Schema.String }),
       Result: MembershipRow,
       execute: (r) =>
-        sql`SELECT * FROM organization_membership WHERE userId = ${r.userId} AND organizationId = ${r.organizationId}`,
+        sql`SELECT * FROM organization_membership WHERE "userId" = ${r.userId} AND "organizationId" = ${r.organizationId}`,
     });
 
     const listByOrganizationQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: MembershipRow,
       execute: (organizationId) =>
-        sql`SELECT * FROM organization_membership WHERE organizationId = ${organizationId} ORDER BY createdAt ASC`,
+        sql`SELECT * FROM organization_membership WHERE "organizationId" = ${organizationId} ORDER BY "createdAt" ASC`,
     });
 
     const listByUserQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: MembershipRow,
-      execute: (userId) => sql`SELECT * FROM organization_membership WHERE userId = ${userId}`,
+      execute: (userId) => sql`SELECT * FROM organization_membership WHERE "userId" = ${userId}`,
     });
 
     const updateRoleQuery = SqlSchema.findOneOption({
@@ -293,16 +332,45 @@ export const layerSql = Layer.effect(
       Result: MembershipRow,
       execute: (r) => sql`
           UPDATE organization_membership SET role = ${r.role}
-          WHERE userId = ${r.userId} AND organizationId = ${r.organizationId}
+          WHERE "userId" = ${r.userId} AND "organizationId" = ${r.organizationId}
           RETURNING *
         `,
+    });
+
+    // MTI-005: counts are COUNT(*) — never a full-row materialization. CAST keeps
+    // pg from returning a bigint string.
+    const CountRow = Schema.Struct({ count: Schema.Number });
+
+    const countByOrganizationQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: CountRow,
+      execute: (organizationId) =>
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership WHERE "organizationId" = ${organizationId}`,
+    });
+
+    // `role` is a JSON array in a TEXT column; "contains the element owner" is
+    // dialect-specific JSON, so the query is branched like the migrations are.
+    const countOwnersQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: CountRow,
+      execute: (organizationId) =>
+        sql.onDialectOrElse({
+          sqlite: () => sql`
+            SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
+            WHERE "organizationId" = ${organizationId}
+              AND EXISTS (SELECT 1 FROM json_each(organization_membership.role) WHERE value = 'owner')`,
+          pg: () => sql`
+            SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
+            WHERE "organizationId" = ${organizationId} AND role::jsonb @> '"owner"'::jsonb`,
+          orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for countOwners")),
+        }),
     });
 
     const removeQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({ userId: Schema.String, organizationId: Schema.String }),
       Result: MembershipRow,
       execute: (r) =>
-        sql`DELETE FROM organization_membership WHERE userId = ${r.userId} AND organizationId = ${r.organizationId} RETURNING *`,
+        sql`DELETE FROM organization_membership WHERE "userId" = ${r.userId} AND "organizationId" = ${r.organizationId} RETURNING *`,
     });
 
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
@@ -314,7 +382,20 @@ export const layerSql = Layer.effect(
         organizationId: input.organizationId,
         role: JSON.stringify(input.role),
         createdAt: now,
-      }).pipe(Effect.orDie);
+      }).pipe(
+        Effect.catchTag("SqlError", (error) =>
+          error.reason._tag === "UniqueViolation"
+            ? Effect.fail(
+                new MembershipRecordAlreadyExists({
+                  userId: input.userId,
+                  organizationId: input.organizationId,
+                }),
+              )
+            : Effect.die(error),
+        ),
+        Effect.catchTag("SchemaError", Effect.die),
+        Effect.catchTag("NoSuchElementError", Effect.die),
+      );
       return toRecord(row);
     });
 
@@ -340,14 +421,14 @@ export const layerSql = Layer.effect(
       );
 
     const countByOrganization: MembershipRecordsShape["countByOrganization"] = (organizationId) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.length),
+      countByOrganizationQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 
     const countOwners: MembershipRecordsShape["countOwners"] = (organizationId) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.map(toRecord).filter((row) => row.role.includes("owner")).length),
+      countOwnersQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 
@@ -373,13 +454,13 @@ export const layerSql = Layer.effect(
     const removeAllForOrganization: MembershipRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
-      sql`DELETE FROM organization_membership WHERE organizationId = ${organizationId}`.pipe(
+      sql`DELETE FROM organization_membership WHERE "organizationId" = ${organizationId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );
 
     const deleteAllByUser: MembershipRecordsShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM organization_membership WHERE userId = ${userId}`.pipe(
+      sql`DELETE FROM organization_membership WHERE "userId" = ${userId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );

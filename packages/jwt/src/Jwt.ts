@@ -277,10 +277,11 @@ const PostAuthResponseHookLive = Layer.effect(
   Effect.gen(function* () {
     const jwt = yield* Jwt;
     const config = yield* JwtConfig;
+    type HookContext = Parameters<Authentication.PostAuthResponseHookShape["decorate"]>[2];
     const mirrorHeader = (
       principal: Api.Principal,
       response: HttpServerResponse.HttpServerResponse,
-      context: { readonly scheme: "cookie" | "bearer" },
+      context: HookContext,
     ) =>
       config.mirrorResponses === "off" ||
       (config.mirrorResponses === "bearer" && context.scheme !== "bearer")
@@ -302,7 +303,7 @@ const PostAuthResponseHookLive = Layer.effect(
     const mirrorCookie = (
       principal: Api.Principal,
       response: HttpServerResponse.HttpServerResponse,
-      context: { readonly scheme: "cookie" | "bearer" },
+      context: HookContext,
     ) => {
       const mirror = config.sessionCookie;
       return mirror === false || context.scheme !== "cookie"
@@ -310,7 +311,12 @@ const PostAuthResponseHookLive = Layer.effect(
         : jwt.sign(principal, { ttl: mirror.ttl }).pipe(
             Effect.flatMap((token) =>
               HttpServerResponse.setCookie(response, mirror.name, token, {
-                ...Sessions.SESSION_COOKIE_ATTRIBUTES,
+                // Always `__Host-` and strict, whatever `SessionCookieConfig` mode the
+                // session cookie itself uses: the edge tier is same-origin by design.
+                secure: true,
+                httpOnly: true,
+                sameSite: "strict",
+                path: "/",
                 maxAge: mirror.ttl,
               }),
             ),
@@ -361,21 +367,21 @@ const jwtMigrations: Migrations.Migrations = [
           CREATE TABLE jwt_signing_key (
             kid TEXT PRIMARY KEY,
             alg TEXT NOT NULL,
-            publicKeyJwk TEXT NOT NULL,
-            privateKeyJwk TEXT,
-            createdAt TIMESTAMPTZ NOT NULL,
-            rotatedAt TIMESTAMPTZ,
-            retiresAt TIMESTAMPTZ
+            "publicKeyJwk" TEXT NOT NULL,
+            "privateKeyJwk" TEXT,
+            "createdAt" TIMESTAMPTZ NOT NULL,
+            "rotatedAt" TIMESTAMPTZ,
+            "retiresAt" TIMESTAMPTZ
           )`,
         sqlite: () => sql`
           CREATE TABLE jwt_signing_key (
             kid TEXT PRIMARY KEY,
             alg TEXT NOT NULL,
-            publicKeyJwk TEXT NOT NULL,
-            privateKeyJwk TEXT,
-            createdAt TEXT NOT NULL,
-            rotatedAt TEXT,
-            retiresAt TEXT
+            "publicKeyJwk" TEXT NOT NULL,
+            "privateKeyJwk" TEXT,
+            "createdAt" TEXT NOT NULL,
+            "rotatedAt" TEXT,
+            "retiresAt" TEXT
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -389,12 +395,12 @@ const jwtMigrations: Migrations.Migrations = [
         pg: () => sql`
           CREATE TABLE jwt_token_revocation (
             jti TEXT PRIMARY KEY,
-            expiresAt TIMESTAMPTZ NOT NULL
+            "expiresAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE jwt_token_revocation (
             jti TEXT PRIMARY KEY,
-            expiresAt TEXT NOT NULL
+            "expiresAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -411,8 +417,8 @@ const jwtMigrations: Migrations.Migrations = [
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
-        CREATE INDEX jwt_signing_key_active_idx ON jwt_signing_key (createdAt)
-        WHERE rotatedAt IS NULL`;
+        CREATE INDEX jwt_signing_key_active_idx ON jwt_signing_key ("createdAt")
+        WHERE "rotatedAt" IS NULL`;
     }),
   },
   {
@@ -426,8 +432,8 @@ const jwtMigrations: Migrations.Migrations = [
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
         CREATE UNIQUE INDEX jwt_signing_key_single_current
-        ON jwt_signing_key ((rotatedAt IS NULL))
-        WHERE rotatedAt IS NULL`;
+        ON jwt_signing_key (("rotatedAt" IS NULL))
+        WHERE "rotatedAt" IS NULL`;
     }),
   },
 ];

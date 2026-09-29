@@ -3,7 +3,7 @@ ID: "BO-005"
 Title: "Session cookie is a browser-session cookie while the server session lives 30d — browser close forces re-login"
 Level: medium
 Category: "dx"
-Status: ready-for-human
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:124"
 Auditor: "balazs-orban"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `core` · reported by **Balázs Orbán — Lead Maintainer, Auth.js** (`balazs-orban`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ Set the cookie's Max-Age from the session's absolute TTL at issuance (or expose 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-cookie-policy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:151`. Fix: Give the session cookie a Max-Age derived from the session's absoluteExpiresAt (recomputed at every rotation), via IC-007's cookie helper, with a 'browserSession' opt-out. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan (default persistence 'absolute'); user may revisit. Session cookies now carry Max-Age = remaining absolute lifetime (SessionCookie.renderAt, never negative), at issuance and recomputed at every rotation (server rotationDelivery passes the refreshed SessionView; Next applyRotatedSession uses session.absoluteExpiresAt); persistence 'browserSession' opts out. Tests: core SessionCookie.test.ts (Max-Age from absoluteExpiresAt, shrinks, browserSession omits), server Authentication.test.ts ('rotated cookie Max-Age = 30d - 2h'), password AuthHttp.test.ts (sign-up Set-Cookie ~30d Max-Age). Spec BEH-EA-055.

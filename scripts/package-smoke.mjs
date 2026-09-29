@@ -36,26 +36,9 @@ const attwBin = path.join(rootDir, "node_modules", ".bin", "attw");
 
 let failed = false;
 
-// DESS-001 drift guards — a README must not describe a package as unbuilt once
-// `src/` holds real modules, and a rewritten README's snippets must only import
-// what the package actually exports.
-const STALE_README_BANNER = "no line of source in this package has shipped yet";
-// Packages whose README still carries the pre-implementation banner although
-// `src/` has modules. Rewrite the README and delete the entry: this list only
-// ever shrinks.
-const STALE_README_ALLOWLIST = new Set([
-  "admin",
-  "api",
-  "core",
-  "oauth",
-  "organization",
-  "passkey",
-  "password",
-  "ports",
-  "qadi",
-  "server",
-  "sql",
-]);
+// DESS-001 drift guard — a rewritten README's snippets must only import what the
+// package actually exports. (The "README claims the package is unshipped" guard is
+// `scripts/check-readme-status.mjs`, `pnpm check:readmes`.)
 // READMEs whose ```ts/```tsx `@awthaq/*` imports are checked against the built
 // package's real exports.
 const SNIPPET_CHECKED_READMES = new Set(["client", "react", "next"]);
@@ -176,19 +159,6 @@ for (const packageJsonPath of packageJsonPaths) {
 
   // 5. DESS-001: README drift.
   const readme = readFileSync(path.join(pkgDir, "README.md"), "utf8");
-  const srcModules = glob
-    .globSync(["src/**/*.{ts,tsx}"], { cwd: pkgDir })
-    .filter((file) => file !== "src/index.ts").length;
-  if (
-    readme.includes(STALE_README_BANNER) &&
-    srcModules > 1 &&
-    !STALE_README_ALLOWLIST.has(pkgName)
-  ) {
-    problems.push(
-      `README still says "${STALE_README_BANNER}" — rewrite it from the shipped modules ` +
-        "(packages whose README is not yet rewritten are listed in STALE_README_ALLOWLIST)",
-    );
-  }
   if (SNIPPET_CHECKED_READMES.has(pkgName)) {
     problems.push(...(await snippetImportProblems(readme)));
   }

@@ -30,6 +30,7 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
+import { Hmac } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -49,11 +50,11 @@ import * as AuthEvents from "./AuthEvents.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
-export type VerificationTokenId = string & Brand.Brand<"VerificationTokenId">;
+// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
+export type VerificationTokenId = SqlModels.VerificationTokenId;
 export const VerificationTokenId = Brand.nominal<VerificationTokenId>();
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
 /**
  * BEH-EA-059/INV-EA-010: every failed consumption — expired, unknown, or
@@ -95,6 +96,7 @@ export interface VerificationShape {
   readonly issue: (input: {
     readonly identifier: string;
     readonly ttl: Duration.Duration;
+    /** ESS-010: `undefined` and an explicit `null` both mean "no payload". */
     readonly payload?: unknown;
     /** BCR-003: attached when the caller already knows the real user this token concerns — lets a later account deletion sweep it. */
     readonly userId?: UserId;
@@ -144,6 +146,14 @@ interface TokenRow {
 const isExpired = (row: TokenRow, now: DateTime.Utc): boolean =>
   DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.expiresAt);
 
+/**
+ * TRBS-005: single-process, test-grade storage. State is one per-process
+ * `Ref`: it is not shared across instances (a revocation on one instance does
+ * not propagate to another), it is lost on restart, and it grows without bound
+ * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
+ * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
+ * `PubSub` has the same process boundary.
+ */
 export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthEvents.AuthEvents> =
   Layer.effect(
     Verification,
@@ -168,7 +178,10 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           valueHash,
           createdAt: now,
           expiresAt: DateTime.addDuration(now, input.ttl),
-          payload: input.payload,
+          // ESS-010: an explicit `null` is treated as absent, exactly as
+          // `layerSql` stores it (a JSON `null` column decodes to `undefined`),
+          // so both layers hand back the same `payload`.
+          payload: input.payload === null ? undefined : input.payload,
         };
         // TMS-004: an unconsumed token was never removed; prune expired rows once the map is large.
         yield* Ref.update(state, (s) =>
@@ -211,7 +224,9 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
               if (
                 Option.isNone(row) ||
                 isExpired(row.value, now) ||
-                row.value.valueHash !== presentedHash
+                // ACS-002: the digest is compared in constant time, like
+                // `Sessions`' secret hash; `layerSql` does it in the DB predicate.
+                !Hmac.constantTimeEqualString(row.value.valueHash, presentedHash)
               ) {
                 return [
                   Result.fail(
@@ -300,7 +315,7 @@ export const layerSql = Layer.effect(
       const value = toHex(yield* crypto.randomBytes(32));
       const valueHash = yield* hash(value);
       const now = yield* DateTime.now;
-      const insert = yield* SqlModels.VerificationToken.insert
+      const insert = yield* repo.models.VerificationToken.insert
         .makeEffect({
           identifier: input.identifier,
           userId: input.userId ?? null,

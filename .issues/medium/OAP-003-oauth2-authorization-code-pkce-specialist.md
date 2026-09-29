@@ -51,3 +51,5 @@ Add optional error/error_description/error_uri fields to CallbackQuery, make cod
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `oauth-callback-error-contract`. Duplicate of `AP-005` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthApi.ts:74`. Full dossier: `.plan/slices/03-oauth-flow.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `AP-005-aaron-parecki` — closed by its fix (see that issue's Resolved comment).

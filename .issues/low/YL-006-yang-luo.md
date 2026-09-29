@@ -3,7 +3,7 @@ ID: "YL-006"
 Title: "No wildcard or pattern matching on permission keys"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "node_modules/.pnpm/@qadi+core@0.7.0/node_modules/@qadi/core/src/Evaluate.ts:823"
 Auditor: "yang-luo"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `—` · reported by **Yang Luo — Creator of Casbin** (`yang-luo`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Either add an explicit matchesPermission(node) with documented '*'/'**' segment 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `roles-permission-modeling`. Evidence at HEAD ec065a7: `node_modules/.pnpm/@qadi+core@0.7.0/node_modules/@qadi/core/src/Evaluate.ts:823`. Fix: Keep qadi's exact O(1) membership (deliberate engine design; no matcher change in ../qadi). Document the modeling boundary in @awthaq/roles and show definition-time expansion via qadi's `createPermissionGroup`, plus attribute policies for the 'wildcard instinct'. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Documented, no matcher change (qadi's exact O(1) membership stays): packages/roles/README.md states permission keys match exactly (no wildcards), shows definition-time expansion via @qadi/core's createPermissionGroup, and points the 'any action on this resource' instinct at attribute policies. Docs-only.

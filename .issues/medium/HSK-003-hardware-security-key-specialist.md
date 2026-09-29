@@ -3,7 +3,7 @@ ID: "HSK-003"
 Title: "Browser-reported transports are dropped at the API boundary, so the transports column is usually empty"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/PasskeyApi.ts:124"
 Auditor: "hardware-security-key-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `passkey` · reported by **Hardware Security Key (FIDO U2F/CTAP) Specialist** (`hardware-security-key-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Add `transports: Schema.optional(Schema.Array(Schema.String))` to AttestationRes
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-wire-contract`. Evidence at HEAD ec065a7: `packages/passkey/src/PasskeyApi.ts:141`. Fix: Carry browser-reported transports end-to-end and surface transports/aaguid in the credential DTO. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Transports end to end: RegistrationCredentialSchema response.transports (any strings on the wire, recognized ones kept), forwarded to the port and persisted; client forwards getTransports(); PasskeyCredentialDto gains transports, aaguid (and counterAnomalyAt). Tests: PasskeyCeremony.test.ts (transports ['usb','nfc'] persisted and echoed in excludeCredentials), PasskeyRealPort.test.ts (real port round trip incl. allowCredentials), client PasskeyClient.test.ts. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

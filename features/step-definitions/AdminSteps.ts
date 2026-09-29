@@ -25,6 +25,13 @@ const impersonate = Effect.fn("features.admin.impersonate")(function* (
   });
 });
 
+/** ESS-006: `GET /admin` answers a page `{ items, nextCursor }`; the scenarios only read the rows. */
+const listRows = <A>(response: Response) =>
+  Effect.promise(async () => {
+    const body: { readonly items: ReadonlyArray<A> } = await response.json();
+    return body.items;
+  });
+
 export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-209: actingAs is a real field on session issuance (400) ----
 
@@ -323,12 +330,12 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       const impersonateResponse = (yield* getOutcome("impersonateResponse")) as Response;
       const sessionId = cookieFrom(impersonateResponse).split("=")[1]!.split(".")[0]!;
       const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
-      const rows = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly adminUserId: string;
         readonly targetUserId: string;
         readonly sessionId: string;
         readonly endedAt: string | null;
-      }>;
+      }>(listResponse);
       const match = rows.find((row) => row.sessionId === sessionId);
       if (match === undefined)
         throw new Error("expected an audit row for the new impersonation session");
@@ -365,11 +372,11 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       const adminCookie = (yield* getOutcome("adminCookie")) as string;
       const sessionId = (yield* getOutcome("sessionId")) as string;
       const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
-      const rows = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly sessionId: string;
         readonly endedAt: string | null;
         readonly endedBy: string | null;
-      }>;
+      }>(listResponse);
       const match = rows.find((row) => row.sessionId === sessionId);
       if (match === undefined) throw new Error("expected to find the matching audit row");
       if (match.endedAt === null || match.endedBy !== "self") {
@@ -399,8 +406,16 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const response = (yield* getOutcome("stopResponse")) as Response;
       if (response.status !== 204) throw new Error(`expected 204, got ${response.status}`);
-      if (response.headers.get("set-cookie") !== null) {
-        throw new Error("expected no set-cookie header on stopImpersonating");
+      // APS-006: the one Set-Cookie allowed is the impersonation cookie's expiry —
+      // it hands the browser back to its own session; it never carries a token.
+      for (const line of response.headers.getSetCookie()) {
+        const [pair = "", ...attributes] = line.split(";");
+        const expiry =
+          pair.startsWith("__Host-impersonation=") &&
+          attributes.some((attribute) => /max-age=0/i.test(attribute));
+        if (!expiry) {
+          throw new Error(`expected only an impersonation-cookie expiry, got "${line}"`);
+        }
       }
     }),
   );
@@ -517,10 +532,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       const adminCookie = (yield* getOutcome("adminCookie")) as string;
       const sessionId = (yield* getOutcome("sessionId")) as string;
       const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
-      const rows = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly sessionId: string;
         readonly endedBy: string | null;
-      }>;
+      }>(listResponse);
       const match = rows.find((row) => row.sessionId === sessionId);
       if (match === undefined || match.endedBy !== "forcedByAdmin") {
         throw new Error(`expected endedBy "forcedByAdmin", got ${match?.endedBy}`);
@@ -570,13 +585,28 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
-  When(
-    'a signed-in user calls "admin.forceStop" naming any session id',
+  Given(
+    "an active impersonation episode that a second admin's gate refuses",
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const response = yield* request("POST", "/admin/force-stop/any-session-id", {
+      // IDS-001: forceStop evaluates the gate against the episode's target; only
+      // "admin-1" passes, so "admin-2" is refused for an episode that exists.
+      yield* configureApp({
+        canImpersonate: ({ admin }) => Effect.succeed(admin.id === "admin-1"),
+      });
+      const adminCookie = yield* signIn("admin-1");
+      const response = yield* impersonate(adminCookie, "target-1", "support ticket #4821");
+      yield* setOutcome("sessionId", cookieFrom(response).split("=")[1]!.split(".")[0]!);
+    }),
+  );
+
+  When(
+    'that second admin calls "admin.forceStop" naming that episode\'s session id',
+    Effect.fn(function* () {
+      const secondAdminCookie = yield* signIn("admin-2");
+      const sessionId = (yield* getOutcome("sessionId")) as string;
+      const response = yield* request("POST", `/admin/force-stop/${sessionId}`, {
         body: {},
-        headers: { cookie: adminCookie },
+        headers: { cookie: secondAdminCookie },
       });
       yield* setOutcome("forceStopResponse", response);
     }),
@@ -681,9 +711,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     "both episodes are returned, ordered newest first",
     Effect.fn(function* () {
       const response = (yield* getOutcome("listResponse")) as Response;
-      const rows = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly startedAt: string;
-      }>;
+      }>(response);
       if (rows.length !== 2) throw new Error(`expected 2 rows, got ${rows.length}`);
       const [first, second] = rows;
       if (first!.startedAt < second!.startedAt) {
@@ -707,9 +737,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     "only the currently-active episode is returned",
     Effect.fn(function* () {
       const response = (yield* getOutcome("listResponse")) as Response;
-      const rows = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly endedAt: string | null;
-      }>;
+      }>(response);
       if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
       if (rows[0]!.endedAt !== null)
         throw new Error("expected the active row's endedAt to be null");
@@ -754,4 +784,214 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       }
     }),
   );
+
+  // ---- IDS-001 / IDS-003: target-aware gate, unknown target ----
+
+  Given(
+    '"Admin" configured with a "canImpersonate" predicate that refuses the target {string}',
+    Effect.fn(function* (protectedId: string) {
+      yield* configureApp({
+        canImpersonate: ({ target }) => Effect.succeed(target.id !== protectedId),
+      });
+      const cookie = yield* signIn("caller-1");
+      yield* setOutcome("adminCookie", cookie);
+    }),
+  );
+
+  When(
+    'a signed-in user calls "admin.impersonate" naming the protected target {string}',
+    Effect.fn(function* (protectedId: string) {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const response = yield* impersonate(adminCookie, protectedId, "reproducing a bug");
+      yield* setOutcome("impersonateResponse", response);
+    }),
+  );
+
+  When(
+    "the admin calls {string} for an unknown user id",
+    Effect.fn(function* (_endpoint: string) {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const response = yield* impersonate(adminCookie, "unknown-user", "reproducing a bug");
+      yield* setOutcome("impersonateResponse", response);
+    }),
+  );
+
+  Then(
+    'the call is rejected with "404 Not Found" and the typed error "AdminTargetNotFound"',
+    Effect.fn(function* () {
+      const response = (yield* getOutcome("impersonateResponse")) as Response;
+      if (response.status !== 404) throw new Error(`expected 404, got ${response.status}`);
+      const body = (yield* Effect.promise(() => response.json())) as { _tag?: string };
+      if (body._tag !== undefined && body._tag !== "AdminTargetNotFound") {
+        throw new Error(`expected AdminTargetNotFound, got ${body._tag}`);
+      }
+    }),
+  );
+
+  Then(
+    "the impersonation audit trail is still empty",
+    Effect.fn(function* () {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const rows = yield* listRows<unknown>(listResponse);
+      if (rows.length !== 0) throw new Error(`expected an empty audit trail, got ${rows.length}`);
+    }),
+  );
+
+  // ---- BAM-005: user and session administration ----
+
+  Given(
+    'an application composing "Admin" with no "canManageUsers" predicate configured',
+    Effect.fn(function* () {
+      yield* configureApp({ canImpersonate: () => Effect.succeed(true) });
+      yield* setOutcome("adminCookie", yield* signIn("admin-1"));
+    }),
+  );
+
+  When(
+    'a signed-in user calls "admin.listUsers"',
+    Effect.fn(function* () {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      yield* setOutcome(
+        "userAdminResponse",
+        yield* request("GET", "/admin/users", { headers: { cookie: adminCookie } }),
+      );
+    }),
+  );
+
+  Then(
+    "the user-administration call is denied with {string}",
+    Effect.fn(function* (statusText: string) {
+      const response = (yield* getOutcome("userAdminResponse")) as Response;
+      const expected = Number(statusText.split(" ")[0]);
+      if (response.status !== expected) {
+        throw new Error(`expected ${expected} ("${statusText}"), got ${response.status}`);
+      }
+    }),
+  );
+
+  Given(
+    '"Admin" configured with a "canManageUsers" predicate that always resolves "true"',
+    Effect.fn(function* () {
+      yield* configureApp({ canManageUsers: () => Effect.succeed(true) });
+      yield* setOutcome("adminCookie", yield* signIn("admin-1"));
+    }),
+  );
+
+  Given(
+    "a user with an active session of their own",
+    Effect.fn(function* () {
+      yield* setOutcome("userCookie", yield* signIn("target-1"));
+    }),
+  );
+
+  When(
+    'the admin calls "admin.revokeUserSession" naming that user\'s session',
+    Effect.fn(function* () {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const userCookie = (yield* getOutcome("userCookie")) as string;
+      const sessionId = tokenFromCookie(userCookie).split(".")[0]!;
+      yield* setOutcome(
+        "userAdminResponse",
+        yield* request("DELETE", `/admin/users/target-1/sessions/${sessionId}`, {
+          headers: { cookie: adminCookie },
+        }),
+      );
+    }),
+  );
+
+  Then(
+    "the user-administration call succeeds with {string}",
+    Effect.fn(function* (statusText: string) {
+      const response = (yield* getOutcome("userAdminResponse")) as Response;
+      const expected = Number(statusText.split(" ")[0]);
+      if (response.status !== expected) {
+        throw new Error(`expected ${expected} ("${statusText}"), got ${response.status}`);
+      }
+    }),
+  );
+
+  Then(
+    "that session no longer authenticates",
+    Effect.fn(function* () {
+      // The user has no admin rights in this World; a 401 (unauthenticated) rather
+      // than a 403 (authenticated, refused) is what proves the session itself is gone.
+      const userCookie = (yield* getOutcome("userCookie")) as string;
+      const response = yield* request("GET", "/admin/users", { headers: { cookie: userCookie } });
+      if (response.status !== 401) {
+        throw new Error(`expected 401 for a revoked session, got ${response.status}`);
+      }
+    }),
+  );
+
+  // ---- APS-006: one real browser cookie jar ----
+
+  Given(
+    "an admin actively impersonating a target user through one browser cookie jar",
+    Effect.fn(function* () {
+      // Only "admin-1" passes the gate, so an episode is visible in `list` when the
+      // caller resolves as the admin and filtered out when it resolves as the target.
+      yield* configureApp({
+        canImpersonate: ({ admin }) => Effect.succeed(admin.id === "admin-1"),
+      });
+      const jar = new Map<string, string>();
+      const [name = "", value = ""] = (yield* signIn("admin-1")).split(/=(.*)/s);
+      jar.set(name, value);
+      yield* setOutcome("jar", jar);
+      const response = yield* request("POST", "/admin/impersonate/target-1", {
+        body: { reason: "support ticket #4821" },
+        headers: { cookie: jarHeader(jar) },
+      });
+      if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
+      applySetCookies(jar, response);
+      const asTarget = yield* request("GET", "/admin", { headers: { cookie: jarHeader(jar) } });
+      const rows = yield* listRows<unknown>(asTarget);
+      if (rows.length !== 0) throw new Error("expected the jar to be served as the target");
+    }),
+  );
+
+  When(
+    'the browser calls "admin.stopImpersonating"',
+    Effect.fn(function* () {
+      const jar = (yield* getOutcome("jar")) as Map<string, string>;
+      const response = yield* request("POST", "/admin/stop-impersonating", {
+        body: {},
+        headers: { cookie: jarHeader(jar) },
+      });
+      if (response.status !== 204) throw new Error(`expected 204, got ${response.status}`);
+      applySetCookies(jar, response);
+    }),
+  );
+
+  Then(
+    "the browser's next request is served as the admin, with no re-login",
+    Effect.fn(function* () {
+      const jar = (yield* getOutcome("jar")) as Map<string, string>;
+      const response = yield* request("GET", "/admin", { headers: { cookie: jarHeader(jar) } });
+      const rows = yield* listRows<{
+        readonly endedBy: string | null;
+      }>(response);
+      if (rows.length !== 1 || rows[0]?.endedBy !== "self") {
+        throw new Error("expected the ended episode to be listed for the admin's own session");
+      }
+    }),
+  );
 });
+
+/** A browser cookie jar: one value per name, every `Set-Cookie` applied, an expired cookie deleted. */
+const jarHeader = (jar: ReadonlyMap<string, string>): string =>
+  [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+
+const applySetCookies = (jar: Map<string, string>, response: Response): void => {
+  for (const line of response.headers.getSetCookie()) {
+    const [pair = "", ...attributes] = line.split(";");
+    const eq = pair.indexOf("=");
+    const name = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (value === "" || attributes.some((attribute) => /^\s*max-age=0\s*$/i.test(attribute))) {
+      jar.delete(name);
+    } else {
+      jar.set(name, value);
+    }
+  }
+};

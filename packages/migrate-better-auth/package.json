@@ -27,7 +27,9 @@
   "dependencies": {
     "@awthaq/core": "workspace:*",
     "@awthaq/ports": "workspace:*",
-    "effect": "catalog:"
+    "@awthaq/sql": "workspace:*",
+    "effect": "catalog:",
+    "hash-wasm": "catalog:"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",

@@ -45,3 +45,5 @@ Add (or document) an HTTP-driver recipe for edge deployments (e.g. Postgres-over
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `sql-docs-operations`. Duplicate of `ERAS-006` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/sql/package.json:31`. Full dossier: `.plan/slices/05-sql.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ERAS-006-edge-runtime-auth-specialist` — closed by its fix (see that issue's Resolved comment).

@@ -3,7 +3,7 @@ ID: "TSS-004"
 Title: "Passkey authenticateVerify early-returns for unknown credential IDs before any signature work"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:551"
 Auditor: "timing-side-channel-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `passkey` · reported by **Timing / Side-Channel Specialist** (`timing-side-channel-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ On the unknown-credential path, perform a dummy WebCrypto importKey/verify (or v
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `passkey-enumeration-safety`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:761`. Fix: Equalize cost on the unknown-credential path with a decoy verification, mirroring Password's dummyHash. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Unknown credential id now performs one verifyAuthentication against a fixed decoy COSE P-256 key (result discarded) before failing InvalidCredentials. Tests: PasskeyEnumeration.test.ts 'an unknown credential id still calls WebAuthn.verifyAuthentication' (spy; red before: 0 calls) + known-credential bad signature also one call. The extra DB-round-trip equalization was not attempted (dossier: where feasible). Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

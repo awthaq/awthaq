@@ -3,7 +3,7 @@ ID: "MLO-003"
 Title: "All email-flow rate limits key on email alone; no IP or dual keying, so mailbox flooding is bounded only per-victim"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:158"
 Auditor: "magic-link-email-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `password` · reported by **Magic Link / Email OTP Specialist** (`magic-link-email-otp-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Add the tracked IP-keying work: key requestReset/resendVerification on (email, I
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `password-rate-limit-hardening`. Already fixed by commit a3b7255. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:923`. Fix: Give resendVerification the same per-IP dimension. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** resendVerification gains a per-source dimension: rules.resendVerificationByIp (20 per 15 min), handler resolves ClientAddress, IP checked before email. Test: PasswordRateLimits.test.ts (one IP across distinct emails is throttled, another IP is not).

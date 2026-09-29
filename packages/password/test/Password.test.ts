@@ -13,6 +13,7 @@ import {
   AuditLog,
   Hooks,
   AuthEvents,
+  MailDispatch,
   RateLimits,
   Sessions,
   Users,
@@ -36,6 +37,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
+import { tokenOf } from "./harness.ts";
 
 const sha1Hex = (plain: string): string =>
   createHash("sha1").update(plain).digest("hex").toUpperCase();
@@ -51,7 +53,7 @@ const httpClientReturning = (body: (url: string) => string): Layer.Layer<HttpCli
   );
 
 /** BEH-EA-119: nothing in the corpus ever matches — the default, "not breached" transport. */
-const NoBreachHttpClient = httpClientReturning(() => "");
+const NoBreachHttpClient = httpClientReturning(() => `${"F".repeat(35)}:1`);
 
 const UnavailableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,
@@ -161,6 +163,9 @@ const TestLayerHangingMailer = Password.Password.layer.pipe(
   Layer.provide(NoBreachHttpClient),
   Layer.provide(SqlTransaction.layerNoop),
   Layer.provide(ClientAddress.layerDirect),
+  // ERS-002: scope close waits `drainTimeout` for in-flight mail; this
+  // mailer never finishes and `TestClock` never advances, so don't wait.
+  Layer.provideMerge(MailDispatch.config({ drainTimeout: Duration.zero })),
 );
 
 const email = "ada@example.com";
@@ -186,14 +191,19 @@ const letForkedFibersRun = Effect.gen(function* () {
 const signUpAndVerify = (
   password: Password.PasswordShape,
   mailer: Mailer.MailerShape,
-  input: { readonly email: string; readonly password: Redacted.Redacted<string> },
+  input: {
+    readonly email: string;
+    readonly password: Redacted.Redacted<string>;
+    readonly ip?: string;
+    readonly userAgent?: string;
+  },
 ) =>
   Effect.gen(function* () {
     const issued = yield* password.signUp(input);
     yield* letForkedFibersRun;
     const sent = yield* mailer.sent;
     const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
-    const token = Redacted.make(String(verifyMail?.data?.["token"]));
+    const token = Redacted.make(tokenOf(verifyMail));
     yield* password.verifyEmail({ token });
     return issued;
   });
@@ -277,6 +287,69 @@ describe("Password", () => {
           Redacted.value(Option.getOrThrow(hashBefore)),
           Redacted.value(Option.getOrThrow(hashAfter)),
         );
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // THS-003: how the session was authenticated.
+  it.effect("THS-003: signUp, signIn and changePassword sessions carry amr [pwd]", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const mailer = yield* Mailer.Mailer;
+      const signedUp = yield* signUpAndVerify(password, mailer, {
+        email,
+        password: strongPassword,
+      });
+      assert.deepStrictEqual(signedUp.session.amr, ["pwd"]);
+      const signedIn = yield* password.signIn({ email, password: strongPassword });
+      assert.deepStrictEqual(signedIn.session.amr, ["pwd"]);
+      const changed = yield* password.changePassword({
+        userId: signedUp.session.userId,
+        currentSessionId: signedIn.session.id,
+        currentPassword: strongPassword,
+        newPassword: Redacted.make("another strong passphrase"),
+      });
+      assert.deepStrictEqual(changed.session.amr, ["pwd"]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSD-003: request context recorded on every session-minting path.
+  it.effect(
+    "CSD-003: signUp, signIn and changePassword record ip and userAgent on the session",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const sessions = yield* Sessions.Sessions;
+        const context = { ip: "203.0.113.7", userAgent: "Agent/1.0" };
+
+        const signedUp = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+          ...context,
+        });
+        assert.deepStrictEqual(signedUp.session.ipAddress, Option.some(context.ip));
+        assert.deepStrictEqual(signedUp.session.userAgent, Option.some(context.userAgent));
+
+        const signedIn = yield* password.signIn({
+          email,
+          password: strongPassword,
+          ip: "198.51.100.9",
+          userAgent: "Agent/2.0",
+        });
+        const verified = yield* sessions.verify(signedIn.token);
+        assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.9"));
+        assert.deepStrictEqual(verified.session.userAgent, Option.some("Agent/2.0"));
+
+        const changed = yield* password.changePassword({
+          userId: signedUp.session.userId,
+          currentSessionId: signedIn.session.id,
+          currentPassword: strongPassword,
+          newPassword: Redacted.make("a different strong passphrase"),
+          ip: "192.0.2.1",
+          userAgent: "Agent/3.0",
+        });
+        assert.deepStrictEqual(changed.session.ipAddress, Option.some("192.0.2.1"));
+        assert.deepStrictEqual(changed.session.userAgent, Option.some("Agent/3.0"));
       }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -485,7 +558,7 @@ describe("Password", () => {
         // still-live token signUp minted — the most recently mailed token
         // is the only one still valid, not the first.
         const verifyMail = afterKnown.findLast((mail) => mail.template === "verify-email");
-        yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
+        yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
         yield* password.resendVerification({ email });
         yield* letForkedFibersRun;
         const afterVerified = yield* mailer.sent;
@@ -557,14 +630,14 @@ describe("Password", () => {
         // verified account — consume signUp's own dispatched mail first.
         yield* letForkedFibersRun;
         const verifyMail = (yield* mailer.sent).find((mail) => mail.template === "verify-email");
-        yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
+        yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
 
         yield* password.requestReset({ email });
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetMail = sent.find((m) => m.template === "reset-password");
         assert.isDefined(resetMail);
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         const newPassword = Redacted.make("a brand new strong password");
         yield* password.confirmReset({ token: mailedToken, password: newPassword });
@@ -598,7 +671,7 @@ describe("Password", () => {
         yield* password.requestReset({ email });
         yield* letForkedFibersRun;
         const resetMail = (yield* mailer.sent).findLast((m) => m.template === "reset-password");
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         const captured = yield* Effect.forkChild(
           events.stream.pipe(
@@ -643,7 +716,7 @@ describe("Password", () => {
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetMail = sent.find((m) => m.template === "reset-password");
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         yield* password.confirmReset({
           token: mailedToken,
@@ -1174,7 +1247,7 @@ describe("Password", () => {
 
       const sent = yield* mailer.sent;
       const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
-      const realToken = String(verifyMail?.data?.["token"]);
+      const realToken = tokenOf(verifyMail);
       const separator = realToken.lastIndexOf(".");
       const identifier = realToken.slice(0, separator);
 
@@ -1244,7 +1317,7 @@ describe("Password", () => {
           const mail = sent.find(
             (m) => m.template === "verify-email" && m.to === `verify-spray-${i}@example.com`,
           );
-          const realToken = String(mail?.data?.["token"]);
+          const realToken = tokenOf(mail);
           identifiers.push(realToken.slice(0, realToken.lastIndexOf(".")));
         }
 
@@ -1355,7 +1428,7 @@ describe("Password signIn timing floor (TSS-006)", () => {
   const InstantHasher = Layer.succeed(
     PasswordHasher.PasswordHasher,
     PasswordHasher.PasswordHasher.of({
-      hash: () => Effect.succeed("instant-hash"),
+      hash: () => Effect.succeed(PasswordHasher.PhcHash("instant-hash")),
       verify: () => Effect.succeed(false),
       needsRehash: () => false,
     }),

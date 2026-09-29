@@ -52,3 +52,5 @@ Surface userPresent (and the raw BE flag) from both verify results in the port, 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `webauthn-user-presence`. Duplicate of `CB-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/ports/src/WebAuthn.ts:204`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `CB-002-christiaan-brand` — closed by its fix (see that issue's Resolved comment).

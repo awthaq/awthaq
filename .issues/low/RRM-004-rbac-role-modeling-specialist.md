@@ -3,7 +3,7 @@ ID: "RRM-004"
 Title: "Duplicate catalog role names silently collapse, last wins"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "roles"
 Source: "packages/roles/src/Roles.ts:122"
 Auditor: "rbac-role-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `roles` · reported by **RBAC Role Modeling Specialist** (`rbac-role-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Fail layer construction on duplicate catalog names (throw at Roles.layer build t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `roles-catalog-validation`. Evidence at HEAD ec065a7: `packages/roles/src/Roles.ts:184`. Fix: Fail Roles layer construction on duplicate catalog names by validating through qadi's own resolveRoleGraph. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Roles.ts validatedCatalog runs at layer build in both rolesMake/rolesMakeSql and subjectResolverMake: a repeated catalog role name dies at build naming the duplicates (was: silently collapsed, last wins). Implemented as an explicit duplicate check rather than through resolveRoleGraph because the catalog holds by-value Roles (no cycles possible) while resolveRoleGraph takes name-referenced definitions. Test: Roles.test.ts 'Roles.layer with two catalog entries named editor fails to build, naming editor'. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 923 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

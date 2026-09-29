@@ -54,3 +54,5 @@ Classify membership and team-membership reads used by decision paths as primary-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `org-qadi-relationships`. Evidence at HEAD ec065a7: `packages/organization/src/OrganizationQadi.ts:96`. Fix: When ticket 28's ReadRouting lands (RRC-001), classify every authorization-decision read as primary-pinned and state the revocation-latency bound in the spec. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Left open: blocked by RRC-001 (ticket 28's ReadRouting does not exist in the repo yet, so there is no read routing to pin authorization-decision reads against). Everything the decision reads (MembershipRecords.findByUserAndOrg, TeamRecords.findTeamMembership, OrgRoleRecords.listByOrganization, ActiveContextRecords.findBySessionId) goes through the single ambient SqlClient today, i.e. the primary. Do the primary-pinning classification and the BEH-EA-162 revocation-latency sentence when ReadRouting lands.

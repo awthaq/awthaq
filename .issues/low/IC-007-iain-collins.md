@@ -3,7 +3,7 @@ ID: "IC-007"
 Title: "Fixed non-configurable __Host-/Strict cookie forecloses legitimate deployments"
 Level: low
 Category: "architecture"
-Status: ready-for-human
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:122"
 Auditor: "iain-collins"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `core` · reported by **Iain Collins — Creator of NextAuth.js** (`iain-collins`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Keep __Host-/strict as the hard default, but allow an explicit, documented downg
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-cookie-policy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:151`. Fix: Introduce SessionCookieConfig with a secure default and typed opt-in modes (incl. __Secure-+Domain for multi-subdomain apps); route every issuance site through one helper. (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan (SessionCookieConfig with typed modes Host/HostEmbedded/SecureDomain + persistence absolute|browserSession); user may revisit. New packages/core/src/SessionCookie.ts (exported as core SessionCookie): closed Mode union (only SecureDomain carries a domain and renders __Secure-session, so __Host- + Domain is unrepresentable), SessionCookieConfig Context.Reference (default = today's attribute set + Max-Age), pure renderAt, effectful render/set/expire, cookieName, csrfCookieOptions. Sessions.SESSION_COOKIE_ATTRIBUTES removed: every issuance site now renders through the helper -- password x3, passkey, admin (SessionCookie.set), oauth (render on the redirect), server rotationDelivery (render + Max-Age recomputed from the refreshed session), server expire helper, Next applyRotatedSession (default config, renderAt). Readers use the configured name: Authentication cookie handler (both middlewares), qadi SubjectExtractor, migrate-better-auth alias middleware; Next reads/renders under the default config only (documented). WithNextCookies CookieSetOptions gained partitioned. Tests: core/test/SessionCookie.test.ts (default byte-for-byte + Max-Age from absoluteExpiresAt, shrink/never negative, browserSession, HostEmbedded, SecureDomain, names, csrf options); server Authentication.test.ts (rotated Max-Age recomputed, HostEmbedded rotation, SecureDomain read/rotate); password AuthHttp wire test (default attributes + ~30d Max-Age). Spec BEH-EA-055 rewritten as secure default + typed modes (title kept: anchors). Deferred: CSRF cookie stays host-only under SecureDomain; Next cannot read a custom config (no Effect context). Touches password/passkey/oauth/admin/next/qadi/migrate-better-auth sources.

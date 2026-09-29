@@ -3,7 +3,7 @@ ID: "OAP-005"
 Title: "No boot-time guard against quirks.skipPkce on a public client (no clientSecret): bare authorization code exchange"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuthProvider.ts:180"
 Auditor: "oauth2-authorization-code-pkce-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `oauth` · reported by **OAuth2 Authorization Code + PKCE Specialist** (`oauth2-authorization-code-pkce-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ In resolve(), die at boot when config.quirks?.skipPkce is true and clientSecret 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-provider-boot-validation`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthProvider.ts:28`. Fix: Gate `quirks.skipPkce` to confidential clients at boot and log whenever it is used. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OAuthProvider.resolve dies at boot when quirks.skipPkce is set with no clientSecret (RFC 9700 2.1.1) and logs a warning naming the provider for permitted uses; BEH-EA-121 amended. Test 'OAP-005: quirks.skipPkce without a clientSecret dies at boot' red first; existing apple-style skipPkce scenario (with secret) stays green. Gates as ESS-002.

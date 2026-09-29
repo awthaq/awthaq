@@ -57,3 +57,5 @@ Replace with a forkIn(scope) attached to the plugin layer's own scope (or a smal
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `mail-delivery-reliability`. Duplicate of `ERS-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:775`. Full dossier: `.plan/slices/07-password-mfa.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ERS-002-effect-runtime-scheduler-specialist` — closed by its fix (see that issue's Resolved comment).

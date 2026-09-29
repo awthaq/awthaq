@@ -3,7 +3,7 @@ ID: "BPAS-008"
 Title: "Challenge value compared with === in memory/SQL stores while the cookie store uses constantTimeEqual"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/ChallengeStore.ts:104"
 Auditor: "biometric-platform-authenticator-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `passkey` · reported by **Biometric / Platform Authenticator Specialist** (`biometric-platform-authenticator-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Route the memory/SQL challenge comparison through the module's existing constant
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-challenge-store-hardening`. Evidence at HEAD ec065a7: `packages/passkey/src/ChallengeStore.ts:104`. Fix: Route the memory/SQL final comparison through the module's constantTimeEqual over decoded bytes. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Constant-time challenge comparison: ChallengeStore.ts challengeMatches decodes both values and compares with the shared constantTimeEqual (moved to src/Hmac.ts with hmacSha256/concatBytes, which layerCookie now also imports); no `=== challenge` remains. Regression tests in ChallengeStore.test.ts (non-base64url value; same-length value differing in its first byte) on all layers. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

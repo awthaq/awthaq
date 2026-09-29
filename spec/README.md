@@ -80,6 +80,9 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `015-*.md` | ADR-EA-015 | Qadi Bridge Path Selection |
 | `017-*.md` | ADR-EA-017 | JWT Signing Keys Rotate on a Grace Period Sized to Token Lifetime, With an Emergency Retire-Now Path |
 | `019-*.md` | ADR-EA-019 | Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption |
+| `026-*.md` | ADR-EA-026 | Sign-Up Reveals an Existing Address by Default, With an Opt-In Conceal Mode |
+| `024-*.md` | ADR-EA-024 | Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token |
+| `025-*.md` | ADR-EA-025 | Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority |
 
 ### `spec/behaviors/` — twenty-six files, eight behaviors per file
 

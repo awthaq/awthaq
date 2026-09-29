@@ -6,7 +6,6 @@
 // `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -15,10 +14,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as Organization from "../src/Organization.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const MemoryLayer = InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("organization_InvitationRecords");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -38,6 +38,9 @@ const future = (hours: number) =>
     return DateTime.addDuration(now, Duration.hours(hours));
   });
 
+let hashCounter = 0;
+const nextHash = (): string => `token-hash-${++hashCounter}`;
+
 const suite = (
   name: string,
   layer: Layer.Layer<InvitationRecords.InvitationRecords, unknown, never>,
@@ -53,6 +56,7 @@ const suite = (
           organizationId: orgId,
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         assert.strictEqual(record.email, "invitee@example.com");
         assert.strictEqual(record.status, "pending");
@@ -60,6 +64,48 @@ const suite = (
 
         const found = yield* records.findById(record.id);
         assert.isTrue(Option.isSome(found));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // MTI-010: the emailed capability is a random token whose SHA-256 is stored;
+    // the invitation's own (REST-visible) id is no longer the secret.
+    it.effect("findByTokenHash resolves the invitation by its hash and not by any other", () =>
+      Effect.gen(function* () {
+        const records = yield* InvitationRecords.InvitationRecords;
+        const expiresAt = yield* future(48);
+        const record = yield* records.create({
+          email: "a@example.com",
+          inviterId: inviter,
+          organizationId: orgId,
+          role: ["member"],
+          expiresAt,
+          tokenHash: "hash-of-secret",
+        });
+        assert.deepStrictEqual(record.tokenHash, Option.some("hash-of-secret"));
+        const found = yield* records.findByTokenHash("hash-of-secret");
+        assert.isTrue(Option.isSome(found) && found.value.id === record.id);
+        assert.isTrue(Option.isNone(yield* records.findByTokenHash("some-other-hash")));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("setTokenHash rotates the hash: the old one stops resolving", () =>
+      Effect.gen(function* () {
+        const records = yield* InvitationRecords.InvitationRecords;
+        const expiresAt = yield* future(48);
+        const record = yield* records.create({
+          email: "a@example.com",
+          inviterId: inviter,
+          organizationId: orgId,
+          role: ["member"],
+          expiresAt,
+          tokenHash: "old-hash",
+        });
+        const rotated = yield* records.setTokenHash(record.id, "new-hash");
+        assert.deepStrictEqual(rotated.tokenHash, Option.some("new-hash"));
+        assert.isTrue(Option.isNone(yield* records.findByTokenHash("old-hash")));
+        assert.isTrue(Option.isSome(yield* records.findByTokenHash("new-hash")));
+        const failure = yield* records.setTokenHash("no-such-id", "x").pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "InvitationRecordNotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -73,6 +119,7 @@ const suite = (
           organizationId: orgId,
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         const foundPending = yield* records.findPendingByEmailAndOrg("a@example.com", orgId);
         assert.isTrue(Option.isSome(foundPending));
@@ -93,6 +140,7 @@ const suite = (
           organizationId: "org-a",
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         yield* records.create({
           email: "a@example.com",
@@ -100,6 +148,7 @@ const suite = (
           organizationId: "org-b",
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         assert.strictEqual((yield* records.listByOrganization("org-a")).length, 1);
         assert.strictEqual((yield* records.listByEmail("a@example.com")).length, 2);
@@ -116,6 +165,7 @@ const suite = (
           organizationId: orgId,
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         yield* records.create({
           email: "b@example.com",
@@ -123,6 +173,7 @@ const suite = (
           organizationId: orgId,
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         yield* records.updateStatus(a.id, "canceled");
         assert.strictEqual(yield* records.countPendingByInviter(inviter), 1);
@@ -139,6 +190,7 @@ const suite = (
           organizationId: orgId,
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         const updated = yield* records.updateStatus(record.id, "accepted");
         assert.strictEqual(updated.status, "accepted");
@@ -157,6 +209,7 @@ const suite = (
           organizationId: "org-a",
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         yield* records.create({
           email: "a@example.com",
@@ -164,6 +217,7 @@ const suite = (
           organizationId: "org-b",
           role: ["member"],
           expiresAt,
+          tokenHash: nextHash(),
         });
         yield* records.removeAllForOrganization("org-a");
         assert.strictEqual((yield* records.listByOrganization("org-a")).length, 0);

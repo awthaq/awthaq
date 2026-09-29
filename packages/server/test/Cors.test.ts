@@ -30,7 +30,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 
 const csrfConfig = (allowedOrigins: ReadonlyArray<string>) =>
   Layer.succeed(Csrf.CsrfConfig, {
-    secret: Redacted.make("server-cors-test-csrf-secret"),
+    secret: Redacted.make("server-cors-test-csrf-secret-padded-to-thirty-two-bytes"),
     allowedOrigins,
   });
 

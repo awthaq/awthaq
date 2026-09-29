@@ -8,23 +8,49 @@
 // `layerMemory`'s own "assigning an already-held role name is a no-op"
 // contract — the one property `Roles.test.ts`'s in-memory suite cannot
 // itself prove.
-import { Migrations, Users } from "@awthaq/core";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
+import { AuditLog, AuthEvents, Migrations, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { permission, role } from "@qadi/core";
+import { Api } from "@awthaq/api";
+import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Roles from "../src/Roles.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("roles_RolesSql");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Roles.Roles.migrations)).pipe(
   Layer.provide(SqlLive),
 );
 
+const editor = role({ name: "editor", permissions: [permission("project", "read")] });
+const owner = role({
+  name: "owner",
+  permissions: [permission("project", "delete")],
+  inherits: [editor],
+});
+
+// `Roles` publishes `auth.roles.assigned/revoked` (RRM-005) and validates
+// assignments against the catalog (RRM-003), so it needs `AuthEvents` and a catalog.
+const CoreLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+
 const TestLayer = Roles.Roles.layerSql.pipe(
+  Layer.provide(Roles.config([editor, owner])),
+  Layer.provideMerge(CoreLive),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
+
+const captured: Array<{ level: string; message: unknown }> = [];
+const CaptureLogs = Logger.layer([
+  Logger.make((options) => {
+    captured.push({ level: options.logLevel, message: options.message });
+  }),
+]);
 
 describe("Roles.Roles.layerSql", () => {
   it.effect("assign persists a role assignment, listRoleNames reads it back", () =>
@@ -67,6 +93,71 @@ describe("Roles.Roles.layerSql", () => {
       const roles = yield* Roles.Roles;
       const userId = Users.UserId("55555555-5555-5555-5555-555555555555");
       assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // RRM-003: drift after a catalog rename is observable, not silent.
+  it.effect(
+    "a stored name later removed from the catalog logs a warning at resolve and is listed",
+    () =>
+      Effect.gen(function* () {
+        const roles = yield* Roles.Roles;
+        const sql = yield* SqlClient.SqlClient;
+        const resolver = yield* QadiSubjectResolver.SubjectResolver;
+        const userId = Users.UserId("55555555-5555-5555-5555-555555555555");
+        yield* roles.assign(userId, "owner");
+        // A row written around the plugin (or left behind by a catalog rename).
+        yield* sql`INSERT INTO role_assignments ("userId", role) VALUES (${userId}, ${"renamed-away"})`;
+
+        captured.length = 0;
+        const subject = yield* resolver.resolve(
+          new Api.UserPrincipal({
+            ref: new Api.PrincipalRef({ type: "user", id: userId }),
+            sessionId: "s-1",
+          }),
+        );
+        assert.includeMembers([...subject.roles].map(String), ["owner"]);
+        const warned = captured.filter(
+          (entry) =>
+            entry.level === "Warn" &&
+            JSON.stringify(entry.message).includes("awthaq.roles.unknownAssignedRole") &&
+            JSON.stringify(entry.message).includes("renamed-away"),
+        );
+        assert.strictEqual(warned.length, 1);
+
+        assert.deepStrictEqual(yield* roles.listUnknownAssignments, [
+          { userId, roleName: "renamed-away" },
+        ]);
+      }).pipe(Effect.provide(Layer.mergeAll(TestLayer, CaptureLogs))),
+  );
+
+  it.effect("assign of a name outside the catalog fails UnknownRole and writes no row", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const userId = Users.UserId("66666666-6666-6666-6666-666666666666");
+      const failure = yield* roles.assign(userId, "typo-role").pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "UnknownRole");
+      assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // RRM-005: only real state changes are audited.
+  it.effect("assign/revoke publish only on a real change, recording the actor", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const auditLog = yield* AuditLog.AuditLog;
+      const userId = Users.UserId("77777777-7777-7777-7777-777777777777");
+      const actor = Users.UserId("88888888-8888-8888-8888-888888888888");
+      yield* roles.assign(userId, "owner", { actorId: actor });
+      yield* roles.assign(userId, "owner", { actorId: actor });
+      yield* roles.revoke(userId, "editor");
+      yield* roles.revoke(userId, "owner", { actorId: actor });
+      const assigned = yield* auditLog.list({ eventTag: "auth.roles.assigned" });
+      const revoked = yield* auditLog.list({ eventTag: "auth.roles.revoked" });
+      assert.strictEqual(assigned.length, 1);
+      assert.strictEqual(revoked.length, 1);
+      assert.deepStrictEqual(assigned[0]?.actorUserId, Option.some(actor));
+      assert.deepStrictEqual(revoked[0]?.actorUserId, Option.some(actor));
     }).pipe(Effect.provide(TestLayer)),
   );
 });

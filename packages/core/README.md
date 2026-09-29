@@ -1,9 +1,15 @@
 # @awthaq/core
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+Domain stratum (4): the plugin contract, `Auth.make` composition and the domain services every plugin builds on.
 
-Domain stratum (4). Domain services, hook points, AuthEvents, config references, slots, the Auth namespace — the plugin contract and Auth.make composition live here.
+**Shipped**
 
-**Planned first module:** AuthPlugin.ts (spec/behaviors/01-plugin-contract.md, BEH-EA-001–008); also Auth.ts, Slots.ts, Users.ts, Sessions.ts, Verification.ts, HookPoint.ts, AuthEvents.ts, RateLimits.ts
+- `AuthPlugin` / `Auth` (BEH-EA-001–016): `AuthPlugin.Service` plugin classes, `Auth.make` composing a plugin tuple into one `api`, `layer`, and manifest.
+- Domain services, each with `layerMemory` and a SQL-backed `layerSql`: `Users`, `Accounts`, `Sessions` (rotation, reuse detection, `authenticatedAt`), `Verification` (single-use tokens, reservations), `AuditLog`.
+- `AuthEvents` (BEH-EA-097–104) — a non-blocking event bus that also records every event durably via `AuditLog` — and the closed `AuthEvent` union.
+- `HookPoint` / `Hooks` (BEH-EA-089–096): veto / observe / divert points and their taps.
+- `Slots`, `RateLimits`, `Migrations`, and the re-exported `HttpApi*` contract classes a plugin author imports from here.
 
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+Writing a plugin? Start from [`docs/plugin-authoring.md`](../../docs/plugin-authoring.md) and copy [`examples/plugin-template/`](../../examples/plugin-template/) (a test-exercised template).
+
+See [`spec/overview.md`](../../spec/overview.md) and [`spec/behaviors/`](../../spec/behaviors/).

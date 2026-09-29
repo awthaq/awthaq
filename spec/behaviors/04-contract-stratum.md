@@ -164,5 +164,7 @@ REQUIREMENT: Merging two contracts that declare the same `HttpApiGroup` id
 
 `archive/design/usage-examples-v4.md` §2.2 is the documented failure this behavior must reproduce: `password()` and a third-party `acmeLegacyLogin()` both contributing a group named `"password"` is designed to be caught as `E_GROUP_CONFLICT`, naming both contributing plugins by version, at the point the contracts are merged — never resolved by whichever plugin happened to be added to the array last.
 
+AVS-004: group ids are not the only thing two plugins can collide on. `Auth.make` also refuses two contributed endpoints, in the same or different groups, with the same method and path (`RouteConflict`, `E_ROUTE_CONFLICT`, naming both plugins, the method and the path); the router would otherwise serve whichever registered first and shadow the other. This is a composition-time check rather than a registry of reserved paths, so it covers a plugin's deliberate root-level routes too — currently informative: `@awthaq/password` owns `POST /verify-email`, `/resend-verification` and `/change-password` at the root, alongside its `/password/*` routes.
+
 _Previous: [BEH-EA-024](03-ports-slots-hooks-registries.md#beh-ea-024-tapping-a-hook-point-nobody-defines-is-a-compile-error-and-registries-aggregate-through-layereffectdiscard-ordered-and-frozen-at-first-read)_
 _Next: [BEH-EA-033](05-persistence-stratum.md#beh-ea-033-every-entity-is-a-modelclass-with-modeluuidv7insert-ids)_

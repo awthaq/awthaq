@@ -3,7 +3,7 @@ ID: "ERS-001"
 Title: "argon2id/scrypt hashing blocks the main JS thread with no worker-pool offload"
 Level: high
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:130"
 Auditor: "effect-runtime-scheduler-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `performance` · `ports` · reported by **Effect Runtime & Scheduler Specialist** (`effect-runtime-scheduler-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [PasswordHasher worker-pool offload (main-thread blocking)](../../.scratch/resolve-ready-for-human-findings/issues/35-passwordhasher-worker-offload.md) — always-on `Effect.Semaphore` concurrency bound on the existing main-thread `layerArgon2id`/`layerScrypt` (edge-safe, no new dependency), plus new opt-in Node-only `layerArgon2idNodeWorkerPool`/`layerScryptNodeWorkerPool` layers built on `effect/Pool` + `effect/unstable/workers/Worker`/`@effect/platform-node`'s `NodeWorker`, same `PasswordHasherShape`, app-provided per ADR-EA-010. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-hasher-offload`. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:159`. Fix: Bound hashing concurrency on the WASM layers and add opt-in Node worker-pool PasswordHasher layers (decision 35). (effort L). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** PasswordHasher layers now build over a KdfBackend: calling-thread hash-wasm behind a Semaphore (AUTH_PASSWORD_HASH_CONCURRENCY, default 4; legacy verifiers incl. bcrypt take a permit) and new opt-in PasswordHasherWorkerPool.layerArgon2id/layerScrypt over effect's Worker platform (AUTH_PASSWORD_HASH_WORKER_POOL_SIZE, default 4; worker entry passwordHasherWorker.ts, exported workerEntry URL; knip entry added). Parsing, ceilings, rehash policy and constant-time compare stay on the main thread, shared by both. Tests: PasswordHasherConcurrency.test.ts (concurrency 1 => max 1 in flight, PHC encoding parity with hash-wasm), PasswordHasherWorkerPool.test.ts (cross-verification pool<->main thread for argon2id and scrypt). Layer names differ from the dossier (WorkerPool, not NodeWorkerPool: the layer is platform-neutral, only the bundled entry is Node).

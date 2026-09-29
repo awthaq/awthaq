@@ -3,7 +3,7 @@ ID: "TS-003"
 Title: "No decision-sink or denial-explainability seam wired anywhere"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/Resolvers.ts:11"
 Auditor: "torin-sandall"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `qadi` · reported by **Torin Sandall — Co-creator of Open Policy Agent (OPA)** (`torin-sandall`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Ship an optional DecisionSink Layer plus a denial logWarning in AuthorizedSubjec
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-bridge-hardening`. Evidence at HEAD ec065a7: `packages/qadi/src/Resolvers.ts:11`. Fix: Ship an opt-in DecisionSink implementation that logs denials (and optionally records them in AuditLog), and refresh the stale header. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/qadi/src/DecisionLogging.ts: DecisionSinkLog (warns on every denial, errors on a failed evaluation) and DecisionSinkAudit (also publishes auth.authz.denied into the durable AuditLog; new core AuthEvents event + AuditLog.actorOf case). Providing a layer is the opt-in — no config flag (the dossier's QadiBridgeConfig.recordDecisions reference would only duplicate choosing the layer). Stale Resolvers.ts header refreshed (AuditLog exists; BEH-EA-164 DecisionHistory is a follow-up, not impossible). Tests: DecisionLogging.test.ts (one record per denial, decision unchanged, allow records nothing, audit lands auth.authz.denied with the user actor). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 915 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

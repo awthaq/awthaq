@@ -6,6 +6,7 @@
 // `effect/unstable/sql`'s `SqlSchema`, owned by this plugin rather than the
 // shared persistence stratum.
 
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -162,16 +163,19 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const OrganizationRow = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  slug: Schema.String,
-  logo: Schema.NullOr(Schema.String),
-  metadata: Schema.NullOr(Schema.String),
-  createdAt: Schema.DateTimeUtcFromString,
-});
+const makeOrganizationRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    name: Schema.String,
+    slug: Schema.String,
+    logo: Schema.NullOr(Schema.String),
+    metadata: Schema.NullOr(Schema.String),
+    createdAt: wire.dateTime,
+  });
 
-const toRecord = (row: typeof OrganizationRow.Type): OrganizationRecord => ({
+type OrganizationRow = ReturnType<typeof makeOrganizationRow>["Type"];
+
+const toRecord = (row: OrganizationRow): OrganizationRecord => ({
   id: row.id,
   name: row.name,
   slug: row.slug,
@@ -184,6 +188,9 @@ export const layerSql = Layer.effect(
   OrganizationRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const OrganizationRow = makeOrganizationRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -193,11 +200,11 @@ export const layerSql = Layer.effect(
         slug: Schema.String,
         logo: Schema.NullOr(Schema.String),
         metadata: Schema.NullOr(Schema.String),
-        createdAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
       }),
       Result: OrganizationRow,
       execute: (r) => sql`
-          INSERT INTO organization_org (id, name, slug, logo, metadata, createdAt)
+          INSERT INTO organization_org (id, name, slug, logo, metadata, "createdAt")
           VALUES (${r.id}, ${r.name}, ${r.slug}, ${r.logo}, ${r.metadata}, ${r.createdAt})
           RETURNING *
         `,
@@ -229,7 +236,7 @@ export const layerSql = Layer.effect(
 
     const listByIdsQuery = (ids: ReadonlyArray<string>) =>
       Effect.gen(function* () {
-        const empty: ReadonlyArray<typeof OrganizationRow.Type> = [];
+        const empty: ReadonlyArray<OrganizationRow> = [];
         if (ids.length === 0) return empty;
         return yield* listByIdsBase(ids);
       });

@@ -49,3 +49,5 @@ State the boundary explicitly in the roles README (enumerate exact keys in roles
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `roles-permission-modeling`. Duplicate of `YL-006` — closed by that issue's fix. Evidence at HEAD ec065a7: `node_modules/.pnpm/@qadi+core@0.7.0/node_modules/@qadi/core/src/Evaluate.ts:823`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `YL-006-yang-luo` — closed by its fix (see that issue's Resolved comment).

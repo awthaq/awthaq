@@ -32,6 +32,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
 
 type UserId = Users.UserId;
 
@@ -48,9 +49,19 @@ export interface PasskeyCredentialRecord {
   readonly name: string;
   readonly createdAt: DateTime.Utc;
   readonly lastUsedAt: DateTime.Utc;
+  /** WPS-006: when a signature-counter regression (a possibly cloned authenticator) was last observed on this credential; `None` if never. */
+  readonly counterAnomalyAt: Option.Option<DateTime.Utc>;
+  readonly counterAnomalyCount: number;
 }
 
 export class PasskeyCredentialNotFound extends Data.TaggedError("PasskeyCredentialNotFound")<{
+  readonly message: string;
+}> {}
+
+/** WPS-010: a credential id is globally unique (it is the table's primary key) — both layers refuse a second `create` for it identically instead of one overwriting and the other dying. */
+export class PasskeyCredentialAlreadyExists extends Data.TaggedError(
+  "PasskeyCredentialAlreadyExists",
+)<{
   readonly message: string;
 }> {}
 
@@ -66,10 +77,15 @@ export interface PasskeyCredentialsShape {
     readonly transports: ReadonlyArray<string>;
     readonly aaguid: string;
     readonly name: string;
-  }) => Effect.Effect<PasskeyCredentialRecord>;
+  }) => Effect.Effect<PasskeyCredentialRecord, PasskeyCredentialAlreadyExists>;
   readonly findById: (id: string) => Effect.Effect<Option.Option<PasskeyCredentialRecord>>;
   readonly listByUser: (userId: UserId) => Effect.Effect<ReadonlyArray<PasskeyCredentialRecord>>;
-  /** BEH-EA-131: updates the counter/backup-state/last-used timestamp after a successful authentication. */
+  /**
+   * BEH-EA-131: updates the counter/backup-state/last-used timestamp after a
+   * successful authentication. The stored counter only ever moves forward
+   * (CB-004): a regressed assertion counter never lowers it, so a clone
+   * replaying old values keeps tripping the anomaly check.
+   */
   readonly recordUsage: (
     id: string,
     counter: number,
@@ -83,6 +99,8 @@ export interface PasskeyCredentialsShape {
   ) => Effect.Effect<PasskeyCredentialRecord, PasskeyCredentialNotFound>;
   /** Enumeration-safe by construction: fails identically for an unknown id and for one belonging to another user. */
   readonly delete: (id: string, userId: UserId) => Effect.Effect<void, PasskeyCredentialNotFound>;
+  /** WPS-006: records a counter regression on the credential — stamps `counterAnomalyAt` and bumps `counterAnomalyCount`. */
+  readonly flagCounterAnomaly: (id: string) => Effect.Effect<void, PasskeyCredentialNotFound>;
   /** CSG-001/DRS-002 (.issues/high): sweeps every credential owned by `userId` in one bulk statement — the erasure cascade's own `Hooks.BeforeUserDelete` tap needs (`Passkey.ts`'s own `layer`), unlike `delete`'s single-id, enumeration-safe shape. */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
 }
@@ -101,11 +119,31 @@ export const layerMemory: Layer.Layer<PasskeyCredentials> = Layer.effect(
   Effect.gen(function* () {
     const state = yield* Ref.make<CredentialsState>(HashMap.empty());
 
+    const alreadyExists = (): PasskeyCredentialAlreadyExists =>
+      new PasskeyCredentialAlreadyExists({ message: "awthaq: passkey credential already exists" });
+
     const create: PasskeyCredentialsShape["create"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
-      const record: PasskeyCredentialRecord = { ...input, createdAt: now, lastUsedAt: now };
-      yield* Ref.update(state, (s) => HashMap.set(s, record.id, record));
-      return record;
+      const record: PasskeyCredentialRecord = {
+        ...input,
+        createdAt: now,
+        lastUsedAt: now,
+        counterAnomalyAt: Option.none(),
+        counterAnomalyCount: 0,
+      };
+      const outcome = yield* Ref.modify(
+        state,
+        (
+          s,
+        ): readonly [
+          Result.Result<PasskeyCredentialRecord, PasskeyCredentialAlreadyExists>,
+          CredentialsState,
+        ] =>
+          HashMap.has(s, record.id)
+            ? ([Result.fail(alreadyExists()), s] as const)
+            : ([Result.succeed(record), HashMap.set(s, record.id, record)] as const),
+      );
+      return yield* Effect.fromResult(outcome);
     });
 
     const findById: PasskeyCredentialsShape["findById"] = (id) =>
@@ -129,9 +167,28 @@ export const layerMemory: Layer.Layer<PasskeyCredentials> = Layer.effect(
             if (Option.isNone(existing)) return [Result.fail(notFound()), s] as const;
             const updated: PasskeyCredentialRecord = {
               ...existing.value,
-              counter,
+              counter: Math.max(existing.value.counter, counter),
               backedUp,
               lastUsedAt: now,
+            };
+            return [Result.succeed(undefined), HashMap.set(s, id, updated)] as const;
+          },
+        );
+        return yield* Effect.fromResult(outcome);
+      });
+
+    const flagCounterAnomaly: PasskeyCredentialsShape["flagCounterAnomaly"] = (id) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const outcome = yield* Ref.modify(
+          state,
+          (s): readonly [Result.Result<void, PasskeyCredentialNotFound>, CredentialsState] => {
+            const existing = HashMap.get(s, id);
+            if (Option.isNone(existing)) return [Result.fail(notFound()), s] as const;
+            const updated: PasskeyCredentialRecord = {
+              ...existing.value,
+              counterAnomalyAt: Option.some(now),
+              counterAnomalyCount: existing.value.counterAnomalyCount + 1,
             };
             return [Result.succeed(undefined), HashMap.set(s, id, updated)] as const;
           },
@@ -177,26 +234,40 @@ export const layerMemory: Layer.Layer<PasskeyCredentials> = Layer.effect(
         ),
       );
 
-    return { create, findById, listByUser, recordUsage, rename, delete: del, deleteAllByUser };
+    return {
+      create,
+      findById,
+      listByUser,
+      recordUsage,
+      flagCounterAnomaly,
+      rename,
+      delete: del,
+      deleteAllByUser,
+    };
   }),
 );
 
 // ---- layerSql ---------------------------------------------------------------
 
-const PasskeyCredentialRow = Schema.Struct({
-  id: Schema.String,
-  userId: Schema.String,
-  webauthnUserId: Schema.String,
-  publicKey: Schema.String,
-  counter: Schema.Int,
-  deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
-  backedUp: Schema.BooleanFromBit,
-  transports: Schema.fromJsonString(Schema.Array(Schema.String)),
-  aaguid: Schema.String,
-  name: Schema.String,
-  createdAt: Schema.DateTimeUtcFromString,
-  lastUsedAt: Schema.DateTimeUtcFromString,
-});
+const makePasskeyCredentialRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    userId: Schema.String,
+    webauthnUserId: Schema.String,
+    publicKey: Schema.String,
+    counter: Schema.Int,
+    deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
+    backedUp: wire.boolean,
+    transports: Schema.fromJsonString(Schema.Array(Schema.String)),
+    aaguid: Schema.String,
+    name: Schema.String,
+    createdAt: wire.dateTime,
+    lastUsedAt: wire.dateTime,
+    counterAnomalyAt: Schema.OptionFromNullOr(wire.dateTime),
+    counterAnomalyCount: Schema.Int,
+  });
+
+type PasskeyCredentialRow = ReturnType<typeof makePasskeyCredentialRow>["Type"];
 
 const bytesToBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
@@ -212,7 +283,7 @@ const base64UrlToBytes = (value: string): Uint8Array => {
   return bytes;
 };
 
-const toRecord = (row: typeof PasskeyCredentialRow.Type): PasskeyCredentialRecord => ({
+const toRecord = (row: PasskeyCredentialRow): PasskeyCredentialRecord => ({
   id: row.id,
   userId: Users.UserId(row.userId),
   webauthnUserId: row.webauthnUserId,
@@ -225,14 +296,19 @@ const toRecord = (row: typeof PasskeyCredentialRow.Type): PasskeyCredentialRecor
   name: row.name,
   createdAt: row.createdAt,
   lastUsedAt: row.lastUsedAt,
+  counterAnomalyAt: row.counterAnomalyAt,
+  counterAnomalyCount: row.counterAnomalyCount,
 });
 
 export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClient> = Layer.effect(
   PasskeyCredentials,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const PasskeyCredentialRow = makePasskeyCredentialRow(wire);
 
-    const insert = SqlSchema.findOne({
+    const insert = SqlSchema.findOneOption({
       Request: Schema.Struct({
         id: Schema.String,
         userId: Schema.String,
@@ -240,19 +316,20 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
         publicKey: Schema.String,
         counter: Schema.Int,
         deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
-        backedUp: Schema.BooleanFromBit,
+        backedUp: wire.boolean,
         transports: Schema.fromJsonString(Schema.Array(Schema.String)),
         aaguid: Schema.String,
         name: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
-        lastUsedAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
+        lastUsedAt: wire.dateTime,
       }),
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
         INSERT INTO passkey_credential
-          (id, userId, webauthnUserId, publicKey, counter, deviceType, backedUp, transports, aaguid, name, createdAt, lastUsedAt)
+          (id, "userId", "webauthnUserId", "publicKey", counter, "deviceType", "backedUp", transports, aaguid, name, "createdAt", "lastUsedAt")
         VALUES
           (${r.id}, ${r.userId}, ${r.webauthnUserId}, ${r.publicKey}, ${r.counter}, ${r.deviceType}, ${r.backedUp}, ${r.transports}, ${r.aaguid}, ${r.name}, ${r.createdAt}, ${r.lastUsedAt})
+        ON CONFLICT(id) DO NOTHING
         RETURNING *
       `,
     });
@@ -266,19 +343,32 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
     const listByUserQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: PasskeyCredentialRow,
-      execute: (userId) => sql`SELECT * FROM passkey_credential WHERE userId = ${userId}`,
+      execute: (userId) => sql`SELECT * FROM passkey_credential WHERE "userId" = ${userId}`,
     });
 
     const recordUsageQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         id: Schema.String,
         counter: Schema.Int,
-        backedUp: Schema.BooleanFromBit,
-        lastUsedAt: Schema.DateTimeUtcFromString,
+        backedUp: wire.boolean,
+        lastUsedAt: wire.dateTime,
       }),
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
-        UPDATE passkey_credential SET counter = ${r.counter}, backedUp = ${r.backedUp}, lastUsedAt = ${r.lastUsedAt}
+        UPDATE passkey_credential
+        SET counter = CASE WHEN ${r.counter} > counter THEN ${r.counter} ELSE counter END,
+            "backedUp" = ${r.backedUp}, "lastUsedAt" = ${r.lastUsedAt}
+        WHERE id = ${r.id}
+        RETURNING *
+      `,
+    });
+
+    const flagCounterAnomalyQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ id: Schema.String, at: wire.dateTime }),
+      Result: PasskeyCredentialRow,
+      execute: (r) => sql`
+        UPDATE passkey_credential
+        SET "counterAnomalyAt" = ${r.at}, "counterAnomalyCount" = "counterAnomalyCount" + 1
         WHERE id = ${r.id}
         RETURNING *
       `,
@@ -289,7 +379,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
         UPDATE passkey_credential SET name = ${r.name}
-        WHERE id = ${r.id} AND userId = ${r.userId}
+        WHERE id = ${r.id} AND "userId" = ${r.userId}
         RETURNING *
       `,
     });
@@ -298,7 +388,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       Request: Schema.Struct({ id: Schema.String, userId: Schema.String }),
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
-        DELETE FROM passkey_credential WHERE id = ${r.id} AND userId = ${r.userId}
+        DELETE FROM passkey_credential WHERE id = ${r.id} AND "userId" = ${r.userId}
         RETURNING *
       `,
     });
@@ -308,7 +398,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
 
     const create: PasskeyCredentialsShape["create"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
-      const row = yield* insert({
+      const inserted = yield* insert({
         id: input.id,
         userId: input.userId,
         webauthnUserId: input.webauthnUserId,
@@ -322,7 +412,14 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
         createdAt: now,
         lastUsedAt: now,
       }).pipe(Effect.orDie);
-      return toRecord(row);
+      if (Option.isNone(inserted)) {
+        return yield* Effect.fail(
+          new PasskeyCredentialAlreadyExists({
+            message: "awthaq: passkey credential already exists",
+          }),
+        );
+      }
+      return toRecord(inserted.value);
     });
 
     const findById: PasskeyCredentialsShape["findById"] = (id) =>
@@ -340,6 +437,13 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
         const updated = yield* recordUsageQuery({ id, counter, backedUp, lastUsedAt: now }).pipe(
           Effect.orDie,
         );
+        if (Option.isNone(updated)) return yield* Effect.fail(notFound());
+      });
+
+    const flagCounterAnomaly: PasskeyCredentialsShape["flagCounterAnomaly"] = (id) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const updated = yield* flagCounterAnomalyQuery({ id, at: now }).pipe(Effect.orDie);
         if (Option.isNone(updated)) return yield* Effect.fail(notFound());
       });
 
@@ -363,11 +467,20 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       );
 
     const deleteAllByUser: PasskeyCredentialsShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM passkey_credential WHERE userId = ${userId}`.pipe(
+      sql`DELETE FROM passkey_credential WHERE "userId" = ${userId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );
 
-    return { create, findById, listByUser, recordUsage, rename, delete: del, deleteAllByUser };
+    return {
+      create,
+      findById,
+      listByUser,
+      recordUsage,
+      flagCounterAnomaly,
+      rename,
+      delete: del,
+      deleteAllByUser,
+    };
   }),
 );

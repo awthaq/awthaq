@@ -3,7 +3,7 @@ ID: "YL-009"
 Title: "Roles plugin exposes no management API surface for administration"
 Level: info
 Category: "dx"
-Status: ready-for-human
+Status: resolved
 Package: "roles"
 Source: "packages/roles/src/Roles.ts:85"
 Auditor: "yang-luo"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `dx` · `roles` · reported by **Yang Luo — Creator of Casbin** (`yang-luo`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ When the admin plane lands, add an AuthApi group for role assignment CRUD guarde
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `roles-audit-and-admin`. Evidence at HEAD ec065a7: `packages/roles/src/Roles.ts:211`. Fix: Ship an opt-in RolesAdmin plugin (pending decision) whose endpoints are guarded by qadi Path B, dogfooding enforcement. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option 2 per plan; user may revisit. New opt-in RolesAdmin plugin in @awthaq/roles (id rolesAdmin, dependsOn Roles, no tables): GET /roles/catalog, GET /roles/users/:userId, POST /roles/users/:userId/assignments, DELETE /roles/users/:userId/assignments/:roleName; UnknownRole -> 422. Guarded by qadi Path B (RequirePermission + RequiredPermission annotations on every endpoint, roles:read to look, roles:manage to change, manage implies read; the app grants them through its own Roles catalog); CsrfProtection outermost. The actor on auth.roles.assigned/revoked is derived from CurrentSubject ('user:<id>'), never the client. Roles stays contract-less (Auth.make([Roles]) unchanged; Auth.make([Roles, RolesAdmin]) composes, tested). This is the repo's first real RequirePermission consumer (test uses RequirePermissionLive + SubjectExtractorLive + EvaluationServicesNone; AuthorizationAudit.auditAuthorizationAnnotations passes on the contract). Tests: packages/roles/test/RolesAdmin.test.ts (anonymous and plain subject 403, read-only 403 on change, admin assigns/revokes with the acting admin in the audit trail, 422, missing CSRF rejected first). Adds @qadi/http, @awthaq/server (dev), @effect/platform-node (dev) to packages/roles/package.json so pnpm-lock.yaml changed. Gates: tsc -b clean apart from packages/react, tsconfig.test clean, packages/roles 27 tests green.

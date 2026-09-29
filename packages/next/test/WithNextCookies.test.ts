@@ -15,7 +15,7 @@
 // a `Response` — the type system already makes that misuse impossible to
 // even attempt, a stronger guarantee than a runtime assertion could give.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -23,7 +23,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
@@ -150,12 +149,8 @@ describe("withNextCookies — a real HTTP response (BEH-EA-189)", () => {
         const user = yield* users
           .create({ email: "with-next-cookies@example.com", name: "Cookie Test" })
           .pipe(Effect.orDie);
-        const { token } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        yield* SessionCookie.set(session, token);
       }),
     }),
   );

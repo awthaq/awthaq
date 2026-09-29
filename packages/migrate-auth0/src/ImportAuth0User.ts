@@ -12,6 +12,7 @@
 // per-provider, and email is already `User.email`'s own job).
 
 import { Accounts, Users } from "@awthaq/core";
+import { PasswordHasher } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
@@ -56,7 +57,8 @@ export const importUser = (
         userId: user.id,
         providerId: Accounts.PASSWORD_PROVIDER_ID,
         subject: user.id,
-        credentialHash: Redacted.make(input.passwordHash),
+        // TTE-005: the trust boundary for an imported hash — minted explicitly.
+        credentialHash: Redacted.make(PasswordHasher.PhcHash(input.passwordHash)),
       })
       .pipe(Effect.catchTag("PlatformError", Effect.die));
     return { user, account };

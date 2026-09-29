@@ -3,7 +3,7 @@ ID: "BPAS-006"
 Title: "WebAuthn L3 Signals API entirely unimplemented — stale passkeys persist in credential managers"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:651"
 Auditor: "biometric-platform-authenticator-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `passkey` · reported by **Biometric / Platform Authenticator Specialist** (`biometric-platform-authenticator-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Expose the deleted credential id set and unknown-credential outcomes to the clie
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-user-handle`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:879`. Fix: Add WebAuthn L3 Signals to the client, fed by an enumeration-safe server surface keyed on the (now stable) user handle. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Signals: authenticated GET /passkey/signals (PasskeySignalsDto: rpId, stable user handle, name, displayName, the caller's accepted credential ids) and the client half (see TC-004). Tests: PasskeyUserHandle.test.ts (only the caller's ids), AuthHttp.test.ts (401 anonymous, own ids with a session), client PasskeyClient.test.ts (deletePasskey signals the remaining ids and the stable handle; unsupported browser/rejected signal/failed fetch never fail the delete). Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

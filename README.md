@@ -128,11 +128,18 @@ const RateLimiterLive = RateLimiter.layer.pipe(
 
 //    Swap the remaining ports for your own: a real mailer
 //    (SMTP/SES/Resend/...) in place of this console stand-in, and — if you
-//    want breach checking — `Password.config(...)`.
+//    want to tune the password policy — `Password.config(...)`. Breach
+//    screening (HIBP, k-anonymity) is on by default and fails open;
+//    `Password.config({ breachCheck: false })` turns it off.
 const consoleMailer = Layer.succeed(
   Mailer.Mailer,
   Mailer.Mailer.of({
-    send: (message) => Effect.sync(() => console.log(`[mail] to=${message.to} subject=${message.subject}`)),
+    // A real adapter maps a provider error to `Mailer.MailDeliveryFailed`
+    // (`Effect.mapError`/`Effect.tryPromise` -> `new Mailer.MailDeliveryFailed({
+    // template: message.template, reason, retryable })`) instead of dying, and
+    // never logs `to` or `data` (they carry the recipient and the reset token).
+    send: (message) => Effect.sync(() => console.log(`[mail] template=${message.template}`)),
+    sent: Effect.succeed([]),
   }),
 );
 
@@ -230,10 +237,31 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 
 | Port | Real layer used above | Other options |
 |---|---|---|
-| `PasswordHasher` | `layerArgon2id` | `layerScrypt` |
+| `PasswordHasher` | `layerArgon2id` | `layerScrypt`; `PasswordHasherWorkerPool.layerArgon2id`/`layerScrypt` run the KDF in worker threads (Node), see [Password hashing](#password-hashing) |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
 | `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `layer` over the bounded, single-process `layerStoreMemory`, or your own `RateLimiterStore`; `layerPermissive` disables limiting (tests only) |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
+| `Csrf.CsrfConfig` | `Csrf.layerConfig` (`AWTHAQ_CSRF_SECRET`, at least 32 bytes; optional `AWTHAQ_CSRF_ALLOWED_ORIGINS`, comma-separated) | `Layer.succeed(Csrf.CsrfConfig, { secret, allowedOrigins })` with a secret loaded from your own secret store |
+
+### Password hashing
+
+Hashing is CPU-heavy by design. The default layers run hash-wasm on the calling thread and bound it: at most `AUTH_PASSWORD_HASH_CONCURRENCY` (default 4) hashes in flight, and legacy verifiers such as bcrypt take a permit too. Each argon2id hash at the defaults (`AUTH_ARGON2_MEMORY_KIB=19456`, `AUTH_ARGON2_ITERATIONS=2`) takes tens of milliseconds and about 19 MiB; scrypt at `AUTH_SCRYPT_COST_LOG2=17` uses about 128 MiB, so peak KDF memory is roughly the concurrency times that.
+
+On Node, offload the KDF entirely with one Layer swap so hashing never blocks the event loop:
+
+```ts
+import { PasswordHasherWorkerPool } from "@awthaq/ports";
+import * as NodeWorker from "@effect/platform-node/NodeWorker";
+import { Worker } from "node:worker_threads";
+
+const HasherLive = PasswordHasherWorkerPool.layerArgon2id.pipe(
+  Layer.provide(NodeWorker.layer(() => new Worker(PasswordHasherWorkerPool.workerEntry))),
+);
+```
+
+`AUTH_PASSWORD_HASH_WORKER_POOL_SIZE` (default 4) sets the number of workers, one hash each at a time. Hashes are identical across both families, so switching is safe on live data.
+
+Where to run it: password hash/verify belongs on your origin (long-running) runtime. A verify at the default cost is tens of milliseconds of CPU, above a Cloudflare Workers free-tier budget; let the edge tier verify sessions/JWTs and redirect. There is deliberately no cheaper "edge" storage profile.
 
 ### Encryption keys
 
@@ -241,7 +269,7 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 
 To rotate: add a new entry, point `AWTHAQ_ENCRYPTION_KEY_ID` at it, and keep the old entry. Existing ciphertext stays readable under the old key and is re-encrypted under the new one the next time it is read. Remove the old entry only once nothing written under it remains (retirement, not a timer; see `spec/decisions/019-encryption-key-rotation.md`). Raw key bytes cannot be scrubbed from a JS process; deployments that must not hold them in memory should implement `KeyProvider` over a KMS.
 
-`Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach checking, off by default) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
+`Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach screening, on by default and fail-open; `signUpEnumeration`, `requireVerifiedEmail`, ...) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
 
 ### Cross-origin SPAs (CORS)
 
@@ -268,6 +296,16 @@ CORS never relaxes CSRF: cross-site mutations still need the double-submit cooki
 | Jwt | `@awthaq/jwt` | JWT issuance/verification for stateless callers |
 
 Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id. `two-factor`, `magic-link`, `api-key`, `cli`, and `next` remain stub packages — see [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md)'s "Out of scope" section for why they're deliberately not part of this pass.
+
+### Migrating users from another provider
+
+Each package lets imported users keep their password: it verifies the old hash on their first sign-in and `rehashOnLogin` upgrades it to argon2id.
+
+| Source | Package | Hash it verifies |
+|---|---|---|
+| Auth0, Supabase (GoTrue) | `@awthaq/migrate-auth0` | bcrypt (`$2a$`/`$2b$`/`$2y$`) |
+| Firebase Authentication | `@awthaq/migrate-firebase` | Firebase's modified scrypt |
+| better-auth | `@awthaq/migrate-better-auth` | better-auth's scrypt (`salt:key`), plus live-session bridging |
 
 ## Publishing status
 

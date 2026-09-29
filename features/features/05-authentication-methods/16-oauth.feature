@@ -59,6 +59,13 @@ Feature: OAuth and OIDC
       When the same callback is replayed with the same "state" value
       Then the replayed callback fails, rather than re-running the token exchange
 
+    @REQ-EA-333
+    Scenario: A user denying consent at the provider gets the typed denial outcome
+      Given an OAuth flow initiated for provider "google"
+      When the provider redirects back with the authorization error "access_denied"
+      Then the callback fails with the typed denial "access_denied"
+      And the flow is consumed, so a replay carrying a code fails
+
     @REQ-EA-334
     Scenario: A callback presented after its flow-state entry's TTL has expired fails
       Given an "oauth.flow" Verification entry whose TTL has expired before the callback arrives
@@ -74,7 +81,7 @@ Feature: OAuth and OIDC
       Given "oauth({ providers: [google()], linking: \"explicit\" })"
       And an existing account with email "alice@example.com" that has not linked "google"
       When "alice@example.com" completes a "google" callback
-      Then the response is "409 Conflict" with the typed error "AccountExists" naming provider "password"
+      Then the response is "409 Conflict" with the typed error "AccountExists" listing provider "password"
 
     @REQ-EA-336
     Scenario: No account is silently linked when the default configuration rejects the callback
@@ -105,6 +112,13 @@ Feature: OAuth and OIDC
       And a "google" callback whose verified email matches an existing, unlinked account
       When the callback is handled
       Then the "google" Account is automatically linked to the existing account
+
+    @REQ-EA-339
+    Scenario: A trusted provider never auto-links into a local account whose email is unverified
+      Given "oauth({ providers: [google()], linking: { trustedProviders: [\"google\"] } })"
+      And a "google" callback whose verified email matches an existing, unlinked account whose own email is unverified
+      When the callback is handled
+      Then the accounts are not auto-linked
 
     @REQ-EA-340
     Scenario: Naming one provider as trusted does not extend auto-link to a second, unnamed provider

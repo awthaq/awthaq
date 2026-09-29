@@ -3,7 +3,7 @@ ID: "PHS-006"
 Title: "Breach screening fully implemented but disabled by default"
 Level: low
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:41"
 Auditor: "password-hashing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `password` · reported by **Password Hashing Specialist** (`password-hashing-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Either flip the default to breachCheck: true (fail-open, matching BEH-EA-119's o
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-policy-posture`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:44`. Fix: After the decision: flip (B) or document (A). (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan; user may revisit. defaultPasswordConfig.breachCheck is now true (fail-open, 3s timeout, breachCheck:false opts out); BEH-EA-119 text, README quickstart and config note updated. Test: PasswordPolicy.test.ts (default config rejects a breached password; opt-out works). Test compositions use a well-formed non-matching range body.

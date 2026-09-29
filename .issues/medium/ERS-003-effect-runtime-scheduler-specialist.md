@@ -3,7 +3,7 @@ ID: "ERS-003"
 Title: "Zero retry/backoff Schedules: one transient provider error fails OAuth callback permanently"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:246"
 Auditor: "effect-runtime-scheduler-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `oauth` · reported by **Effect Runtime & Scheduler Specialist** (`effect-runtime-scheduler-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Add a narrowly scoped retry policy to idempotent outbound GETs only: Effect.retr
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-outbound-resilience`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:323`. Fix: Retry only idempotent GETs (JWKS, discovery, userinfo) with jittered exponential backoff inside the deadline. Never retry the single-use code exchange. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ProviderHttp.retrying = HttpClient.retryTransient(errors-and-responses, jittered exponential) with OAuthConfig.retry {times:2, base:50ms}; used for JWKS, userinfo and discovery GETs only, inside each call's deadline. exchangeCode and the refresh grant stay on the plain client (single-use code / rotating refresh token). Tests: JWKS 503-then-200 and userinfo 503-then-200 succeed, discovery 503-then-200 registers at boot, token endpoint 503 called exactly once; mutation-checked red (retrying client replaced by plain -> the two retry tests fail). Gates as ECF-001.

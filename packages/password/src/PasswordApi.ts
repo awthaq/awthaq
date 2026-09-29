@@ -8,7 +8,7 @@
 // plugin's own package (`spec/overview.md`: "Each plugin's own groups,
 // schemas, errors, and contract `HttpApi`").
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, EmailContract, SessionContract } from "@awthaq/api";
 import { HookPoint, Hooks } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -68,33 +68,43 @@ export class EmailNotVerified extends Schema.TaggedError<EmailNotVerified>()(
   { httpApiStatus: 403 },
 ) {}
 
+/**
+ * ESS-006: config-independent ceiling on a submitted password. `minLength` and
+ * the breach check live in `checkPolicy` because they read the runtime
+ * `PasswordConfig`, which a static schema cannot; the upper bound needs no
+ * config and stops a multi-megabyte "password" from reaching the hasher
+ * (hash-wasm input cost is linear in its length).
+ */
+export const MAX_PASSWORD_LENGTH = 1024;
+const PasswordInput = Schema.Redacted(Schema.String.check(Schema.isMaxLength(MAX_PASSWORD_LENGTH)));
+
 export const SignUpPayload = Schema.Struct({
-  email: Schema.String,
-  password: Schema.Redacted(Schema.String),
+  email: EmailContract.Email,
+  password: PasswordInput,
 });
 export type SignUpPayload = typeof SignUpPayload.Type;
 
 export const SignInPayload = Schema.Struct({
-  email: Schema.String,
-  password: Schema.Redacted(Schema.String),
+  email: EmailContract.Email,
+  password: PasswordInput,
 });
 export type SignInPayload = typeof SignInPayload.Type;
 
 /** BEH-EA-064/117: answered identically whether or not `email` resolves to an account. */
 export const RequestResetPayload = Schema.Struct({
-  email: Schema.String,
+  email: EmailContract.Email,
 });
 export type RequestResetPayload = typeof RequestResetPayload.Type;
 
 /** Upstream-hardening map, ticket 04: same shape as `RequestResetPayload` — answered identically regardless of whether `email` resolves to an account, or is already verified. */
 export const ResendVerificationPayload = Schema.Struct({
-  email: Schema.String,
+  email: EmailContract.Email,
 });
 export type ResendVerificationPayload = typeof ResendVerificationPayload.Type;
 
 export const ConfirmResetPayload = Schema.Struct({
   token: Schema.Redacted(Schema.String),
-  password: Schema.Redacted(Schema.String),
+  password: PasswordInput,
 });
 export type ConfirmResetPayload = typeof ConfirmResetPayload.Type;
 
@@ -104,8 +114,8 @@ export const VerifyEmailPayload = Schema.Struct({
 export type VerifyEmailPayload = typeof VerifyEmailPayload.Type;
 
 export const ChangePasswordPayload = Schema.Struct({
-  currentPassword: Schema.Redacted(Schema.String),
-  newPassword: Schema.Redacted(Schema.String),
+  currentPassword: PasswordInput,
+  newPassword: PasswordInput,
 });
 export type ChangePasswordPayload = typeof ChangePasswordPayload.Type;
 
@@ -117,7 +127,7 @@ export type ChangePasswordPayload = typeof ChangePasswordPayload.Type;
  * which mints and returns a fresh, superseding one).
  */
 export const ReauthenticatePayload = Schema.Struct({
-  password: Schema.Redacted(Schema.String),
+  password: PasswordInput,
 });
 export type ReauthenticatePayload = typeof ReauthenticatePayload.Type;
 
@@ -150,7 +160,10 @@ export const PasswordGroup = HttpApiGroup.make("password")
   .add(
     HttpApiEndpoint.post("signUp", "/password/sign-up", {
       payload: SignUpPayload,
-      success: SessionContract.SessionDto,
+      // TMS-005: `200` with the session (`signUpEnumeration: "reveal"`, the
+      // default) or an empty `202` (`"conceal"`: same answer for a fresh and
+      // an existing address, no session until the mailbox is proven).
+      success: [SessionContract.SessionDto, HttpApiSchema.Empty(202)],
       // Each error's own `httpApiStatus` is only honored per member when
       // `error` is a plain array — `HttpApiEndpoint.getErrorSchemas` reads
       // `endpoint.error` as a `Set` of individually-annotated schemas
@@ -198,9 +211,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
     // route, not nested under `/password/*` — account-lifecycle actions
     // apply regardless of which auth method a user signed up with, even
     // though this particular capability happens to be implemented here
-    // (it reuses this module's own `VERIFY_PREFIX`/token-encoding, which
-    // already exists only in this file). No `success` schema — defaults
-    // to `204`, matching `signOut`'s own convention.
+    // (it consumes the token `signUp` mails). No `success` schema —
+    // defaults to `204`, matching `signOut`'s own convention.
     HttpApiEndpoint.post("verifyEmail", "/verify-email", {
       payload: VerifyEmailPayload,
       error: [TokenConsumed, Api.RateLimited],
@@ -219,14 +231,27 @@ export const PasswordGroup = HttpApiGroup.make("password")
       error: Api.RateLimited,
     }),
   )
+  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every endpoint here
+  // is an unsafe method, and most (signUp/signIn/requestReset/
+  // confirmReset/verifyEmail/resendVerification) are otherwise-public —
+  // exactly the login-CSRF surface `CsrfProtectionLive` exists to close,
+  // and `CsrfProtection` doesn't require an authenticated principal, so it
+  // applies at the group level. The authenticated endpoints are in
+  // `PasswordAccountGroup`.
+  .middleware(Api.CsrfProtection);
+
+/**
+ * EHA-007: the endpoints that need a live session, in a dotted sub-id group of
+ * their own with group-level `Authentication` (the `passkey`/`passkey.credentials`
+ * and `jwt` convention), not per-endpoint middleware inside the public group.
+ * Wire paths are unchanged. `CsrfProtection` is declared last so it runs first.
+ */
+export const PasswordAccountGroup = HttpApiGroup.make("password.account")
   .add(
     // Shipping-gap map (.scratch/shipping-gaps), ticket 11: authenticated
     // change-password, distinct from the unauthenticated forgot-password
-    // pair (`requestReset`/`confirmReset`) above — per-endpoint
-    // `Authentication` middleware, since this is the one endpoint in this
-    // group that requires a live session. Top-level route, matching
-    // `verifyEmail`'s own convention. No `success` schema — defaults to
-    // `204`.
+    // pair (`requestReset`/`confirmReset`) in the `password` group. Top-level
+    // route, matching `verifyEmail`'s own convention.
     HttpApiEndpoint.post("changePassword", "/change-password", {
       payload: ChangePasswordPayload,
       // PIL-002/RRS-001/SMS-001: BEH-EA-053 requires every privilege-change
@@ -236,28 +261,20 @@ export const PasswordGroup = HttpApiGroup.make("password")
       success: SessionContract.SessionDto,
       // Ticket 14: rate-limited.
       error: [WrongPassword, WeakPassword, Api.RateLimited],
-    }).middleware(Api.Authentication),
+    }),
   )
   .add(
     // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
     // (AAPS-001): this obligation's own real discharge path — re-verifies
     // the submitted password (reusing `signIn`'s own hash-comparison
-    // path) and, on success, calls `Sessions.reauthenticate`. Top-level
-    // route, matching `changePassword`'s own convention; authenticated,
-    // same as `changePassword`. No `success` schema — defaults to `204`,
-    // since this never mints a new session.
+    // path) and, on success, calls `Sessions.reauthenticate`. No `success`
+    // schema — defaults to `204`, since this never mints a new session.
     HttpApiEndpoint.post("reauthenticate", "/password/reauthenticate", {
       payload: ReauthenticatePayload,
       error: [WrongPassword, Api.RateLimited],
-    }).middleware(Api.Authentication),
+    }),
   )
-  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every endpoint here
-  // is an unsafe method, and most (signUp/signIn/requestReset/
-  // confirmReset/verifyEmail/resendVerification) are otherwise-public —
-  // exactly the login-CSRF surface `CsrfProtectionLive` exists to close,
-  // and `CsrfProtection` doesn't require an authenticated principal, so it
-  // applies at the group level regardless of `changePassword`'s own
-  // per-endpoint `Authentication`.
+  .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);
 
-export const PasswordApi = HttpApi.make("auth").add(PasswordGroup);
+export const PasswordApi = HttpApi.make("auth").add(PasswordGroup).add(PasswordAccountGroup);

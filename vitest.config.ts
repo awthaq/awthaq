@@ -13,7 +13,9 @@ import { defineConfig } from "vitest/config";
 // exclude needed the way the flat `include` shape required one.
 export default defineConfig({
   test: {
-    projects: ["packages/*"],
+    // `examples/plugin-template` is the one example with a test suite (JH-009): the
+    // template plugin `docs/plugin-authoring.md` walks through must keep passing.
+    projects: ["packages/*", "examples/plugin-template"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

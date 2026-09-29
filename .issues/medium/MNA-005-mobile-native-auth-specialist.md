@@ -3,7 +3,7 @@ ID: "MNA-005"
 Title: "Bearer rotation rides an unread set-auth-token header; native sessions silently expire within an hour"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:223"
 Auditor: "mobile-native-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `server` · reported by **Mobile/Native Auth Specialist** (`mobile-native-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Ship a first-class client helper (transformResponse layer) that persists the set
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-rotation-delivery`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:233`. Fix: Ship a first-class bearer-client contract: a shared header constant, a client-side token store, and a transform that attaches the bearer and captures rotations on every response. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/client/src/AuthClient.ts: BearerTokenStore service (get/set/clear) + BearerTokenStoreMemory layer + bearerTransformClient(store) (HttpClient.mapRequestEffect attaches Authorization: Bearer from the store; HttpClient.tap persists Api.ROTATED_TOKEN_HEADER from every response). Header constant already single-sourced (CSS-007, Api.ROTATED_TOKEN_HEADER). Tests (client/test/AuthClient.test.ts, fake HttpClient transport): rotated token is stored and sent on the next request across two rotations; a response without the header leaves the token unchanged; no Authorization header while the store is empty. Docs: BEH-EA-174 paragraph, packages/client/README.md bearer section (proxy/CORS/never-log guidance). Platform-keychain storage stays the application's job (documented). CLI-specific re-auth UX is CTA-001's.

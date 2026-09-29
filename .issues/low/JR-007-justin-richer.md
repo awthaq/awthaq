@@ -3,7 +3,7 @@ ID: "JR-007"
 Title: "No RFC 6750/7235 challenge: 401s carry no WWW-Authenticate header and no insufficient_scope concept exists anywhere"
 Level: low
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "api"
 Source: "packages/api/src/Api.ts:63"
 Auditor: "justin-richer"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `compliance` · `api` · reported by **Justin Richer — OAuth2/OIDC Contributor, Co-author of "OAuth 2 in Action"** (`justin-richer`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ When a bearer credential was presented but failed, add a WWW-Authenticate: Beare
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `optional-auth-contract`. Evidence at HEAD ec065a7: `packages/api/src/Api.ts:62`. Fix: Emit RFC 6750/7235 challenges on 401s from Authentication while keeping the typed JSON body. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Authentication.ts: the bearer handler (last scheme) registers a pre-response handler on an Unauthenticated failure adding WWW-Authenticate: Bearer realm="awthaq" (no credential) or Bearer realm="awthaq", error="invalid_token" (a bearer was presented), only on 401 responses; a handler's own typed errors (wrapped as HandlerError) get none; JSON body unchanged. Tests (Authentication.test.ts, real toHandled path): no credential, invalid bearer, invalid cookie only, handler 404 has no challenge. insufficient_scope deferred until scope enforcement exists (spec note). Spec BEH-EA-067 paragraph.

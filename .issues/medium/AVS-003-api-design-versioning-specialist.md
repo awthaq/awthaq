@@ -3,7 +3,7 @@ ID: "AVS-003"
 Title: "Untyped `Schema.Unknown` success contracts on passkey register-options endpoints"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/PasskeyApi.ts:203"
 Auditor: "api-design-versioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `passkey` · reported by **API Design & Versioning Specialist** (`api-design-versioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Define a `PublicKeyCredentialCreationOptionsDto` Schema class (or a documented p
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-wire-contract`. Evidence at HEAD ec065a7: `packages/passkey/src/PasskeyApi.ts:232`. Fix: Model the WebAuthn options dictionaries as Schemas in the contract and use them as success types. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Typed contract: PasskeyApi.PublicKeyCredentialCreationOptionsSchema / PublicKeyCredentialRequestOptionsSchema (WebAuthn L3 members, mutable arrays, optionalKey) replace Schema.Unknown on registerOptions, registerOptionsConditional, reauthenticateOptions and AuthenticateOptionsResult.options; Passkey.ts decodes the port's output through them (Schema.decodeUnknownEffect + orDie, no casts; the port now omits an undefined `extensions` member); the client's isCreationOptionsJSON/isRequestOptionsJSON guards are deleted and the typed options go straight to startRegistration/startAuthentication. Tests: AuthHttp.test.ts 'the OpenAPI document declares a structured schema for the options endpoints'; client tests now expect SchemaError for malformed options. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

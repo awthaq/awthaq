@@ -3,7 +3,7 @@ ID: "MLO-009"
 Title: "Token encoding embeds the raw identifier+secret with no canonical delivery format, leaving link shape entirely to consumers"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:177"
 Auditor: "magic-link-email-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `password` · reported by **Magic Link / Email OTP Specialist** (`magic-link-email-otp-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Ship a small delivery helper with M7: an opinionated URL builder (token in POST 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `verification-token-delivery`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:271`. Fix: Extract a shared, purpose-checked token codec + link builder into core and give every mailed token {url, token, expiresAt}. (effort M). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/core/src/VerificationLink.ts: encode/decode(raw, purpose)/issue/mailData shared codec; mail data is { token: Redacted, expiresAt, url? } with PasswordConfig.links.{verifyEmail,resetPassword} link builders. Password uses it for all three mails. Tests: packages/core/test/VerificationLink.test.ts, PasswordMail.test.ts. spec BEH-EA-057 extended.

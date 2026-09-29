@@ -48,6 +48,12 @@ export class SubjectDto extends Schema.Class<SubjectDto>("SubjectDto")({
   id: Schema.String,
   roles: Schema.Array(Schema.String),
   permissions: Schema.Array(Schema.String),
+  /**
+   * AAPS-008: the subject's embedded attributes plus whatever
+   * `@awthaq/qadi`'s `SubjectApiConfig.exposedAttributes` names (resolved from
+   * `AttributeResolver`). Other resolver-backed attributes are server-side
+   * only — a client-side gate can read exactly what the operator chose to expose.
+   */
   attributes: Schema.Record(Schema.String, Schema.Unknown),
 }) {}
 

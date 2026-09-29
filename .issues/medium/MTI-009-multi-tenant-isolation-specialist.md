@@ -3,7 +3,7 @@ ID: "MTI-009"
 Title: "Cross-tenant denials answer 403, contradicting the repo's own BEH-EA-147 enumeration guidance"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/OrganizationApi.ts:55"
 Auditor: "multi-tenant-isolation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `organization` · reported by **Multi-Tenant Isolation Specialist** (`multi-tenant-isolation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Map OrganizationPermissionDenied to 404 on read paths (or make requireMembership
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-tenant-read-isolation`. Evidence at HEAD ec065a7: `packages/organization/src/OrganizationApi.ts:53`. Fix: Answer 404 OrganizationNotFound whenever the caller is not a member (BEH-EA-147); keep 403 only for members who lack a statement. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Organization.requireMembership and requirePermission's non-member branch now fail OrganizationNotFound (404, byte-identical to an unknown id); OrganizationPermissionDenied (403) is reserved for a member lacking a statement. removeMember/updateMemberRole check caller membership before the target lookup so a non-member cannot probe who else is a member; cancelInvitation checks membership before the pending check and answers InvitationNotFound. Tests: AuthHttp.test.ts 'a non-member gets the same 404 for an existing organization as for a random id' (9 endpoints, identical bodies), 'a member without the statement still gets 403', 'update answers 404 for a non-member'; Organization.test.ts non-member expectations flipped to 404 (proven red by temporarily restoring the old branches: 6 failures). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test all pass (one unrelated ports PasswordHasher scrypt timing flake under machine load, green on rerun), test:bdd green, spec:verify:strict PASS, oxlint clean.

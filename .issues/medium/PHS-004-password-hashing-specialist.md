@@ -3,7 +3,7 @@ ID: "PHS-004"
 Title: "HIBP response status is never checked; non-2xx resolves to not-breached, bypassing fail-closed mode"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:215"
 Auditor: "password-hashing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `password` · reported by **Password Hashing Specialist** (`password-hashing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Check response.status explicitly (or pipe the client through HttpClient.filterSt
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `password-policy-posture`. Already fixed by commit 25d991e. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:316`. Fix: Treat an unparseable HIBP body and a slow provider as 'unavailable'. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** isBreached validates the HIBP body (every non-empty line must match ^[0-9A-F]{35}:\d+$, empty body counts as unavailable) and applies PasswordConfig.breachCheckTimeout (default 3s); both route to onUnavailable. Tests (red first): PasswordPolicy.test.ts (HTML body fails closed under reject and open by default; never-responding lookup times out per TestClock).

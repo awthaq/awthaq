@@ -3,7 +3,7 @@ ID: "AVS-006"
 Title: "Two spellings of the DELETE verb and four id conventions for destructive endpoints"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/PasskeyApi.ts:257"
 Auditor: "api-design-versioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `passkey` · reported by **API Design & Versioning Specialist** (`api-design-versioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Standardize on the `HttpApiEndpoint.delete(...)` constructor and one id scheme f
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-wire-contract`. Evidence at HEAD ec065a7: `packages/passkey/src/PasskeyApi.ts:310`. Fix: Use HttpApiEndpoint.delete and a resource-action id for the passkey credential delete. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** PasskeyApi uses HttpApiEndpoint.delete and one resource-action id scheme (listCredentials/renameCredential/removeCredential/signals); handlers and client updated. Typecheck plus the existing AuthHttp DELETE test are the proof. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

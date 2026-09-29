@@ -55,3 +55,5 @@ Add a type-level test asserting sql's branded schema types are assignable to cor
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `sql-repository-hygiene`. Duplicate of `MA-008` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/sql/src/Models.ts:11`. Full dossier: `.plan/slices/05-sql.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `MA-008-michael-arnaldi` — closed by its fix (see that issue's Resolved comment).

@@ -43,3 +43,5 @@ Land BEH-EA-037/038: a shipped layer (or CLI verb) that runs one Migrator.make c
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `migration-wiring`. Duplicate of `BE-003` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/sql/src/index.ts:10`. Full dossier: `.plan/slices/05-sql.md`. Status → resolved.
+
+**Plan note (2026-09-29, P09):** left as a duplicate of BE-003 (CLI wiring is P17). The id-space collision it warned about (core ids 1-17 vs index-numbered plugin ids in one `effect_sql_migrations` table) is fixed: plugin migrations now use their own `awthaq_plugin_migrations` ledger (packages/core `Migrations.run`, test "N11: core and plugin migrations apply on one database without skipping").

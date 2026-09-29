@@ -20,7 +20,7 @@ import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import type * as AuthPlugin from "./AuthPlugin.ts";
+import * as AuthPlugin from "./AuthPlugin.ts";
 import type { Migrations } from "./Migrations.ts";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,23 @@ export class EmptyPluginTuple extends Data.TaggedError("EmptyPluginTuple")<{
  */
 export class GroupIdConflict extends Data.TaggedError("GroupIdConflict")<{
   readonly groupId: string;
+  readonly firstPluginId: string;
+  readonly secondPluginId: string;
+  readonly message: string;
+}> {}
+
+/**
+ * AVS-004: two contributed endpoints, in the same or different groups, claim
+ * the same method and path. The router would silently serve whichever
+ * registered first, shadowing the other plugin's endpoint, so composition
+ * refuses it instead of relying on a hand-kept list of reserved paths — which
+ * also covers a plugin's deliberate root-level routes (`@awthaq/password`
+ * owns `/verify-email`, `/resend-verification`, `/change-password`) the same
+ * way it covers namespaced ones.
+ */
+export class RouteConflict extends Data.TaggedError("RouteConflict")<{
+  readonly method: string;
+  readonly path: string;
   readonly firstPluginId: string;
   readonly secondPluginId: string;
   readonly message: string;
@@ -258,6 +275,20 @@ type FoldLayerFrom<
  */
 export interface Built<P extends ReadonlyArray<AuthPlugin.Any>> {
   readonly api: HttpApi.HttpApi<"auth", GroupsOf<P[number]>>;
+  /**
+   * AR-003: `api` minus the admin-tier groups (`AuthPlugin.isAdminTier`) — what a host
+   * serves on its public listener when it firewalls the admin surface separately.
+   * Handlers still come from the one composed `layer`; serving fewer groups needs no more.
+   */
+  readonly publicApi: HttpApi.HttpApi<
+    "auth",
+    Exclude<GroupsOf<P[number]>, AuthPlugin.AdminTierGroup>
+  >;
+  /** AR-003: only the admin-tier groups, for a separate listener/port (empty when no plugin has one). */
+  readonly adminApi: HttpApi.HttpApi<
+    "auth",
+    Extract<GroupsOf<P[number]>, AuthPlugin.AdminTierGroup>
+  >;
   readonly layer: FoldLayer<P>;
   readonly migrations: Migrations;
   readonly manifest: Manifest;
@@ -376,6 +407,12 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
   })),
 });
 
+const hasRoute = (endpoint: object): endpoint is { readonly method: string; readonly path: string } =>
+  "method" in endpoint &&
+  typeof endpoint.method === "string" &&
+  "path" in endpoint &&
+  typeof endpoint.path === "string";
+
 /**
  * Every group of every plugin's own `contract`, added in one call —
  * `HttpApiGroup.Constraint` values, read straight off each `HttpApi`, prove
@@ -409,12 +446,52 @@ const composeApi = (
     }
     ownerOf.set(group.identifier, plugin);
   }
+  // AVS-004: a group id is not the only thing two plugins can collide on —
+  // refuse a duplicate (method, path) across every contributed endpoint.
+  const routeOwner = new Map<string, AuthPlugin.Any>();
+  for (const { plugin, group } of contributions) {
+    for (const endpoint of Object.values(group.endpoints)) {
+      // `HttpApiGroup.Constraint` widens each endpoint past its method/path.
+      if (!hasRoute(endpoint)) continue;
+      const route = `${endpoint.method} ${endpoint.path}`;
+      const owner = routeOwner.get(route);
+      if (owner !== undefined) {
+        throw new RouteConflict({
+          method: endpoint.method,
+          path: endpoint.path,
+          firstPluginId: owner.id,
+          secondPluginId: plugin.id,
+          message: `awthaq: E_ROUTE_CONFLICT: ${route} contributed by plugin "${owner.id}" and plugin "${plugin.id}"`,
+        });
+      }
+      routeOwner.set(route, plugin);
+    }
+  }
   const groups = contributions.map((contribution) => contribution.group);
   const [firstGroup, ...restGroups] = groups;
   if (firstGroup === undefined) {
     throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
   }
   return HttpApi.make("auth").add(firstGroup, ...restGroups);
+};
+
+/**
+ * AR-003: the groups of `order`'s contracts on one side of the admin tier, as its
+ * own `HttpApi`. Unlike `composeApi`, an empty side is legitimate (a composition
+ * with no admin group has nothing to firewall), hence the union with the
+ * no-groups `HttpApi`; the precise per-tier type is `Built<P>`'s, as for `api`.
+ */
+const composeTier = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+  admin: boolean,
+): HttpApi.HttpApi<"auth", never> | HttpApi.HttpApi<"auth", HttpApiGroup.Constraint> => {
+  const groups = order
+    .flatMap((plugin) => Object.values(plugin.contract.groups))
+    .filter((group) => AuthPlugin.isAdminTier(group.identifier) === admin);
+  const [firstGroup, ...restGroups] = groups;
+  return firstGroup === undefined
+    ? HttpApi.make("auth")
+    : HttpApi.make("auth").add(firstGroup, ...restGroups);
 };
 
 /**
@@ -482,6 +559,8 @@ export function make(plugins: ReadonlyArray<AuthPlugin.Any>) {
   const order = linkPlugins(plugins);
   return {
     api: composeApi(order),
+    publicApi: composeTier(order, false),
+    adminApi: composeTier(order, true),
     layer: composeLayer(order),
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),

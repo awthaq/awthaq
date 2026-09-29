@@ -72,25 +72,62 @@ export interface SessionReuseEvent {
   readonly userId: UserId;
 }
 
-/** ALF-004: published whenever `@awthaq/password` mints a session — signUp's initial session, signIn, and changePassword's own rotation alike. */
+/**
+ * ALF-004/ESA-006: published by `Sessions.issue` itself (both layers), so
+ * every path that mints a session — password, OAuth, passkey, admin
+ * impersonation, a legacy-session bridge, a `supersedes` rotation — emits
+ * exactly one, with no plugin having to remember to.
+ */
 export interface SessionIssuedEvent {
   readonly _tag: "auth.session.issued";
   readonly sessionId: string;
   readonly userId: UserId;
+  /** RRS-003: the rotation family this session belongs to (its own id for a fresh family). */
+  readonly familyId: string;
+  /** BEH-EA-209: present only for an impersonation session. */
+  readonly actingAs?: { readonly type: string; readonly id: string };
 }
 
+/** TIR-008/ESA-006: why a session ended — supplied by the caller of every `Sessions` revocation primitive. */
+export type SessionRevocationReason =
+  | "signOut"
+  | "userRevoked"
+  | "passwordChanged"
+  | "passwordReset"
+  | "userDeleted"
+  | "impersonationStopped"
+  | "admin"
+  | "reuseDetected"
+  /** SMS-003: evicted by `SessionConfig.maxConcurrent` when the user's newest session was issued. */
+  | "limitEvicted";
+
 /**
- * ALF-004: published whenever `@awthaq/password` bulk-revokes sessions as
- * part of a credential change — `confirmReset`'s `revokeAll` (no
- * authenticated "current" session to keep) and `changePassword`'s
- * `revokeOthers` (the caller's own session survives, rotated) alike. Carries
- * no `sessionId`: the underlying `Sessions.revokeAll`/`revokeOthers`
- * primitives are bulk operations with no per-row identity to report.
+ * TIR-008/ESA-006: published by `Sessions`' own revocation primitives
+ * (`revoke`, `revokeOwned`, `revokeOthers`, `revokeAll`, and reuse-detection's
+ * family revocation), so every revocation path is observable and lands in
+ * `AuditLog` — sign-out, account deletion and admin stops included, not just
+ * the password plugin's bulk revocations. `sessionId` is the ended row for
+ * `scope: "one"` and `null` for a bulk scope, which has no single row to name.
  */
 export interface SessionRevokedEvent {
   readonly _tag: "auth.session.revoked";
   readonly userId: UserId;
-  readonly reason: "passwordChanged" | "passwordReset";
+  readonly sessionId: string | null;
+  readonly scope: "one" | "others" | "all" | "family";
+  readonly reason: SessionRevocationReason;
+}
+
+/**
+ * ESA-006: published when `Sessions.verify` observes that a presented session
+ * (with its correct secret) is past its absolute or idle expiry. Lazy: there
+ * is no background reaper (CSG-003), so an expiry is only observed when the
+ * expired credential is presented, and each such presentation publishes one.
+ */
+export interface SessionExpiredEvent {
+  readonly _tag: "auth.session.expired";
+  readonly sessionId: string;
+  readonly userId: UserId;
+  readonly kind: "absolute" | "idle";
 }
 
 /** ALF-004: published by `@awthaq/password`'s `changePassword`, after the new hash is persisted. */
@@ -144,6 +181,38 @@ export interface AdminImpersonationStoppedEvent {
 export interface AdminImpersonationDeniedEvent {
   readonly _tag: "auth.admin.impersonationDenied";
   readonly adminUserId: UserId;
+}
+
+/**
+ * BAM-005: published by `@awthaq/admin` when an admin capability other than
+ * impersonation (`AdminConfig.canManageUsers`) resolves `false` — the same
+ * "genuine authorization rejection, never input-validation noise" signal
+ * `auth.admin.impersonationDenied` is for impersonation. `action` names the
+ * endpoint (`"listUsers"`, `"updateUser"`, ...).
+ */
+export interface AdminActionDeniedEvent {
+  readonly _tag: "auth.admin.actionDenied";
+  readonly adminUserId: UserId;
+  readonly action: string;
+}
+
+/** BAM-005: published by `@awthaq/admin`'s `updateUser`, after the profile change is persisted. */
+export interface AdminUserUpdatedEvent {
+  readonly _tag: "auth.admin.userUpdated";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+}
+
+/**
+ * BAM-005: published by `@awthaq/admin`'s `revokeUserSession`/`revokeUserSessions`.
+ * `sessionId` is the one revoked session, or `null` when every non-impersonation
+ * session of `userId` was revoked in one call.
+ */
+export interface AdminSessionRevokedEvent {
+  readonly _tag: "auth.admin.sessionRevoked";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+  readonly sessionId: string | null;
 }
 
 /** Published by `@awthaq/organization`'s `create`. */
@@ -253,6 +322,14 @@ export interface OrganizationTeamUpdatedEvent {
   readonly teamId: string;
 }
 
+/** OHS-001: published by `@awthaq/organization`'s `moveTeam`; `parentId` is `null` when the team became a root. */
+export interface OrganizationTeamMovedEvent {
+  readonly _tag: "auth.organization.teamMoved";
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly parentId: string | null;
+}
+
 /** Published by `@awthaq/organization`'s `removeTeam`. */
 export interface OrganizationTeamDeletedEvent {
   readonly _tag: "auth.organization.teamDeleted";
@@ -268,12 +345,87 @@ export interface OrganizationTeamMemberAddedEvent {
   readonly userId: UserId;
 }
 
+/** OHS-004: published by `@awthaq/organization`'s `updateTeamMemberRole`. */
+export interface OrganizationTeamMemberRoleUpdatedEvent {
+  readonly _tag: "auth.organization.teamMemberRoleUpdated";
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly userId: UserId;
+  readonly role: ReadonlyArray<string>;
+}
+
 /** Published by `@awthaq/organization`'s `removeTeamMember`. */
 export interface OrganizationTeamMemberRemovedEvent {
   readonly _tag: "auth.organization.teamMemberRemoved";
   readonly organizationId: string;
   readonly teamId: string;
   readonly userId: UserId;
+}
+
+/**
+ * Published by `@awthaq/organization` whenever its own `PermissionEngine`
+ * gating denies an operation (PERS-005) — the plugin authorizes without a
+ * qadi round trip, so without this its denials would leave no durable record.
+ * `reason` says why: the caller is not a member (`notMember`, answered to the
+ * caller as a 404) or is a member without the statement (`missingStatement`).
+ */
+export interface OrganizationPermissionDeniedEvent {
+  readonly _tag: "auth.organization.permissionDenied";
+  readonly organizationId: string;
+  readonly userId: UserId;
+  readonly resource: string;
+  readonly action: string;
+  readonly reason: "notMember" | "missingStatement";
+}
+
+/**
+ * Published by `@awthaq/qadi`'s `DecisionSinkAudit` for every authorization
+ * denial qadi's evaluator reaches (TS-003) — which policy denied which
+ * subject, durably, without the operator writing a sink of their own.
+ * `subjectId` is qadi's own subject id (`user:<id>`, `apikey:<id>`,
+ * `anonymous`, ...); `reason` is qadi's denial sentence (it names attributes,
+ * never their values).
+ */
+export interface AuthorizationDeniedEvent {
+  readonly _tag: "auth.authz.denied";
+  readonly subjectId: string;
+  readonly evaluationId: string;
+  readonly policyTag: string;
+  readonly action?: string | undefined;
+  readonly reason: string;
+}
+
+/**
+ * Published by `@awthaq/roles`' `assign`/`revoke` on a *real* change of a
+ * user's global role assignments (RRM-005): a re-assign or a revoke of a role
+ * the user never held publishes nothing. `userId` is the user whose roles
+ * changed; `actorUserId` the operator who changed them, when the caller said —
+ * `Roles` is a trusted primitive, so an application-driven change has none.
+ */
+export interface RolesAssignedEvent {
+  readonly _tag: "auth.roles.assigned";
+  readonly userId: UserId;
+  readonly roleName: string;
+  readonly actorUserId?: UserId | undefined;
+}
+
+/**
+ * FAMS-004: published by `@awthaq/qadi`'s `UserClaims` on a real change. `keys` names the
+ * claim keys that changed — never their values, which may be sensitive and must not enter the
+ * audit trail; `actorUserId` is who made the change, when known.
+ */
+export interface UserClaimsUpdatedEvent {
+  readonly _tag: "auth.user.claimsUpdated";
+  readonly userId: UserId;
+  readonly keys: ReadonlyArray<string>;
+  readonly actorUserId?: UserId | undefined;
+}
+
+export interface RolesRevokedEvent {
+  readonly _tag: "auth.roles.revoked";
+  readonly userId: UserId;
+  readonly roleName: string;
+  readonly actorUserId?: UserId | undefined;
 }
 
 /**
@@ -291,6 +443,20 @@ export interface RateLimitExceededEvent {
   readonly retryAfterMillis: number;
 }
 
+/**
+ * ERS-002: published by `MailDispatch` when a mail that was accepted for
+ * background delivery could not be delivered after its retries (or failed
+ * permanently) — the one signal that a verification/reset mail was lost,
+ * since the request that triggered it already answered uniformly. Carries the
+ * template and, when known, the user it concerned, never the recipient
+ * address or any token (EOTS-010).
+ */
+export interface MailFailedEvent {
+  readonly _tag: "auth.mail.failed";
+  readonly template: string;
+  readonly userId?: UserId;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -300,12 +466,16 @@ export type AuthEvent =
   | SessionReuseEvent
   | SessionIssuedEvent
   | SessionRevokedEvent
+  | SessionExpiredEvent
   | PasswordChangedEvent
   | PasswordResetCompletedEvent
   | PasskeyCounterAnomalyEvent
   | AdminImpersonationStartedEvent
   | AdminImpersonationStoppedEvent
   | AdminImpersonationDeniedEvent
+  | AdminActionDeniedEvent
+  | AdminUserUpdatedEvent
+  | AdminSessionRevokedEvent
   | OrganizationCreatedEvent
   | OrganizationUpdatedEvent
   | OrganizationDeletedEvent
@@ -321,10 +491,18 @@ export type AuthEvent =
   | OrganizationRoleDeletedEvent
   | OrganizationTeamCreatedEvent
   | OrganizationTeamUpdatedEvent
+  | OrganizationTeamMovedEvent
   | OrganizationTeamDeletedEvent
   | OrganizationTeamMemberAddedEvent
+  | OrganizationTeamMemberRoleUpdatedEvent
   | OrganizationTeamMemberRemovedEvent
-  | RateLimitExceededEvent;
+  | OrganizationPermissionDeniedEvent
+  | AuthorizationDeniedEvent
+  | RolesAssignedEvent
+  | UserClaimsUpdatedEvent
+  | RolesRevokedEvent
+  | RateLimitExceededEvent
+  | MailFailedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

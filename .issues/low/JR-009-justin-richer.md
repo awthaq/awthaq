@@ -3,7 +3,7 @@ ID: "JR-009"
 Title: "oidc() factory does not require the openid scope; a mis-scoped provider surfaces only as an undifferentiated runtime 400"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuthProvider.ts:179"
 Auditor: "justin-richer"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `oauth` · reported by **Justin Richer — OAuth2/OIDC Contributor, Co-author of "OAuth 2 in Action"** (`justin-richer`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ In resolve() (or the oidc factory), die at boot when kind === "oidc" and config.
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-provider-boot-validation`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthProvider.ts:127`. Fix: Die at boot when an `oidc` provider's scopes omit `openid`. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OAuthProvider.resolve dies at boot when an oidc provider's scopes omit openid; BEH-EA-127 amended. Test 'JR-009: an oidc provider whose scopes omit openid dies at boot' red first. Gates as ESS-002.

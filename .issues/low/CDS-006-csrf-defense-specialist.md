@@ -3,7 +3,7 @@ ID: "CDS-006"
 Title: "CSRF token is not bound to the session and never expires"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Csrf.ts:95"
 Auditor: "csrf-defense-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `server` · reported by **CSRF Defense Specialist** (`csrf-defense-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Sign <iat>.<random> and reject tokens older than a bounded window (e.g. 24h); op
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `csrf-hardening`. Evidence at HEAD ec065a7: `packages/server/src/Csrf.ts:91`. Fix: Time-bound the double-submit token: sign `<iat>.<random>`, reject tokens older than a configurable max age, and re-mint proactively so the window never bites mid-session. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Csrf.ts: token is now <iatSeconds>.<random>.<hmac(iat.random)> (HMAC covers iat), valid while now - iat <= CsrfConfig.maxAge (new optional field, default 24h; iat more than 60s in the future rejected), re-minted on any safe or unsafe request once a valid token is older than maxAge/2; a token past maxAge is invalid (403 on unsafe, fresh cookie on that response). Deliberately not session-bound (documented in the file header and BEH-EA-075: rotation every touchEvery would 403 hourly). Tests (server/test/Csrf.test.ts, TestClock): older than maxAge rejected on POST, within maxAge accepted past half-life, tampered iat fails signature, future iat rejected, re-minted at half-life on a GET (fresh iat), not re-minted when fresh. CROSS-BRANCH HAZARD: the wire format changed, so every hand-built double-submit cookie in tests had to move to the new format (server, password, passkey, admin, organization AuthHttp tests and features/step-definitions/CsrfTestSupport.ts; iat 0 under TestClock, real seconds for web-handler tests). Any test another branch adds with the old '<token>.<hmac>' helper will 403 after merge -- this is landed as its own separable commit.

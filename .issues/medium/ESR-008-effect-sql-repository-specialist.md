@@ -3,7 +3,7 @@ ID: "ESR-008"
 Title: "Package README and quality-metrics JSON contradict the shipped implementation"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/README.md:3"
 Auditor: "effect-sql-repository-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `sql` · reported by **Effect SQL Repository Specialist** (`effect-sql-repository-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Regenerate the README to describe the implemented Models/Repositories/CoreMigrat
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-docs-operations`. Evidence at HEAD ec065a7: `packages/sql/README.md:3`. Fix: Rewrite the package README as the operations home for the persistence stratum. The docs-only findings in this slice (ERAS-006, PPS-004, PPS-009, SSMS-006, NAM-007, CSG-006, CSG-009, SAM-006) land as sections of it. Refresh or delete the stale metrics JSON. (effort M). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/sql/README.md rewritten as the persistence operations home (what ships, driver matrix, PgClient pool recipe, embedded SQLite, migration ledgers + populated-database runbook, schema conventions, encryption boundary, read replicas, testing, migration guides); packages/sql/src/index.ts header now describes what ships (no 'Planned next'). .quality-metrics/sql.json does not exist in this repository (no .quality-metrics directory is tracked), so there was nothing to refresh or delete. Docs findings landed as sections: ERAS-006, PPS-004, PPS-009, SSMS-006, NAM-007, CSG-006 (boundary), SEA-003. CSG-009/SAM-006 belong to other programs and are not covered.

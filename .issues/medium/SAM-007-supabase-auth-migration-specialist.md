@@ -3,7 +3,7 @@ ID: "SAM-007"
 Title: "Token claims are write-only: auth.jwt()-based policies have no read path into qadi"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/SubjectResolver.ts:52"
 Auditor: "supabase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `qadi` · reported by **Supabase Auth Migration Specialist** (`supabase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Document the asymmetry explicitly in the jwt and qadi package docs: claims minte
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `authz-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/qadi/src/SubjectResolver.ts:52`. Fix: Document that JWT claims authenticate but do not authorize, and where claim-driven policy logic must be re-homed. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/jwt/README.md and packages/qadi/README.md state that JWT claims authenticate but do not authorize (definePayload claims are not projected into AuthSubject; the default resolver is identity-only) and where auth.jwt()-style facts must be re-homed (Roles, organization relations, AttributeResolver, own SubjectResolver override); cross-linked from the RLS appendix. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, tests/bdd green apart from load-induced timeouts in password/ports (machine load average ~170 from parallel agents; each green in isolation), spec:verify:strict PASS, oxlint clean.

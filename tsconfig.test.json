@@ -3,7 +3,8 @@
   "include": [
     "features/**/*.steps.test.ts",
     "packages/*/test/**/*.test.ts",
-    "packages/*/test/**/*.test.tsx"
+    "packages/*/test/**/*.test.tsx",
+    "examples/plugin-template/test/**/*.test.ts"
   ],
   "compilerOptions": {
     "noEmit": true,
@@ -45,7 +46,8 @@
       "@awthaq/admin": ["./packages/admin/src/index.ts"],
       "@awthaq/jwt": ["./packages/jwt/src/index.ts"],
       "@awthaq/migrate-auth0": ["./packages/migrate-auth0/src/index.ts"],
-      "@awthaq/migrate-better-auth": ["./packages/migrate-better-auth/src/index.ts"]
+      "@awthaq/migrate-better-auth": ["./packages/migrate-better-auth/src/index.ts"],
+      "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"]
     }
   }
 }

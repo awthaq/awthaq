@@ -22,6 +22,7 @@ const view: Sessions.SessionView = {
   ipAddress: Option.none(),
   userAgent: Option.some("test-agent"),
   actingAs: Option.none(),
+  amr: ["pwd"],
 };
 
 const session = (): Session => ({

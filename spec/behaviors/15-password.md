@@ -26,6 +26,10 @@ REQUIREMENT: `password.signUp` MUST create the user and session in one
              blocking the response on delivery.
 ```
 
+CSD-003: every session the password plugin mints (`signUp`, `signIn`, and the rotated one `changePassword` returns) records the request's resolved client address (through the `ClientAddress` port) and its `User-Agent`, bounded to 512 characters, so the session device list (BEH-EA-054) has data; `@awthaq/oauth`'s callback and `@awthaq/passkey`'s `authenticateVerify` do the same.
+
+ERS-002/EEM-002: the dispatch is owned, not fire-and-forget: `@awthaq/core`'s `MailDispatch` runs each mail in a `FiberSet` in the plugin's scope, retries a `retryable` `MailDeliveryFailed` (`Mailer.send`'s typed failure) with jittered exponential backoff, bounds concurrent sends, publishes `auth.mail.failed` (template and user id, never the recipient or token) when a mail is lost, and on shutdown waits up to `drainTimeout` for in-flight mail before interrupting the rest. The three background mails (sign-up verification, reset, resend) share it; an authenticated flow such as an organization invitation surfaces `MailDeliveryFailed` to its caller instead.
+
 `usage-examples-v4.md` §6.2 fixes the shape: `signUp` sends a verification mail as a side effect, and the caller receives a `SessionView` immediately rather than waiting on mail delivery. Not awaiting the send keeps the sign-up response time independent of the mail provider's latency and, per `research/05-oauth-oidc.md` Q48's `Mailer`-capability recommendation ("Fire-and-forget: core wraps sends with `Effect.forkDaemon`/`waitUntil`-style detached execution so request latency and error surface don't leak account existence (enumeration resistance...)"), avoids a timing side-channel that a slow-vs-fast response could otherwise leak about whether the address already had an account. Q48 lives in the OAuth research file because it was written to answer a delivery question that first came up in the OAuth/verification-linking context, but the finding itself is general to any mail send awthaq issues from a request path — password sign-up's verification mail included — which is why this citation names the specific question rather than the file's title.
 
 _Previous: [BEH-EA-112](14-rate-limiting.md#beh-ea-112-testing-with-a-permissive-limiter) | Next: [BEH-EA-114](15-password.md#beh-ea-114-uniform-invalidcredentials-on-sign-in)_
@@ -46,6 +50,8 @@ REQUIREMENT: `password.signIn` MUST fail with the same `InvalidCredentials`
 PRD §10 states this directly: "`InvalidCredentials` is uniform to prevent enumeration." An attacker probing `signIn` cannot use a different error, status, or timing to learn which emails have accounts — the constant-time hash comparison and the single error shape together remove the oracle. `usage-examples-v4.md` §1.2 shows the wire shape: `401 {"_tag":"InvalidCredentials"}`, regardless of which of the three underlying reasons applied.
 
 **Timing floor (TSS-006).** A verify runs at the *stored* hash's cost, so a row still on a cheaper legacy hash (bcrypt awaiting rehash) would answer faster than the dummy-hash path an unknown email takes. `PasswordConfig.signInTimingFloor` closes that: by default (`"calibrated"`) the layer times a verify of its boot-time dummy hash and holds `signIn`'s credential check (lookup plus verify, success and failure alike) to at least 1.25 times that; a `Duration` fixes the floor and `"off"` disables it. `changePassword` and `reauthenticate` hold their verify to the same floor. The residual: a hash *costlier* than the floor (a high-cost legacy bcrypt) still takes longer than the floor and stays distinguishable until it has been rehashed.
+
+**Verified-email gate (FAMS-003).** After the credentials are confirmed, `signIn` refuses an unverified account (`403 EmailNotVerified`), so the gate can never be used to probe a password. `PasswordConfig.requireVerifiedEmail` (default `true`) turns it off for a deployment whose imported users were never verified in the source system; such a deployment either calls `Users.verifyEmail` for the users the source had verified, or keeps the gate off and restricts unverified users downstream.
 
 _Previous: [BEH-EA-113](15-password.md#beh-ea-113-sign-up-issues-a-pending-user-and-a-verification-mail) | Next: [BEH-EA-115](15-password.md#beh-ea-115-passwordhasher-is-a-port-the-plugin-never-provides)_
 
@@ -80,6 +86,10 @@ REQUIREMENT: On a successful sign-in, if the stored hash's parameters are
              unless the deployment opts into `exact` semantics.
 ```
 
+TTE-005: a stored hash is the branded `PasswordHasher.PhcHash` end to end: `hash` returns one, `verify`/`needsRehash` require one, `Accounts` stores and returns `Redacted<PhcHash>`, and the only places that mint one are trust boundaries (the hasher, a repository reading a stored column, a migration import). A bare string cannot be verified or stored as a credential by accident.
+
+ERS-001: KDF work is bounded, and can be moved off the event loop. The calling-thread layers admit at most `AUTH_PASSWORD_HASH_CONCURRENCY` (default 4) concurrent hash/verify derivations, legacy verifiers included; `PasswordHasherWorkerPool` provides the same hashers with the derivation in a pool of `AUTH_PASSWORD_HASH_WORKER_POOL_SIZE` worker threads (an opt-in Layer swap needing the application's worker platform). Hashes are identical either way; parsing, ceilings, the rehash policy and the constant-time comparison always run on the calling thread. Password hashing belongs on a long-running runtime, not an edge/Workers tier (ERAS-004).
+
 PHS-002: the default `AUTH_PASSWORD_REHASH_POLICY=floor` rewrites only a hash weaker than the target (argon2: `m` or `t` below it; scrypt: `N` or `r` below it; `p` alone never triggers), so lowering the configured cost can never silently downgrade existing hashes. `AUTH_PASSWORD_REHASH_POLICY=exact` restores the earlier "any difference" behavior for an operator who deliberately lowers cost. Both layers also refuse, without running the KDF, any stored hash claiming a cost above a configurable ceiling (ACS-006), and `layerArgon2id` compares digests itself in constant time rather than through hash-wasm's `argon2Verify` (PHS-001).
 
 
@@ -98,7 +108,16 @@ yield* client.password.confirmReset({ payload: { token, password: newPassword } 
 REQUIREMENT: `password.requestReset` MUST respond identically for a known and
              an unknown email; `password.confirmReset` MUST consume the reset
              token and revoke every other session for the account in the same
-             transaction that sets the new password.
+             transaction that sets the new password. `confirmReset` MUST
+             evaluate the password policy before consuming the token (a weak
+             password never burns it, and no breach-check network call runs
+             inside the transaction), MUST refuse a token of another purpose
+             or for an account with no password credential as `TokenConsumed`
+             (never a defect), and MUST mark the account's email verified —
+             the mailed token proves the same mailbox control `verifyEmail`
+             does. `requestReset` for an existing account with no password
+             credential MUST mail `reset-password-unavailable` (no token)
+             instead of a reset link.
 ```
 
 `usage-examples-v4.md` §6.1 states both halves: the request endpoint answers `202` unconditionally, so an attacker cannot use it to test which emails are registered, and confirmation both consumes the token and revokes other sessions "in the same transaction that sets the new password" — so a session an attacker obtained before the legitimate reset does not survive it. This is the reset-token half of the purpose-scoped, single-use Verification design that file 08 specifies for tokens generally.
@@ -125,8 +144,9 @@ _Previous: [BEH-EA-117](15-password.md#beh-ea-117-reset-revokes-other-sessions-i
 ## BEH-EA-119: Breach-check is fail-open by default, fail-closed by config
 
 ```ts
-password({ breachCheck: true })                                       // HIBP unreachable → fail-open
+password({ breachCheck: true })                                       // the default: HIBP unreachable → fail-open
 password({ breachCheck: { onUnavailable: "reject" } })                 // fail-closed
+password({ breachCheck: false })                                      // opt out (air-gapped deployments)
 ```
 
 ```text
@@ -135,6 +155,8 @@ REQUIREMENT: When `breachCheck` is enabled and the breach-database provider is
              application has explicitly configured `onUnavailable: "reject"`;
              the default posture MUST be documented, not silently chosen.
 ```
+
+PHS-006/PHS-004: screening is **on by default** (NIST SP 800-63B §3.1.1.2 makes checking against compromised-password lists a SHALL; the k-anonymity range API discloses only a 5-character SHA-1 prefix), fail-open, and turning it off is the one line `breachCheck: false`. "Unavailable" means everything short of a well-formed range listing: a transport error, a non-2xx status, a 200 whose body is not a listing (an HTML error page, an empty or truncated body), and a lookup that exceeds `breachCheckTimeout` (3 s by default) — so a black-holed egress can neither hang sign-up nor read as "not breached".
 
 `usage-examples-v4.md` §6.3 states the default outcome directly — "HIBP unreachable → fail-open by default" — and gives the escape hatch for operators who would rather block sign-up than risk admitting a breached password. Fail-open is the default because a third-party outage should not be able to take down account creation for an application that has no other dependency on that provider; fail-closed is available because some deployments' risk posture prefers exactly that trade in the other direction. Either way the choice is explicit configuration, never an accident of how the HTTP call to the provider happened to fail.
 
@@ -156,5 +178,7 @@ REQUIREMENT: `minLength`, `breachCheck` and related policy knobs MUST be
 ```
 
 This is ADR-EA-011 ("Configuration Is a Service With a Default") applied to the password plugin specifically: `WeakPassword` is a typed error the contract already declares, and tightening `minLength` from 8 to 16 changes only which inputs trigger it, not the shape of the endpoint. A contract test in the testing harness (file 25, `runPluginContractTests`'s "options do not change the contract hash" check) holds this invariant for every option the plugin exposes, password policy included.
+
+ESS-006/EHA-007: the static half of the policy lives in the contract: every email payload field is `EmailContract.Email` from `@awthaq/api` (a shape check, non-normalizing: one `@`, no whitespace, local part at most 64, domain with a dot, at most 254 in all) and every password field is capped at 1024 characters, so malformed input answers `400` before any rate limit, hasher or database is touched. `minLength` and the breach check stay in `checkPolicy` because they read the runtime configuration a static schema cannot. The endpoints that need a live session (`change-password`, `reauthenticate`) form the `password.account` group with group-level `Authentication`, the same convention `passkey` and `jwt` follow; their wire paths are unchanged.
 
 _Previous: [BEH-EA-119](15-password.md#beh-ea-119-breach-check-is-fail-open-by-default-fail-closed-by-config) | Next: [BEH-EA-121](16-oauth.md#beh-ea-121-pkce-s256-is-structural-not-optional)_

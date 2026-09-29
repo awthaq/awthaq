@@ -3,7 +3,7 @@ ID: "NSA-005"
 Title: "No peerDependencies: zero declared compatibility range for next or react"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/package.json:33"
 Auditor: "nextjs-server-actions-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `next` · reported by **Next.js Server Actions Auth Specialist** (`nextjs-server-actions-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `next-package-manifest-hygiene`. Evidence at HEAD ec065a7: `packages/next/package.json:42`. Fix: Declare the Next.js range the recipes assume and document the proxy.ts/middleware.ts split. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
 
 **Plan note (2026-09-29):** Partially done: README now states the proxy.ts (Next 16.3+) vs middleware.ts split and the Next 15+ assumption. NOT done: `peerDependencies.next` (+ optional meta). pnpm auto-installs the peer for this workspace package, so adding it makes the lockfile resolve next + sharp (~500 lines) and breaks `pnpm install --offline` for every other worktree (no next metadata in the offline mirror). Enable by adding `"next": ">=15.0.0"` to packages/next peerDependencies with `peerDependenciesMeta.next.optional = true` and regenerating the lockfile online, at merge time.
+
+**Resolved (2026-09-29):** Completed at integration: packages/next peerDependencies.next '>=15.0.0' + optional peerDependenciesMeta; lockfile regenerated online (adds next and its deps); README states the proxy.ts (16.3+) vs middleware.ts split. Supersedes the earlier Plan note.

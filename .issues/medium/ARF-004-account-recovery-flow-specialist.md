@@ -3,7 +3,7 @@ ID: "ARF-004"
 Title: "requestReset issues tokens for accounts with no password credential; confirmReset then dies with a 500"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:650"
 Auditor: "account-recovery-flow-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `password` · reported by **Account Recovery Flow Specialist** (`account-recovery-flow-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Check accounts.findByProviderSubject(PASSWORD_PROVIDER_ID, user.id) in requestRe
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-recovery-correctness`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:1005`. Fix: Skip reset issuance for credential-less accounts (inside the forked fiber, preserving uniform latency) and map the missing-credential case to TokenConsumed defensively. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** requestReset looks up the password credential inside the dispatched work (uniform latency kept) and mails template reset-password-unavailable (no token) for OAuth-/passkey-only accounts; confirmReset maps a missing credential to TokenConsumed instead of a defect. Tests (red first): PasswordRecovery.test.ts. BEH-EA-117 updated.

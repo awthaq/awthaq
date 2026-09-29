@@ -55,3 +55,5 @@ Bind a `Schema.BooleanFromBit`-encoded value (or encode `true` through the model
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** ALREADY-FIXED (confidence high); workstream `sql-dialect-neutral-models`. Already fixed by commit b8d6177. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:103`. Full dossier: `.plan/slices/05-sql.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Already fixed by b8d6177 (dialect literal) and now fully superseded by PPS-007/TS-001: verifyEmail binds through the dialect boolean codec, no literal.

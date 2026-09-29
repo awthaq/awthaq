@@ -3,7 +3,7 @@ ID: "RRS-006"
 Title: "AccountsRepository.update read-modify-write of all three secret columns is a lost-update hazard"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Accounts.ts:424"
 Auditor: "refresh-token-rotation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `core` · reported by **Refresh Token Rotation Specialist** (`refresh-token-rotation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Offer targeted per-secret writes (the updateCredentialHash pattern generalized t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `accounts-targeted-writes`. Evidence at HEAD ec065a7: `packages/core/src/Accounts.ts:600`. Fix: Replace read-pass-through writes with column-targeted UPDATE statements (no read needed) so writers of one secret never rewrite another. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Re-verified at current HEAD: the read-pass-through writes were already replaced by P03's SMS-002 targeted UPDATEs (AccountsRepository.updatePasswordHash / updateProviderTokens; core Accounts.updateCredentialHash/updateProviderTokens call them, no generic update on any write path; existing core tests 'updateCredentialHash leaves the tokens untouched' / 'updateProviderTokens leaves the hash untouched' cover the dossier's test). Residual closed here: core updateProviderTokens still read the row through findById (decrypting and possibly lazily re-encrypting the very columns it was about to overwrite) just to get the AAD; added AccountsRepository.findAad (token-free SELECT providerId,userId) and used it. Test packages/sql/test/AccountsTokenReadPath.test.ts 'findAad returns the encryption AAD without touching the token columns' (red: findAad missing). Not done: the dossier's optional step 3 (expectedUpdatedAt CAS + single-flight refresh in OAuthTokenAccess) — left as a follow-up, the residual is two concurrent writers of one federated row, each writing a complete self-consistent token set.

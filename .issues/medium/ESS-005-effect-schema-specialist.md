@@ -3,7 +3,7 @@ ID: "ESS-005"
 Title: "Rate-limit key derivation uses bare casts 60 lines after the same file forbids them"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:397"
 Auditor: "effect-schema-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `password` · reported by **Effect Schema Specialist** (`effect-schema-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Use emailFromRateLimitInput in all four rules, or better, type RateLimitKey's in
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-rate-limit-hardening`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:571`. Fix: Remove the three casts — delivered by RBS-006's single-source rule definitions (schema-decoded registry keys). (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** The three 'as' key casts are gone: every rule is defined once with a Schema for its secret-free key input (PasswordRateLimits.ts) and the registry key narrows with Schema.decodeUnknownOption. Password.ts contains no type assertions.

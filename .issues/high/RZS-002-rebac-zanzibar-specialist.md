@@ -51,3 +51,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — spec/appendices/02-qadi-path-a-end-to-end.md:59 matches verbatim, and a repo-wide grep of `packages/` finds zero references to `DecisionCache`/`decisionCache`/`.clear`; OrganizationHooks.ts (lines 68/94/108) does define the `AfterRemoveMember`/`AfterUpdateMemberRole`/`AfterDeleteOrganization` hook points the auditor cites, but nothing consumes them for cache invalidation. Designing the invalidation layer (hook-driven clear vs. zookie/revision semantics) is an architecture decision. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `qadi-decision-cache-invalidation`. Duplicate of `PCS-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `spec/appendices/02-qadi-path-a-end-to-end.md:59`. Full dossier: `.plan/slices/12-spec.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `PCS-001-permission-caching-specialist` — closed by its fix (see that issue's Resolved comment).

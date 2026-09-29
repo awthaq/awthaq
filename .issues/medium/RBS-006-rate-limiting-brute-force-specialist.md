@@ -3,7 +3,7 @@ ID: "RBS-006"
 Title: "Registry metadata has already drifted from enforced keys (and two registered keys embed full request payloads)"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:402"
 Auditor: "rate-limiting-brute-force-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `password` · reported by **Rate Limiting & Brute-Force Defense Specialist** (`rate-limiting-brute-force-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Make the registry the single source of truth: pass the registered key function t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-rate-limit-hardening`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:581`. Fix: Make one typed rule definition feed both the registry and enforcement; key functions never see secrets. (effort M). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** One typed rule definition (PasswordRateLimits.makeRules) feeds both registration and enforcement; keys are derived only from { email } / { ip } / { identifier } / { userId }, never a payload. Tests: packages/password/test/PasswordRateLimits.test.ts (registered keys equal enforced keys for Alice@X.com, no secrets in any registered key, inert key on wrong-shaped input).

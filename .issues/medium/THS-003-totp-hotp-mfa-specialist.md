@@ -3,7 +3,7 @@ ID: "THS-003"
 Title: "Sessions carry no amr/trust/assurance field recording which factors authenticated the principal"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:90"
 Auditor: "totp-hotp-mfa-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **TOTP/HOTP MFA Specialist** (`totp-hotp-mfa-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ When two-factor lands, add an authentication-methods-evidence field to the sessi
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-policy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:92`. Fix: Add RFC 8176 `amr` evidence to sessions: set at issue by the authenticating plugin, extendable by reauthenticate, exposed on SessionView/SessionListItem/SessionDto. (effort L). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** core Sessions.ts: closed AuthMethod union (RFC 8176: pwd|hwk|swk|user|otp|mfa|fed|email), issue({amr?}), SessionRow/SessionView/SessionListItem.amr, reauthenticate(id, amr?) unions (order-preserving, deduplicated, monotone; unionAmr exported), parseAmr drops unknown values. SQL: Models.Session.amr (JSON-array text, constructor default '[]', no update variant), migration 19 add_sessions_amr_column (NOT NULL DEFAULT '[]'), SessionsRepository.reauthenticate takes the already-unioned JSON (COALESCE). api SessionDto.amr (decoding default [] + constructor default), server Session.ts/password/passkey/admin DTO builders. Callers: password signUp/signIn/changePassword [pwd] and reauthenticate; OAuth [fed]; passkey [hwk] + user when UV (issue and reauthenticate); legacy bridge and impersonation none. Tests: core Sessions.test.ts both layers (issue/verify/list/findOwned round-trip, none by default, reauthenticate union), password/oauth/passkey amr assertions. Spec: BEH-EA-049 paragraph. Deferred: qadi Subject attribute exposure (step 4, coordinate with qadi owners) -- the resolved UserPrincipal now carries amr for qadi's SubjectResolver to read. Touches password/passkey/oauth/admin sources.

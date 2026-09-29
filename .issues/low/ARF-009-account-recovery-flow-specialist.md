@@ -3,7 +3,7 @@ ID: "ARF-009"
 Title: "Mailed reset token embeds the internal userId, leaking a UUIDv7 (creation timestamp) inside a recovery artifact"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:177"
 Auditor: "account-recovery-flow-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `password` · reported by **Account Recovery Flow Specialist** (`account-recovery-flow-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Issue an opaque per-token public id (the VerificationTokenId already exists) in 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `verification-token-delivery`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:271`. Fix: Replace the userId in token identifiers with a random public id; recover userId from the consumed VerificationTokenView. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Tokens are <purpose>:<publicId>.<secret> with a 128-bit random base64url publicId; userId is recovered from the consumed row (Option.none -> TokenConsumed) and rate-limit keys use the publicId. Tests (red first): PasswordMail.test.ts ('reset and verify mail tokens do not contain the userId'); VerificationLink.test.ts. Trade-off noted: a re-request no longer supersedes an earlier undelivered token for the same user (old tokens live until expiry); a per-user invalidation would need a Verification API addition (not done).

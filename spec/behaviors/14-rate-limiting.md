@@ -110,6 +110,8 @@ REQUIREMENT: A rate-limit rule MUST derive its bucket key from `CurrentPrincipal
 
 Two failure modes motivate the constraint: keying only on IP lets a NATed office collectively lock itself out, and keying on an attacker-chosen value (an email in a sign-in payload, say) makes the limiter's bucket space attacker-controlled, defeating the limit's purpose. The built-in strategies (`"principal"`, `"ip"`) cover the common cases; a custom function is available for a plugin that genuinely needs a composite key (`` `signin:${email}` `` in `usage-examples-v4.md` §16), but the plugin author is then responsible for the same reasoning the built-ins already satisfy.
 
+RBS-006/TMS-006: a plugin that registers rules for introspection and also enforces them (`@awthaq/password` does) defines each rule once, so the registered key function and the enforced key cannot drift; a key is derived only from the small secret-free input its endpoint names (an email, an address, a token's public id, a user id), never from a request payload that also carries a password or token. A per-email key SHOULD be normalized so subaddressed aliases (`victim+1@x.com`) share one bucket while delivery keeps the literal address.
+
 _Previous: [BEH-EA-107](14-rate-limiting.md#beh-ea-107-a-plugin-may-only-rate-limit-its-own-endpoints) | Next: [BEH-EA-109](14-rate-limiting.md#beh-ea-109-swappable-stores)_
 
 ## BEH-EA-109: Swappable stores

@@ -3,7 +3,7 @@ ID: "TMS-006"
 Title: "Signup spam and verification-mail bombing via subaddressed aliases — per-email rate keys normalize case only"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:471"
 Auditor: "threat-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `password` · reported by **Threat Modeling Specialist** (`threat-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Normalize subaddressing (strip '+tag' for the rate-limit key, keep the literal e
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `password-rate-limit-hardening`. Already fixed by commit a3b7255. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:715`. Fix: Normalize subaddressed emails for every per-email rate-limit key (delivery keeps the literal address). (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Per-email rate keys normalize case and a +tag (defaultEmailRateKey), configurable via PasswordConfig.rateLimitEmailKey, for signUp/signIn/requestReset/resendVerification; delivery keeps the literal address. Tests: PasswordRateLimits.test.ts (victim+1..6@x.com share one bucket; custom key fn).

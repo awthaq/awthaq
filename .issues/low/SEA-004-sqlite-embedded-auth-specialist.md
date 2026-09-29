@@ -3,7 +3,7 @@ ID: "SEA-004"
 Title: "All SQLite tests run :memory:, so the WAL configuration production gets is never exercised"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/test/Repositories.test.ts:27"
 Auditor: "sqlite-embedded-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `sql` · reported by **SQLite Embedded Auth Specialist** (`sqlite-embedded-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Add one contract-suite pass against a temp-dir file database (and a two-client c
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-contract-test-coverage`. Evidence at HEAD ec065a7: `packages/sql/test/Repositories.test.ts:27`. Fix: Run the SQLite contract cases against a temp-file database as well, and add a two-connection contention test for the CAS primitives. (effort M). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/sql/test/Repositories.file.test.ts runs the shared contract cases on a temp-file WAL database (journal_mode asserted = wal) and races Sessions.touch and VerificationReservations.claim across two independent SqliteClient connections on one file: exactly one winner each, winner visible to both connections.

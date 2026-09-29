@@ -121,6 +121,8 @@ REQUIREMENT: Every endpoint whose failure could disclose whether a
 
 This is BEH-EA-027 and BEH-EA-064 restated as a property of the HTTP surface taken as a whole, per `archive/PRD.md` §18's "uniform enumeration-safe errors": the requirement applies not only to sign-in (`InvalidCredentials`) and password reset (`requestReset` always `202`), but to every endpoint the composed `auth.api` exposes, including ones contributed by third-party plugins — a plugin author is expected to apply the same discipline to their own account- or token-existence-sensitive endpoints.
 
+TMS-005: `password.signUp` is the one recorded exception. By default (`signUpEnumeration: "reveal"`) it answers `409 EmailAlreadyExists` for a registered address, with the `signUp`/`signUpByIp` rate limits as compensating controls; `"conceal"` closes it (`202`, no session, mail to the address's owner). See [ADR-EA-026](../decisions/026-signup-enumeration-posture.md).
+
 ## BEH-EA-087: `ManagedRuntime` serves imperative, non-Effect-native code paths against the same Layer
 
 ```ts

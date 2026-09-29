@@ -1,9 +1,5 @@
 # @awthaq/test
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+Test harness: `TestAuth.layer` runs a composed plugin tuple over an in-memory backend (memory `Users`/`Accounts`/`Sessions`/`Mailer`, a permissive `RateLimiter`, `SqlTransaction.layerNoop`, direct client addresses) so a wire-level test needs no database (BEH-EA-193–200). `examples/memory-server` runs the same machinery as a real listening server.
 
-Tools. TestAuth test harness and the plugin contract-test suite (runPluginContractTests) — runs the whole plugin pipeline over an in-memory backend.
-
-**Planned first module:** TestAuth.ts (spec/behaviors/25-testing-harness.md, BEH-EA-193–200)
-
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+See [`spec/behaviors/25-testing-harness.md`](../../spec/behaviors/25-testing-harness.md).

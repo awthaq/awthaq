@@ -3,7 +3,7 @@ ID: "TRBS-005"
 Title: "Memory layer revocation never propagates: per-process Ref, zero cross-instance story"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:222"
 Auditor: "token-revocation-blacklist-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **Token Revocation & Blacklist Specialist** (`token-revocation-blacklist-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Document layerMemory as single-instance-only in its API docs, and for multi-inst
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-docs-accuracy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:317`. Fix: Document every core layerMemory as single-process/test-grade and point multi-instance deployments at layerSql (or a future KV layer per ADR-EA-014). (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Doc-only: single-process/test-grade warning (per-process Ref, no cross-instance revocation, restart loss, unbounded growth until CSG-003's sweep, use layerSql) on Sessions/Users/Accounts/Verification layerMemory; ADR-EA-014 rev 1.1 Consequences paragraph; examples/memory-server header. AuthEvents' PubSub boundary is mentioned in the same comments. spec:verify:strict green.

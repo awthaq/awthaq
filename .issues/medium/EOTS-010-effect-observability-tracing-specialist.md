@@ -3,7 +3,7 @@ ID: "EOTS-010"
 Title: "Mailer contract carries token-bearing payloads with no logging prohibition, and layerNoop interpolates recipient email into a die message"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:507"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `password` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Document a never-log clause on the Mailer port contract, pass tokens as `Redacte
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mail-delivery-reliability`. Evidence at HEAD ec065a7: `packages/ports/src/Mailer.ts:50`. Fix: Harden the Mailer contract: tokens as Redacted in data, never-log clause, no PII in layerNoop's defect. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Mailer contract hardened: MailMessage/MailerShape document the never-log clause, layerNoop's defect carries only the template, token mail data is Redacted (VerificationLink.mailData). Tests: Mailer.test.ts (noop defect has no recipient/token), PasswordMail.test.ts (String(data.token) does not reveal it); tests/BDD steps read tokens via a narrowing helper.

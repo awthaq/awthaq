@@ -24,10 +24,12 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { makeServerActionClient, serverActionClient } from "../src/ServerActionClient.ts";
 
-const secret = "test-csrf-secret";
+// CSRF secrets must be at least 32 bytes (the layer dies at build otherwise).
+const secret = "test-csrf-secret-0123456789-0123456789";
+// `<iatSeconds>.<random>.<hmac>` — the wire format `CsrfProtectionLive` mints and verifies.
 const validCsrfCookie = (): string => {
-  const token = randomBytes(32).toString("hex");
-  return `${token}.${createHmac("sha256", secret).update(token).digest("hex")}`;
+  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
+  return `${signed}.${createHmac("sha256", secret).update(signed).digest("hex")}`;
 };
 
 const Echo = Schema.Struct({

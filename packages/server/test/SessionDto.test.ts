@@ -19,6 +19,7 @@ const view: Sessions.SessionView = {
   ipAddress: Option.some("203.0.113.9"),
   userAgent: Option.some("test-agent"),
   actingAs: Option.none(),
+  amr: ["pwd"],
 };
 
 describe("toSessionDto (RSC-005)", () => {
@@ -29,6 +30,7 @@ describe("toSessionDto (RSC-005)", () => {
     assert.strictEqual(dto.lastActiveAt, "2024-01-02T00:00:00.000Z");
     assert.strictEqual(dto.expiresAt, "2024-02-01T00:00:00.000Z");
     assert.strictEqual(dto.userAgent, "test-agent");
+    assert.deepStrictEqual(dto.amr, ["pwd"]);
     assert.isTrue(dto.current);
   });
 

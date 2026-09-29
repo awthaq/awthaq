@@ -3,7 +3,7 @@ ID: "CWM-003"
 Title: "removeMember/leave delete the membership row but leave the removed user's active-organization pointer stale and never touch their session"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1206"
 Auditor: "clerk-workos-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `organization` · reported by **Clerk/WorkOS Migration Specialist** (`clerk-workos-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ In removeMember/leave (and organization delete's cascade), unset the removed use
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-active-context-lifecycle`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1564`. Fix: Clear active-context pointers (and team memberships) whenever the membership/team/org they point at goes away, and re-validate on read. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** removeMember and leave now go through dropMembership: one SqlTransaction that removes the membership, calls activeContext.clearOrganizationForUser and the new teams.removeUserFromOrganizationTeams (decrementing each memberCount), then publishes auth.organization.teamMemberRemoved + runs AfterRemoveTeamMember per team after commit (N9: team-member in qadi no longer answers for a removed member). delete_ clears activeContext.clearOrganization and removeTeam clearTeam inside their transactions (closes OHS-007). getActive re-validates org/team membership on read and lazily clears stale pointers. Tests: Organization.test.ts 'active context lifecycle (CWM-003)' x5, OrganizationQadi.test.ts 'a removed member is no longer team-member', ActiveContextRecords.test.ts; all red before. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 871 pass, test:bdd green, spec:verify:strict PASS, oxlint clean.

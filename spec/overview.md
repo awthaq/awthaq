@@ -91,8 +91,8 @@ Each table below is a planned surface, not a shipped one. "Source" is the intend
 
 | Export | Kind | Source |
 |---|---|---|
-| `PasswordHasher` (`layerArgon2id`, `layerScrypt`) | `Context.Tag` + Layers | `PasswordHasher.ts` |
-| `Mailer` (`layerNoop`, `layerMemory`) | `Context.Tag` + Layers | `Mailer.ts` |
+| `PasswordHasher` (`layerArgon2id`, `layerScrypt`, worker-pool variants in `PasswordHasherWorkerPool`) | `Context.Tag` + Layers | `PasswordHasher.ts` — plus a verify-only `LegacyPasswordVerifiers` reference for imported foreign hashes (bcrypt, Firebase scrypt, better-auth scrypt) |
+| `Mailer` (`layerNoop`, `layerMemory`) | `Context.Tag` + Layers | `Mailer.ts` — `send` fails with a typed `MailDeliveryFailed` (EEM-002); `layerNoop` still dies |
 | `WebAuthn` (`layerSimpleWebAuthn`) | `Context.Tag` + Layers | `WebAuthn.ts` |
 
 ### Domain stratum (4)
@@ -105,6 +105,8 @@ Each table below is a planned surface, not a shipped one. "Source" is the intend
 | `Verification` | `Context.Service` | `Verification.ts` |
 | `AuthEvents` | `Context.Service` (bounded `PubSub`) | `AuthEvents.ts` |
 | `BeforeSignUp`, `BeforeSignIn`, `BeforeSessionIssue`, `AfterSignUp`, `AfterSignIn`, `BeforeUserDelete` | hook points (`HookPoint.Service`) | `Hooks.ts` |
+
+**Edge and origin.** Persistence depends only on `effect`'s `SqlClient`, so where code runs is decided by the client provided. Edge runtimes (Workers, Vercel Edge) do stateless work — verifying a signed JWT (`@awthaq/jwt`), presence checks — and need no database; origin (Node) owns everything backed by a `SqlClient` (sessions, users, credentials, migrations), unless an HTTP-capable sqlite-dialect driver (libSQL) is used. The driver matrix and its tested/untested status is in `packages/sql/README.md`, "Runtimes & drivers" (ERAS-006).
 
 ### Qadi bridge (stratum 6)
 
@@ -129,7 +131,11 @@ export const AuthLive = auth.layer.pipe(
   Layer.provide(WebAuthn.layerSimpleWebAuthn({ rpId: "example.com", origins: ["https://example.com"] })),
   Layer.provide(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
   Layer.provide(PgMigrator.layer({ loader: PgMigrator.fromRecord(auth.migrations) }).pipe(
-    Layer.provideMerge(PgClient.layerConfig({ url: Config.Redacted("DATABASE_URL") })))),
+    Layer.provideMerge(PgClient.layerConfig({
+      url: Config.Redacted("DATABASE_URL"),
+      maxConnections: 10,        // (server max_connections - headroom) / app instances
+      idleTimeout: "30 seconds", // prepare: false behind pgbouncer transaction pooling
+    })))),
   Layer.provide(NodeServices.layer)
 )
 // Delete the Mailer line: AuthLive no longer compiles.

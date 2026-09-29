@@ -14,18 +14,30 @@ import {
   Accounts,
   Hooks,
   HookPoint,
+  MailDispatch,
   RateLimits,
+  SessionCookie,
   Sessions,
   Users,
   Verification,
+  VerificationLink,
 } from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import {
+  ClientAddress,
+  Hmac,
+  Mailer,
+  PasswordHasher,
+  RateLimiter,
+  SqlTransaction,
+} from "@awthaq/ports";
 import { Session } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Headers from "effect/unstable/http/Headers";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -34,10 +46,25 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as PasswordApi from "./PasswordApi.ts";
+import * as PasswordRateLimits from "./PasswordRateLimits.ts";
 
 export interface PasswordConfigShape {
   readonly minLength: number;
+  /**
+   * BEH-EA-119/PHS-006: screening a new password against the HIBP corpus is on
+   * by default (NIST SP 800-63B section 3.1.1.2 makes checking against
+   * compromised-password lists a SHALL; the k-anonymity range API discloses
+   * only a 5-character SHA-1 prefix). `true` fails open when the provider is
+   * unavailable, `{ onUnavailable: "reject" }` fails closed, `false` disables
+   * it (air-gapped deployments).
+   */
   readonly breachCheck: boolean | { readonly onUnavailable: "allow" | "reject" };
+  /**
+   * PHS-004: how long the breach lookup (request plus body) may take before
+   * it counts as "unavailable" and follows `breachCheck`'s `onUnavailable`,
+   * so a black-holed egress never hangs sign-up.
+   */
+  readonly breachCheckTimeout: Duration.Duration;
   readonly resetTtl: Duration.Duration;
   readonly rehashOnLogin: boolean;
   /**
@@ -50,14 +77,55 @@ export interface PasswordConfigShape {
    * the floor still takes longer, and stays distinguishable until rehashed.
    */
   readonly signInTimingFloor: "calibrated" | "off" | Duration.Duration;
+  /**
+   * TMS-006: maps an address to the per-email rate-limit bucket it is
+   * counted in (sign-up, sign-in, reset, resend). The default lower-cases and
+   * strips a `+tag`, so subaddressed aliases share one budget; delivery still
+   * uses the literal address. Override for providers with other conventions.
+   */
+  readonly rateLimitEmailKey: (email: string) => string;
+  /**
+   * MLO-009: builds the link mailed for each token, from the token string. When
+   * set, the mail's `data.url` carries it (alongside `token` and `expiresAt`,
+   * which are always present). Point it at a page that consumes the token from
+   * the URL fragment or a form POST — never a query string a GET handler
+   * acts on, which mail scanners prefetch.
+   */
+  readonly links: {
+    readonly verifyEmail?: (token: string) => string;
+    readonly resetPassword?: (token: string) => string;
+  };
+  /**
+   * FAMS-003: whether `signIn` refuses an account whose email is unverified
+   * (after the credentials are confirmed, so it is never a password oracle).
+   * Default `true`. A deployment that imported users from a source that
+   * never verified them (or verified differently) may set `false` and
+   * restrict unverified users downstream instead, or call
+   * `Users.verifyEmail` for the imported users the source had verified.
+   */
+  readonly requireVerifiedEmail: boolean;
+  /**
+   * TMS-005: how `signUp` answers an address that already has an account.
+   * `"reveal"` (default) fails with 409 `EmailAlreadyExists` and issues the
+   * session at once. `"conceal"` answers 202 for a fresh and an existing
+   * address alike, issues no session until the mailbox is proven (the
+   * verification mail), and mails the existing owner an `account-exists`
+   * notice. See ADR-EA-018.
+   */
+  readonly signUpEnumeration: "reveal" | "conceal";
 }
 
 const defaultPasswordConfig: PasswordConfigShape = {
   minLength: 12,
-  breachCheck: false,
+  breachCheck: true,
+  breachCheckTimeout: Duration.seconds(3),
   resetTtl: Duration.hours(1),
   rehashOnLogin: true,
   signInTimingFloor: "calibrated",
+  rateLimitEmailKey: PasswordRateLimits.defaultEmailRateKey,
+  links: {},
+  requireVerifiedEmail: true,
+  signUpEnumeration: "reveal",
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -86,12 +154,30 @@ export interface PasswordShape {
      * independently of the (attacker-chosen) email each attempt names.
      */
     readonly ip?: string;
+    /** CSD-003: recorded on the issued session (device list, forensics); capped by `Sessions.issue`. */
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     | PasswordApi.WeakPassword
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
     | HookPoint.HookAborted
+  >;
+  /**
+   * TMS-005: the `signUpEnumeration: "conceal"` flavour of `signUp` — the same
+   * checks, then the same outcome for a fresh and an already-registered
+   * address: nothing is returned and no session is issued (a fresh account
+   * gets its verification mail, an existing owner an `account-exists` notice),
+   * so the response cannot tell them apart. The HTTP handler routes here when
+   * the config says `"conceal"`; `signUp` above is the reveal flavour.
+   */
+  readonly signUpConcealed: (input: {
+    readonly email: string;
+    readonly password: Redacted.Redacted<string>;
+    readonly ip?: string;
+  }) => Effect.Effect<
+    void,
+    PasswordApi.WeakPassword | Api.RateLimited | HookPoint.HookAborted
   >;
   /**
    * BEH-EA-114/116: uniform `InvalidCredentials`, constant real hashing cost
@@ -116,6 +202,8 @@ export interface PasswordShape {
      * as a single shared "unknown origin" bucket, never as unthrottled.
      */
     readonly ip?: string;
+    /** CSD-003: recorded on the issued session; see `signUp`'s own `userAgent`. */
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     | Api.InvalidCredentials
@@ -136,6 +224,8 @@ export interface PasswordShape {
    */
   readonly resendVerification: (input: {
     readonly email: string;
+    /** MLO-003: same per-source dimension as `requestReset`'s own `ip`. */
+    readonly ip?: string;
   }) => Effect.Effect<void, Api.RateLimited>;
   /** BEH-EA-117: consumes the reset token and sets the new password in one call, then revokes every other session. */
   readonly confirmReset: (input: {
@@ -162,7 +252,8 @@ export interface PasswordShape {
    */
   /**
    * PIL-002/RRS-001/SMS-001: BEH-EA-053 — every privilege-changing
-   * operation mints a fresh session and deletes the row it supersedes.
+   * operation mints a fresh session and tombstones the row it supersedes
+   * (atomically with the insert — ESR-002/RRS-004).
    * `currentSessionId` names the caller's own session so it can be
    * rotated (superseded, not merely kept) while every *other* session for
    * this user is revoked outright, closing the classic "attacker holds a
@@ -174,6 +265,9 @@ export interface PasswordShape {
     readonly currentSessionId: Sessions.SessionId;
     readonly currentPassword: Redacted.Redacted<string>;
     readonly newPassword: Redacted.Redacted<string>;
+    /** CSD-003: the superseding session records the caller's request context too. */
+    readonly ip?: string;
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited
@@ -193,127 +287,19 @@ export interface PasswordShape {
   }) => Effect.Effect<void, PasswordApi.WrongPassword | Api.RateLimited>;
 }
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
-/**
- * `RateLimits.RateLimitKey`'s own `input` is untyped (`unknown`) — one
- * registry list covers every endpoint's differently-shaped payload — so
- * pulling `email` back out needs a real narrowing check rather than a type
- * assertion (this repo forbids `as`/`as unknown as`/`as any` in library
- * source). Empty string on a shape mismatch is a defect elsewhere, not a
- * condition this key derivation needs its own error channel for.
- */
-const emailFromRateLimitInput = (input: unknown): string =>
-  typeof input === "object" && input !== null && "email" in input && typeof input.email === "string"
-    ? input.email
-    : "";
+// MLO-009: the mailed token's codec is `VerificationLink`'s, shared with every
+// plugin that mails a `Verification` token; these are this plugin's purposes.
+const RESET_PURPOSE = "reset-password";
+const VERIFY_PURPOSE = "verify-email";
+const VERIFY_TTL = Duration.hours(24);
 
-/** Same narrowing shape as `emailFromRateLimitInput`, for `signIn`'s per-IP rule (RBS-001/CSD-002). */
-const ipFromRateLimitInput = (input: unknown): string =>
-  typeof input === "object" && input !== null && "ip" in input && typeof input.ip === "string"
-    ? input.ip
-    : "unknown";
+/** PHS-004: internal only — routed to `onUnavailable` by `isBreached`, never surfaced. */
+class MalformedBreachResponse extends Data.TaggedError("MalformedBreachResponse")<{}> {}
 
-/**
- * Shipping-gap map (.scratch/shipping-gaps), ticket 12: one rule per
- * rate-limited endpoint — mirrors `usage-examples-v4.md` §16's own worked
- * `signin:${email}` example for `signIn`'s numbers exactly. Every rule
- * here keys on identity/email, never IP: this codebase has no client-IP-
- * extraction mechanism anywhere yet (no handler threads a request's
- * origin into a domain capability today), and building one speculatively
- * for this one rate-limit key would be exactly the kind of unrequested
- * infrastructure this codebase's own standing preference warns against.
- * IP-based keying (ticket 02's own "sign-in keys on both identity and
- * IP") is real follow-on work, not silently dropped — tracked, not built
- * here.
- */
-const RATE_LIMITS = {
-  signUp: { limit: 5, window: Duration.hours(1) },
-  // AGA-001/NHS-003: same reasoning as `signInByIp` below — bounds mass
-  // account creation from one source independently of the (freely
-  // chosen) email each attempt names.
-  signUpByIp: { limit: 20, window: Duration.hours(1) },
-  signIn: { limit: 5, window: Duration.minutes(15) },
-  // RBS-001/CSD-002: the per-account budget above is keyed on an
-  // attacker-controlled email — an attacker can burn a victim's 5
-  // attempts to lock them out, and distributed spraying across many
-  // distinct addresses never trips it at all. This second, per-IP rule
-  // bounds spraying independently of which account is targeted; looser
-  // than the per-account limit so one shared office NAT can't lock out
-  // every real user behind it.
-  signInByIp: { limit: 30, window: Duration.minutes(15) },
-  requestReset: { limit: 5, window: Duration.minutes(15) },
-  // AGA-001/NHS-003: mirrors `signInByIp` — bounds one source spraying
-  // reset requests across many distinct, unrelated emails.
-  requestResetByIp: { limit: 30, window: Duration.minutes(15) },
-  confirmReset: { limit: 5, window: Duration.minutes(15) },
-  // Shipping-gap map (.scratch/shipping-gaps), ticket 14.
-  changePassword: { limit: 5, window: Duration.minutes(15) },
-  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15:
-  // mirrors `changePassword`'s own numbers — the identical
-  // authenticated-password-recheck shape.
-  reauthenticate: { limit: 5, window: Duration.minutes(15) },
-  // Upstream-hardening map, ticket 04: tighter than the generic 5-per-15-
-  // min default — resend-verification abuse is an inbox-flooding
-  // harassment vector against the *target*, not an account-takeover one.
-  resendVerification: { limit: 3, window: Duration.minutes(15) },
-  // APS-003: `verifyEmail` had no rule at all — an unlimited flood of
-  // wrong guesses against `/verify-email` is hopeless against a 256-bit
-  // token, but each failed `consume` still publishes `auth.token.replay`
-  // (now a lossy, non-suspending publish — BEH-EA-098 — but still
-  // pointless churn/log-spam to leave completely unbounded). Same numbers
-  // as `confirmReset`, the closest structural sibling (also a bare
-  // token-consume endpoint).
-  verifyEmail: { limit: 5, window: Duration.minutes(15) },
-  // Mirrors `signInByIp`/`requestResetByIp`: bounds one source spraying
-  // guesses across many distinct, unrelated tokens/accounts.
-  verifyEmailByIp: { limit: 30, window: Duration.minutes(15) },
-} as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
-
-/**
- * EOTS-007: the fixed labels a breach of `rule` is reported under — the
- * `RATE_LIMITS` entry's name, never the (email/IP-bearing) bucket key.
- */
-const ruleMeta = (rule: {
-  readonly limit: number;
-  readonly window: Duration.Duration;
-}): RateLimits.EnforceMeta => {
-  const name =
-    Object.entries(RATE_LIMITS).find(([, candidate]) => candidate === rule)?.[0] ?? "unknown";
-  return {
-    group: "password",
-    endpoint: name.replace(/ByIp$/, ""),
-    rule: name,
-    dimension: name.endsWith("ByIp") ? "ip" : "identity",
-  };
-};
-
-/**
- * The mailed reset/verification link's token embeds `Verification`'s own
- * `identifier` alongside its secret value (`<identifier>.<secret>`) — the
- * domain service's `consume` needs `identifier` to look the row up at all,
- * and the caller who receives this link has nothing else to supply it with.
- * Neither half can contain a literal `.` (`identifier`'s own `:`-delimited
- * scheme, BEH-EA-057; `value`'s hex digest), so splitting on the last `.`
- * round-trips exactly.
- */
-const encodeVerificationToken = (identifier: string, value: Redacted.Redacted<string>): string =>
-  `${identifier}.${Redacted.value(value)}`;
-
-const decodeVerificationToken = (
-  raw: string,
-): Option.Option<{ readonly identifier: string; readonly value: Redacted.Redacted<string> }> => {
-  const separator = raw.lastIndexOf(".");
-  if (separator === -1) return Option.none();
-  return Option.some({
-    identifier: raw.slice(0, separator),
-    value: Redacted.make(raw.slice(separator + 1)),
-  });
-};
-
-const RESET_PREFIX = "reset-password:";
-const VERIFY_PREFIX = "verify-email:";
+/** One HIBP range line: the 35-hex-character SHA-1 suffix and its breach count. */
+const HIBP_LINE = /^[0-9A-F]{35}:\d+$/i;
 
 /**
  * BEH-EA-119: the k-anonymity HIBP check — only a 5-character SHA-1 prefix
@@ -327,6 +313,7 @@ const isBreached = (
   crypto: Crypto.Crypto,
   password: Redacted.Redacted<string>,
   onUnavailable: "allow" | "reject",
+  timeout: Duration.Duration,
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const digest = yield* crypto.digest(
@@ -347,8 +334,23 @@ const isBreached = (
       .get(`https://api.pwnedpasswords.com/range/${prefix}`)
       .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
     const body = yield* response.text;
-    return body.split("\n").some((line) => line.split(":")[0]?.trim().toUpperCase() === suffix);
-  }).pipe(Effect.catch(() => Effect.succeed(onUnavailable === "reject")));
+    // PHS-004: a 200 that is not a range listing (an HTML error page from a
+    // proxy, a truncated body) is no evidence of anything — treat it as
+    // unavailable rather than as "not breached". Every real prefix has
+    // hundreds of entries, so an empty body is malformed too.
+    const lines = body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+    if (lines.length === 0 || !lines.every((line) => HIBP_LINE.test(line))) {
+      return yield* new MalformedBreachResponse();
+    }
+    return lines.some((line) => line.split(":")[0]?.toUpperCase() === suffix);
+  }).pipe(
+    // PHS-004: a black-holed egress follows `onUnavailable` too, not a hang.
+    Effect.timeout(timeout),
+    Effect.catch(() => Effect.succeed(onUnavailable === "reject")),
+  );
 
 const checkPolicy = (
   httpClient: HttpClient.HttpClient,
@@ -364,17 +366,31 @@ const checkPolicy = (
     if (config.breachCheck !== false) {
       const onUnavailable =
         config.breachCheck === true ? "allow" : config.breachCheck.onUnavailable;
-      if (yield* isBreached(httpClient, crypto, password, onUnavailable)) {
+      if (
+        yield* isBreached(httpClient, crypto, password, onUnavailable, config.breachCheckTimeout)
+      ) {
         hints.push("appears in known breaches");
       }
     }
     return hints;
   });
 
+/** CSD-003: the `request` context `Sessions.issue` records — omitted keys, not `undefined` (`exactOptionalPropertyTypes`). */
+const sessionRequest = (input: { readonly ip?: string; readonly userAgent?: string }) => ({
+  ...(input.ip !== undefined ? { ip: input.ip } : {}),
+  ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
+});
+
+/** CSD-003: the caller's `User-Agent` header, when present. */
+const requestUserAgent = (request: HttpServerRequest.HttpServerRequest) =>
+  Option.match(Headers.get(request.headers, "user-agent"), {
+    onNone: () => ({}),
+    onSome: (userAgent) => ({ userAgent }),
+  });
+
 // RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
 // wrapper also keeps `SessionContract` in scope so declaration emit can name
-// `SessionDto` in the handler group's inferred type (TS2883 otherwise). The
-// response to `signUp`/`signIn` is always the caller's own, `current` session.
+// `SessionDto` in the handler group's inferred type (TS2883 otherwise).
 const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
   Session.toSessionDto(view);
 
@@ -396,6 +412,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const password = yield* Password;
     const clientAddress = yield* ClientAddress.ClientAddress;
+    const config = yield* PasswordConfig;
 
     return handlers.handleAll({
       signUp: Effect.fnUntraced(function* ({
@@ -406,15 +423,18 @@ export const PasswordHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         const resolvedAddress = yield* clientAddress.resolve(request);
-        const issued = yield* password.signUp({
+        const signUpInput = {
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-        });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+          ...requestUserAgent(request),
+        };
+        // TMS-005: `conceal` answers 202 with no session for a fresh and an
+        // existing address alike (ADR-EA-026).
+        if (config.signUpEnumeration === "conceal") {
+          return yield* password.signUpConcealed(signUpInput);
+        }
+        const issued = yield* password.signUp(signUpInput);
+        yield* SessionCookie.set(issued.session, issued.token);
         return sessionResponse(issued.session);
       }),
 
@@ -433,12 +453,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
         const issued = yield* password.signIn({
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return sessionResponse(issued.session);
       }),
 
@@ -458,10 +475,16 @@ export const PasswordHandlers = HttpApiBuilder.group(
 
       resendVerification: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.ResendVerificationPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
-        yield* password.resendVerification(payload);
+        const resolvedAddress = yield* clientAddress.resolve(request);
+        yield* password.resendVerification({
+          ...payload,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+        });
       }),
 
       confirmReset: Effect.fnUntraced(function* ({
@@ -485,11 +508,29 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
         });
       }),
+    });
+  }),
+);
 
+/**
+ * EHA-007: the `password.account` group — the endpoints that need a live
+ * session (`Api.Authentication` runs as group middleware, so
+ * `Api.CurrentPrincipal` is always resolved here).
+ */
+export const PasswordAccountHandlers = HttpApiBuilder.group(
+  PasswordApi.PasswordApi,
+  "password.account",
+  Effect.fnUntraced(function* (handlers) {
+    const password = yield* Password;
+    const clientAddress = yield* ClientAddress.ClientAddress;
+
+    return handlers.handleAll({
       changePassword: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.ChangePasswordPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
         const principal = yield* Api.CurrentPrincipal;
         // `changePassword`'s own `Authentication` middleware already
@@ -503,17 +544,16 @@ export const PasswordHandlers = HttpApiBuilder.group(
             ),
           );
         }
+        const resolvedAddress = yield* clientAddress.resolve(request);
         const issued = yield* password.changePassword({
           userId: Users.UserId(principal.ref.id),
           currentSessionId: Sessions.SessionId(principal.sessionId),
           currentPassword: payload.currentPassword,
           newPassword: payload.newPassword,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return sessionResponse(issued.session);
       }),
 
@@ -555,7 +595,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
    * sibling export.
    */
   static readonly layer = AuthPlugin.layer(Password, {
-    handlers: PasswordHandlers,
+    handlers: Layer.mergeAll(PasswordHandlers, PasswordAccountHandlers),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
@@ -570,6 +610,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
+      // ERS-002: mail is dispatched in the background (BEH-EA-064/113) by a
+      // dispatcher this layer owns — supervised, retried, bounded, observable
+      // and drained on shutdown — in place of unowned `forkDetach` fibers.
+      const mailDispatcher = yield* MailDispatch.make;
       // AOMS-006/BCR-004 (.issues/high, wayfinder ticket 03): the mechanism
       // an Auth0-Rule-style sign-up policy, and the MFA divert point a
       // future `TwoFactor` plugin taps, both attach through.
@@ -577,109 +621,20 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
 
-      /**
-       * Ticket 12: registers this plugin's own limits into the
-       * introspectable registry (BEH-EA-107/110/111) — declarative,
-       * matching the `limit`/`window` each `rateLimit(...)` call below
-       * actually enforces (`RATE_LIMITS` is the single source of truth
-       * both sides draw from). A `RateLimitScopeViolation` here is only
-       * reachable if `group` below ever named something other than this
-       * plugin's own `"password"` contract group — a coding defect in
-       * this file, not a condition any caller composing `Password` could
-       * trigger, hence `Effect.orDie` rather than adding it to this
-       * plugin's own public error surface.
-       */
+      // RBS-006: one typed definition per rule feeds both this registry
+      // (BEH-EA-107/110/111 introspection) and the enforcement calls below,
+      // so `registered()` reports exactly the keys enforced. A
+      // `RateLimitScopeViolation` is only reachable if a rule named a group
+      // other than this plugin's own `"password"` — a coding defect in this
+      // package, not a condition a caller composing `Password` could trigger,
+      // hence `Effect.orDie` rather than widening the public error surface.
+      const rules = PasswordRateLimits.makeRules(config.rateLimitEmailKey);
       yield* Effect.all(
-        (
-          [
-            {
-              endpoint: "signUp",
-              key: (input) => `password:signup:${(input as { readonly email: string }).email}`,
-              ...RATE_LIMITS.signUp,
-            },
-            {
-              // AGA-001/NHS-003: a second, independent rule for the same
-              // endpoint, mirroring `signIn`'s own IP rule below.
-              endpoint: "signUp",
-              key: (input) => `password:signup:ip:${ipFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.signUpByIp,
-            },
-            {
-              endpoint: "signIn",
-              key: (input) => `password:signin:${(input as { readonly email: string }).email}`,
-              ...RATE_LIMITS.signIn,
-            },
-            {
-              // RBS-001/CSD-002: a second, independent rule for the same
-              // endpoint — the registry has no one-rule-per-endpoint
-              // constraint, and `OAuth.ts`'s own `callback` rule already
-              // establishes the "declare a `key: \"ip\"` rule alongside a
-              // manually-keyed `rateLimit(...)` call" pattern this follows.
-              endpoint: "signIn",
-              key: (input) => `password:signin:ip:${ipFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.signInByIp,
-            },
-            {
-              endpoint: "requestReset",
-              key: (input) =>
-                `password:reset-request:${(input as { readonly email: string }).email}`,
-              ...RATE_LIMITS.requestReset,
-            },
-            {
-              // AGA-001/NHS-003: a second, independent rule for the same
-              // endpoint, mirroring `signIn`'s own IP rule above.
-              endpoint: "requestReset",
-              key: (input) => `password:reset-request:ip:${ipFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.requestResetByIp,
-            },
-            {
-              endpoint: "confirmReset",
-              // Keyed on the token's own decoded identifier at enforcement
-              // time, not a payload field — this description is necessarily
-              // approximate.
-              key: (input) => `password:reset-confirm:${JSON.stringify(input)}`,
-              ...RATE_LIMITS.confirmReset,
-            },
-            {
-              endpoint: "changePassword",
-              // Keyed on `CurrentPrincipal`'s own userId at enforcement
-              // time (the authenticated caller), not a payload field.
-              key: (input) => `password:change-password:${JSON.stringify(input)}`,
-              ...RATE_LIMITS.changePassword,
-            },
-            {
-              endpoint: "reauthenticate",
-              // Keyed on `CurrentPrincipal`'s own userId at enforcement
-              // time, mirroring `changePassword`'s own posture.
-              key: (input) => `password:reauthenticate:${JSON.stringify(input)}`,
-              ...RATE_LIMITS.reauthenticate,
-            },
-            {
-              endpoint: "resendVerification",
-              key: (input) => `password:resend-verification:${emailFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.resendVerification,
-            },
-            {
-              endpoint: "verifyEmail",
-              // Keyed on the token's own decoded identifier at enforcement
-              // time, not a payload field — mirrors `confirmReset`'s own
-              // identical description-is-approximate posture.
-              key: (input) => `password:verify-email:${JSON.stringify(input)}`,
-              ...RATE_LIMITS.verifyEmail,
-            },
-            {
-              endpoint: "verifyEmail",
-              key: (input) => `password:verify-email:ip:${ipFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.verifyEmailByIp,
-            },
-          ] satisfies ReadonlyArray<{
-            readonly endpoint: string;
-            readonly key: RateLimits.RateLimitKey;
-            readonly limit: number;
-            readonly window: Duration.Duration;
-          }>
-        ).map((rule): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-          rateLimitsRegistry.register(Password, { group: "password", ...rule }),
+        // The callback's return type is annotated to break the inference
+        // cycle through `Password.layer` (its own initializer names `Password`).
+        PasswordRateLimits.registryEntries(rules).map(
+          (entry): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
+            rateLimitsRegistry.register(Password, entry),
         ),
       ).pipe(Effect.orDie);
 
@@ -722,19 +677,24 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             });
 
       /**
-       * Ticket 12: every call site below passes its own `key`/`limit`/
-       * `window` from `RATE_LIMITS`, and maps the port's own domain
-       * `RateLimitExceeded` (`@awthaq/ports`) onto the wire-level
-       * `Api.RateLimited` — the same class `PasswordShape`'s own error
-       * unions declare and `PasswordApi`'s endpoints carry, so no separate
-       * mapping is needed again at the HTTP handler layer.
+       * Ticket 12: enforces one `rules.*` definition against its own
+       * secret-free key input, mapping the port's domain `RateLimitExceeded`
+       * (`@awthaq/ports`) onto the wire-level `Api.RateLimited` — the same
+       * class `PasswordShape`'s own error unions declare and `PasswordApi`'s
+       * endpoints carry, so no separate mapping is needed again at the HTTP
+       * handler layer.
        */
-      const rateLimit = (
-        key: string,
-        rule: { readonly limit: number; readonly window: Duration.Duration },
+      const rateLimit = <I>(
+        rule: PasswordRateLimits.PasswordRule<I>,
+        input: I,
       ): Effect.Effect<void, Api.RateLimited> =>
         // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        RateLimits.enforce({ key, limit: rule.limit, window: rule.window, meta: ruleMeta(rule) }).pipe(
+        RateLimits.enforce({
+          key: rule.keyOf(input),
+          limit: rule.limit,
+          window: rule.window,
+          meta: PasswordRateLimits.metaOf(rule),
+        }).pipe(
           Effect.provideService(RateLimiter.RateLimiter, limiter),
           Effect.provideService(AuthEvents.AuthEvents, events),
           Effect.catchTag(
@@ -767,11 +727,40 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           ),
         );
 
-      const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
+      /** Issues a verify-email token and mails it; dispatched, never awaited. */
+      const dispatchVerificationMail = (user: Users.UserRecord) =>
+        mailDispatcher.dispatch(
+          { template: "verify-email", userId: user.id },
+          Effect.gen(function* () {
+            const issued = yield* VerificationLink.issue(
+              { verification, crypto },
+              { purpose: VERIFY_PURPOSE, ttl: VERIFY_TTL, userId: user.id },
+            );
+            yield* mailer.send({
+              to: user.email,
+              template: "verify-email",
+              data: VerificationLink.mailData({
+                token: issued.token,
+                expiresAt: issued.expiresAt,
+                link: config.links.verifyEmail,
+              }),
+            });
+          }),
+        );
+
+      /**
+       * The checks `signUp` and `signUpConcealed` share, in the same order:
+       * rate limits, password policy, the `BeforeSignUp` veto, then the hash.
+       */
+      const prepareSignUp = Effect.fnUntraced(function* (input: {
+        readonly email: string;
+        readonly password: Redacted.Redacted<string>;
+        readonly ip?: string;
+      }) {
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
         // account creation from one source before the per-email check.
-        yield* rateLimit(`password:signup:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.signUpByIp);
-        yield* rateLimit(`password:signup:${input.email.toLowerCase()}`, RATE_LIMITS.signUp);
+        yield* rateLimit(rules.signUpByIp, input);
+        yield* rateLimit(rules.signUp, input);
         const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
         if (hints.length > 0) {
           return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
@@ -789,6 +778,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           beforeSignUp.run({ email: input.email, name }),
         );
         const hash = yield* hasher.hash(input.password);
+        return { vetoedSignUp, hash };
+      });
+
+      const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
+        const { vetoedSignUp, hash } = yield* prepareSignUp(input);
 
         // RRC-002/BEH-EA-113: "MUST create the user and session in one
         // transaction" — create+link+issue previously committed
@@ -814,39 +808,70 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   credentialHash: Redacted.make(hash),
                 })
                 .pipe(Effect.orDie);
-              const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+              const issued = yield* sessions
+                .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
+                .pipe(Effect.orDie);
               return { user, issued };
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: user.id,
-        });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
         // research/05-oauth-oidc.md Q48, a slow-vs-fast response is
         // itself an enumeration side channel.
-        yield* Effect.forkDetach(
-          Effect.gen(function* () {
-            const identifier = `${VERIFY_PREFIX}${user.id}`;
-            const { value } = yield* verification.issue({
-              identifier,
-              ttl: Duration.hours(24),
-              userId: user.id,
-            });
-            yield* mailer.send({
-              to: user.email,
-              template: "verify-email",
-              data: { token: encodeVerificationToken(identifier, value) },
-            });
-          }).pipe(Effect.ignore),
-        );
+        yield* dispatchVerificationMail(user);
 
         return issued;
+      });
+
+      const signUpConcealed: PasswordShape["signUpConcealed"] = Effect.fnUntraced(function* (input) {
+        const { vetoedSignUp, hash } = yield* prepareSignUp(input);
+        // TMS-005: the hash above is computed in both branches, so the
+        // expensive work does not depend on whether the address exists. The
+        // duplicate is caught outside the transaction (which rolls back), and
+        // no session is issued either way.
+        const created = yield* sqlTransaction
+          .withTransaction(
+            Effect.gen(function* () {
+              const user = yield* users
+                .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
+                .pipe(
+                  Effect.catchTag("EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                  Effect.catchTag("PlatformError", Effect.die),
+                );
+              yield* accounts
+                .link({
+                  userId: user.id,
+                  providerId: Accounts.PASSWORD_PROVIDER_ID,
+                  subject: user.id,
+                  credentialHash: Redacted.make(hash),
+                })
+                .pipe(Effect.orDie);
+              return user;
+            }),
+          )
+          .pipe(
+            Effect.map(Option.some),
+            Effect.catchTag("EmailAlreadyExists", () => Effect.succeed(Option.none())),
+            Effect.catchTag("SqlError", Effect.die),
+          );
+        if (Option.isSome(created)) {
+          yield* events.publish({ _tag: "auth.user.created", userId: created.value.id });
+          yield* dispatchVerificationMail(created.value);
+          return;
+        }
+        // The address is taken: tell its owner (no token, nothing to act on),
+        // looked up inside the background work so the response path is the same.
+        yield* mailDispatcher.dispatch(
+          { template: "account-exists" },
+          Effect.gen(function* () {
+            const owner = yield* users.findByEmail(vetoedSignUp.email);
+            if (Option.isNone(owner)) return;
+            yield* mailer.send({ to: owner.value.email, template: "account-exists" });
+          }),
+        );
       });
 
       const signIn: PasswordShape["signIn"] = Effect.fnUntraced(function* (input) {
@@ -854,8 +879,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // enforce (no DB lookup) and bounds a distributed spray across
         // many distinct emails before the per-account check below ever
         // sees them.
-        yield* rateLimit(`password:signin:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.signInByIp);
-        yield* rateLimit(`password:signin:${input.email.toLowerCase()}`, RATE_LIMITS.signIn);
+        yield* rateLimit(rules.signInByIp, input);
+        yield* rateLimit(rules.signIn, input);
         // TSS-006: the whole credential check is held to `timingFloorMillis`.
         const { userOpt, accountOpt, hashOpt, verified } = yield* withTimingFloor(
           Effect.gen(function* () {
@@ -866,7 +891,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
             });
             const hashOpt = yield* Option.match(accountOpt, {
-              onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+              onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
               onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
             });
             // BEH-EA-114: this call happens on every attempt, real or not —
@@ -903,7 +928,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // Upstream-hardening ticket 04: checked only now that a genuinely
         // correct password is confirmed — never before, so this can't be
         // used to probe whether a guessed password is even close to right.
-        if (!user.emailVerified) {
+        if (config.requireVerifiedEmail && !user.emailVerified) {
           yield* events.publish({
             _tag: "auth.user.signInFailed",
             strategy: "password",
@@ -928,16 +953,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
         }
-        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
+          .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: user.id,
           strategy: "password",
-        });
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: user.id,
         });
         yield* afterSignIn.run({ userId: user.id, strategy: "password" });
         return issued;
@@ -946,14 +968,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const requestReset: PasswordShape["requestReset"] = Effect.fnUntraced(function* (input) {
         // AGA-001/NHS-003: per-IP first, bounds one source spraying
         // reset requests across many distinct, unrelated emails.
-        yield* rateLimit(
-          `password:reset-request:ip:${input.ip ?? "unknown"}`,
-          RATE_LIMITS.requestResetByIp,
-        );
-        yield* rateLimit(
-          `password:reset-request:${input.email.toLowerCase()}`,
-          RATE_LIMITS.requestReset,
-        );
+        yield* rateLimit(rules.requestResetByIp, input);
+        yield* rateLimit(rules.requestReset, input);
         const userOpt = yield* users.findByEmail(input.email);
         // TSS-001/EEM-001/MLO-001: BEH-EA-064 requires the response to be
         // uniform whether or not `email` resolves to an account — status
@@ -961,38 +977,52 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // `verification.issue` + real `mailer.send` (network I/O) only
         // ever runs in this branch, making response *latency* (and, if
         // the mail provider is down, response *status*) an enumeration
-        // oracle. `signUp`'s own `Effect.forkDetach`+`Effect.ignore`
-        // posture (above) fixes the identical hazard there; mirrored here
-        // so both branches cost one user lookup and return with the same
-        // latency distribution regardless of mail-provider health.
+        // oracle. `signUp`'s own background dispatch (above) fixes the
+        // identical hazard there; mirrored here so both branches cost one
+        // user lookup and return with the same latency distribution
+        // regardless of mail-provider health.
         if (Option.isSome(userOpt)) {
           const user = userOpt.value;
-          yield* Effect.forkDetach(
+          yield* mailDispatcher.dispatch(
+            { template: "reset-password", userId: user.id },
             Effect.gen(function* () {
-              const identifier = `${RESET_PREFIX}${user.id}`;
-              const { value } = yield* verification.issue({
-                identifier,
-                ttl: config.resetTtl,
-                userId: user.id,
-              });
+              // ARF-004: an OAuth-/passkey-only account has no password to
+              // reset — a token would only lead to a dead link. Looked up
+              // here, inside the dispatched work, so both branches still cost
+              // the same on the response path (BEH-EA-064).
+              const account = yield* accounts.findByProviderSubject(
+                Accounts.PASSWORD_PROVIDER_ID,
+                user.id,
+              );
+              if (Option.isNone(account)) {
+                yield* mailer.send({ to: user.email, template: "reset-password-unavailable" });
+                return;
+              }
+              const issued = yield* VerificationLink.issue(
+                { verification, crypto },
+                { purpose: RESET_PURPOSE, ttl: config.resetTtl, userId: user.id },
+              );
               yield* mailer.send({
                 to: user.email,
                 template: "reset-password",
-                data: { token: encodeVerificationToken(identifier, value) },
+                data: VerificationLink.mailData({
+                  token: issued.token,
+                  expiresAt: issued.expiresAt,
+                  link: config.links.resetPassword,
+                }),
               });
-            }).pipe(Effect.ignore),
+            }),
           );
         }
       });
 
       const resendVerification: PasswordShape["resendVerification"] = Effect.fnUntraced(
         function* (input) {
-          yield* rateLimit(
-            `password:resend-verification:${input.email.toLowerCase()}`,
-            RATE_LIMITS.resendVerification,
-          );
+          // MLO-003: per-source first, like the sibling email flows.
+          yield* rateLimit(rules.resendVerificationByIp, input);
+          yield* rateLimit(rules.resendVerification, input);
           const userOpt = yield* users.findByEmail(input.email);
-          // TSS-002: same forkDetach+ignore posture as `requestReset`
+          // TSS-002: same background-dispatch posture as `requestReset`
           // above — without it this branch is the only one paying for a
           // `verification.issue` + awaited `mailer.send`, which (combined
           // with `requestReset`'s own timing) lets a caller classify any
@@ -1000,38 +1030,32 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           // by latency.
           if (Option.isSome(userOpt) && !userOpt.value.emailVerified) {
             const user = userOpt.value;
-            yield* Effect.forkDetach(
-              Effect.gen(function* () {
-                const identifier = `${VERIFY_PREFIX}${user.id}`;
-                const { value } = yield* verification.issue({
-                  identifier,
-                  ttl: Duration.hours(24),
-                  userId: user.id,
-                });
-                yield* mailer.send({
-                  to: user.email,
-                  template: "verify-email",
-                  data: { token: encodeVerificationToken(identifier, value) },
-                });
-              }).pipe(Effect.ignore),
-            );
+            yield* dispatchVerificationMail(user);
           }
         },
       );
 
       const confirmReset: PasswordShape["confirmReset"] = Effect.fnUntraced(function* (input) {
-        const decoded = decodeVerificationToken(Redacted.value(input.token));
+        // ARF-007: a token of another purpose (a verify-email token) or a
+        // malformed one is refused before it is rate-limited or consumed.
+        const decoded = VerificationLink.decode(Redacted.value(input.token), RESET_PURPOSE);
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
-        const { identifier, value } = decoded.value;
-        // Keyed on the token's own decoded identifier (e.g.
-        // `reset-password:<userId>`) rather than email — already available
-        // for free at this point, and ties the limit to the specific
-        // account the token names, matching `signIn`/`requestReset`'s own
-        // identity-keyed posture without a second lookup.
-        yield* rateLimit(`password:reset-confirm:${identifier}`, RATE_LIMITS.confirmReset);
-        const userId = Users.UserId(identifier.slice(RESET_PREFIX.length));
+        const { identifier, publicId, value } = decoded.value;
+        // Keyed on the token's own public id rather than email — already
+        // available for free at this point, and ties the limit to the
+        // specific token without a second lookup (ARF-009: it names no user).
+        yield* rateLimit(rules.confirmReset, { identifier: publicId });
+
+        // ARF-002: the policy (including the breach check's network call)
+        // is decided before the token is touched, so a weak password never
+        // burns the single-use token under any `Verification` store — and
+        // no network I/O happens while the transaction below is open.
+        const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
+        if (hints.length > 0) {
+          return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
+        }
 
         // ARF-001: BEH-EA-058/117 require consuming the token, setting the
         // new password, and revoking every other session to commit as one
@@ -1040,37 +1064,32 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // the new password live while an attacker's pre-reset sessions
         // survived. Mirrors `OAuth.ts`'s own `sqlTransaction.withTransaction`
         // usage: only the transaction's own `SqlError` dies below —
-        // `TokenConsumed`/`WeakPassword` are real, expected outcomes and
-        // must still reach the caller as themselves (and, as a consequence
-        // of the wrap, a `WeakPassword` failure now rolls the token
-        // consumption back too, rather than burning a single-use token on
-        // a rejected password).
-        yield* sqlTransaction
+        // `TokenConsumed` is a real, expected outcome and must still reach
+        // the caller as itself.
+        const userId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              yield* verification.consume(identifier, value).pipe(
+              const consumed = yield* verification.consume(identifier, value).pipe(
                 Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
                 Effect.catchTag("PlatformError", Effect.die),
               );
-
-              const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
-              if (hints.length > 0) {
-                return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
+              // ARF-009: the user comes from the consumed row, never from the
+              // token; a row with none is no reset token this plugin issued.
+              if (Option.isNone(consumed.userId)) {
+                return yield* Effect.fail(new PasswordApi.TokenConsumed());
               }
+              const userId = consumed.userId.value;
 
               const account = yield* accounts
                 .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
                 .pipe(
                   Effect.flatMap(
                     Option.match({
-                      // The token was only ever issued right after `signUp`
-                      // created this exact row (BEH-EA-113/117) — its
-                      // absence here is a defect, not a request-level
-                      // condition the caller can act on.
-                      onNone: () =>
-                        Effect.die(
-                          new Error(`awthaq: password credential missing for user ${userId}`),
-                        ),
+                      // ARF-004: `requestReset` no longer mints a token for a
+                      // credential-less account, but one issued before that
+                      // fix (or a credential unlinked since) can still land
+                      // here — a dead token, not a defect.
+                      onNone: () => Effect.fail(new PasswordApi.TokenConsumed()),
                       onSome: Effect.succeed,
                     }),
                   ),
@@ -1080,13 +1099,28 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 .updateCredentialHash(account.id, Redacted.make(hash))
                 .pipe(Effect.orDie);
 
+              // ARF-008: consuming a token mailed to the address proves the
+              // same mailbox control `verifyEmail` demands — otherwise a
+              // user who resets is still refused at `signIn`. Idempotent.
+              yield* users
+                .verifyEmail(userId)
+                .pipe(
+                  Effect.catchTag("UserNotFound", () =>
+                    Effect.die(new Error(`awthaq: reset token's own user missing: ${userId}`)),
+                  ),
+                );
+
               // BEH-EA-117: every session, no exceptions — the caller
               // isn't authenticated at all here, so there is no "current"
               // session to keep. Upstream-hardening ticket 02: the real
               // `revokeAll` primitive, retiring the empty-string-id
               // `revokeOthers` trick this call site used to stand in for
               // it.
-              yield* sessions.revokeAll(userId);
+              // ESA-006/TIR-008: `Sessions.revokeAll` itself publishes the
+              // `auth.session.revoked` (reason `passwordReset`) — after this
+              // transaction's own write, like every other revocation.
+              yield* sessions.revokeAll(userId, "passwordReset");
+              return userId;
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
@@ -1094,32 +1128,21 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // committed — mirroring `signUp`'s own `auth.user.created`
         // placement, never inside the transaction itself.
         yield* events.publish({ _tag: "auth.password.resetCompleted", userId });
-        yield* events.publish({
-          _tag: "auth.session.revoked",
-          userId,
-          reason: "passwordReset",
-        });
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
         // APS-003: per-IP first — guards against a flood of garbage
         // tokens before even attempting to decode one, mirroring
         // `signIn`/`requestReset`'s own IP-then-identity ordering.
-        yield* rateLimit(
-          `password:verify-email:ip:${input.ip ?? "unknown"}`,
-          RATE_LIMITS.verifyEmailByIp,
-        );
-        const decoded = decodeVerificationToken(Redacted.value(input.token));
+        yield* rateLimit(rules.verifyEmailByIp, input);
+        // ARF-007: mirror of `confirmReset`'s purpose check.
+        const decoded = VerificationLink.decode(Redacted.value(input.token), VERIFY_PURPOSE);
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
-        const { identifier, value } = decoded.value;
-        // Keyed on the token's own decoded identifier, mirroring
-        // `confirmReset`'s identical posture — already available for
-        // free at this point, ties the limit to the specific account the
-        // token names.
-        yield* rateLimit(`password:verify-email:${identifier}`, RATE_LIMITS.verifyEmail);
-        const userId = Users.UserId(identifier.slice(VERIFY_PREFIX.length));
+        const { identifier, publicId, value } = decoded.value;
+        // Keyed on the token's own public id, mirroring `confirmReset`.
+        yield* rateLimit(rules.verifyEmail, { identifier: publicId });
 
         // RRC-002: same class of bug `ARF-001` closes for `confirmReset` —
         // a crash between `consume` and `verifyEmail` previously burned
@@ -1131,10 +1154,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              yield* verification.consume(identifier, value).pipe(
+              const consumed = yield* verification.consume(identifier, value).pipe(
                 Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
                 Effect.catchTag("PlatformError", Effect.die),
               );
+              // ARF-009: the user comes from the consumed row, not the token.
+              if (Option.isNone(consumed.userId)) {
+                return yield* Effect.fail(new PasswordApi.TokenConsumed());
+              }
+              const userId = consumed.userId.value;
 
               // Mirrors `confirmReset`'s own posture on the analogous
               // case: this token was only ever issued right after
@@ -1162,13 +1190,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // Keyed on `userId` directly — this endpoint is authenticated, so
         // (unlike `signIn`/`requestReset`) there's no need to look up an
         // email first.
-        yield* rateLimit(`password:change-password:${input.userId}`, RATE_LIMITS.changePassword);
+        yield* rateLimit(rules.changePassword, input);
         const accountOpt = yield* accounts.findByProviderSubject(
           Accounts.PASSWORD_PROVIDER_ID,
           input.userId,
         );
         const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
           onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
         });
         // Same uniform-cost shape as `signIn`'s own `dummyHash` check —
@@ -1202,33 +1230,28 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // row with a freshly minted one. Reversing this order would leave
         // `revokeOthers` nothing to `keep` (the superseded id no longer
         // exists once `issue` has run).
-        yield* sessions.revokeOthers(input.userId, input.currentSessionId);
-        yield* events.publish({
-          _tag: "auth.session.revoked",
-          userId: input.userId,
-          reason: "passwordChanged",
-        });
+        yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
         const issued = yield* sessions
-          .issue({ userId: input.userId, supersedes: input.currentSessionId })
+          .issue({
+            userId: input.userId,
+            supersedes: input.currentSessionId,
+            request: sessionRequest(input),
+            amr: ["pwd"],
+          })
           .pipe(Effect.orDie);
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: input.userId,
-        });
         return issued;
       });
 
       const reauthenticate: PasswordShape["reauthenticate"] = Effect.fnUntraced(function* (input) {
         // Keyed on `userId` directly — this endpoint is authenticated,
         // mirroring `changePassword`'s own posture.
-        yield* rateLimit(`password:reauthenticate:${input.userId}`, RATE_LIMITS.reauthenticate);
+        yield* rateLimit(rules.reauthenticate, input);
         const accountOpt = yield* accounts.findByProviderSubject(
           Accounts.PASSWORD_PROVIDER_ID,
           input.userId,
         );
         const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
           onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
         });
         // Same uniform-cost shape as `changePassword`'s own `dummyHash`
@@ -1245,7 +1268,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
           return yield* Effect.fail(new PasswordApi.WrongPassword());
         }
-        yield* sessions.reauthenticate(input.currentSessionId).pipe(
+        yield* sessions.reauthenticate(input.currentSessionId, ["pwd"]).pipe(
           Effect.catchTag("SessionNotFound", () =>
             // `changePassword`'s own `Authentication` middleware already
             // proved this exact session live moments ago — a
@@ -1263,6 +1286,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
       return Password.of({
         signUp,
+        signUpConcealed,
         signIn,
         requestReset,
         resendVerification,

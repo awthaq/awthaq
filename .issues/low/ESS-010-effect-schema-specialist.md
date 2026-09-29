@@ -3,7 +3,7 @@ ID: "ESS-010"
 Title: "Documented latent decode asymmetry in VerificationToken.payload"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Models.ts:155"
 Auditor: "effect-schema-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `sql` · reported by **Effect Schema Specialist** (`effect-schema-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Make the divergence unreachable rather than documented: either reject explicit n
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `verification-store-hygiene`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:170`. Fix: Make the divergence unreachable: layerMemory normalizes explicit `null` to `undefined` at issue, matching the SQL encoding. Enforce it with a shared two-layer contract test. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Verification.layerMemory.issue treats an explicit null payload as absent, matching layerSql; Models.ts comment updated. Test: 'an explicit null payload round-trips as undefined' runs in both layers.

@@ -9,3 +9,5 @@
 // See spec/overview.md for the full package map.
 
 export * as Roles from "./Roles.ts";
+export * as RolesAdmin from "./RolesAdmin.ts";
+export * as RolesAdminApi from "./RolesAdminApi.ts";

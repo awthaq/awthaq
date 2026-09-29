@@ -3,7 +3,7 @@ ID: "ESA-006"
 Title: "Session lifecycle events are absent from the registry — revocation, the event that must never be silently dropped, is unobservable"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/13-events.md:76"
 Auditor: "event-sourcing-audit-trail-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `—` · reported by **Event Sourcing & Audit Trail Specialist** (`event-sourcing-audit-trail-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Publish auth.session.issued from Sessions.issue and a revoked/expired event from
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `session-lifecycle-events`. Already fixed by commit 45325bb (partial). Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:90`. Fix: Move session lifecycle publication into the Sessions service itself (both layers) so every issuance/revocation path — OAuth, passkey, admin impersonation, sign-out, revokeAll — emits, with a reason, and drop the plugin-level duplicates in Password. (effort M). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Sessions itself now publishes the lifecycle (both layers): issue -> one auth.session.issued (sessionId, userId, familyId, actingAs?); revoke/revokeOwned/revokeOthers/revokeAll -> one auth.session.revoked each (scope one|others|all|family, reason); reuse detection also publishes a family revoked (reuseDetected); verify publishes new auth.session.expired (absolute|idle) lazily. AuthEvents.ts widened (SessionRevocationReason, SessionExpiredEvent); AuditLog.actorOf covers the new tag. Password.ts deleted its five duplicate publishes and passes reasons instead; admin/server callers updated. Spec: BEH-EA-101 registry list + a paragraph. Tests: core/test/Sessions.test.ts eventsSuite (both layers: issued once with family, actingAs + rotation family, revoke/revokeOwned/others/all/family, no event on a failed revoke, expired) plus the existing password ALF-004 tests unchanged and green (no double publish). Deviation: 'reason' is a REQUIRED parameter (type-system-first, compiler-forced call sites) rather than the optional-with-default the ESA-006 dossier floated; TIR-008's dossier asked for required.

@@ -197,6 +197,50 @@ const suite = (
         }).pipe(Effect.provide(layer)),
     );
 
+    it.effect("ESS-010: an explicit null payload round-trips as undefined in both layers", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "verify-email:user-13";
+        const { value } = yield* verification.issue({
+          identifier,
+          ttl: Duration.minutes(10),
+          payload: null,
+        });
+        const consumed = yield* verification.consume(identifier, value);
+        assert.isUndefined(consumed.payload);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // MLO-006: BEH-EA-062's "at most one concurrent caller succeeds", raced
+    // for real (the sequential test above cannot catch a read-then-delete).
+    it.effect("BEH-EA-062: two concurrent consumes of one token yield exactly one success", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const events = yield* AuthEvents.AuthEvents;
+        const identifier = "verify-email:user-14";
+        const { value } = yield* verification.issue({ identifier, ttl: Duration.minutes(10) });
+        const replays = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.token.replay"),
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+          { startImmediately: true },
+        );
+        const outcomes = yield* Effect.all(
+          [
+            verification.consume(identifier, value).pipe(Effect.exit),
+            verification.consume(identifier, value).pipe(Effect.exit),
+          ],
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(outcomes.filter((exit) => exit._tag === "Success").length, 1);
+        assert.strictEqual(outcomes.filter((exit) => exit._tag === "Failure").length, 1);
+        const published = yield* Fiber.join(replays);
+        assert.strictEqual(published.length, 1);
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BEH-EA-063: reserve is true only for the first caller while unexpired", () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
