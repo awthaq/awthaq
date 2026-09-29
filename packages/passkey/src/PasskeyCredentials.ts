@@ -326,7 +326,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
         INSERT INTO passkey_credential
-          (id, userId, webauthnUserId, publicKey, counter, deviceType, backedUp, transports, aaguid, name, createdAt, lastUsedAt)
+          (id, "userId", "webauthnUserId", "publicKey", counter, "deviceType", "backedUp", transports, aaguid, name, "createdAt", "lastUsedAt")
         VALUES
           (${r.id}, ${r.userId}, ${r.webauthnUserId}, ${r.publicKey}, ${r.counter}, ${r.deviceType}, ${r.backedUp}, ${r.transports}, ${r.aaguid}, ${r.name}, ${r.createdAt}, ${r.lastUsedAt})
         ON CONFLICT(id) DO NOTHING
@@ -343,7 +343,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
     const listByUserQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: PasskeyCredentialRow,
-      execute: (userId) => sql`SELECT * FROM passkey_credential WHERE userId = ${userId}`,
+      execute: (userId) => sql`SELECT * FROM passkey_credential WHERE "userId" = ${userId}`,
     });
 
     const recordUsageQuery = SqlSchema.findOneOption({
@@ -357,7 +357,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       execute: (r) => sql`
         UPDATE passkey_credential
         SET counter = CASE WHEN ${r.counter} > counter THEN ${r.counter} ELSE counter END,
-            backedUp = ${r.backedUp}, lastUsedAt = ${r.lastUsedAt}
+            "backedUp" = ${r.backedUp}, "lastUsedAt" = ${r.lastUsedAt}
         WHERE id = ${r.id}
         RETURNING *
       `,
@@ -368,7 +368,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
         UPDATE passkey_credential
-        SET counterAnomalyAt = ${r.at}, counterAnomalyCount = counterAnomalyCount + 1
+        SET "counterAnomalyAt" = ${r.at}, "counterAnomalyCount" = "counterAnomalyCount" + 1
         WHERE id = ${r.id}
         RETURNING *
       `,
@@ -379,7 +379,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
         UPDATE passkey_credential SET name = ${r.name}
-        WHERE id = ${r.id} AND userId = ${r.userId}
+        WHERE id = ${r.id} AND "userId" = ${r.userId}
         RETURNING *
       `,
     });
@@ -388,7 +388,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       Request: Schema.Struct({ id: Schema.String, userId: Schema.String }),
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
-        DELETE FROM passkey_credential WHERE id = ${r.id} AND userId = ${r.userId}
+        DELETE FROM passkey_credential WHERE id = ${r.id} AND "userId" = ${r.userId}
         RETURNING *
       `,
     });
@@ -467,7 +467,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       );
 
     const deleteAllByUser: PasskeyCredentialsShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM passkey_credential WHERE userId = ${userId}`.pipe(
+      sql`DELETE FROM passkey_credential WHERE "userId" = ${userId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );

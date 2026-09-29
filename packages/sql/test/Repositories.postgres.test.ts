@@ -15,11 +15,15 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
+import * as Layer from "effect/Layer";
+import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
 import * as ReadRouting from "../src/ReadRouting.ts";
 import * as Repositories from "../src/Repositories.ts";
 import { contractCases, repositoriesLayer } from "./contract.ts";
+import { regclassTypes } from "./support/TestSql.ts";
 
 const M = Models.makeModels("pg");
 
@@ -282,5 +286,42 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
           Effect.provide(replicaLive),
         );
       }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  // `Migrator`'s Postgres ledger check (`select 'name'::regclass`) cannot decode its
+  // row under @effect/sql-pg 4.0.0-rc.116 once the ledger exists, and the failure
+  // wrecks the connection: a *second* migrator run on a migrated database dies.
+  // A client-scoped regclass codec (README, "Postgres client configuration")
+  // makes a re-run the no-op it should be.
+  it.effect(
+    "re-running coreMigrations on a migrated database applies nothing (regclass codec)",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const again = yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+        assert.strictEqual(again.length, 0);
+        // The connection is still healthy afterwards.
+        const rows = yield* sql`SELECT 1 AS ok`;
+        assert.strictEqual(rows.length, 1);
+      }).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            Layer.effectDiscard(
+              Effect.gen(function* () {
+                const sql = yield* SqlClient.SqlClient;
+                for (const table of coreTables) {
+                  yield* sql.unsafe(`DROP TABLE IF EXISTS ${table} CASCADE`);
+                }
+                yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+              }),
+            ),
+            PgClient.layer({
+              url: Redacted.make(postgresUrl ?? ""),
+              types: regclassTypes(),
+              maxConnections: 1,
+            }),
+          ),
+        ),
+      ),
   );
 });

@@ -2,7 +2,6 @@
 // through qadi). Both layers run the same contract; then a real policy reads a migrated
 // claim through the resolver.
 import { AuditLog, AuthEvents, Auth, Hooks, Migrations, Users } from "@awthaq/core";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import {
   AttributeResolver,
@@ -23,6 +22,7 @@ import * as Option from "effect/Option";
 import * as AttributeResolvers from "../src/AttributeResolvers.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import * as UserClaims from "../src/UserClaims.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const CoreLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
 
@@ -31,7 +31,7 @@ const withResolver = <E, R>(store: Layer.Layer<UserClaims.UserClaims, E, R>) =>
 
 const MemoryLayer = withResolver(UserClaims.UserClaims.layer).pipe(Layer.provideMerge(CoreLive));
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("qadi_UserClaims");
 const Migrated = Layer.effectDiscard(Migrations.run(UserClaims.UserClaims.migrations)).pipe(
   Layer.provide(SqlLive),
 );

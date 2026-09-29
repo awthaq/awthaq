@@ -1200,7 +1200,7 @@ const organizationMigrations: Migrations.Migrations = [
             slug TEXT NOT NULL UNIQUE,
             logo TEXT,
             metadata TEXT,
-            createdAt TIMESTAMPTZ NOT NULL
+            "createdAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE organization_org (
@@ -1209,7 +1209,7 @@ const organizationMigrations: Migrations.Migrations = [
             slug TEXT NOT NULL UNIQUE,
             logo TEXT,
             metadata TEXT,
-            createdAt TEXT NOT NULL
+            "createdAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -1223,18 +1223,18 @@ const organizationMigrations: Migrations.Migrations = [
         pg: () => sql`
           CREATE TABLE organization_membership (
             id TEXT PRIMARY KEY,
-            userId TEXT NOT NULL,
-            organizationId TEXT NOT NULL,
+            "userId" TEXT NOT NULL,
+            "organizationId" TEXT NOT NULL,
             role TEXT NOT NULL,
-            createdAt TIMESTAMPTZ NOT NULL
+            "createdAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE organization_membership (
             id TEXT PRIMARY KEY,
-            userId TEXT NOT NULL,
-            organizationId TEXT NOT NULL,
+            "userId" TEXT NOT NULL,
+            "organizationId" TEXT NOT NULL,
             role TEXT NOT NULL,
-            createdAt TEXT NOT NULL
+            "createdAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -1246,15 +1246,15 @@ const organizationMigrations: Migrations.Migrations = [
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
         pg: () =>
-          sql`CREATE INDEX organization_membership_organization_id ON organization_membership(organizationId)`.pipe(
+          sql`CREATE INDEX organization_membership_organization_id ON organization_membership("organizationId")`.pipe(
             Effect.andThen(
-              sql`CREATE INDEX organization_membership_user_id ON organization_membership(userId)`,
+              sql`CREATE INDEX organization_membership_user_id ON organization_membership("userId")`,
             ),
           ),
         sqlite: () =>
-          sql`CREATE INDEX organization_membership_organization_id ON organization_membership(organizationId)`.pipe(
+          sql`CREATE INDEX organization_membership_organization_id ON organization_membership("organizationId")`.pipe(
             Effect.andThen(
-              sql`CREATE INDEX organization_membership_user_id ON organization_membership(userId)`,
+              sql`CREATE INDEX organization_membership_user_id ON organization_membership("userId")`,
             ),
           ),
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
@@ -1270,25 +1270,25 @@ const organizationMigrations: Migrations.Migrations = [
           CREATE TABLE organization_invitation (
             id TEXT PRIMARY KEY,
             email TEXT NOT NULL,
-            inviterId TEXT NOT NULL,
-            organizationId TEXT NOT NULL,
-            teamId TEXT,
+            "inviterId" TEXT NOT NULL,
+            "organizationId" TEXT NOT NULL,
+            "teamId" TEXT,
             role TEXT NOT NULL,
             status TEXT NOT NULL,
-            createdAt TIMESTAMPTZ NOT NULL,
-            expiresAt TIMESTAMPTZ NOT NULL
+            "createdAt" TIMESTAMPTZ NOT NULL,
+            "expiresAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE organization_invitation (
             id TEXT PRIMARY KEY,
             email TEXT NOT NULL,
-            inviterId TEXT NOT NULL,
-            organizationId TEXT NOT NULL,
-            teamId TEXT,
+            "inviterId" TEXT NOT NULL,
+            "organizationId" TEXT NOT NULL,
+            "teamId" TEXT,
             role TEXT NOT NULL,
             status TEXT NOT NULL,
-            createdAt TEXT NOT NULL,
-            expiresAt TEXT NOT NULL
+            "createdAt" TEXT NOT NULL,
+            "expiresAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -1300,21 +1300,21 @@ const organizationMigrations: Migrations.Migrations = [
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
         pg: () =>
-          sql`CREATE INDEX organization_invitation_organization_id ON organization_invitation(organizationId)`.pipe(
+          sql`CREATE INDEX organization_invitation_organization_id ON organization_invitation("organizationId")`.pipe(
             Effect.andThen(
               sql`CREATE INDEX organization_invitation_email ON organization_invitation(email)`,
             ),
             Effect.andThen(
-              sql`CREATE INDEX organization_invitation_inviter_id ON organization_invitation(inviterId)`,
+              sql`CREATE INDEX organization_invitation_inviter_id ON organization_invitation("inviterId")`,
             ),
           ),
         sqlite: () =>
-          sql`CREATE INDEX organization_invitation_organization_id ON organization_invitation(organizationId)`.pipe(
+          sql`CREATE INDEX organization_invitation_organization_id ON organization_invitation("organizationId")`.pipe(
             Effect.andThen(
               sql`CREATE INDEX organization_invitation_email ON organization_invitation(email)`,
             ),
             Effect.andThen(
-              sql`CREATE INDEX organization_invitation_inviter_id ON organization_invitation(inviterId)`,
+              sql`CREATE INDEX organization_invitation_inviter_id ON organization_invitation("inviterId")`,
             ),
           ),
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
@@ -1330,19 +1330,19 @@ const organizationMigrations: Migrations.Migrations = [
           CREATE TABLE organization_team (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            organizationId TEXT NOT NULL,
-            memberCount INTEGER NOT NULL,
-            createdAt TIMESTAMPTZ NOT NULL,
-            updatedAt TIMESTAMPTZ NOT NULL
+            "organizationId" TEXT NOT NULL,
+            "memberCount" INTEGER NOT NULL,
+            "createdAt" TIMESTAMPTZ NOT NULL,
+            "updatedAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE organization_team (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            organizationId TEXT NOT NULL,
-            memberCount INTEGER NOT NULL,
-            createdAt TEXT NOT NULL,
-            updatedAt TEXT NOT NULL
+            "organizationId" TEXT NOT NULL,
+            "memberCount" INTEGER NOT NULL,
+            "createdAt" TEXT NOT NULL,
+            "updatedAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -1354,9 +1354,9 @@ const organizationMigrations: Migrations.Migrations = [
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
         pg: () =>
-          sql`CREATE INDEX organization_team_organization_id ON organization_team(organizationId)`,
+          sql`CREATE INDEX organization_team_organization_id ON organization_team("organizationId")`,
         sqlite: () =>
-          sql`CREATE INDEX organization_team_organization_id ON organization_team(organizationId)`,
+          sql`CREATE INDEX organization_team_organization_id ON organization_team("organizationId")`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -1369,16 +1369,16 @@ const organizationMigrations: Migrations.Migrations = [
         pg: () => sql`
           CREATE TABLE organization_team_membership (
             id TEXT PRIMARY KEY,
-            teamId TEXT NOT NULL,
-            userId TEXT NOT NULL,
-            createdAt TIMESTAMPTZ NOT NULL
+            "teamId" TEXT NOT NULL,
+            "userId" TEXT NOT NULL,
+            "createdAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE organization_team_membership (
             id TEXT PRIMARY KEY,
-            teamId TEXT NOT NULL,
-            userId TEXT NOT NULL,
-            createdAt TEXT NOT NULL
+            "teamId" TEXT NOT NULL,
+            "userId" TEXT NOT NULL,
+            "createdAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -1390,9 +1390,9 @@ const organizationMigrations: Migrations.Migrations = [
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
         pg: () =>
-          sql`CREATE INDEX organization_team_membership_team_id ON organization_team_membership(teamId)`,
+          sql`CREATE INDEX organization_team_membership_team_id ON organization_team_membership("teamId")`,
         sqlite: () =>
-          sql`CREATE INDEX organization_team_membership_team_id ON organization_team_membership(teamId)`,
+          sql`CREATE INDEX organization_team_membership_team_id ON organization_team_membership("teamId")`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -1405,22 +1405,22 @@ const organizationMigrations: Migrations.Migrations = [
         pg: () => sql`
           CREATE TABLE organization_role (
             id TEXT PRIMARY KEY,
-            organizationId TEXT NOT NULL,
+            "organizationId" TEXT NOT NULL,
             role TEXT NOT NULL,
             permission TEXT NOT NULL,
-            createdAt TIMESTAMPTZ NOT NULL,
-            updatedAt TIMESTAMPTZ NOT NULL,
-            UNIQUE(organizationId, role)
+            "createdAt" TIMESTAMPTZ NOT NULL,
+            "updatedAt" TIMESTAMPTZ NOT NULL,
+            UNIQUE("organizationId", role)
           )`,
         sqlite: () => sql`
           CREATE TABLE organization_role (
             id TEXT PRIMARY KEY,
-            organizationId TEXT NOT NULL,
+            "organizationId" TEXT NOT NULL,
             role TEXT NOT NULL,
             permission TEXT NOT NULL,
-            createdAt TEXT NOT NULL,
-            updatedAt TEXT NOT NULL,
-            UNIQUE(organizationId, role)
+            "createdAt" TEXT NOT NULL,
+            "updatedAt" TEXT NOT NULL,
+            UNIQUE("organizationId", role)
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -1433,17 +1433,17 @@ const organizationMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`
           CREATE TABLE organization_active_context (
-            sessionId TEXT PRIMARY KEY,
-            activeOrganizationId TEXT,
-            activeTeamId TEXT,
-            updatedAt TIMESTAMPTZ NOT NULL
+            "sessionId" TEXT PRIMARY KEY,
+            "activeOrganizationId" TEXT,
+            "activeTeamId" TEXT,
+            "updatedAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE organization_active_context (
-            sessionId TEXT PRIMARY KEY,
-            activeOrganizationId TEXT,
-            activeTeamId TEXT,
-            updatedAt TEXT NOT NULL
+            "sessionId" TEXT PRIMARY KEY,
+            "activeOrganizationId" TEXT,
+            "activeTeamId" TEXT,
+            "updatedAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -1457,8 +1457,8 @@ const organizationMigrations: Migrations.Migrations = [
     name: "organization_membership_unique_user_org",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`DELETE FROM organization_membership WHERE id NOT IN (SELECT MIN(id) FROM organization_membership GROUP BY userId, organizationId)`;
-      yield* sql`CREATE UNIQUE INDEX organization_membership_user_org ON organization_membership(userId, organizationId)`;
+      yield* sql`DELETE FROM organization_membership WHERE id NOT IN (SELECT MIN(id) FROM organization_membership GROUP BY "userId", "organizationId")`;
+      yield* sql`CREATE UNIQUE INDEX organization_membership_user_org ON organization_membership("userId", "organizationId")`;
     }),
   },
   // DRS-008: the active-context row is keyed by session but must be findable by
@@ -1468,8 +1468,8 @@ const organizationMigrations: Migrations.Migrations = [
     name: "organization_active_context_user_id",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`ALTER TABLE organization_active_context ADD COLUMN userId TEXT`;
-      yield* sql`CREATE INDEX organization_active_context_user_id ON organization_active_context(userId)`;
+      yield* sql`ALTER TABLE organization_active_context ADD COLUMN "userId" TEXT`;
+      yield* sql`CREATE INDEX organization_active_context_user_id ON organization_active_context("userId")`;
     }),
   },
   // MTI-010: the emailed invitation capability is a random token, stored only as
@@ -1479,8 +1479,8 @@ const organizationMigrations: Migrations.Migrations = [
     name: "organization_invitation_token_hash",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`ALTER TABLE organization_invitation ADD COLUMN tokenHash TEXT`;
-      yield* sql`CREATE UNIQUE INDEX organization_invitation_token_hash ON organization_invitation(tokenHash)`;
+      yield* sql`ALTER TABLE organization_invitation ADD COLUMN "tokenHash" TEXT`;
+      yield* sql`CREATE UNIQUE INDEX organization_invitation_token_hash ON organization_invitation("tokenHash")`;
     }),
   },
   // OHS-003: one membership per (team, user), and `memberCount` recomputed from
@@ -1489,9 +1489,9 @@ const organizationMigrations: Migrations.Migrations = [
     name: "organization_team_membership_unique_team_user",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`DELETE FROM organization_team_membership WHERE id NOT IN (SELECT MIN(id) FROM organization_team_membership GROUP BY teamId, userId)`;
-      yield* sql`UPDATE organization_team SET memberCount = (SELECT COUNT(*) FROM organization_team_membership WHERE organization_team_membership.teamId = organization_team.id)`;
-      yield* sql`CREATE UNIQUE INDEX organization_team_membership_team_user ON organization_team_membership(teamId, userId)`;
+      yield* sql`DELETE FROM organization_team_membership WHERE id NOT IN (SELECT MIN(id) FROM organization_team_membership GROUP BY "teamId", "userId")`;
+      yield* sql`UPDATE organization_team SET "memberCount" = (SELECT COUNT(*) FROM organization_team_membership WHERE organization_team_membership."teamId" = organization_team.id)`;
+      yield* sql`CREATE UNIQUE INDEX organization_team_membership_team_user ON organization_team_membership("teamId", "userId")`;
     }),
   },
   // OHS-004: a team membership carries team-scoped role names (JSON array, like
@@ -1513,17 +1513,17 @@ const organizationMigrations: Migrations.Migrations = [
     name: "organization_team_hierarchy",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`ALTER TABLE organization_team ADD COLUMN parentId TEXT`;
-      yield* sql`CREATE INDEX organization_team_parent_id ON organization_team(parentId)`;
+      yield* sql`ALTER TABLE organization_team ADD COLUMN "parentId" TEXT`;
+      yield* sql`CREATE INDEX organization_team_parent_id ON organization_team("parentId")`;
       yield* sql`
         CREATE TABLE organization_team_closure (
-          ancestorId TEXT NOT NULL,
-          descendantId TEXT NOT NULL,
+          "ancestorId" TEXT NOT NULL,
+          "descendantId" TEXT NOT NULL,
           depth INTEGER NOT NULL,
-          PRIMARY KEY (ancestorId, descendantId)
+          PRIMARY KEY ("ancestorId", "descendantId")
         )`;
-      yield* sql`CREATE INDEX organization_team_closure_descendant_id ON organization_team_closure(descendantId)`;
-      yield* sql`INSERT INTO organization_team_closure (ancestorId, descendantId, depth) SELECT id, id, 0 FROM organization_team`;
+      yield* sql`CREATE INDEX organization_team_closure_descendant_id ON organization_team_closure("descendantId")`;
+      yield* sql`INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth) SELECT id, id, 0 FROM organization_team`;
     }),
   },
 ];

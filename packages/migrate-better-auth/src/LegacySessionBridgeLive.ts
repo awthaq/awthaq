@@ -52,7 +52,7 @@ export const layer: Layer.Layer<never, never, SqlClient.SqlClient> = Layer.effec
       Request: Schema.String,
       Result: BetterAuthSessionRow,
       execute: (token) =>
-        sql`SELECT userId, ipAddress, userAgent, expiresAt FROM session WHERE token = ${token}`,
+        sql`SELECT "userId", "ipAddress", "userAgent", "expiresAt" FROM session WHERE token = ${token}`,
     });
 
     const resolve: LegacySessionBridge.LegacySessionBridgeShape["resolve"] = (rawToken) =>

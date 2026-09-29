@@ -280,7 +280,7 @@ export const layerSql = Layer.effect(
       Result: SigningKeyRow,
       execute: (r) => sql`
           INSERT INTO jwt_signing_key
-            (kid, alg, publicKeyJwk, privateKeyJwk, createdAt, rotatedAt, retiresAt)
+            (kid, alg, "publicKeyJwk", "privateKeyJwk", "createdAt", "rotatedAt", "retiresAt")
           VALUES
             (${r.kid}, ${r.alg}, ${r.publicKeyJwk}, ${r.privateKeyJwk}, ${r.createdAt}, ${r.rotatedAt}, ${r.retiresAt})
           RETURNING *
@@ -291,7 +291,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Void,
       Result: SigningKeyRow,
       execute: () => sql`
-          SELECT * FROM jwt_signing_key WHERE rotatedAt IS NULL ORDER BY createdAt DESC LIMIT 1
+          SELECT * FROM jwt_signing_key WHERE "rotatedAt" IS NULL ORDER BY "createdAt" DESC LIMIT 1
         `,
     });
 
@@ -300,8 +300,8 @@ export const layerSql = Layer.effect(
       Result: SigningKeyRow,
       execute: (now) => sql`
           SELECT * FROM jwt_signing_key
-          WHERE retiresAt IS NULL OR retiresAt > ${now}
-          ORDER BY createdAt DESC
+          WHERE "retiresAt" IS NULL OR "retiresAt" > ${now}
+          ORDER BY "createdAt" DESC
         `,
     });
 
@@ -316,8 +316,8 @@ export const layerSql = Layer.effect(
       }),
       Result: SigningKeyRow,
       execute: (r) => sql`
-          UPDATE jwt_signing_key SET rotatedAt = ${r.rotatedAt}, retiresAt = ${r.retiresAt}
-          WHERE kid = ${r.kid} AND rotatedAt IS NULL
+          UPDATE jwt_signing_key SET "rotatedAt" = ${r.rotatedAt}, "retiresAt" = ${r.retiresAt}
+          WHERE kid = ${r.kid} AND "rotatedAt" IS NULL
           RETURNING *
         `,
     });
@@ -330,9 +330,9 @@ export const layerSql = Layer.effect(
       }),
       Result: SigningKeyRow,
       execute: (r) => sql`
-          UPDATE jwt_signing_key SET retiresAt = ${r.retiresAt}
-          WHERE kid = ${r.kid} AND rotatedAt IS NOT NULL
-            AND (retiresAt IS NULL OR retiresAt > ${r.retiresAt})
+          UPDATE jwt_signing_key SET "retiresAt" = ${r.retiresAt}
+          WHERE kid = ${r.kid} AND "rotatedAt" IS NOT NULL
+            AND ("retiresAt" IS NULL OR "retiresAt" > ${r.retiresAt})
           RETURNING *
         `,
     });

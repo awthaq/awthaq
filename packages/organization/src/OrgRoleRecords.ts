@@ -225,7 +225,7 @@ export const layerSql = Layer.effect(
       }),
       Result: OrgRoleRow,
       execute: (r) => sql`
-          INSERT INTO organization_role (id, organizationId, role, permission, createdAt, updatedAt)
+          INSERT INTO organization_role (id, "organizationId", role, permission, "createdAt", "updatedAt")
           VALUES (${r.id}, ${r.organizationId}, ${r.role}, ${r.permission}, ${r.createdAt}, ${r.updatedAt})
           RETURNING *
         `,
@@ -235,14 +235,14 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
       Result: OrgRoleRow,
       execute: (r) =>
-        sql`SELECT * FROM organization_role WHERE id = ${r.id} AND organizationId = ${r.organizationId}`,
+        sql`SELECT * FROM organization_role WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}`,
     });
 
     const listByOrganizationQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: OrgRoleRow,
       execute: (organizationId) =>
-        sql`SELECT * FROM organization_role WHERE organizationId = ${organizationId}`,
+        sql`SELECT * FROM organization_role WHERE "organizationId" = ${organizationId}`,
     });
 
     // MTI-005: a COUNT(*), never a full-row materialization.
@@ -250,7 +250,7 @@ export const layerSql = Layer.effect(
       Request: Schema.String,
       Result: Schema.Struct({ count: Schema.Number }),
       execute: (organizationId) =>
-        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_role WHERE organizationId = ${organizationId}`,
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_role WHERE "organizationId" = ${organizationId}`,
     });
 
     const updateQuery = SqlSchema.findOneOption({
@@ -262,8 +262,8 @@ export const layerSql = Layer.effect(
       }),
       Result: OrgRoleRow,
       execute: (r) => sql`
-          UPDATE organization_role SET permission = ${r.permission}, updatedAt = ${r.updatedAt}
-          WHERE id = ${r.id} AND organizationId = ${r.organizationId}
+          UPDATE organization_role SET permission = ${r.permission}, "updatedAt" = ${r.updatedAt}
+          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
           RETURNING *
         `,
     });
@@ -272,7 +272,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
       Result: OrgRoleRow,
       execute: (r) =>
-        sql`DELETE FROM organization_role WHERE id = ${r.id} AND organizationId = ${r.organizationId} RETURNING *`,
+        sql`DELETE FROM organization_role WHERE id = ${r.id} AND "organizationId" = ${r.organizationId} RETURNING *`,
     });
 
     const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input) {
@@ -334,7 +334,7 @@ export const layerSql = Layer.effect(
     const removeAllForOrganization: OrgRoleRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
-      sql`DELETE FROM organization_role WHERE organizationId = ${organizationId}`.pipe(
+      sql`DELETE FROM organization_role WHERE "organizationId" = ${organizationId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );

@@ -247,7 +247,7 @@ export const layerSql = Layer.effect(
       Request: Schema.String,
       Result: ActiveContextRow,
       execute: (sessionId) =>
-        sql`SELECT * FROM organization_active_context WHERE sessionId = ${sessionId}`,
+        sql`SELECT * FROM organization_active_context WHERE "sessionId" = ${sessionId}`,
     });
 
     const insert = SqlSchema.findOne({
@@ -260,7 +260,7 @@ export const layerSql = Layer.effect(
       }),
       Result: ActiveContextRow,
       execute: (r) => sql`
-          INSERT INTO organization_active_context (sessionId, userId, activeOrganizationId, activeTeamId, updatedAt)
+          INSERT INTO organization_active_context ("sessionId", "userId", "activeOrganizationId", "activeTeamId", "updatedAt")
           VALUES (${r.sessionId}, ${r.userId}, ${r.activeOrganizationId}, ${r.activeTeamId}, ${r.updatedAt})
           RETURNING *
         `,
@@ -276,8 +276,8 @@ export const layerSql = Layer.effect(
       Result: ActiveContextRow,
       execute: (r) => sql`
           UPDATE organization_active_context
-          SET activeOrganizationId = ${r.activeOrganizationId}, userId = ${r.userId}, updatedAt = ${r.updatedAt}
-          WHERE sessionId = ${r.sessionId}
+          SET "activeOrganizationId" = ${r.activeOrganizationId}, "userId" = ${r.userId}, "updatedAt" = ${r.updatedAt}
+          WHERE "sessionId" = ${r.sessionId}
           RETURNING *
         `,
     });
@@ -292,8 +292,8 @@ export const layerSql = Layer.effect(
       Result: ActiveContextRow,
       execute: (r) => sql`
           UPDATE organization_active_context
-          SET activeTeamId = ${r.activeTeamId}, userId = ${r.userId}, updatedAt = ${r.updatedAt}
-          WHERE sessionId = ${r.sessionId}
+          SET "activeTeamId" = ${r.activeTeamId}, "userId" = ${r.userId}, "updatedAt" = ${r.updatedAt}
+          WHERE "sessionId" = ${r.sessionId}
           RETURNING *
         `,
     });
@@ -364,7 +364,7 @@ export const layerSql = Layer.effect(
       findBySessionIdQuery(sessionId).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
 
     const clearOrganization: ActiveContextRecordsShape["clearOrganization"] = (organizationId) =>
-      sql`UPDATE organization_active_context SET activeOrganizationId = NULL, activeTeamId = NULL WHERE activeOrganizationId = ${organizationId}`.pipe(
+      sql`UPDATE organization_active_context SET "activeOrganizationId" = NULL, "activeTeamId" = NULL WHERE "activeOrganizationId" = ${organizationId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );
@@ -373,19 +373,19 @@ export const layerSql = Layer.effect(
       userId,
       organizationId,
     ) =>
-      sql`UPDATE organization_active_context SET activeOrganizationId = NULL, activeTeamId = NULL WHERE userId = ${userId} AND activeOrganizationId = ${organizationId}`.pipe(
+      sql`UPDATE organization_active_context SET "activeOrganizationId" = NULL, "activeTeamId" = NULL WHERE "userId" = ${userId} AND "activeOrganizationId" = ${organizationId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );
 
     const clearTeam: ActiveContextRecordsShape["clearTeam"] = (teamId) =>
-      sql`UPDATE organization_active_context SET activeTeamId = NULL WHERE activeTeamId = ${teamId}`.pipe(
+      sql`UPDATE organization_active_context SET "activeTeamId" = NULL WHERE "activeTeamId" = ${teamId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );
 
     const deleteAllByUser: ActiveContextRecordsShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM organization_active_context WHERE userId = ${userId}`.pipe(
+      sql`DELETE FROM organization_active_context WHERE "userId" = ${userId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );

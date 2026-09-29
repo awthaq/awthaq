@@ -6,7 +6,6 @@
 // against the `userHandle` a discoverable credential's assertion carries.
 import { Migrations, Sessions, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -14,6 +13,7 @@ import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
 import { assertionCredential, mockWebAuthn, registrationPayload } from "./passkeyTestFixtures.ts";
 import { buildLayer } from "./passkeyTestLayers.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const newUserSession = (email: string) =>
   Effect.gen(function* () {
@@ -186,7 +186,7 @@ describe("BPAS-006/TC-004: the signals surface", () => {
 
 const MemoryLayer = PasskeyUserHandles.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("passkey_PasskeyUserHandle");
 const Migrated = Layer.effectDiscard(Migrations.run(Passkey.Passkey.migrations)).pipe(
   Layer.provide(SqlLive),
 );

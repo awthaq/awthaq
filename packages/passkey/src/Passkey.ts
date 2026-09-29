@@ -765,32 +765,32 @@ const passkeyMigrations: Migrations.Migrations = [
         pg: () => sql`
           CREATE TABLE passkey_credential (
             id TEXT PRIMARY KEY,
-            userId TEXT NOT NULL,
-            webauthnUserId TEXT NOT NULL,
-            publicKey TEXT NOT NULL,
+            "userId" TEXT NOT NULL,
+            "webauthnUserId" TEXT NOT NULL,
+            "publicKey" TEXT NOT NULL,
             counter INTEGER NOT NULL,
-            deviceType TEXT NOT NULL,
-            backedUp BOOLEAN NOT NULL,
+            "deviceType" TEXT NOT NULL,
+            "backedUp" BOOLEAN NOT NULL,
             transports TEXT NOT NULL,
             aaguid TEXT NOT NULL,
             name TEXT NOT NULL,
-            createdAt TIMESTAMPTZ NOT NULL,
-            lastUsedAt TIMESTAMPTZ NOT NULL
+            "createdAt" TIMESTAMPTZ NOT NULL,
+            "lastUsedAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE passkey_credential (
             id TEXT PRIMARY KEY,
-            userId TEXT NOT NULL,
-            webauthnUserId TEXT NOT NULL,
-            publicKey TEXT NOT NULL,
+            "userId" TEXT NOT NULL,
+            "webauthnUserId" TEXT NOT NULL,
+            "publicKey" TEXT NOT NULL,
             counter INTEGER NOT NULL,
-            deviceType TEXT NOT NULL,
-            backedUp INTEGER NOT NULL,
+            "deviceType" TEXT NOT NULL,
+            "backedUp" INTEGER NOT NULL,
             transports TEXT NOT NULL,
             aaguid TEXT NOT NULL,
             name TEXT NOT NULL,
-            createdAt TEXT NOT NULL,
-            lastUsedAt TEXT NOT NULL
+            "createdAt" TEXT NOT NULL,
+            "lastUsedAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -801,8 +801,8 @@ const passkeyMigrations: Migrations.Migrations = [
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
-        pg: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential(userId)`,
-        sqlite: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential(userId)`,
+        pg: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential("userId")`,
+        sqlite: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential("userId")`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -816,15 +816,15 @@ const passkeyMigrations: Migrations.Migrations = [
           CREATE TABLE passkey_challenge (
             scope TEXT PRIMARY KEY,
             value TEXT NOT NULL,
-            expiresAt TIMESTAMPTZ NOT NULL,
-            createdAt TIMESTAMPTZ NOT NULL
+            "expiresAt" TIMESTAMPTZ NOT NULL,
+            "createdAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE passkey_challenge (
             scope TEXT PRIMARY KEY,
             value TEXT NOT NULL,
-            expiresAt TEXT NOT NULL,
-            createdAt TEXT NOT NULL
+            "expiresAt" TEXT NOT NULL,
+            "createdAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -835,9 +835,9 @@ const passkeyMigrations: Migrations.Migrations = [
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
-        pg: () => sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge(expiresAt)`,
+        pg: () => sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge("expiresAt")`,
         sqlite: () =>
-          sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge(expiresAt)`,
+          sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge("expiresAt")`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -847,8 +847,8 @@ const passkeyMigrations: Migrations.Migrations = [
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
-        pg: () => sql`ALTER TABLE passkey_credential ADD COLUMN counterAnomalyAt TIMESTAMPTZ`,
-        sqlite: () => sql`ALTER TABLE passkey_credential ADD COLUMN counterAnomalyAt TEXT`,
+        pg: () => sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyAt" TIMESTAMPTZ`,
+        sqlite: () => sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyAt" TEXT`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -859,9 +859,9 @@ const passkeyMigrations: Migrations.Migrations = [
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
         pg: () =>
-          sql`ALTER TABLE passkey_credential ADD COLUMN counterAnomalyCount INTEGER NOT NULL DEFAULT 0`,
+          sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyCount" INTEGER NOT NULL DEFAULT 0`,
         sqlite: () =>
-          sql`ALTER TABLE passkey_credential ADD COLUMN counterAnomalyCount INTEGER NOT NULL DEFAULT 0`,
+          sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyCount" INTEGER NOT NULL DEFAULT 0`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -873,15 +873,15 @@ const passkeyMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`
           CREATE TABLE passkey_user_handle (
-            userId TEXT PRIMARY KEY,
-            webauthnUserId TEXT NOT NULL UNIQUE,
-            createdAt TIMESTAMPTZ NOT NULL
+            "userId" TEXT PRIMARY KEY,
+            "webauthnUserId" TEXT NOT NULL UNIQUE,
+            "createdAt" TIMESTAMPTZ NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE passkey_user_handle (
-            userId TEXT PRIMARY KEY,
-            webauthnUserId TEXT NOT NULL UNIQUE,
-            createdAt TEXT NOT NULL
+            "userId" TEXT PRIMARY KEY,
+            "webauthnUserId" TEXT NOT NULL UNIQUE,
+            "createdAt" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });

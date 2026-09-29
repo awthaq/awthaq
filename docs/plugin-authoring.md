@@ -8,14 +8,14 @@ To start a plugin: copy `examples/plugin-template/`, rename `Notes` / `notes_not
 
 A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces it contributes (ADR-EA-001):
 
-| Piece | Template file | Rule |
-|---|---|---|
-| Contract | `TemplateApi.ts` | One `HttpApiGroup` whose id is the plugin id, wrapped in `HttpApi.make("auth")`. |
-| Config | `Template.ts` (`NotesConfig`) | A `Context.Reference` with a default plus a `config(partial)` layer (ADR-EA-011). Policy knobs are never a required service. |
-| Persistence | `Template.ts` (`NoteRecords`, `layerSql`) | The plugin owns its tables; the table prefix is the plugin id. |
-| Migrations | `Template.ts` (`notesMigrations`) | Append-only, dialect-branched with `sql.onDialectOrElse`. |
-| Hooks | `Template.ts` (`BeforeCreateNote`, `AfterCreateNote`) | One veto (before) and one observe (after) point per mutating operation. |
-| Service + handlers | `Template.ts` (`Notes`, `NotesHandlers`) | `AuthPlugin.layer(Notes, { handlers, make })`. |
+| Piece              | Template file                                         | Rule                                                                                                                         |
+| ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Contract           | `TemplateApi.ts`                                      | One `HttpApiGroup` whose id is the plugin id, wrapped in `HttpApi.make("auth")`.                                             |
+| Config             | `Template.ts` (`NotesConfig`)                         | A `Context.Reference` with a default plus a `config(partial)` layer (ADR-EA-011). Policy knobs are never a required service. |
+| Persistence        | `Template.ts` (`NoteRecords`, `layerSql`)             | The plugin owns its tables; the table prefix is the plugin id.                                                               |
+| Migrations         | `Template.ts` (`notesMigrations`)                     | Append-only, dialect-branched with `sql.onDialectOrElse`.                                                                    |
+| Hooks              | `Template.ts` (`BeforeCreateNote`, `AfterCreateNote`) | One veto (before) and one observe (after) point per mutating operation.                                                      |
+| Service + handlers | `Template.ts` (`Notes`, `NotesHandlers`)              | `AuthPlugin.layer(Notes, { handlers, make })`.                                                                               |
 
 `Auth.make([Notes])` composes the plugin into one `api`, one `layer` and a manifest (BEH-EA-009 to 016); the template's first test shows it.
 
@@ -29,7 +29,7 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 
 ## Dependencies: `dependsOn` versus a direct `yield*`
 
-Core domain services (`Sessions`, `Users`, `AuthEvents`, `AuditLog`) and the plugin's own records are simply `yield*`ed inside `make`; nothing is declared. Declare `dependsOn: [OtherPlugin]` only when your plugin needs *another plugin's* contribution to be composed first (it also orders migrations and makes `Auth.make` refuse cycles, BEH-EA-016). `admin/src/Admin.ts` explains why it needs no `dependsOn` despite using three core services.
+Core domain services (`Sessions`, `Users`, `AuthEvents`, `AuditLog`) and the plugin's own records are simply `yield*`ed inside `make`; nothing is declared. Declare `dependsOn: [OtherPlugin]` only when your plugin needs _another plugin's_ contribution to be composed first (it also orders migrations and makes `Auth.make` refuse cycles, BEH-EA-016). `admin/src/Admin.ts` explains why it needs no `dependsOn` despite using three core services.
 
 ## Ports are required, never provided (ADR-EA-010)
 
@@ -46,8 +46,9 @@ A plugin that needs a mailer, a crypto source, a rate limiter or a transaction b
 
 - Append only. Never edit a migration that has shipped; add a new entry (BEH-EA-033 to 040). Names are re-keyed per plugin by `Auth.make`.
 - Dialect-branch with `sql.onDialectOrElse({ pg, sqlite, orElse })` where a type differs; use `Effect.die` in `orElse` for an unsupported dialect.
-- Use single-word lowercase column names, or quote consistently: Postgres folds unquoted identifiers to lowercase, so a camelCase column decodes on SQLite but not on Postgres.
-- Test with the real thing: `Migrations.run(Plugin.migrations)` against `SqliteClient.layer({ filename: ":memory:" })`, never a hand-written `CREATE TABLE`.
+- Use single-word lowercase column names, or quote consistently in **every** statement (DDL, queries, trigger bodies): Postgres folds unquoted identifiers to lowercase, so an unquoted camelCase column returns a lower-cased key that no row schema matches. All shipped plugins quote their camelCase columns; SQLite is indifferent.
+- Row codecs follow the client's dialect: `@effect/sql-pg` returns `boolean`/`Date`, `node:sqlite` returns `0 | 1`/ISO strings. Build a store's row schemas from `Models.dialectFields(yield* Models.resolveDialect(sql))` (`@awthaq/sql`) instead of `Schema.DateTimeUtcFromString`/`BooleanFromBit`.
+- Test with the real thing: `Migrations.run(Plugin.migrations)` against a database from `packages/sql/test/support/TestSql.ts` (`TestSql.layer("<suite>")`: `:memory:` SQLite by default, a real per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`/`pnpm run test:pg`), never a hand-written `CREATE TABLE`. Plugin migrations run in their own ledger table (`Migrations.pluginMigrationsTable`), separate from core's.
 - A statement that touches a tenant-scoped table must filter by the tenant key; see `packages/organization/test/TenantScoping.test.ts` for a static guard you can copy.
 
 ## Multi-statement writes
@@ -57,7 +58,7 @@ An operation that is several SQL statements runs in one `sql.withTransaction` so
 ## House rules
 
 - No type assertions in library source: no `as`, `as unknown as`, `as any`. Use `Schema` decoding, `Brand.nominal` for witnesses, or a typed helper.
-- No return-type annotations on `Effect`/`Layer` consts; let inference infer. (Annotating an *interface method* type, as `NotesShape` does, is the contract and is fine.)
+- No return-type annotations on `Effect`/`Layer` consts; let inference infer. (Annotating an _interface method_ type, as `NotesShape` does, is the contract and is fine.)
 - A plugin's own tests run against the built `lib`; run `pnpm build` (or `tsc -b`) before `pnpm test` after changing a dependency package.
 
 ## Checklist for a new plugin

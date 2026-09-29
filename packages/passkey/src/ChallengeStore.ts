@@ -197,13 +197,13 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
         }),
         Result: ChallengeRow,
         execute: (request) => sql`
-          INSERT INTO passkey_challenge (scope, value, expiresAt, createdAt)
+          INSERT INTO passkey_challenge (scope, value, "expiresAt", "createdAt")
           VALUES (${request.scope}, ${request.value}, ${request.expiresAt}, ${request.createdAt})
           ON CONFLICT(scope) DO UPDATE SET
             value = excluded.value,
-            expiresAt = excluded.expiresAt,
-            createdAt = excluded.createdAt
-          RETURNING scope, value, expiresAt
+            "expiresAt" = excluded."expiresAt",
+            "createdAt" = excluded."createdAt"
+          RETURNING scope, value, "expiresAt"
         `,
       });
 
@@ -213,7 +213,7 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
         Result: ChallengeRow,
         execute: (scope) => sql`
           DELETE FROM passkey_challenge WHERE scope = ${scope}
-          RETURNING scope, value, expiresAt
+          RETURNING scope, value, "expiresAt"
         `,
       });
 
@@ -222,7 +222,7 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
         Request: wire.dateTime,
         Result: Schema.Struct({ scope: Schema.String }),
         execute: (now) => sql`
-          DELETE FROM passkey_challenge WHERE expiresAt <= ${now}
+          DELETE FROM passkey_challenge WHERE "expiresAt" <= ${now}
           RETURNING scope
         `,
       });

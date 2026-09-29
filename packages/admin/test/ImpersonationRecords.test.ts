@@ -10,7 +10,6 @@
 // produce a working schema.
 import { AuditChain, Migrations, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -21,6 +20,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const ChainLive = AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer));
 
@@ -29,7 +29,7 @@ const MemoryLayer = ImpersonationRecords.layerMemory.pipe(
   Layer.provide(ChainLive),
 );
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("admin_ImpersonationRecords");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Admin.Admin.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -262,8 +262,9 @@ suite("ImpersonationRecords (layerSql)", SqlLayer);
 
 /**
  * ALF-005: the database itself refuses the casual rewrite, and the hash chain makes a
- * forger who bypasses the triggers (a DBA, `DROP TRIGGER`) detectable. SQLite only:
- * the Postgres triggers ship in the same migration but need a Postgres to run.
+ * forger who bypasses the triggers (a DBA, `DROP TRIGGER`) detectable. Runs on SQLite and, with
+ * `AWTHAQ_POSTGRES_URL` (`pnpm run test:pg`), on Postgres, whose plpgsql triggers ship in the same
+ * migration.
  */
 describe("ALF-005 tamper evidence (layerSql)", () => {
   /** A `SqlError` wraps the driver's own error; the trigger's message lives a few `cause`s down. */
@@ -276,6 +277,16 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
     }
     return messages.join(" | ");
   };
+
+  /** What a DBA bypassing the triggers does. Postgres has one guard trigger per table, SQLite one per rule. */
+  const dropTrigger = (sqlite: string, pg: { readonly name: string; readonly table: string }) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql.unsafe(`DROP TRIGGER IF EXISTS ${pg.name} ON ${pg.table}`),
+        orElse: () => sql.unsafe(`DROP TRIGGER ${sqlite}`),
+      });
+    });
 
   const seedTwo = Effect.gen(function* () {
     const records = yield* ImpersonationRecords.ImpersonationRecords;
@@ -314,7 +325,7 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
       const sql = yield* SqlClient.SqlClient;
       const { first } = yield* seedTwo;
       const failure =
-        yield* sql`UPDATE admin_impersonation SET endedBy = 'expired' WHERE id = ${first.id}`.pipe(
+        yield* sql`UPDATE admin_impersonation SET "endedBy" = 'expired' WHERE id = ${first.id}`.pipe(
           Effect.flip,
         );
       assert.include(rejection(failure), "append-only");
@@ -342,7 +353,10 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
         const { records, second } = yield* seedTwo;
         assert.isTrue(Option.isNone(yield* records.verifyChain));
 
-        yield* sql`DROP TRIGGER admin_impersonation_immutable`;
+        yield* dropTrigger("admin_impersonation_immutable", {
+          name: "admin_impersonation_guard",
+          table: "admin_impersonation",
+        });
         yield* sql`UPDATE admin_impersonation SET reason = 'forged' WHERE id = ${second.id}`;
 
         const broken = yield* records.verifyChain;
@@ -361,7 +375,10 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
       const sql = yield* SqlClient.SqlClient;
       const { records, first, second } = yield* seedTwo;
 
-      yield* sql`DROP TRIGGER admin_impersonation_no_delete`;
+      yield* dropTrigger("admin_impersonation_no_delete", {
+        name: "admin_impersonation_guard",
+        table: "admin_impersonation",
+      });
       yield* sql`DELETE FROM admin_impersonation WHERE id = ${second.id}`;
       const missing = yield* records.verifyChain;
       assert.isTrue(Option.isSome(missing));
@@ -370,8 +387,11 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
         assert.strictEqual(missing.value.reason, "row-missing");
       }
 
-      yield* sql`DROP TRIGGER admin_impersonation_chain_no_update`;
-      yield* sql`UPDATE admin_impersonation_chain SET payload = 'forged' WHERE episodeId = ${first.id} AND kind = 'started'`;
+      yield* dropTrigger("admin_impersonation_chain_no_update", {
+        name: "admin_impersonation_chain_guard",
+        table: "admin_impersonation_chain",
+      });
+      yield* sql`UPDATE admin_impersonation_chain SET payload = 'forged' WHERE "episodeId" = ${first.id} AND kind = 'started'`;
       const ledger = yield* records.verifyChain;
       assert.isTrue(Option.isSome(ledger));
       if (Option.isSome(ledger)) {
@@ -386,7 +406,7 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const { records } = yield* seedTwo;
-      yield* sql`INSERT INTO admin_impersonation (id, adminUserId, targetUserId, sessionId, reason, startedAt, expiresAt, endedAt, endedBy)
+      yield* sql`INSERT INTO admin_impersonation (id, "adminUserId", "targetUserId", "sessionId", reason, "startedAt", "expiresAt", "endedAt", "endedBy")
         VALUES ('smuggled', 'a', 'b', 'session-x', 'r', '1970-01-01T00:00:00.000Z', NULL, NULL, NULL)`;
       const broken = yield* records.verifyChain;
       assert.isTrue(Option.isSome(broken));

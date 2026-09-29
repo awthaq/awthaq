@@ -93,9 +93,9 @@ export const layerSql: Layer.Layer<PasskeyUserHandles, never, SqlClient.SqlClien
           createdAt: wire.dateTime,
         }),
         execute: (r) => sql`
-          INSERT INTO passkey_user_handle (userId, webauthnUserId, createdAt)
+          INSERT INTO passkey_user_handle ("userId", "webauthnUserId", "createdAt")
           VALUES (${r.userId}, ${r.webauthnUserId}, ${r.createdAt})
-          ON CONFLICT(userId) DO NOTHING
+          ON CONFLICT("userId") DO NOTHING
         `,
       });
 
@@ -103,7 +103,7 @@ export const layerSql: Layer.Layer<PasskeyUserHandles, never, SqlClient.SqlClien
         Request: Schema.String,
         Result: Schema.Struct({ webauthnUserId: Schema.String }),
         execute: (userId) =>
-          sql`SELECT webauthnUserId FROM passkey_user_handle WHERE userId = ${userId}`,
+          sql`SELECT "webauthnUserId" FROM passkey_user_handle WHERE "userId" = ${userId}`,
       });
 
       const getOrCreate: PasskeyUserHandlesShape["getOrCreate"] = Effect.fnUntraced(
@@ -121,7 +121,7 @@ export const layerSql: Layer.Layer<PasskeyUserHandles, never, SqlClient.SqlClien
       );
 
       const deleteByUser: PasskeyUserHandlesShape["deleteByUser"] = (userId) =>
-        sql`DELETE FROM passkey_user_handle WHERE userId = ${userId}`.pipe(
+        sql`DELETE FROM passkey_user_handle WHERE "userId" = ${userId}`.pipe(
           Effect.orDie,
           Effect.asVoid,
         );

@@ -7,17 +7,17 @@
 // hand-rolled inline `CREATE TABLE` — BAM-002 (.issues/high) verification,
 // the same `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations, Users } from "@awthaq/core";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const MemoryLayer = PasskeyCredentials.layerMemory;
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("passkey_PasskeyCredentials");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Passkey.Passkey.migrations)).pipe(
   Layer.provide(SqlLive),

@@ -21,7 +21,6 @@
 import { Migrations } from "@awthaq/core";
 import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
@@ -38,10 +37,11 @@ import * as JwtConfig from "../src/JwtConfig.ts";
 import * as Jwt from "../src/Jwt.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const TestConfig = JwtConfig.config({ issuer: "https://issuer.test" });
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("jwt_KeyRing");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Jwt.Jwt.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -357,7 +357,7 @@ describe("layerSql private key at rest (KRS-001)", () => {
       yield* KeyRing.current;
       const sql = yield* SqlClient.SqlClient;
       const rows = yield* sql<{ readonly privateKeyJwk: string | null }>`
-        SELECT privateKeyJwk FROM jwt_signing_key`;
+        SELECT "privateKeyJwk" FROM jwt_signing_key`;
       assert.strictEqual(rows.length, 1);
       const stored = rows[0]?.privateKeyJwk;
       assert.isString(stored);
@@ -374,8 +374,8 @@ describe("layerSql private key at rest (KRS-001)", () => {
       const sql = yield* SqlClient.SqlClient;
       const records = yield* SigningKeyRecords.SigningKeyRecords;
       const [donor] = yield* sql<{ readonly privateKeyJwk: string }>`
-        SELECT privateKeyJwk FROM jwt_signing_key WHERE kid = ${original.kid}`;
-      yield* sql`UPDATE jwt_signing_key SET privateKeyJwk = ${donor?.privateKeyJwk ?? ""}
+        SELECT "privateKeyJwk" FROM jwt_signing_key WHERE kid = ${original.kid}`;
+      yield* sql`UPDATE jwt_signing_key SET "privateKeyJwk" = ${donor?.privateKeyJwk ?? ""}
         WHERE kid <> ${original.kid}`;
       const exit = yield* Effect.exit(records.findCurrent());
       assert.isTrue(Exit.isFailure(exit));
@@ -394,8 +394,13 @@ describe("layerSql single current key (JJS-004)", () => {
   it.effect("the migrations create the single-current unique index", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const rows = yield* sql<{ readonly sql: string | null }>`
-        SELECT sql FROM sqlite_master WHERE name = 'jwt_signing_key_single_current'`;
+      const rows = yield* sql.onDialectOrElse({
+        pg: () => sql<{ readonly sql: string | null }>`
+          SELECT indexdef AS sql FROM pg_indexes
+          WHERE schemaname = current_schema() AND indexname = 'jwt_signing_key_single_current'`,
+        orElse: () => sql<{ readonly sql: string | null }>`
+          SELECT sql FROM sqlite_master WHERE name = 'jwt_signing_key_single_current'`,
+      });
       assert.strictEqual(rows.length, 1);
       assert.include(rows[0]?.sql ?? "", "UNIQUE");
     }).pipe(Effect.provide(Base)),

@@ -297,7 +297,7 @@ export const layerSql = Layer.effect(
       }),
       Result: MembershipRow,
       execute: (r) => sql`
-          INSERT INTO organization_membership (id, userId, organizationId, role, createdAt)
+          INSERT INTO organization_membership (id, "userId", "organizationId", role, "createdAt")
           VALUES (${r.id}, ${r.userId}, ${r.organizationId}, ${r.role}, ${r.createdAt})
           RETURNING *
         `,
@@ -307,20 +307,20 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ userId: Schema.String, organizationId: Schema.String }),
       Result: MembershipRow,
       execute: (r) =>
-        sql`SELECT * FROM organization_membership WHERE userId = ${r.userId} AND organizationId = ${r.organizationId}`,
+        sql`SELECT * FROM organization_membership WHERE "userId" = ${r.userId} AND "organizationId" = ${r.organizationId}`,
     });
 
     const listByOrganizationQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: MembershipRow,
       execute: (organizationId) =>
-        sql`SELECT * FROM organization_membership WHERE organizationId = ${organizationId} ORDER BY createdAt ASC`,
+        sql`SELECT * FROM organization_membership WHERE "organizationId" = ${organizationId} ORDER BY "createdAt" ASC`,
     });
 
     const listByUserQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: MembershipRow,
-      execute: (userId) => sql`SELECT * FROM organization_membership WHERE userId = ${userId}`,
+      execute: (userId) => sql`SELECT * FROM organization_membership WHERE "userId" = ${userId}`,
     });
 
     const updateRoleQuery = SqlSchema.findOneOption({
@@ -332,7 +332,7 @@ export const layerSql = Layer.effect(
       Result: MembershipRow,
       execute: (r) => sql`
           UPDATE organization_membership SET role = ${r.role}
-          WHERE userId = ${r.userId} AND organizationId = ${r.organizationId}
+          WHERE "userId" = ${r.userId} AND "organizationId" = ${r.organizationId}
           RETURNING *
         `,
     });
@@ -345,7 +345,7 @@ export const layerSql = Layer.effect(
       Request: Schema.String,
       Result: CountRow,
       execute: (organizationId) =>
-        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership WHERE organizationId = ${organizationId}`,
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership WHERE "organizationId" = ${organizationId}`,
     });
 
     // `role` is a JSON array in a TEXT column; "contains the element owner" is
@@ -357,11 +357,11 @@ export const layerSql = Layer.effect(
         sql.onDialectOrElse({
           sqlite: () => sql`
             SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
-            WHERE organizationId = ${organizationId}
+            WHERE "organizationId" = ${organizationId}
               AND EXISTS (SELECT 1 FROM json_each(organization_membership.role) WHERE value = 'owner')`,
           pg: () => sql`
             SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
-            WHERE organizationId = ${organizationId} AND role::jsonb @> '"owner"'::jsonb`,
+            WHERE "organizationId" = ${organizationId} AND role::jsonb @> '"owner"'::jsonb`,
           orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for countOwners")),
         }),
     });
@@ -370,7 +370,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ userId: Schema.String, organizationId: Schema.String }),
       Result: MembershipRow,
       execute: (r) =>
-        sql`DELETE FROM organization_membership WHERE userId = ${r.userId} AND organizationId = ${r.organizationId} RETURNING *`,
+        sql`DELETE FROM organization_membership WHERE "userId" = ${r.userId} AND "organizationId" = ${r.organizationId} RETURNING *`,
     });
 
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
@@ -454,13 +454,13 @@ export const layerSql = Layer.effect(
     const removeAllForOrganization: MembershipRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
-      sql`DELETE FROM organization_membership WHERE organizationId = ${organizationId}`.pipe(
+      sql`DELETE FROM organization_membership WHERE "organizationId" = ${organizationId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );
 
     const deleteAllByUser: MembershipRecordsShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM organization_membership WHERE userId = ${userId}`.pipe(
+      sql`DELETE FROM organization_membership WHERE "userId" = ${userId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );

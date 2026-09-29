@@ -1,16 +1,42 @@
 #!/usr/bin/env bash
-# TS-001/ESR-009: run the real-Postgres suites (`*.postgres.test.ts`) against a
-# throwaway postgres:16 container. This repo has no git remote, so the CI
-# Postgres service in `.github/workflows/check.yml` has never run these; this
-# is the local equivalent.
+# TS-001/ESR-009/PV-010: run the real-Postgres suites against a throwaway
+# postgres:16 container. This repo has no git remote, so the CI Postgres service
+# in `.github/workflows/check.yml` has never run these; this is the local
+# equivalent.
 #
 #   pnpm run test:pg                                       # starts a container, runs, removes it
 #   AWTHAQ_POSTGRES_URL=postgres://... pnpm run test:pg    # use an existing server
 #
-# The suites `DROP SCHEMA public CASCADE` — point the URL at a scratch database.
+# Two kinds of suite run:
+#   * `*.postgres.test.ts` in @awthaq/sql (skipped without AWTHAQ_POSTGRES_URL);
+#   * every plugin record-store suite (admin, jwt, organization, passkey, roles,
+#     qadi claims, migrate-better-auth), which builds its database through
+#     `packages/sql/test/support/TestSql.ts`: the same tests, on Postgres instead
+#     of `:memory:` SQLite, each suite in its own schema.
+#
+# The suites `DROP TABLE`/`DROP SCHEMA` — point the URL at a scratch database.
 set -euo pipefail
 
-suites=(packages/sql/test/Repositories.postgres.test.ts packages/sql/test/RateLimiterStoreSql.postgres.test.ts)
+suites=(
+  packages/sql/test/Repositories.postgres.test.ts
+  packages/sql/test/RateLimiterStoreSql.postgres.test.ts
+  packages/admin/test/ImpersonationRecords.test.ts
+  packages/jwt/test/KeyRing.test.ts
+  packages/jwt/test/RevocationStore.test.ts
+  packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
+  packages/organization/test/ActiveContextRecords.test.ts
+  packages/organization/test/InvitationRecords.test.ts
+  packages/organization/test/MembershipRecords.test.ts
+  packages/organization/test/OrgRoleRecords.test.ts
+  packages/organization/test/OrganizationRecords.test.ts
+  packages/organization/test/OrganizationSql.test.ts
+  packages/organization/test/TeamRecords.test.ts
+  packages/passkey/test/ChallengeStore.test.ts
+  packages/passkey/test/PasskeyCredentials.test.ts
+  packages/passkey/test/PasskeyUserHandle.test.ts
+  packages/qadi/test/UserClaims.test.ts
+  packages/roles/test/RolesSql.test.ts
+)
 
 if [[ -z "${AWTHAQ_POSTGRES_URL:-}" ]]; then
   name="awthaq-test-pg-$$"
@@ -25,4 +51,4 @@ if [[ -z "${AWTHAQ_POSTGRES_URL:-}" ]]; then
   export AWTHAQ_POSTGRES_URL="postgres://postgres:pw@localhost:$port/awthaq"
 fi
 
-pnpm exec vitest run "${suites[@]}"
+pnpm exec vitest run --testTimeout=60000 "${suites[@]}"

@@ -484,7 +484,7 @@ export const layerSql = Layer.effect(
     const ledgerTail = SqlSchema.findOneOption({
       Request: Schema.Void,
       Result: Schema.Struct({ rowHash: Schema.String }),
-      execute: () => sql`SELECT rowHash FROM admin_impersonation_chain ORDER BY seq DESC LIMIT 1`,
+      execute: () => sql`SELECT "rowHash" FROM admin_impersonation_chain ORDER BY seq DESC LIMIT 1`,
     });
 
     const ledgerInsert = SqlSchema.void({
@@ -496,7 +496,7 @@ export const layerSql = Layer.effect(
         rowHash: Schema.String,
       }),
       execute: (r) => sql`
-        INSERT INTO admin_impersonation_chain (kind, episodeId, prevHash, payload, rowHash)
+        INSERT INTO admin_impersonation_chain (kind, "episodeId", "prevHash", payload, "rowHash")
         VALUES (${r.kind}, ${r.episodeId}, ${r.prevHash}, ${r.payload}, ${r.rowHash})
       `,
     });
@@ -505,7 +505,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Void,
       Result: LedgerRow,
       execute: () =>
-        sql`SELECT seq, kind, episodeId, prevHash, payload, rowHash FROM admin_impersonation_chain ORDER BY seq ASC`,
+        sql`SELECT seq, kind, "episodeId", "prevHash", payload, "rowHash" FROM admin_impersonation_chain ORDER BY seq ASC`,
     });
 
     const rowsAll = SqlSchema.findAll({
@@ -559,7 +559,7 @@ export const layerSql = Layer.effect(
       Result: ImpersonationRow,
       execute: (r) => sql`
           INSERT INTO admin_impersonation
-            (id, adminUserId, targetUserId, sessionId, reason, startedAt, expiresAt, endedAt, endedBy)
+            (id, "adminUserId", "targetUserId", "sessionId", reason, "startedAt", "expiresAt", "endedAt", "endedBy")
           VALUES
             (${r.id}, ${r.adminUserId}, ${r.targetUserId}, ${r.sessionId}, ${r.reason}, ${r.startedAt}, ${r.expiresAt}, NULL, NULL)
           RETURNING *
@@ -569,7 +569,8 @@ export const layerSql = Layer.effect(
     const findBySessionIdQuery = SqlSchema.findOneOption({
       Request: Schema.String,
       Result: ImpersonationRow,
-      execute: (sessionId) => sql`SELECT * FROM admin_impersonation WHERE sessionId = ${sessionId}`,
+      execute: (sessionId) =>
+        sql`SELECT * FROM admin_impersonation WHERE "sessionId" = ${sessionId}`,
     });
 
     const endEpisodeQuery = SqlSchema.findOneOption({
@@ -580,8 +581,8 @@ export const layerSql = Layer.effect(
       }),
       Result: ImpersonationRow,
       execute: (r) => sql`
-          UPDATE admin_impersonation SET endedAt = ${r.endedAt}, endedBy = ${r.endedBy}
-          WHERE sessionId = ${r.sessionId} AND endedAt IS NULL
+          UPDATE admin_impersonation SET "endedAt" = ${r.endedAt}, "endedBy" = ${r.endedBy}
+          WHERE "sessionId" = ${r.sessionId} AND "endedAt" IS NULL
           RETURNING *
         `,
     });
@@ -591,8 +592,8 @@ export const layerSql = Layer.effect(
       Request: wire.dateTime,
       Result: ImpersonationRow,
       execute: (now) => sql`
-          UPDATE admin_impersonation SET endedAt = expiresAt, endedBy = 'expired'
-          WHERE endedAt IS NULL AND expiresAt IS NOT NULL AND expiresAt <= ${now}
+          UPDATE admin_impersonation SET "endedAt" = "expiresAt", "endedBy" = 'expired'
+          WHERE "endedAt" IS NULL AND "expiresAt" IS NOT NULL AND "expiresAt" <= ${now}
           RETURNING *
         `,
     });
@@ -608,14 +609,14 @@ export const layerSql = Layer.effect(
       Result: ImpersonationRow,
       execute: (r) => {
         const conditions = [
-          ...(r.active ? [sql`endedAt IS NULL`] : []),
+          ...(r.active ? [sql`"endedAt" IS NULL`] : []),
           ...(r.cursorStartedAt === null || r.cursorId === null
             ? []
             : [
-                sql`(startedAt < ${r.cursorStartedAt} OR (startedAt = ${r.cursorStartedAt} AND id < ${r.cursorId}))`,
+                sql`("startedAt" < ${r.cursorStartedAt} OR ("startedAt" = ${r.cursorStartedAt} AND id < ${r.cursorId}))`,
               ]),
         ];
-        return sql`SELECT * FROM admin_impersonation WHERE ${sql.and(conditions)} ORDER BY startedAt DESC, id DESC LIMIT ${r.limit + 1}`;
+        return sql`SELECT * FROM admin_impersonation WHERE ${sql.and(conditions)} ORDER BY "startedAt" DESC, id DESC LIMIT ${r.limit + 1}`;
       },
     });
 

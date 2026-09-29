@@ -280,7 +280,7 @@ export const layerSql = Layer.effect(
       }),
       Result: InvitationRow,
       execute: (r) => sql`
-          INSERT INTO organization_invitation (id, email, inviterId, organizationId, teamId, role, status, createdAt, expiresAt, tokenHash)
+          INSERT INTO organization_invitation (id, email, "inviterId", "organizationId", "teamId", role, status, "createdAt", "expiresAt", "tokenHash")
           VALUES (${r.id}, ${r.email}, ${r.inviterId}, ${r.organizationId}, ${r.teamId}, ${r.role}, ${r.status}, ${r.createdAt}, ${r.expiresAt}, ${r.tokenHash})
           RETURNING *
         `,
@@ -296,14 +296,14 @@ export const layerSql = Layer.effect(
       Request: Schema.String,
       Result: InvitationRow,
       execute: (tokenHash) =>
-        sql`SELECT * FROM organization_invitation WHERE tokenHash = ${tokenHash}`,
+        sql`SELECT * FROM organization_invitation WHERE "tokenHash" = ${tokenHash}`,
     });
 
     const setTokenHashQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({ id: Schema.String, tokenHash: Schema.String }),
       Result: InvitationRow,
       execute: (r) => sql`
-          UPDATE organization_invitation SET tokenHash = ${r.tokenHash}
+          UPDATE organization_invitation SET "tokenHash" = ${r.tokenHash}
           WHERE id = ${r.id}
           RETURNING *
         `,
@@ -313,14 +313,14 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ email: Schema.String, organizationId: Schema.String }),
       Result: InvitationRow,
       execute: (r) =>
-        sql`SELECT * FROM organization_invitation WHERE email = ${r.email} AND organizationId = ${r.organizationId} AND status = 'pending'`,
+        sql`SELECT * FROM organization_invitation WHERE email = ${r.email} AND "organizationId" = ${r.organizationId} AND status = 'pending'`,
     });
 
     const listByOrganizationQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: InvitationRow,
       execute: (organizationId) =>
-        sql`SELECT * FROM organization_invitation WHERE organizationId = ${organizationId}`,
+        sql`SELECT * FROM organization_invitation WHERE "organizationId" = ${organizationId}`,
     });
 
     const listByEmailQuery = SqlSchema.findAll({
@@ -334,7 +334,7 @@ export const layerSql = Layer.effect(
       Request: Schema.String,
       Result: Schema.Struct({ count: Schema.Number }),
       execute: (inviterId) =>
-        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_invitation WHERE inviterId = ${inviterId} AND status = 'pending'`,
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_invitation WHERE "inviterId" = ${inviterId} AND status = 'pending'`,
     });
 
     const updateStatusQuery = SqlSchema.findOneOption({
@@ -417,7 +417,7 @@ export const layerSql = Layer.effect(
     const removeAllForOrganization: InvitationRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
-      sql`DELETE FROM organization_invitation WHERE organizationId = ${organizationId}`.pipe(
+      sql`DELETE FROM organization_invitation WHERE "organizationId" = ${organizationId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );

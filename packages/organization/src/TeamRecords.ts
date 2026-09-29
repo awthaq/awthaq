@@ -673,7 +673,7 @@ export const layerSql = Layer.effect(
       }),
       Result: TeamRow,
       execute: (r) => sql`
-          INSERT INTO organization_team (id, name, organizationId, memberCount, parentId, createdAt, updatedAt)
+          INSERT INTO organization_team (id, name, "organizationId", "memberCount", "parentId", "createdAt", "updatedAt")
           VALUES (${r.id}, ${r.name}, ${r.organizationId}, ${r.memberCount}, ${r.parentId}, ${r.createdAt}, ${r.updatedAt})
           RETURNING *
         `,
@@ -689,16 +689,16 @@ export const layerSql = Layer.effect(
           direction === "ancestors"
             ? sql`
                 SELECT t.* FROM organization_team t
-                INNER JOIN organization_team_closure c ON c.ancestorId = t.id
-                WHERE c.descendantId = ${r.id} AND c.depth >= ${minDepth}
-                  AND t.organizationId = ${r.organizationId}
+                INNER JOIN organization_team_closure c ON c."ancestorId" = t.id
+                WHERE c."descendantId" = ${r.id} AND c.depth >= ${minDepth}
+                  AND t."organizationId" = ${r.organizationId}
                 ORDER BY c.depth ASC`
             : sql`
                 SELECT t.* FROM organization_team t
-                INNER JOIN organization_team_closure c ON c.descendantId = t.id
-                WHERE c.ancestorId = ${r.id} AND c.depth >= ${minDepth}
-                  AND t.organizationId = ${r.organizationId}
-                ORDER BY c.depth ASC, t.createdAt ASC, t.id ASC`,
+                INNER JOIN organization_team_closure c ON c."descendantId" = t.id
+                WHERE c."ancestorId" = ${r.id} AND c.depth >= ${minDepth}
+                  AND t."organizationId" = ${r.organizationId}
+                ORDER BY c.depth ASC, t."createdAt" ASC, t.id ASC`,
       });
     const ancestorsQuery = closureRelatives("ancestors", 1);
     const descendantsQuery = closureRelatives("descendants", 1);
@@ -708,14 +708,14 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
       Result: Schema.Struct({ count: Schema.Number }),
       execute: (r) =>
-        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_team WHERE parentId = ${r.id} AND organizationId = ${r.organizationId}`,
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_team WHERE "parentId" = ${r.id} AND "organizationId" = ${r.organizationId}`,
     });
 
     const isInSubtreeQuery = SqlSchema.findOne({
       Request: Schema.Struct({ ancestorId: Schema.String, descendantId: Schema.String }),
       Result: Schema.Struct({ count: Schema.Number }),
       execute: (r) =>
-        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_team_closure WHERE ancestorId = ${r.ancestorId} AND descendantId = ${r.descendantId}`,
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_team_closure WHERE "ancestorId" = ${r.ancestorId} AND "descendantId" = ${r.descendantId}`,
     });
 
     const setParentQuery = SqlSchema.findOne({
@@ -727,8 +727,8 @@ export const layerSql = Layer.effect(
       }),
       Result: TeamRow,
       execute: (r) => sql`
-          UPDATE organization_team SET parentId = ${r.parentId}, updatedAt = ${r.updatedAt}
-          WHERE id = ${r.id} AND organizationId = ${r.organizationId}
+          UPDATE organization_team SET "parentId" = ${r.parentId}, "updatedAt" = ${r.updatedAt}
+          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
           RETURNING *
         `,
     });
@@ -737,7 +737,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
       Result: TeamRow,
       execute: (r) =>
-        sql`SELECT * FROM organization_team WHERE id = ${r.id} AND organizationId = ${r.organizationId}`,
+        sql`SELECT * FROM organization_team WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}`,
     });
 
     const findTeamByIdAnyOrgQuery = SqlSchema.findOneOption({
@@ -751,14 +751,14 @@ export const layerSql = Layer.effect(
       Request: Schema.String,
       Result: Schema.Struct({ count: Schema.Number }),
       execute: (organizationId) =>
-        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_team WHERE organizationId = ${organizationId}`,
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_team WHERE "organizationId" = ${organizationId}`,
     });
 
     const listTeamsByOrganizationQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: TeamRow,
       execute: (organizationId) =>
-        sql`SELECT * FROM organization_team WHERE organizationId = ${organizationId} ORDER BY createdAt ASC`,
+        sql`SELECT * FROM organization_team WHERE "organizationId" = ${organizationId} ORDER BY "createdAt" ASC`,
     });
 
     const updateTeamQuery = SqlSchema.findOneOption({
@@ -770,8 +770,8 @@ export const layerSql = Layer.effect(
       }),
       Result: TeamRow,
       execute: (r) => sql`
-          UPDATE organization_team SET name = ${r.name}, updatedAt = ${r.updatedAt}
-          WHERE id = ${r.id} AND organizationId = ${r.organizationId}
+          UPDATE organization_team SET name = ${r.name}, "updatedAt" = ${r.updatedAt}
+          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
           RETURNING *
         `,
     });
@@ -780,7 +780,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
       Result: TeamRow,
       execute: (r) =>
-        sql`DELETE FROM organization_team WHERE id = ${r.id} AND organizationId = ${r.organizationId} RETURNING *`,
+        sql`DELETE FROM organization_team WHERE id = ${r.id} AND "organizationId" = ${r.organizationId} RETURNING *`,
     });
 
     const insertTeamMembership = SqlSchema.findOne({
@@ -793,7 +793,7 @@ export const layerSql = Layer.effect(
       }),
       Result: TeamMembershipRow,
       execute: (r) => sql`
-          INSERT INTO organization_team_membership (id, teamId, userId, role, createdAt)
+          INSERT INTO organization_team_membership (id, "teamId", "userId", role, "createdAt")
           VALUES (${r.id}, ${r.teamId}, ${r.userId}, ${r.role}, ${r.createdAt})
           RETURNING *
         `,
@@ -804,7 +804,7 @@ export const layerSql = Layer.effect(
       Result: TeamMembershipRow,
       execute: (r) => sql`
           UPDATE organization_team_membership SET role = ${r.role}
-          WHERE teamId = ${r.teamId} AND userId = ${r.userId}
+          WHERE "teamId" = ${r.teamId} AND "userId" = ${r.userId}
           RETURNING *
         `,
     });
@@ -813,20 +813,21 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ teamId: Schema.String, userId: Schema.String }),
       Result: TeamMembershipRow,
       execute: (r) =>
-        sql`SELECT * FROM organization_team_membership WHERE teamId = ${r.teamId} AND userId = ${r.userId}`,
+        sql`SELECT * FROM organization_team_membership WHERE "teamId" = ${r.teamId} AND "userId" = ${r.userId}`,
     });
 
     const listTeamMembersQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: TeamMembershipRow,
-      execute: (teamId) => sql`SELECT * FROM organization_team_membership WHERE teamId = ${teamId}`,
+      execute: (teamId) =>
+        sql`SELECT * FROM organization_team_membership WHERE "teamId" = ${teamId}`,
     });
 
     const deleteTeamMembershipQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({ teamId: Schema.String, userId: Schema.String }),
       Result: TeamMembershipRow,
       execute: (r) =>
-        sql`DELETE FROM organization_team_membership WHERE teamId = ${r.teamId} AND userId = ${r.userId} RETURNING *`,
+        sql`DELETE FROM organization_team_membership WHERE "teamId" = ${r.teamId} AND "userId" = ${r.userId} RETURNING *`,
     });
 
     const listTeamsByUserQuery = SqlSchema.findAll({
@@ -834,8 +835,8 @@ export const layerSql = Layer.effect(
       Result: TeamRow,
       execute: (r) => sql`
           SELECT t.* FROM organization_team t
-          INNER JOIN organization_team_membership tm ON tm.teamId = t.id
-          WHERE t.organizationId = ${r.organizationId} AND tm.userId = ${r.userId}
+          INNER JOIN organization_team_membership tm ON tm."teamId" = t.id
+          WHERE t."organizationId" = ${r.organizationId} AND tm."userId" = ${r.userId}
         `,
     });
 
@@ -843,14 +844,14 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ organizationId: Schema.String, userId: Schema.String }),
       Result: Schema.Struct({ teamId: Schema.String }),
       execute: (r) => sql`
-          SELECT tm.teamId AS teamId FROM organization_team_membership tm
-          INNER JOIN organization_team t ON t.id = tm.teamId
-          WHERE t.organizationId = ${r.organizationId} AND tm.userId = ${r.userId}
+          SELECT tm."teamId" AS "teamId" FROM organization_team_membership tm
+          INNER JOIN organization_team t ON t.id = tm."teamId"
+          WHERE t."organizationId" = ${r.organizationId} AND tm."userId" = ${r.userId}
         `,
     });
 
     const adjustMemberCount = (teamId: string, delta: number) =>
-      sql`UPDATE organization_team SET memberCount = memberCount + ${delta} WHERE id = ${teamId}`.pipe(
+      sql`UPDATE organization_team SET "memberCount" = "memberCount" + ${delta} WHERE id = ${teamId}`.pipe(
         Effect.asVoid,
       );
 
@@ -877,12 +878,12 @@ export const layerSql = Layer.effect(
               createdAt: now,
               updatedAt: now,
             });
-            yield* sql`INSERT INTO organization_team_closure (ancestorId, descendantId, depth) VALUES (${id}, ${id}, 0)`;
+            yield* sql`INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth) VALUES (${id}, ${id}, 0)`;
             if (parentId !== null) {
               yield* sql`
-                INSERT INTO organization_team_closure (ancestorId, descendantId, depth)
-                SELECT ancestorId, ${id}, depth + 1 FROM organization_team_closure
-                WHERE descendantId = ${parentId}`;
+                INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth)
+                SELECT "ancestorId", ${id}, depth + 1 FROM organization_team_closure
+                WHERE "descendantId" = ${parentId}`;
             }
             return toTeamRecord(row);
           }),
@@ -925,15 +926,15 @@ export const layerSql = Layer.effect(
             // Detach the subtree from its old ancestors, then hang it under the new parent.
             yield* sql`
               DELETE FROM organization_team_closure
-              WHERE descendantId IN (SELECT descendantId FROM organization_team_closure WHERE ancestorId = ${input.id})
-                AND ancestorId NOT IN (SELECT descendantId FROM organization_team_closure WHERE ancestorId = ${input.id})`;
+              WHERE "descendantId" IN (SELECT "descendantId" FROM organization_team_closure WHERE "ancestorId" = ${input.id})
+                AND "ancestorId" NOT IN (SELECT "descendantId" FROM organization_team_closure WHERE "ancestorId" = ${input.id})`;
             if (parentId !== null) {
               yield* sql`
-                INSERT INTO organization_team_closure (ancestorId, descendantId, depth)
-                SELECT p.ancestorId, c.descendantId, p.depth + c.depth + 1
+                INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth)
+                SELECT p."ancestorId", c."descendantId", p.depth + c.depth + 1
                 FROM organization_team_closure p
                 CROSS JOIN organization_team_closure c
-                WHERE p.descendantId = ${parentId} AND c.ancestorId = ${input.id}`;
+                WHERE p."descendantId" = ${parentId} AND c."ancestorId" = ${input.id}`;
             }
             const row = yield* setParentQuery({
               organizationId: input.organizationId,
@@ -1017,8 +1018,8 @@ export const layerSql = Layer.effect(
             if (children.count > 0) return yield* Effect.fail(new TeamHasChildren({ id }));
             const row = yield* deleteTeamQuery({ organizationId, id });
             if (Option.isNone(row)) return yield* Effect.fail(teamNotFound(id));
-            yield* sql`DELETE FROM organization_team_membership WHERE teamId = ${id}`;
-            yield* sql`DELETE FROM organization_team_closure WHERE descendantId = ${id} OR ancestorId = ${id}`;
+            yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${id}`;
+            yield* sql`DELETE FROM organization_team_closure WHERE "descendantId" = ${id} OR "ancestorId" = ${id}`;
           }),
         )
         .pipe(
@@ -1037,14 +1038,14 @@ export const layerSql = Layer.effect(
           Effect.gen(function* () {
             yield* sql`
               DELETE FROM organization_team_membership
-              WHERE teamId IN (SELECT id FROM organization_team WHERE organizationId = ${organizationId})
+              WHERE "teamId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
             `;
             yield* sql`
               DELETE FROM organization_team_closure
-              WHERE descendantId IN (SELECT id FROM organization_team WHERE organizationId = ${organizationId})
-                 OR ancestorId IN (SELECT id FROM organization_team WHERE organizationId = ${organizationId})
+              WHERE "descendantId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
+                 OR "ancestorId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
             `;
-            yield* sql`DELETE FROM organization_team WHERE organizationId = ${organizationId}`;
+            yield* sql`DELETE FROM organization_team WHERE "organizationId" = ${organizationId}`;
           }),
         )
         .pipe(Effect.orDie);
@@ -1115,7 +1116,7 @@ export const layerSql = Layer.effect(
           Effect.gen(function* () {
             const rows = yield* listOrganizationTeamIdsOfUserQuery({ organizationId, userId });
             for (const { teamId } of rows) {
-              yield* sql`DELETE FROM organization_team_membership WHERE teamId = ${teamId} AND userId = ${userId}`;
+              yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
               yield* adjustMemberCount(teamId, -1);
             }
             return rows.map((row) => row.teamId);

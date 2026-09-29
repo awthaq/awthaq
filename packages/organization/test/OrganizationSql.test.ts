@@ -8,7 +8,6 @@ import { AuditLog, AuthEvents, Hooks, Migrations, Sessions, Users } from "@awtha
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -23,6 +22,7 @@ import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
@@ -45,7 +45,7 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("organization_OrganizationSql");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -112,10 +112,11 @@ describe("Organization over SQL (OHS-002)", () => {
         permission: { organization: ["update"] },
       });
 
-      yield* sql.unsafe(
-        `CREATE TRIGGER fail_org_delete BEFORE DELETE ON organization_org
-         BEGIN SELECT RAISE(ABORT, 'injected'); END`,
-      );
+      yield* TestSql.injectFailure({
+        name: "fail_org_delete",
+        table: "organization_org",
+        event: "DELETE",
+      });
       const exit = yield* Effect.exit(organization.delete(owner, org.id));
       assert.isTrue(Exit.isFailure(exit));
 
@@ -151,10 +152,11 @@ describe("Organization over SQL (OHS-002)", () => {
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
       const team = yield* organization.createTeam(owner, org.id, "Engineering");
       yield* organization.addTeamMember(owner, org.id, team.id, Users.UserId("owner-1"));
-      yield* sql.unsafe(
-        `CREATE TRIGGER fail_team_membership_delete BEFORE DELETE ON organization_team_membership
-         BEGIN SELECT RAISE(ABORT, 'injected'); END`,
-      );
+      yield* TestSql.injectFailure({
+        name: "fail_team_membership_delete",
+        table: "organization_team_membership",
+        event: "DELETE",
+      });
       const exit = yield* Effect.exit(organization.removeTeam(owner, org.id, team.id));
       assert.isTrue(Exit.isFailure(exit));
       assert.strictEqual(yield* countRows(sql, "organization_team"), 1);

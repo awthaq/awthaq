@@ -92,9 +92,9 @@ export const layerSql = Layer.effect(
       Request: RevocationRow,
       Result: RevocationRow,
       execute: (r) => sql`
-          INSERT INTO jwt_token_revocation (jti, expiresAt)
+          INSERT INTO jwt_token_revocation (jti, "expiresAt")
           VALUES (${r.jti}, ${r.expiresAt})
-          ON CONFLICT (jti) DO UPDATE SET expiresAt = excluded.expiresAt
+          ON CONFLICT (jti) DO UPDATE SET "expiresAt" = excluded."expiresAt"
           RETURNING *
         `,
     });

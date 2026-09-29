@@ -12,10 +12,15 @@ import { assert, describe, it } from "@effect/vitest";
 
 const srcDir = new URL("../src/", import.meta.url);
 
-/** Every `sql\`...\`` template body in `source` (statements contain no nested backticks). */
+/**
+ * Every `sql\`...\`` template body in `source` (statements contain no nested
+ * backticks). Identifier quotes are stripped: the statements quote their
+ * camelCase columns for Postgres (`"organizationId"`), and the patterns below
+ * are written against the bare names.
+ */
 const statementsOf = (source: string): ReadonlyArray<string> =>
   Array.from(source.matchAll(/\bsql`([^`]*)`/g), (match) =>
-    (match[1] ?? "").replace(/\s+/g, " ").trim(),
+    (match[1] ?? "").replace(/"/g, "").replace(/\s+/g, " ").trim(),
   );
 
 const TENANT_KEY =

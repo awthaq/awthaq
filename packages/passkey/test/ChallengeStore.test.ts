@@ -12,7 +12,6 @@
 // the same `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -22,10 +21,11 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const MemoryLayer = ChallengeStore.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("passkey_ChallengeStore");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Passkey.Passkey.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -285,7 +285,7 @@ describe("ChallengeStore (layerSql) — single-use", () => {
         const rows = yield* sql<{ readonly count: number }>`
           SELECT COUNT(*) as count FROM passkey_challenge WHERE scope = ${scope}
         `;
-        assert.strictEqual(rows[0]?.count, 1);
+        assert.strictEqual(Number(rows[0]?.count), 1); // pg returns COUNT as bigint
       }).pipe(Effect.provide(SqlLayer)),
   );
 });

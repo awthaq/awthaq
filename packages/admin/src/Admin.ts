@@ -404,24 +404,24 @@ const adminMigrations: Migrations.Migrations = [
         pg: () => sql`
           CREATE TABLE admin_impersonation (
             id TEXT PRIMARY KEY,
-            adminUserId TEXT NOT NULL,
-            targetUserId TEXT NOT NULL,
-            sessionId TEXT NOT NULL,
+            "adminUserId" TEXT NOT NULL,
+            "targetUserId" TEXT NOT NULL,
+            "sessionId" TEXT NOT NULL,
             reason TEXT NOT NULL,
-            startedAt TIMESTAMPTZ NOT NULL,
-            endedAt TIMESTAMPTZ,
-            endedBy TEXT
+            "startedAt" TIMESTAMPTZ NOT NULL,
+            "endedAt" TIMESTAMPTZ,
+            "endedBy" TEXT
           )`,
         sqlite: () => sql`
           CREATE TABLE admin_impersonation (
             id TEXT PRIMARY KEY,
-            adminUserId TEXT NOT NULL,
-            targetUserId TEXT NOT NULL,
-            sessionId TEXT NOT NULL,
+            "adminUserId" TEXT NOT NULL,
+            "targetUserId" TEXT NOT NULL,
+            "sessionId" TEXT NOT NULL,
             reason TEXT NOT NULL,
-            startedAt TEXT NOT NULL,
-            endedAt TEXT,
-            endedBy TEXT
+            "startedAt" TEXT NOT NULL,
+            "endedAt" TEXT,
+            "endedBy" TEXT
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -433,9 +433,9 @@ const adminMigrations: Migrations.Migrations = [
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
         pg: () =>
-          sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation(sessionId)`,
+          sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation("sessionId")`,
         sqlite: () =>
-          sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation(sessionId)`,
+          sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation("sessionId")`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -448,8 +448,8 @@ const adminMigrations: Migrations.Migrations = [
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
-        pg: () => sql`ALTER TABLE admin_impersonation ADD COLUMN expiresAt TIMESTAMPTZ`,
-        sqlite: () => sql`ALTER TABLE admin_impersonation ADD COLUMN expiresAt TEXT`,
+        pg: () => sql`ALTER TABLE admin_impersonation ADD COLUMN "expiresAt" TIMESTAMPTZ`,
+        sqlite: () => sql`ALTER TABLE admin_impersonation ADD COLUMN "expiresAt" TEXT`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -461,9 +461,9 @@ const adminMigrations: Migrations.Migrations = [
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
         pg: () =>
-          sql`CREATE INDEX admin_impersonation_started_at ON admin_impersonation(startedAt, id)`,
+          sql`CREATE INDEX admin_impersonation_started_at ON admin_impersonation("startedAt", id)`,
         sqlite: () =>
-          sql`CREATE INDEX admin_impersonation_started_at ON admin_impersonation(startedAt, id)`,
+          sql`CREATE INDEX admin_impersonation_started_at ON admin_impersonation("startedAt", id)`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -480,19 +480,19 @@ const adminMigrations: Migrations.Migrations = [
           CREATE TABLE admin_impersonation_chain (
             seq SERIAL PRIMARY KEY,
             kind TEXT NOT NULL,
-            episodeId TEXT NOT NULL,
-            prevHash TEXT NOT NULL,
+            "episodeId" TEXT NOT NULL,
+            "prevHash" TEXT NOT NULL,
             payload TEXT NOT NULL,
-            rowHash TEXT NOT NULL
+            "rowHash" TEXT NOT NULL
           )`,
         sqlite: () => sql`
           CREATE TABLE admin_impersonation_chain (
             seq INTEGER PRIMARY KEY AUTOINCREMENT,
             kind TEXT NOT NULL,
-            episodeId TEXT NOT NULL,
-            prevHash TEXT NOT NULL,
+            "episodeId" TEXT NOT NULL,
+            "prevHash" TEXT NOT NULL,
             payload TEXT NOT NULL,
-            rowHash TEXT NOT NULL
+            "rowHash" TEXT NOT NULL
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -516,13 +516,13 @@ const adminMigrations: Migrations.Migrations = [
               BEGIN
                 IF TG_TABLE_NAME = 'admin_impersonation' AND TG_OP = 'UPDATE' THEN
                   IF NEW.id IS DISTINCT FROM OLD.id
-                    OR NEW.adminUserId IS DISTINCT FROM OLD.adminUserId
-                    OR NEW.targetUserId IS DISTINCT FROM OLD.targetUserId
-                    OR NEW.sessionId IS DISTINCT FROM OLD.sessionId
+                    OR NEW."adminUserId" IS DISTINCT FROM OLD."adminUserId"
+                    OR NEW."targetUserId" IS DISTINCT FROM OLD."targetUserId"
+                    OR NEW."sessionId" IS DISTINCT FROM OLD."sessionId"
                     OR NEW.reason IS DISTINCT FROM OLD.reason
-                    OR NEW.startedAt IS DISTINCT FROM OLD.startedAt
-                    OR NEW.expiresAt IS DISTINCT FROM OLD.expiresAt
-                    OR OLD.endedAt IS NOT NULL THEN
+                    OR NEW."startedAt" IS DISTINCT FROM OLD."startedAt"
+                    OR NEW."expiresAt" IS DISTINCT FROM OLD."expiresAt"
+                    OR OLD."endedAt" IS NOT NULL THEN
                     RAISE EXCEPTION 'awthaq: % is append-only: this UPDATE is rejected', TG_TABLE_NAME;
                   END IF;
                   RETURN NEW;
@@ -551,13 +551,13 @@ const adminMigrations: Migrations.Migrations = [
             yield* sql`
               CREATE TRIGGER admin_impersonation_immutable BEFORE UPDATE ON admin_impersonation
               WHEN NEW.id IS NOT OLD.id
-                OR NEW.adminUserId IS NOT OLD.adminUserId
-                OR NEW.targetUserId IS NOT OLD.targetUserId
-                OR NEW.sessionId IS NOT OLD.sessionId
+                OR NEW."adminUserId" IS NOT OLD."adminUserId"
+                OR NEW."targetUserId" IS NOT OLD."targetUserId"
+                OR NEW."sessionId" IS NOT OLD."sessionId"
                 OR NEW.reason IS NOT OLD.reason
-                OR NEW.startedAt IS NOT OLD.startedAt
-                OR NEW.expiresAt IS NOT OLD.expiresAt
-                OR OLD.endedAt IS NOT NULL
+                OR NEW."startedAt" IS NOT OLD."startedAt"
+                OR NEW."expiresAt" IS NOT OLD."expiresAt"
+                OR OLD."endedAt" IS NOT NULL
               BEGIN SELECT RAISE(ABORT, 'awthaq: admin_impersonation is append-only: this UPDATE is rejected'); END`;
             yield* sql`
               CREATE TRIGGER admin_impersonation_chain_no_update BEFORE UPDATE ON admin_impersonation_chain

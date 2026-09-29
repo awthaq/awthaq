@@ -204,7 +204,7 @@ export const layerSql = Layer.effect(
       }),
       Result: OrganizationRow,
       execute: (r) => sql`
-          INSERT INTO organization_org (id, name, slug, logo, metadata, createdAt)
+          INSERT INTO organization_org (id, name, slug, logo, metadata, "createdAt")
           VALUES (${r.id}, ${r.name}, ${r.slug}, ${r.logo}, ${r.metadata}, ${r.createdAt})
           RETURNING *
         `,

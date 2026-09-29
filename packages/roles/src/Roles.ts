@@ -215,10 +215,10 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       Result: RoleAssignmentRow,
       execute: (r) =>
         sql`
-          INSERT INTO role_assignments (userId, role)
+          INSERT INTO role_assignments ("userId", role)
           VALUES (${r.userId}, ${r.role})
-          ON CONFLICT (userId, role) DO NOTHING
-          RETURNING userId, role
+          ON CONFLICT ("userId", role) DO NOTHING
+          RETURNING "userId", role
         `,
     });
 
@@ -226,7 +226,7 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       Request: RoleAssignmentRow,
       Result: RoleAssignmentRow,
       execute: (r) =>
-        sql`DELETE FROM role_assignments WHERE userId = ${r.userId} AND role = ${r.role} RETURNING userId, role`,
+        sql`DELETE FROM role_assignments WHERE "userId" = ${r.userId} AND role = ${r.role} RETURNING "userId", role`,
     });
 
     const listUnknownQuery = SqlSchema.findAll({
@@ -234,14 +234,14 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       Result: RoleAssignmentRow,
       execute: (names) =>
         names.length === 0
-          ? sql`SELECT userId, role FROM role_assignments`
-          : sql`SELECT userId, role FROM role_assignments WHERE role NOT IN ${sql.in(names)}`,
+          ? sql`SELECT "userId", role FROM role_assignments`
+          : sql`SELECT "userId", role FROM role_assignments WHERE role NOT IN ${sql.in(names)}`,
     });
 
     const listQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: Schema.Struct({ role: Schema.String }),
-      execute: (userId) => sql`SELECT role FROM role_assignments WHERE userId = ${userId}`,
+      execute: (userId) => sql`SELECT role FROM role_assignments WHERE "userId" = ${userId}`,
     });
 
     return {
@@ -300,17 +300,17 @@ const rolesMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`
           CREATE TABLE role_assignments (
-            userId TEXT NOT NULL,
+            "userId" TEXT NOT NULL,
             role TEXT NOT NULL,
-            createdAt TIMESTAMPTZ NOT NULL DEFAULT now(),
-            UNIQUE (userId, role)
+            "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE ("userId", role)
           )`,
         sqlite: () => sql`
           CREATE TABLE role_assignments (
-            userId TEXT NOT NULL,
+            "userId" TEXT NOT NULL,
             role TEXT NOT NULL,
-            createdAt TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            UNIQUE (userId, role)
+            "createdAt" TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            UNIQUE ("userId", role)
           )`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
@@ -321,8 +321,8 @@ const rolesMigrations: Migrations.Migrations = [
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
-        pg: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments(userId)`,
-        sqlite: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments(userId)`,
+        pg: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments("userId")`,
+        sqlite: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments("userId")`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),

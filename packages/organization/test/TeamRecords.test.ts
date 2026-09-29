@@ -8,7 +8,6 @@
 // `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -17,10 +16,11 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Organization from "../src/Organization.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const MemoryLayer = TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("organization_TeamRecords");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -312,10 +312,11 @@ describe("TeamRecords (layerSql) atomicity", () => {
       const sql = yield* SqlClient.SqlClient;
       const team = yield* records.createTeam({ organizationId: orgId, name: "Engineering" });
       yield* records.addTeamMember({ teamId: team.id, userId: Users.UserId("user-1") });
-      yield* sql.unsafe(
-        `CREATE TRIGGER fail_team_membership_delete BEFORE DELETE ON organization_team_membership
-         BEGIN SELECT RAISE(ABORT, 'injected'); END`,
-      );
+      yield* TestSql.injectFailure({
+        name: "fail_team_membership_delete",
+        table: "organization_team_membership",
+        event: "DELETE",
+      });
       const exit = yield* Effect.exit(records.removeTeam(orgId, team.id));
       assert.isTrue(Exit.isFailure(exit));
       // The team row's own DELETE ran first; it must have been rolled back.
@@ -329,16 +330,17 @@ describe("TeamRecords (layerSql) atomicity", () => {
       const records = yield* TeamRecords.TeamRecords;
       const sql = yield* SqlClient.SqlClient;
       const team = yield* records.createTeam({ organizationId: orgId, name: "Engineering" });
-      yield* sql.unsafe(
-        `CREATE TRIGGER fail_team_count BEFORE UPDATE ON organization_team
-         BEGIN SELECT RAISE(ABORT, 'injected'); END`,
-      );
+      yield* TestSql.injectFailure({
+        name: "fail_team_count",
+        table: "organization_team",
+        event: "UPDATE",
+      });
       const exit = yield* Effect.exit(
         records.addTeamMember({ teamId: team.id, userId: Users.UserId("user-1") }),
       );
       assert.isTrue(Exit.isFailure(exit));
       const rows =
-        yield* sql`SELECT id FROM organization_team_membership WHERE teamId = ${team.id}`;
+        yield* sql`SELECT id FROM organization_team_membership WHERE "teamId" = ${team.id}`;
       assert.strictEqual(rows.length, 0);
     }).pipe(Effect.provide(SqlLayer)),
   );
@@ -349,14 +351,15 @@ describe("TeamRecords (layerSql) atomicity", () => {
       const sql = yield* SqlClient.SqlClient;
       const team = yield* records.createTeam({ organizationId: "org-x", name: "X" });
       yield* records.addTeamMember({ teamId: team.id, userId: Users.UserId("user-1") });
-      yield* sql.unsafe(
-        `CREATE TRIGGER fail_team_delete BEFORE DELETE ON organization_team
-         BEGIN SELECT RAISE(ABORT, 'injected'); END`,
-      );
+      yield* TestSql.injectFailure({
+        name: "fail_team_delete",
+        table: "organization_team",
+        event: "DELETE",
+      });
       const exit = yield* Effect.exit(records.removeAllTeamsForOrganization("org-x"));
       assert.isTrue(Exit.isFailure(exit));
       const rows =
-        yield* sql`SELECT id FROM organization_team_membership WHERE teamId = ${team.id}`;
+        yield* sql`SELECT id FROM organization_team_membership WHERE "teamId" = ${team.id}`;
       assert.strictEqual(rows.length, 1);
     }).pipe(Effect.provide(SqlLayer)),
   );
@@ -405,7 +408,7 @@ describe("TeamRecords (layerSql) closure table", () => {
         // Schema as it stood before the hierarchy, with a team written under it.
         yield* Migrations.run(all.slice(0, at));
         yield* sql.unsafe(
-          `INSERT INTO organization_team (id, name, organizationId, memberCount, createdAt, updatedAt)
+          `INSERT INTO organization_team (id, name, "organizationId", "memberCount", "createdAt", "updatedAt")
          VALUES ('legacy-1', 'Legacy', 'org-1', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
         );
         yield* Migrations.run(all);
