@@ -23,6 +23,7 @@
 // awthaq itself creates.
 
 import { LegacySessionBridge } from "@awthaq/ports";
+import { Models as SqlModels } from "@awthaq/sql";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -31,17 +32,21 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-const BetterAuthSessionRow = Schema.Struct({
-  userId: Schema.String,
-  ipAddress: Schema.NullOr(Schema.String),
-  userAgent: Schema.NullOr(Schema.String),
-  expiresAt: Schema.DateTimeUtcFromString,
-});
+const makeBetterAuthSessionRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    userId: Schema.String,
+    ipAddress: Schema.NullOr(Schema.String),
+    userAgent: Schema.NullOr(Schema.String),
+    expiresAt: wire.dateTime,
+  });
 
 export const layer: Layer.Layer<never, never, SqlClient.SqlClient> = Layer.effect(
   LegacySessionBridge.LegacySessionBridge,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const BetterAuthSessionRow = makeBetterAuthSessionRow(wire);
 
     const findByToken = SqlSchema.findOneOption({
       Request: Schema.String,

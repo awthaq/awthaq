@@ -34,6 +34,8 @@ REQUIREMENT: No two `User` rows MAY hold the same email compared
              schema level, not by application-level lookup discipline alone.
 ```
 
+The one fold is JavaScript's `String.prototype.toLowerCase()`, applied at the domain boundary (ESR-003): `Users.create` stores the folded value, and `Users.findByEmail` folds its argument before the repository binds it, so lookups behave identically on the in-memory, SQLite and Postgres backends for non-ASCII addresses too (SQLite's own `lower()` folds ASCII only). The repository compares `lower(email)` on the column side against the already-folded parameter, so the `lower(email)` expression index still serves the lookup and the database never sees a non-normalized value.
+
 `better-auth/01-core-domain/01-entities-and-invariants.md` §2.1 documents email uniqueness as better-auth's primary identity key, enforced by a schema-level unique constraint, and awthaq's plan follows the same choice for the same reason: it is the key both password sign-in and OAuth implicit account matching rely on. The same source file's note is worth carrying forward as a documented constraint rather than an eternal one — requiring email specifically is "the *current* invariant, not an eternal one," and any future relaxation toward a wider identity key must be an explicit, versioned design change, never a silent one.
 
 ## BEH-EA-042: `emailVerified` is monotone and never client-settable through a generic write

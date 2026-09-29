@@ -14,6 +14,8 @@ import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
 import * as Repositories from "../src/Repositories.ts";
 
+const M = Models.makeModels("sqlite");
+
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 const Migrated = Layer.effectDiscard(
   Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
@@ -67,10 +69,10 @@ const seedAccount = (subject: string) =>
     const users = yield* Repositories.UsersRepository;
     const accounts = yield* Repositories.AccountsRepository;
     const user = yield* users.insert(
-      yield* Models.User.insert.makeEffect({ email: `${subject}@example.com`, name: subject }),
+      yield* M.User.insert.makeEffect({ email: `${subject}@example.com`, name: subject }),
     );
     return yield* accounts.insert(
-      yield* Models.Account.insert.makeEffect({
+      yield* M.Account.insert.makeEffect({
         userId: user.id,
         providerId: "github",
         subject,
@@ -142,7 +144,7 @@ describe("AccountsRepository token read path (SMS-002)", () => {
         const accounts = yield* Repositories.AccountsRepository;
         // A second, healthy account for the same user.
         yield* accounts.insert(
-          yield* Models.Account.insert.makeEffect({
+          yield* M.Account.insert.makeEffect({
             userId: bad.userId,
             providerId: "google",
             subject: "list-good",

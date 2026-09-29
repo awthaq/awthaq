@@ -29,6 +29,7 @@
     "@awthaq/core": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

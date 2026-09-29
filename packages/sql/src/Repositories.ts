@@ -25,15 +25,27 @@ import * as SqlModel from "effect/unstable/sql/SqlModel";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import {
-  Account,
   AccountId,
-  Session,
   SessionId,
-  User,
   UserId,
-  VerificationReservation,
-  VerificationToken,
   VerificationTokenId,
+  makeModels,
+  resolveDialect,
+} from "./Models.ts";
+import type {
+  Account,
+  AccountInsert,
+  AccountUpdate,
+  Session,
+  SessionInsert,
+  SessionUpdate,
+  SqlModels,
+  User,
+  UserInsert,
+  UserUpdate,
+  VerificationToken,
+  VerificationTokenInsert,
+  VerificationTokenUpdate,
 } from "./Models.ts";
 
 /** BEH-EA-036: the one cursor shape every paginated repository query accepts. */
@@ -50,11 +62,24 @@ export interface Page<A> {
 
 type RepositoryError = Schema.SchemaError | SqlError;
 
+/**
+ * EOTS-008: SqlModel names its own CRUD spans `<spanPrefix>.<method>`; every
+ * hand-written method gets the same convention so a flame graph reads
+ * `Users.findByEmail > sql.execute`. Attributes are ids only — never an
+ * email, identifier, hash, token or payload (BEH-EA-199).
+ */
+const traced = (name: string, attributes?: Record<string, unknown>) =>
+  Effect.withSpan(name, attributes === undefined ? {} : { attributes }, {
+    captureStackTrace: false,
+  });
+
 // ---- Users ------------------------------------------------------------
 
 export interface UsersRepositoryShape {
-  readonly insert: (input: typeof User.insert.Type) => Effect.Effect<User, RepositoryError>;
-  readonly update: (input: typeof User.update.Type) => Effect.Effect<User, RepositoryError>;
+  /** TS-001: the dialect-resolved models this repository decodes with — callers build insert/update inputs from these. */
+  readonly models: SqlModels;
+  readonly insert: (input: UserInsert) => Effect.Effect<User, RepositoryError>;
+  readonly update: (input: UserUpdate) => Effect.Effect<User, RepositoryError>;
   readonly findById: (
     id: UserId,
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
@@ -79,39 +104,49 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
     UsersRepository,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const repo = yield* SqlModel.makeRepository(User, {
+      const models = makeModels(yield* resolveDialect(sql));
+      const repo = yield* SqlModel.makeRepository(models.User, {
         tableName: "users",
         spanPrefix: "Users",
         idColumn: "id",
       });
 
-      const findByEmail = SqlSchema.findOneOption({
+      // ESR-003: JS `toLowerCase()` is the only fold — the bound parameter is
+      // normalized here (and stored values already are, by `Users.ts`), while
+      // the column side keeps `lower(email)` so `users_email_unique`'s
+      // expression index still serves the lookup. SQLite's own `lower()` folds
+      // ASCII only, so folding the *parameter* in SQL would miss non-ASCII.
+      const findByEmailQuery = SqlSchema.findOneOption({
         Request: Schema.String,
-        Result: User,
-        execute: (email) => sql`SELECT * FROM users WHERE lower(email) = lower(${email})`,
+        Result: models.User,
+        execute: (email) => sql`SELECT * FROM users WHERE lower(email) = ${email.toLowerCase()}`,
       });
 
-      const verifyEmail: UsersRepositoryShape["verifyEmail"] = Effect.fnUntraced(function* (id) {
-        const encodedNow = yield* Schema.encodeEffect(Schema.DateTimeUtcFromString)(
-          yield* DateTime.now,
-        );
-        // TS-002: `= 1` is verbatim SQL text, not a bind parameter Postgres's
-        // driver could type as boolean — Postgres has no implicit
-        // integer→boolean assignment cast (`emailVerified BOOLEAN` per
-        // `CoreMigrations.ts`), while SQLite's own `emailVerified INTEGER`
-        // needs exactly this literal. Same `sql.onDialectOrElse` branching
-        // `CoreMigrations.ts` already uses for DDL, here for a DML literal.
-        yield* sql.onDialectOrElse({
-          pg: () =>
-            sql`UPDATE users SET "emailVerified" = TRUE, "updatedAt" = ${encodedNow} WHERE id = ${id}`,
-          sqlite: () =>
-            sql`UPDATE users SET "emailVerified" = 1, "updatedAt" = ${encodedNow} WHERE id = ${id}`,
-          orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for verifyEmail")),
-        });
-        return yield* repo.findById(id);
+      const findByEmail: UsersRepositoryShape["findByEmail"] = (email) =>
+        findByEmailQuery(email).pipe(traced("Users.findByEmail"));
+
+      // PPS-007: one `UPDATE ... RETURNING *`, decoded through the dialect
+      // model. The boolean binds through the dialect's own wire codec (`TRUE`
+      // on pg, `1` on SQLite), so there is no per-dialect literal branch (TS-002).
+      const verifyEmailQuery = SqlSchema.findOne({
+        Request: Schema.Struct({
+          id: UserId,
+          verified: models.wire.boolean,
+          updatedAt: models.wire.dateTime,
+        }),
+        Result: models.User,
+        execute: (r) =>
+          sql`UPDATE users SET "emailVerified" = ${r.verified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
       });
+
+      const verifyEmail: UsersRepositoryShape["verifyEmail"] = (id) =>
+        DateTime.now.pipe(
+          Effect.flatMap((updatedAt) => verifyEmailQuery({ id, verified: true, updatedAt })),
+          traced("Users.verifyEmail", { id }),
+        );
 
       return {
+        models,
         insert: repo.insert,
         update: repo.update,
         findById: repo.findById,
@@ -125,7 +160,9 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
 // ---- Accounts -----------------------------------------------------------
 
 export interface AccountsRepositoryShape {
-  readonly insert: (input: typeof Account.insert.Type) => Effect.Effect<Account, RepositoryError>;
+  /** TS-001: the dialect-resolved models this repository decodes with. */
+  readonly models: SqlModels;
+  readonly insert: (input: AccountInsert) => Effect.Effect<Account, RepositoryError>;
   /**
    * BEH-EA-116 (`@awthaq/password`'s rehash-on-login): the generic write
    * path — `passwordHash`/`accessToken`/`refreshToken` are all
@@ -141,7 +178,7 @@ export interface AccountsRepositoryShape {
    * truth.
    */
   readonly update: (
-    input: typeof Account.update.Type,
+    input: AccountUpdate,
     aad: { readonly providerId: string; readonly userId: string },
   ) => Effect.Effect<Account, RepositoryError>;
   /**
@@ -272,7 +309,8 @@ export const AccountsRepositoryLive: Layer.Layer<
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const encryption = yield* Encryption.Encryption;
-    const repo = yield* SqlModel.makeRepository(Account, {
+    const models = makeModels(yield* resolveDialect(sql));
+    const repo = yield* SqlModel.makeRepository(models.Account, {
       tableName: "accounts",
       spanPrefix: "Accounts",
       idColumn: "id",
@@ -377,7 +415,7 @@ export const AccountsRepositoryLive: Layer.Layer<
             yield* persistRefreshed(row, "refreshToken", refresh.stored, refresh.refreshed.value);
           }
         }
-        return Account.make({
+        return models.Account.make({
           ...row,
           accessToken: access.plaintext,
           refreshToken: refresh.plaintext,
@@ -428,7 +466,9 @@ export const AccountsRepositoryLive: Layer.Layer<
       repo.findById(id).pipe(Effect.flatMap(decryptRow));
 
     const findTokensById: AccountsRepositoryShape["findTokensById"] = (id) =>
-      repo.findById(id).pipe(Effect.flatMap(decryptRowStrict));
+      repo
+        .findById(id)
+        .pipe(Effect.flatMap(decryptRowStrict), traced("Accounts.findTokensById", { id }));
 
     // SMS-002: targeted writes — neither reads (or decrypts) the old token
     // columns, so an undecryptable row can still be repaired by a fresh write.
@@ -436,9 +476,9 @@ export const AccountsRepositoryLive: Layer.Layer<
       Request: Schema.Struct({
         id: AccountId,
         passwordHash: Schema.String,
-        updatedAt: Schema.DateTimeUtcFromString,
+        updatedAt: models.wire.dateTime,
       }),
-      Result: Account,
+      Result: models.Account,
       execute: (request) => sql`
         UPDATE accounts
         SET "passwordHash" = ${request.passwordHash}, "updatedAt" = ${request.updatedAt}
@@ -451,6 +491,7 @@ export const AccountsRepositoryLive: Layer.Layer<
       DateTime.now.pipe(
         Effect.flatMap((updatedAt) => updatePasswordHashQuery({ id, passwordHash, updatedAt })),
         Effect.flatMap(decryptRow),
+        traced("Accounts.updatePasswordHash", { id }),
       );
 
     const updateProviderTokensQuery = SqlSchema.findOne({
@@ -458,13 +499,13 @@ export const AccountsRepositoryLive: Layer.Layer<
         id: AccountId,
         accessToken: Schema.NullOr(Schema.String),
         refreshToken: Schema.NullOr(Schema.String),
-        accessTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-        refreshTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+        accessTokenExpiresAt: models.wire.nullableDateTime,
+        refreshTokenExpiresAt: models.wire.nullableDateTime,
         scope: Schema.NullOr(Schema.String),
         tokenType: Schema.NullOr(Schema.String),
-        updatedAt: Schema.DateTimeUtcFromString,
+        updatedAt: models.wire.dateTime,
       }),
-      Result: Account,
+      Result: models.Account,
       execute: (request) => sql`
         UPDATE accounts
         SET "accessToken" = ${request.accessToken},
@@ -506,7 +547,7 @@ export const AccountsRepositoryLive: Layer.Layer<
           updatedAt,
         });
         return yield* decryptRow(row);
-      });
+      }).pipe(traced("Accounts.updateProviderTokens", { id }));
 
     const findByProviderSubject = SqlSchema.findOneOption({
       Request: Schema.Struct({
@@ -514,21 +555,25 @@ export const AccountsRepositoryLive: Layer.Layer<
         subject: Schema.String,
         issuer: Schema.String,
       }),
-      Result: Account,
+      Result: models.Account,
       execute: (request) =>
         sql`SELECT * FROM accounts WHERE "providerId" = ${request.providerId} AND subject = ${request.subject} AND issuer = ${request.issuer}`,
     });
 
     const listByUser = SqlSchema.findAll({
       Request: UserId,
-      Result: Account,
+      Result: models.Account,
       execute: (userId) => sql`SELECT * FROM accounts WHERE "userId" = ${userId}`,
     });
 
     const deleteAllByUser: AccountsRepositoryShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM accounts WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
+      sql`DELETE FROM accounts WHERE "userId" = ${userId}`.pipe(
+        Effect.asVoid,
+        traced("Accounts.deleteAllByUser", { userId }),
+      );
 
     return {
+      models,
       insert,
       update,
       findById,
@@ -536,6 +581,8 @@ export const AccountsRepositoryLive: Layer.Layer<
       updatePasswordHash,
       updateProviderTokens,
       delete: repo.delete,
+      // `subject`/`issuer` identify a person at an IdP: only `providerId` is
+      // safe as a span attribute.
       findByProviderSubject: (providerId, subject, issuer) =>
         findByProviderSubject({ providerId, subject, issuer }).pipe(
           Effect.flatMap(
@@ -544,9 +591,13 @@ export const AccountsRepositoryLive: Layer.Layer<
               onSome: (row) => decryptRow(row).pipe(Effect.map(Option.some)),
             }),
           ),
+          traced("Accounts.findByProviderSubject", { providerId }),
         ),
       listByUser: (userId) =>
-        listByUser(userId).pipe(Effect.flatMap((rows) => Effect.forEach(rows, decryptRow))),
+        listByUser(userId).pipe(
+          Effect.flatMap((rows) => Effect.forEach(rows, decryptRow)),
+          traced("Accounts.listByUser", { userId }),
+        ),
       deleteAllByUser,
     };
   }),
@@ -554,16 +605,11 @@ export const AccountsRepositoryLive: Layer.Layer<
 
 // ---- Sessions -----------------------------------------------------------
 
-const SessionCursorRequest = Schema.Struct({
-  userId: UserId,
-  cursorCreatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-  cursorId: Schema.NullOr(Schema.String),
-  limit: Schema.Int,
-});
-
 export interface SessionsRepositoryShape {
-  readonly insert: (input: typeof Session.insert.Type) => Effect.Effect<Session, RepositoryError>;
-  readonly update: (input: typeof Session.update.Type) => Effect.Effect<Session, RepositoryError>;
+  /** TS-001: the dialect-resolved models this repository decodes with. */
+  readonly models: SqlModels;
+  readonly insert: (input: SessionInsert) => Effect.Effect<Session, RepositoryError>;
+  readonly update: (input: SessionUpdate) => Effect.Effect<Session, RepositoryError>;
   readonly findById: (
     id: SessionId,
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
@@ -645,7 +691,8 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
     SessionsRepository,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const repo = yield* SqlModel.makeRepository(Session, {
+      const models = makeModels(yield* resolveDialect(sql));
+      const repo = yield* SqlModel.makeRepository(models.Session, {
         tableName: "sessions",
         spanPrefix: "Sessions",
         idColumn: "id",
@@ -657,8 +704,13 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       // correctly reject a reused/family-revoked session's JWT for free —
       // both call this same `list`.
       const page = SqlSchema.findAll({
-        Request: SessionCursorRequest,
-        Result: Session,
+        Request: Schema.Struct({
+          userId: UserId,
+          cursorCreatedAt: models.wire.nullableDateTime,
+          cursorId: Schema.NullOr(Schema.String),
+          limit: Schema.Int,
+        }),
+        Result: models.Session,
         execute: (request) =>
           request.cursorCreatedAt === null || request.cursorId === null
             ? sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
@@ -687,17 +739,18 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
                 : Option.none();
             return { items, nextCursor };
           }),
+          traced("Sessions.listByUser", { userId }),
         );
 
-      const touch = SqlSchema.findOneOption({
+      const touchQuery = SqlSchema.findOneOption({
         Request: Schema.Struct({
           id: SessionId,
           expectedSecretHash: Schema.String,
           secretHash: Schema.String,
-          lastActiveAt: Schema.DateTimeUtcFromString,
-          idleExpiresAt: Schema.DateTimeUtcFromString,
+          lastActiveAt: models.wire.dateTime,
+          idleExpiresAt: models.wire.dateTime,
         }),
-        Result: Session,
+        Result: models.Session,
         // Quoted column names: this table's Postgres DDL (`CoreMigrations.ts`)
         // declares `"secretHash"`/`"lastActiveAt"`/`"idleExpiresAt"` with
         // preserved mixed case, which only an equally-quoted reference
@@ -715,11 +768,17 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         `,
       });
 
+      const touch: SessionsRepositoryShape["touch"] = (input) =>
+        touchQuery(input).pipe(traced("Sessions.touch", { id: input.id }));
+
       const deleteAllForUserExcept: SessionsRepositoryShape["deleteAllForUserExcept"] = (
         userId,
         keep,
       ) =>
-        sql`DELETE FROM sessions WHERE "userId" = ${userId} AND id != ${keep}`.pipe(Effect.asVoid);
+        sql`DELETE FROM sessions WHERE "userId" = ${userId} AND id != ${keep}`.pipe(
+          Effect.asVoid,
+          traced("Sessions.deleteAllForUserExcept", { userId }),
+        );
 
       // Quoted `"userId"`: this table's Postgres DDL (`CoreMigrations.ts`)
       // declares the column with preserved mixed case, which only an
@@ -728,15 +787,18 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       // resolution is case-insensitive regardless of quoting, so the same
       // quoted form is correct on both dialects.
       const deleteAllByUser: SessionsRepositoryShape["deleteAllByUser"] = (userId) =>
-        sql`DELETE FROM sessions WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
+        sql`DELETE FROM sessions WHERE "userId" = ${userId}`.pipe(
+          Effect.asVoid,
+          traced("Sessions.deleteAllByUser", { userId }),
+        );
 
       const tombstoneQuery = SqlSchema.findOne({
         Request: Schema.Struct({
           id: SessionId,
           supersededBy: SessionId,
-          supersededAt: Schema.DateTimeUtcFromString,
+          supersededAt: models.wire.dateTime,
         }),
-        Result: Session,
+        Result: models.Session,
         execute: (request) => sql`
           UPDATE sessions
           SET "supersededBy" = ${request.supersededBy}, "supersededAt" = ${request.supersededAt}
@@ -745,28 +807,34 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         `,
       });
 
-      const tombstone: SessionsRepositoryShape["tombstone"] = (input) => tombstoneQuery(input);
+      const tombstone: SessionsRepositoryShape["tombstone"] = (input) =>
+        tombstoneQuery(input).pipe(traced("Sessions.tombstone", { id: input.id }));
 
-      // `reusedAt` must be pre-encoded — unlike `tombstoneQuery`/`touch`
-      // above, this is a plain template query with no `SqlSchema` `Request`
-      // to do that encoding for it; interpolating a raw `DateTime.Utc`
-      // object here binds its internal fields instead of a string.
+      // SEA-005: like every other timestamp write here, `reusedAt` goes
+      // through a `Request` schema, so the dialect's own wire codec is the
+      // one and only encoder (interpolating a raw `DateTime.Utc` would bind
+      // its internal fields instead of a timestamp).
+      const markReusedQuery = SqlSchema.void({
+        Request: Schema.Struct({ id: SessionId, reusedAt: models.wire.dateTime }),
+        execute: (request) =>
+          sql`UPDATE sessions SET "reusedAt" = ${request.reusedAt} WHERE "id" = ${request.id}`,
+      });
+
       const markReused: SessionsRepositoryShape["markReused"] = (id, reusedAt) =>
-        sql`UPDATE sessions SET "reusedAt" = ${Schema.encodeSync(Schema.DateTimeUtcFromString)(reusedAt)} WHERE "id" = ${id}`.pipe(
-          Effect.asVoid,
-        );
+        markReusedQuery({ id, reusedAt }).pipe(traced("Sessions.markReused", { id }));
 
       const revokeFamily: SessionsRepositoryShape["revokeFamily"] = (familyId) =>
         sql`DELETE FROM sessions WHERE "familyId" = ${familyId} AND "supersededAt" IS NULL`.pipe(
           Effect.asVoid,
+          traced("Sessions.revokeFamily", { familyId }),
         );
 
       const reauthenticateQuery = SqlSchema.findOne({
         Request: Schema.Struct({
           id: SessionId,
-          authenticatedAt: Schema.DateTimeUtcFromString,
+          authenticatedAt: models.wire.dateTime,
         }),
-        Result: Session,
+        Result: models.Session,
         execute: (request) => sql`
           UPDATE sessions
           SET "authenticatedAt" = ${request.authenticatedAt}
@@ -776,9 +844,12 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       });
 
       const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, authenticatedAt) =>
-        reauthenticateQuery({ id, authenticatedAt });
+        reauthenticateQuery({ id, authenticatedAt }).pipe(
+          traced("Sessions.reauthenticate", { id }),
+        );
 
       return {
+        models,
         insert: repo.insert,
         update: repo.update,
         findById: repo.findById,
@@ -798,11 +869,13 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
 // ---- Verification ---------------------------------------------------------
 
 export interface VerificationRepositoryShape {
+  /** TS-001: the dialect-resolved models this repository decodes with. */
+  readonly models: SqlModels;
   readonly insert: (
-    input: typeof VerificationToken.insert.Type,
+    input: VerificationTokenInsert,
   ) => Effect.Effect<VerificationToken, RepositoryError>;
   readonly update: (
-    input: typeof VerificationToken.update.Type,
+    input: VerificationTokenUpdate,
   ) => Effect.Effect<VerificationToken, RepositoryError>;
   readonly findById: (
     id: VerificationTokenId,
@@ -860,30 +933,36 @@ export const VerificationRepositoryLive: Layer.Layer<
   VerificationRepository,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const repo = yield* SqlModel.makeRepository(VerificationToken, {
+    const models = makeModels(yield* resolveDialect(sql));
+    const repo = yield* SqlModel.makeRepository(models.VerificationToken, {
       tableName: "verification_tokens",
       spanPrefix: "VerificationTokens",
       idColumn: "id",
     });
 
-    const findByIdentifier = SqlSchema.findOneOption({
+    const findByIdentifierQuery = SqlSchema.findOneOption({
       Request: Schema.String,
-      Result: VerificationToken,
+      Result: models.VerificationToken,
       execute: (identifier) =>
         sql`SELECT * FROM verification_tokens WHERE identifier = ${identifier} ORDER BY "createdAt" DESC LIMIT 1`,
     });
 
-    const upsertLive = SqlSchema.findOne({
+    // `identifier` embeds a user id or email (`verify-email:<userId>`), so it
+    // is never a span attribute.
+    const findByIdentifier: VerificationRepositoryShape["findByIdentifier"] = (identifier) =>
+      findByIdentifierQuery(identifier).pipe(traced("VerificationTokens.findByIdentifier"));
+
+    const upsertLiveQuery = SqlSchema.findOne({
       Request: Schema.Struct({
         id: VerificationTokenId,
         identifier: Schema.String,
         userId: Schema.NullOr(UserId),
         valueHash: Schema.String,
-        expiresAt: Schema.DateTimeUtcFromString,
-        createdAt: Schema.DateTimeUtcFromString,
+        expiresAt: models.wire.dateTime,
+        createdAt: models.wire.dateTime,
         payload: Schema.fromJsonString(Schema.Unknown),
       }),
-      Result: VerificationToken,
+      Result: models.VerificationToken,
       execute: (request) => sql`
         INSERT INTO verification_tokens (id, identifier, "userId", "valueHash", "expiresAt", "consumedAt", "createdAt", payload)
         VALUES (${request.id}, ${request.identifier}, ${request.userId}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload})
@@ -900,16 +979,22 @@ export const VerificationRepositoryLive: Layer.Layer<
       `,
     });
 
-    const deleteAllByUser: VerificationRepositoryShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM verification_tokens WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
+    const upsertLive: VerificationRepositoryShape["upsertLive"] = (input) =>
+      upsertLiveQuery(input).pipe(traced("VerificationTokens.upsertLive", { id: input.id }));
 
-    const tryConsume = SqlSchema.findOneOption({
+    const deleteAllByUser: VerificationRepositoryShape["deleteAllByUser"] = (userId) =>
+      sql`DELETE FROM verification_tokens WHERE "userId" = ${userId}`.pipe(
+        Effect.asVoid,
+        traced("VerificationTokens.deleteAllByUser", { userId }),
+      );
+
+    const tryConsumeQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         identifier: Schema.String,
         valueHash: Schema.String,
-        now: Schema.DateTimeUtcFromString,
+        now: models.wire.dateTime,
       }),
-      Result: VerificationToken,
+      Result: models.VerificationToken,
       execute: (request) => sql`
         UPDATE verification_tokens
         SET "consumedAt" = ${request.now}
@@ -921,7 +1006,11 @@ export const VerificationRepositoryLive: Layer.Layer<
       `,
     });
 
+    const tryConsume: VerificationRepositoryShape["tryConsume"] = (input) =>
+      tryConsumeQuery(input).pipe(traced("VerificationTokens.tryConsume"));
+
     return {
+      models,
       insert: repo.insert,
       update: repo.update,
       findById: repo.findById,
@@ -967,6 +1056,7 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
   VerificationReservationsRepository,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const models = makeModels(yield* resolveDialect(sql));
 
     /**
      * ADR-EA-016: one atomic statement — the `WHERE` clause on the `DO
@@ -981,10 +1071,10 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
     const attempt = SqlSchema.findOneOption({
       Request: Schema.Struct({
         identifier: Schema.String,
-        expiresAt: Schema.DateTimeUtcFromString,
-        now: Schema.DateTimeUtcFromString,
+        expiresAt: models.wire.dateTime,
+        now: models.wire.dateTime,
       }),
-      Result: VerificationReservation,
+      Result: models.VerificationReservation,
       execute: (request) => sql`
         INSERT INTO verification_reservations (identifier, "expiresAt")
         VALUES (${request.identifier}, ${request.expiresAt})
@@ -995,7 +1085,7 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
     });
 
     const claim: VerificationReservationsRepositoryShape["claim"] = (input) =>
-      attempt(input).pipe(Effect.map(Option.isSome));
+      attempt(input).pipe(Effect.map(Option.isSome), traced("VerificationReservations.claim"));
 
     return { claim };
   }),
@@ -1042,31 +1132,23 @@ export class AuditLogRepository extends Context.Service<
   AuditLogRepositoryShape
 >()("awthaq/sql/AuditLogRepository") {}
 
-const AuditLogRowSchema = Schema.Struct({
-  id: Schema.String,
-  eventTag: Schema.String,
-  actorUserId: Schema.NullOr(Schema.String),
-  occurredAt: Schema.DateTimeUtcFromString,
-  correlationId: Schema.NullOr(Schema.String),
-  payload: Schema.fromJsonString(Schema.Unknown),
-});
-
 export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlClient.SqlClient> =
   Layer.effect(
     AuditLogRepository,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      const models = makeModels(yield* resolveDialect(sql));
 
       const insertQuery = SqlSchema.findOne({
         Request: Schema.Struct({
           id: Schema.String,
           eventTag: Schema.String,
           actorUserId: Schema.NullOr(Schema.String),
-          occurredAt: Schema.DateTimeUtcFromString,
+          occurredAt: models.wire.dateTime,
           correlationId: Schema.NullOr(Schema.String),
           payload: Schema.fromJsonString(Schema.Unknown),
         }),
-        Result: AuditLogRowSchema,
+        Result: models.AuditLogRow,
         execute: (r) => sql`
         INSERT INTO auth_audit_log (id, "eventTag", "actorUserId", "occurredAt", "correlationId", payload)
         VALUES (${r.id}, ${r.eventTag}, ${r.actorUserId}, ${r.occurredAt}, ${r.correlationId}, ${r.payload})
@@ -1078,10 +1160,10 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
         Request: Schema.Struct({
           eventTag: Schema.NullOr(Schema.String),
           actorUserId: Schema.NullOr(Schema.String),
-          occurredAfter: Schema.NullOr(Schema.DateTimeUtcFromString),
-          occurredBefore: Schema.NullOr(Schema.DateTimeUtcFromString),
+          occurredAfter: models.wire.nullableDateTime,
+          occurredBefore: models.wire.nullableDateTime,
         }),
-        Result: AuditLogRowSchema,
+        Result: models.AuditLogRow,
         execute: (r) => {
           const conditions = [
             ...(r.eventTag === null ? [] : [sql`"eventTag" = ${r.eventTag}`]),
@@ -1093,9 +1175,13 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
         },
       });
 
-      const insert: AuditLogRepositoryShape["insert"] = (input) => insertQuery(input);
+      const insert: AuditLogRepositoryShape["insert"] = (input) =>
+        insertQuery(input).pipe(
+          traced("AuditLog.insert", { id: input.id, eventTag: input.eventTag }),
+        );
 
-      const list: AuditLogRepositoryShape["list"] = (input) => listQuery(input);
+      const list: AuditLogRepositoryShape["list"] = (input) =>
+        listQuery(input).pipe(traced("AuditLog.list"));
 
       return { insert, list };
     }),

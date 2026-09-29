@@ -33,6 +33,7 @@
 // challenge's raw bytes (see that module's own header comment on why a
 // bare string is never treated as UTF-8 text there).
 
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -110,17 +111,21 @@ export const layerMemory: Layer.Layer<ChallengeStore, never, Crypto.Crypto> = La
 
 // ---- layerSql ---------------------------------------------------------------
 
-const ChallengeRow = Schema.Struct({
-  scope: Schema.String,
-  value: Schema.String,
-  expiresAt: Schema.DateTimeUtcFromString,
-});
+const makeChallengeRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    scope: Schema.String,
+    value: Schema.String,
+    expiresAt: wire.dateTime,
+  });
 
 export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | Crypto.Crypto> =
   Layer.effect(
     ChallengeStore,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+      const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+      const ChallengeRow = makeChallengeRow(wire);
       const crypto = yield* Crypto.Crypto;
 
       /**
@@ -134,8 +139,8 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
         Request: Schema.Struct({
           scope: Schema.String,
           value: Schema.String,
-          expiresAt: Schema.DateTimeUtcFromString,
-          createdAt: Schema.DateTimeUtcFromString,
+          expiresAt: wire.dateTime,
+          createdAt: wire.dateTime,
         }),
         Result: ChallengeRow,
         execute: (request) => sql`

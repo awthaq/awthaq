@@ -6,6 +6,7 @@
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
 import { Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -224,17 +225,20 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const MembershipRow = Schema.Struct({
-  id: Schema.String,
-  userId: Schema.String,
-  organizationId: Schema.String,
-  role: Schema.String,
-  createdAt: Schema.DateTimeUtcFromString,
-});
+const makeMembershipRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    userId: Schema.String,
+    organizationId: Schema.String,
+    role: Schema.String,
+    createdAt: wire.dateTime,
+  });
+
+type MembershipRow = ReturnType<typeof makeMembershipRow>["Type"];
 
 const parseRoleArray = (json: string): ReadonlyArray<string> => JSON.parse(json);
 
-const toRecord = (row: typeof MembershipRow.Type): MembershipRecord => ({
+const toRecord = (row: MembershipRow): MembershipRecord => ({
   id: row.id,
   userId: Users.UserId(row.userId),
   organizationId: row.organizationId,
@@ -246,6 +250,9 @@ export const layerSql = Layer.effect(
   MembershipRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const MembershipRow = makeMembershipRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -254,7 +261,7 @@ export const layerSql = Layer.effect(
         userId: Schema.String,
         organizationId: Schema.String,
         role: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
       }),
       Result: MembershipRow,
       execute: (r) => sql`

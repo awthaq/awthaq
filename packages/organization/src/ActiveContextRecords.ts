@@ -15,6 +15,7 @@
 // session-lifecycle plumbing" precedent `@awthaq/admin`'s own
 // `endedBy: "expired"` gap already sets for this codebase.
 
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -114,14 +115,17 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const ActiveContextRow = Schema.Struct({
-  sessionId: Schema.String,
-  activeOrganizationId: Schema.NullOr(Schema.String),
-  activeTeamId: Schema.NullOr(Schema.String),
-  updatedAt: Schema.DateTimeUtcFromString,
-});
+const makeActiveContextRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    sessionId: Schema.String,
+    activeOrganizationId: Schema.NullOr(Schema.String),
+    activeTeamId: Schema.NullOr(Schema.String),
+    updatedAt: wire.dateTime,
+  });
 
-const toRecord = (row: typeof ActiveContextRow.Type): ActiveContextRecord => ({
+type ActiveContextRow = ReturnType<typeof makeActiveContextRow>["Type"];
+
+const toRecord = (row: ActiveContextRow): ActiveContextRecord => ({
   sessionId: row.sessionId,
   activeOrganizationId: Option.fromNullishOr(row.activeOrganizationId),
   activeTeamId: Option.fromNullishOr(row.activeTeamId),
@@ -132,6 +136,9 @@ export const layerSql = Layer.effect(
   ActiveContextRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const ActiveContextRow = makeActiveContextRow(wire);
 
     const findBySessionIdQuery = SqlSchema.findOneOption({
       Request: Schema.String,
@@ -145,7 +152,7 @@ export const layerSql = Layer.effect(
         sessionId: Schema.String,
         activeOrganizationId: Schema.NullOr(Schema.String),
         activeTeamId: Schema.NullOr(Schema.String),
-        updatedAt: Schema.DateTimeUtcFromString,
+        updatedAt: wire.dateTime,
       }),
       Result: ActiveContextRow,
       execute: (r) => sql`
@@ -159,7 +166,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({
         sessionId: Schema.String,
         activeOrganizationId: Schema.NullOr(Schema.String),
-        updatedAt: Schema.DateTimeUtcFromString,
+        updatedAt: wire.dateTime,
       }),
       Result: ActiveContextRow,
       execute: (r) => sql`
@@ -173,7 +180,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({
         sessionId: Schema.String,
         activeTeamId: Schema.NullOr(Schema.String),
-        updatedAt: Schema.DateTimeUtcFromString,
+        updatedAt: wire.dateTime,
       }),
       Result: ActiveContextRow,
       execute: (r) => sql`

@@ -201,6 +201,9 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
       '@qadi/core':
         specifier: ^0.7.0
         version: 0.7.0
@@ -372,6 +375,9 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -462,6 +468,9 @@ importers:
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -564,6 +573,9 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
       '@qadi/core':
         specifier: ^0.7.0
         version: 0.7.0
@@ -604,6 +616,9 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116

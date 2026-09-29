@@ -12,6 +12,7 @@
     "typecheck": "tsc -b tsconfig.json && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:pg": "bash scripts/test-pg.sh",
     "test:bdd": "pnpm --filter @awthaq/features test",
     "coverage": "vitest run --coverage",
     "circular": "node scripts/circular.mjs",

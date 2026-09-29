@@ -32,6 +32,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
 
 type UserId = Users.UserId;
 
@@ -183,20 +184,23 @@ export const layerMemory: Layer.Layer<PasskeyCredentials> = Layer.effect(
 
 // ---- layerSql ---------------------------------------------------------------
 
-const PasskeyCredentialRow = Schema.Struct({
-  id: Schema.String,
-  userId: Schema.String,
-  webauthnUserId: Schema.String,
-  publicKey: Schema.String,
-  counter: Schema.Int,
-  deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
-  backedUp: Schema.BooleanFromBit,
-  transports: Schema.fromJsonString(Schema.Array(Schema.String)),
-  aaguid: Schema.String,
-  name: Schema.String,
-  createdAt: Schema.DateTimeUtcFromString,
-  lastUsedAt: Schema.DateTimeUtcFromString,
-});
+const makePasskeyCredentialRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    userId: Schema.String,
+    webauthnUserId: Schema.String,
+    publicKey: Schema.String,
+    counter: Schema.Int,
+    deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
+    backedUp: wire.boolean,
+    transports: Schema.fromJsonString(Schema.Array(Schema.String)),
+    aaguid: Schema.String,
+    name: Schema.String,
+    createdAt: wire.dateTime,
+    lastUsedAt: wire.dateTime,
+  });
+
+type PasskeyCredentialRow = ReturnType<typeof makePasskeyCredentialRow>["Type"];
 
 const bytesToBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
@@ -212,7 +216,7 @@ const base64UrlToBytes = (value: string): Uint8Array => {
   return bytes;
 };
 
-const toRecord = (row: typeof PasskeyCredentialRow.Type): PasskeyCredentialRecord => ({
+const toRecord = (row: PasskeyCredentialRow): PasskeyCredentialRecord => ({
   id: row.id,
   userId: Users.UserId(row.userId),
   webauthnUserId: row.webauthnUserId,
@@ -231,6 +235,9 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
   PasskeyCredentials,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const PasskeyCredentialRow = makePasskeyCredentialRow(wire);
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -240,12 +247,12 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
         publicKey: Schema.String,
         counter: Schema.Int,
         deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
-        backedUp: Schema.BooleanFromBit,
+        backedUp: wire.boolean,
         transports: Schema.fromJsonString(Schema.Array(Schema.String)),
         aaguid: Schema.String,
         name: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
-        lastUsedAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
+        lastUsedAt: wire.dateTime,
       }),
       Result: PasskeyCredentialRow,
       execute: (r) => sql`
@@ -273,8 +280,8 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       Request: Schema.Struct({
         id: Schema.String,
         counter: Schema.Int,
-        backedUp: Schema.BooleanFromBit,
-        lastUsedAt: Schema.DateTimeUtcFromString,
+        backedUp: wire.boolean,
+        lastUsedAt: wire.dateTime,
       }),
       Result: PasskeyCredentialRow,
       execute: (r) => sql`

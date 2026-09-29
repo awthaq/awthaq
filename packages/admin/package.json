@@ -28,6 +28,7 @@
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
     "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*",
     "@qadi/core": "^0.7.0",
     "effect": "catalog:"
   },

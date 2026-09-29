@@ -9,6 +9,7 @@
 // every time.
 
 import { Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -305,16 +306,19 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const TeamRow = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  organizationId: Schema.String,
-  memberCount: Schema.Number,
-  createdAt: Schema.DateTimeUtcFromString,
-  updatedAt: Schema.DateTimeUtcFromString,
-});
+const makeTeamRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    name: Schema.String,
+    organizationId: Schema.String,
+    memberCount: Schema.Number,
+    createdAt: wire.dateTime,
+    updatedAt: wire.dateTime,
+  });
 
-const toTeamRecord = (row: typeof TeamRow.Type): TeamRecord => ({
+type TeamRow = ReturnType<typeof makeTeamRow>["Type"];
+
+const toTeamRecord = (row: TeamRow): TeamRecord => ({
   id: row.id,
   name: row.name,
   organizationId: row.organizationId,
@@ -323,14 +327,17 @@ const toTeamRecord = (row: typeof TeamRow.Type): TeamRecord => ({
   updatedAt: row.updatedAt,
 });
 
-const TeamMembershipRow = Schema.Struct({
-  id: Schema.String,
-  teamId: Schema.String,
-  userId: Schema.String,
-  createdAt: Schema.DateTimeUtcFromString,
-});
+const makeTeamMembershipRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    teamId: Schema.String,
+    userId: Schema.String,
+    createdAt: wire.dateTime,
+  });
 
-const toTeamMembershipRecord = (row: typeof TeamMembershipRow.Type): TeamMembershipRecord => ({
+type TeamMembershipRow = ReturnType<typeof makeTeamMembershipRow>["Type"];
+
+const toTeamMembershipRecord = (row: TeamMembershipRow): TeamMembershipRecord => ({
   id: row.id,
   teamId: row.teamId,
   userId: Users.UserId(row.userId),
@@ -341,6 +348,10 @@ export const layerSql = Layer.effect(
   TeamRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const TeamRow = makeTeamRow(wire);
+    const TeamMembershipRow = makeTeamMembershipRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insertTeam = SqlSchema.findOne({
@@ -349,8 +360,8 @@ export const layerSql = Layer.effect(
         name: Schema.String,
         organizationId: Schema.String,
         memberCount: Schema.Number,
-        createdAt: Schema.DateTimeUtcFromString,
-        updatedAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
+        updatedAt: wire.dateTime,
       }),
       Result: TeamRow,
       execute: (r) => sql`
@@ -379,7 +390,7 @@ export const layerSql = Layer.effect(
         organizationId: Schema.String,
         id: Schema.String,
         name: Schema.String,
-        updatedAt: Schema.DateTimeUtcFromString,
+        updatedAt: wire.dateTime,
       }),
       Result: TeamRow,
       execute: (r) => sql`
@@ -401,7 +412,7 @@ export const layerSql = Layer.effect(
         id: Schema.String,
         teamId: Schema.String,
         userId: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
       }),
       Result: TeamMembershipRow,
       execute: (r) => sql`

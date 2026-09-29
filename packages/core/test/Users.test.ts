@@ -68,6 +68,17 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
       }).pipe(Effect.provide(layer)),
     );
 
+    // ESR-003: JS `toLowerCase()` is the only fold. SQLite's own `lower()`
+    // folds ASCII only, so a SQL-side fold of the *parameter* would miss.
+    it.effect("ESR-003: findByEmail finds a non-ASCII email under any casing", () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        yield* users.create({ email: "Müller@Example.com", name: "Müller" });
+        const found = yield* users.findByEmail("MÜLLER@EXAMPLE.COM");
+        assert.isTrue(Option.isSome(found));
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BEH-EA-042: emailVerified only ever transitions false -> true, and stays true", () =>
       Effect.gen(function* () {
         const users = yield* Users.Users;

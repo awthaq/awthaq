@@ -26,6 +26,7 @@
 // — the same standalone-export shape `KeyRing.rotateNow` already uses)
 // with a `jti` it extracted from `jwt.verify`/`verifyJWT`'s own claims.
 
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -73,15 +74,19 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const RevocationRow = Schema.Struct({
-  jti: Schema.String,
-  expiresAt: Schema.DateTimeUtcFromString,
-});
+const makeRevocationRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    jti: Schema.String,
+    expiresAt: wire.dateTime,
+  });
 
 export const layerSql = Layer.effect(
   RevocationStore,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const RevocationRow = makeRevocationRow(wire);
 
     const upsert = SqlSchema.findOne({
       Request: RevocationRow,

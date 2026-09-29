@@ -45,7 +45,8 @@ const beforeUserDeleteVeto = <A>(
   );
 
 /** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. */
-export type UserId = string & Brand.Brand<"UserId">;
+// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
+export type UserId = SqlModels.UserId;
 export const UserId = Brand.nominal<UserId>();
 
 export interface UserRecord {
@@ -284,7 +285,7 @@ export const layerSql: Layer.Layer<
 
     const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
       const email = input.email.toLowerCase();
-      const insert = yield* SqlModels.User.insert
+      const insert = yield* repo.models.User.insert
         .makeEffect({ email, name: input.name, metadata: input.metadata ?? null })
         .pipe(Effect.orDie);
       const row = yield* repo.insert(insert).pipe(
@@ -315,13 +316,15 @@ export const layerSql: Layer.Layer<
       );
 
     const findByEmail: UsersShape["findByEmail"] = (email) =>
-      repo.findByEmail(email).pipe(Effect.map(Option.map(toUserRecord)), Effect.orDie);
+      repo
+        .findByEmail(email.toLowerCase())
+        .pipe(Effect.map(Option.map(toUserRecord)), Effect.orDie);
 
     const updateProfile: UsersShape["updateProfile"] = Effect.fnUntraced(function* (id, input) {
       const existing = yield* findById(id);
       const nextMetadata =
         input.metadata === undefined ? Option.getOrNull(existing.metadata) : input.metadata;
-      const update = yield* SqlModels.User.update
+      const update = yield* repo.models.User.update
         .makeEffect({ id, email: existing.email, name: input.name, metadata: nextMetadata })
         .pipe(Effect.orDie);
       const row = yield* repo.update(update).pipe(Effect.orDie);

@@ -24,7 +24,8 @@ import * as Result from "effect/Result";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { UserId } from "./Users.ts";
 
-export type AccountId = string & Brand.Brand<"AccountId">;
+// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
+export type AccountId = SqlModels.AccountId;
 export const AccountId = Brand.nominal<AccountId>();
 
 /** BEH-EA-044: `providerId = "password"` is the reserved password-credential provider. */
@@ -503,7 +504,7 @@ export const layerSql: Layer.Layer<
     const sql = yield* SqlClient.SqlClient;
 
     const link: AccountsShape["link"] = Effect.fnUntraced(function* (input) {
-      const insert = yield* SqlModels.Account.insert
+      const insert = yield* repo.models.Account.insert
         .makeEffect({
           userId: input.userId,
           providerId: input.providerId,

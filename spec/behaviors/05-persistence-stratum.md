@@ -37,6 +37,8 @@ REQUIREMENT: `User`, `Account`, `Session`, and `VerificationToken` MUST each
              the ordinary creation path.
 ```
 
+One declaration per field stays the rule, with one deliberate exception (TS-001, wayfinder ticket 29): the per-dialect *wire codec* of the boolean and DateTime columns. `node:sqlite` binds and returns booleans as `0 | 1` and timestamps as ISO strings, while `@effect/sql-pg` returns a JS `boolean`/`Date`, so `Models.makeModels(dialect)` builds the entities with `Schema.BooleanFromBit`/`DateTimeUtcFromString` (sqlite) or `Schema.Boolean`/`DateTimeUtcFromDate` (pg) in the database variants of exactly those columns. Every JSON variant is byte-identical across dialects. Each repository layer resolves the dialect once from the ambient `SqlClient` and exposes the resulting `models`; the pg client's own codecs are never overridden, because that client is shared with the host application's tables. Record stores outside this package (admin, jwt, organization, passkey, migrate-better-auth) take the same codecs from `Models.dialectFields(dialect)`.
+
 `archive/PRD.md` §12 fixes `Model.Class` as the one entity-definition mechanism, from which validation schemas, JSON variants, and repository helpers are all derived, rather than declared three separate times. `better-auth/01-core-domain/01-entities-and-invariants.md` §1 documents the same base-contract shape (an opaque, supplier-assigned `id`) as the invariant every one of better-auth's four core entities shares; awthaq's plan is to make that shared base a property of `Model.Class` itself rather than a convention each entity's author must repeat.
 
 ## BEH-EA-034: `Model.Sensitive` fields never appear in any JSON variant of an entity
@@ -75,6 +77,8 @@ REQUIREMENT: A repository MUST be a `Context.Service` built via
 ```
 
 `research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so a repository that opened its own transaction internally would silently change the atomicity boundary any caller composing two repository calls expects. Keeping repositories transaction-agnostic and letting the domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) hold the boundary is what keeps composition safe.
+
+Every hand-written repository method (anything `SqlModel.makeRepository` does not generate) is wrapped in a span named `<spanPrefix>.<method>` — `Users.findByEmail`, `Sessions.touch`, `VerificationTokens.tryConsume` — matching the convention `SqlModel` uses for its own CRUD methods, so a trace reads `Users.findByEmail > sql.execute` (EOTS-008). Span attributes are ids only (a user, session or account id); never an email, identifier, hash, token, provider subject or payload (BEH-EA-199).
 
 ## BEH-EA-036: Pagination is keyset-only; no repository interface accepts an offset
 

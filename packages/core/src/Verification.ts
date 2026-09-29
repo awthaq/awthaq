@@ -49,7 +49,8 @@ import * as AuthEvents from "./AuthEvents.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
-export type VerificationTokenId = string & Brand.Brand<"VerificationTokenId">;
+// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
+export type VerificationTokenId = SqlModels.VerificationTokenId;
 export const VerificationTokenId = Brand.nominal<VerificationTokenId>();
 
 const toHex = (bytes: Uint8Array): string =>
@@ -300,7 +301,7 @@ export const layerSql = Layer.effect(
       const value = toHex(yield* crypto.randomBytes(32));
       const valueHash = yield* hash(value);
       const now = yield* DateTime.now;
-      const insert = yield* SqlModels.VerificationToken.insert
+      const insert = yield* repo.models.VerificationToken.insert
         .makeEffect({
           identifier: input.identifier,
           userId: input.userId ?? null,

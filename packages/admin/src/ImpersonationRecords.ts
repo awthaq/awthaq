@@ -12,6 +12,7 @@
 // to end — a session issued by `impersonate` is 1:1 with its own audit row.
 
 import { Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -179,18 +180,21 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const ImpersonationRow = Schema.Struct({
-  id: Schema.String,
-  adminUserId: Schema.String,
-  targetUserId: Schema.String,
-  sessionId: Schema.String,
-  reason: Schema.String,
-  startedAt: Schema.DateTimeUtcFromString,
-  endedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-  endedBy: Schema.NullOr(Schema.Literals(["self", "forcedByAdmin", "expired"])),
-});
+const makeImpersonationRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    adminUserId: Schema.String,
+    targetUserId: Schema.String,
+    sessionId: Schema.String,
+    reason: Schema.String,
+    startedAt: wire.dateTime,
+    endedAt: wire.nullableDateTime,
+    endedBy: Schema.NullOr(Schema.Literals(["self", "forcedByAdmin", "expired"])),
+  });
 
-const toRecord = (row: typeof ImpersonationRow.Type): ImpersonationRecord => ({
+type ImpersonationRow = ReturnType<typeof makeImpersonationRow>["Type"];
+
+const toRecord = (row: ImpersonationRow): ImpersonationRecord => ({
   id: row.id,
   adminUserId: Users.UserId(row.adminUserId),
   targetUserId: Users.UserId(row.targetUserId),
@@ -205,6 +209,9 @@ export const layerSql = Layer.effect(
   ImpersonationRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const ImpersonationRow = makeImpersonationRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -214,7 +221,7 @@ export const layerSql = Layer.effect(
         targetUserId: Schema.String,
         sessionId: Schema.String,
         reason: Schema.String,
-        startedAt: Schema.DateTimeUtcFromString,
+        startedAt: wire.dateTime,
       }),
       Result: ImpersonationRow,
       execute: (r) => sql`
@@ -235,7 +242,7 @@ export const layerSql = Layer.effect(
     const endEpisodeQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         sessionId: Schema.String,
-        endedAt: Schema.DateTimeUtcFromString,
+        endedAt: wire.dateTime,
         endedBy: Schema.Literals(["self", "forcedByAdmin", "expired"]),
       }),
       Result: ImpersonationRow,

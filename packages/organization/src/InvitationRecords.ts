@@ -7,6 +7,7 @@
 // caller (`Organization.ts`) transitions it explicitly via `updateStatus`.
 
 import { Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -181,21 +182,24 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const InvitationRow = Schema.Struct({
-  id: Schema.String,
-  email: Schema.String,
-  inviterId: Schema.String,
-  organizationId: Schema.String,
-  teamId: Schema.NullOr(Schema.String),
-  role: Schema.String,
-  status: Schema.Literals(["pending", "accepted", "rejected", "canceled", "expired"]),
-  createdAt: Schema.DateTimeUtcFromString,
-  expiresAt: Schema.DateTimeUtcFromString,
-});
+const makeInvitationRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    email: Schema.String,
+    inviterId: Schema.String,
+    organizationId: Schema.String,
+    teamId: Schema.NullOr(Schema.String),
+    role: Schema.String,
+    status: Schema.Literals(["pending", "accepted", "rejected", "canceled", "expired"]),
+    createdAt: wire.dateTime,
+    expiresAt: wire.dateTime,
+  });
+
+type InvitationRow = ReturnType<typeof makeInvitationRow>["Type"];
 
 const parseRoleArray = (json: string): ReadonlyArray<string> => JSON.parse(json);
 
-const toRecord = (row: typeof InvitationRow.Type): InvitationRecord => ({
+const toRecord = (row: InvitationRow): InvitationRecord => ({
   id: row.id,
   email: row.email,
   inviterId: Users.UserId(row.inviterId),
@@ -211,6 +215,9 @@ export const layerSql = Layer.effect(
   InvitationRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const InvitationRow = makeInvitationRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -222,8 +229,8 @@ export const layerSql = Layer.effect(
         teamId: Schema.NullOr(Schema.String),
         role: Schema.String,
         status: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
-        expiresAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
+        expiresAt: wire.dateTime,
       }),
       Result: InvitationRow,
       execute: (r) => sql`

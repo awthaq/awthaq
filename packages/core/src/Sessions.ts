@@ -28,7 +28,8 @@ import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
 /** BEH-EA-049: the public half of a session's `id.secret` token. */
-export type SessionId = string & Brand.Brand<"SessionId">;
+// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
+export type SessionId = SqlModels.SessionId;
 export const SessionId = Brand.nominal<SessionId>();
 
 const toHex = (bytes: Uint8Array): string =>
@@ -711,7 +712,7 @@ export const layerSql: Layer.Layer<
         input.actingAs === undefined
           ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
           : absoluteExpiresAt;
-      const insert = yield* SqlModels.Session.insert
+      const insert = yield* repo.models.Session.insert
         .makeEffect({
           id,
           userId: input.userId,

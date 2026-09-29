@@ -9,6 +9,7 @@
 // permission directly into `PermissionEngine.statementsByRoleFrom`'s
 // `dynamicStatements` argument with no reshaping.
 
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -181,18 +182,21 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const OrgRoleRow = Schema.Struct({
-  id: Schema.String,
-  organizationId: Schema.String,
-  role: Schema.String,
-  permission: Schema.String,
-  createdAt: Schema.DateTimeUtcFromString,
-  updatedAt: Schema.DateTimeUtcFromString,
-});
+const makeOrgRoleRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    organizationId: Schema.String,
+    role: Schema.String,
+    permission: Schema.String,
+    createdAt: wire.dateTime,
+    updatedAt: wire.dateTime,
+  });
+
+type OrgRoleRow = ReturnType<typeof makeOrgRoleRow>["Type"];
 
 const parsePermission = (json: string): PermissionEngine.Statements => JSON.parse(json);
 
-const toRecord = (row: typeof OrgRoleRow.Type): OrgRoleRecord => ({
+const toRecord = (row: OrgRoleRow): OrgRoleRecord => ({
   id: row.id,
   organizationId: row.organizationId,
   role: row.role,
@@ -205,6 +209,9 @@ export const layerSql = Layer.effect(
   OrgRoleRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const OrgRoleRow = makeOrgRoleRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -213,8 +220,8 @@ export const layerSql = Layer.effect(
         organizationId: Schema.String,
         role: Schema.String,
         permission: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
-        updatedAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
+        updatedAt: wire.dateTime,
       }),
       Result: OrgRoleRow,
       execute: (r) => sql`
@@ -243,7 +250,7 @@ export const layerSql = Layer.effect(
         organizationId: Schema.String,
         id: Schema.String,
         permission: Schema.String,
-        updatedAt: Schema.DateTimeUtcFromString,
+        updatedAt: wire.dateTime,
       }),
       Result: OrgRoleRow,
       execute: (r) => sql`
