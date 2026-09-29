@@ -3,7 +3,7 @@ ID: "PPS-006"
 Title: "No prepared-statement reuse: every hot statement is an unnamed template executed fresh"
 Level: low
 Category: "performance"
-Status: needs-triage
+Status: wontfix
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:424"
 Auditor: "postgres-performance-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `performance` · `sql` · reported by **Postgres Performance Specialist** (`postgres-performance-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Name and prepare the hot statements once per client (session findById, touch, tr
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** INVALID (confidence high); workstream `sql-docs-operations`. Evidence at HEAD ec065a7: `node_modules/.pnpm/@effect+sql-pg@4.0.0-rc.116_effect@4.0.0-rc.116/node_modules/@effect/sql-pg/src/PgClient.ts:139`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/05-sql.md`.
+
+**Wontfix (2026-09-29):** Invalid. The pinned @effect/sql-pg client prepares statements by default (`prepare` option 'Caches prepared statements by name. Enabled by default', `preparedStatementCacheSize` default 100; PgClient.ts:139-144, `run(query, params, prepare = true)` at :281), keyed by the query text, so the static tagged-template hot statements are already named/cached per connection. There is no `.prepare(` API to call. A user behind pgbouncer transaction pooling who needs to disable this sets `prepare: false` on PgClient.layer (documented in the sql README pool recipe).

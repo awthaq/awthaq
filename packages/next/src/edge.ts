@@ -15,14 +15,14 @@
 //
 // Edge-safe by construction: this module imports only `effect`, the lite
 // verifier (`@awthaq/jwt/verify` — checkably free of `@awthaq/core`/
-// `@awthaq/server`) and this package's own `CookieHeader.ts`. Never import
+// `@awthaq/server`) and `@awthaq/web/cookies`. Never import
 // `getSession`/`serverActionClient` from a file that also runs at the edge.
 import { SESSION_MIRROR_COOKIE_NAME, makeVerifier } from "@awthaq/jwt/verify";
 import type { Verifier, VerifierOptions } from "@awthaq/jwt/verify";
 import * as Effect from "effect/Effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import { findCookieValue } from "./CookieHeader.ts";
-import type { HeadersLike } from "./GetSession.ts";
+import { findCookieValue } from "@awthaq/web/cookies";
+import type { HeadersLike } from "@awthaq/web/cookies";
 
 /**
  * Builds the verifier once (module scope in `proxy.ts`): JWKS is fetched lazily

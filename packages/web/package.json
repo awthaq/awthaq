@@ -1,8 +1,8 @@
 {
-  "name": "@awthaq/next",
+  "name": "@awthaq/web",
   "version": "0.1.0",
   "private": true,
-  "description": "Next.js adapter: database-verified getSession, optimistic proxy.ts cookie check, Set-Cookie bridging for server actions.",
+  "description": "Framework-neutral web-adapter core: cookie-jar bridge, database-verified session read and rotation, presence check, and the in-process CSRF-echoing client. The base a Next, Astro or SvelteKit adapter shares.",
   "license": "MIT",
   "files": [
     "lib",
@@ -18,11 +18,11 @@
       "import": "./lib/index.js",
       "default": "./lib/index.js"
     },
-    "./edge": {
-      "types": "./lib/edge.d.ts",
-      "bun": "./src/edge.ts",
-      "import": "./lib/edge.js",
-      "default": "./lib/edge.js"
+    "./cookies": {
+      "types": "./lib/cookies.d.ts",
+      "bun": "./src/cookies.ts",
+      "import": "./lib/cookies.js",
+      "default": "./lib/cookies.js"
     }
   },
   "scripts": {
@@ -32,29 +32,16 @@
   },
   "dependencies": {
     "@awthaq/api": "workspace:*",
-    "@awthaq/jwt": "workspace:*",
+    "@awthaq/client": "workspace:*",
+    "@awthaq/core": "workspace:*",
     "@awthaq/server": "workspace:*",
-    "@awthaq/web": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@awthaq/core": "workspace:*",
-    "@awthaq/ports": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
-    "@types/react": "catalog:",
-    "react": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
-  },
-  "peerDependencies": {
-    "next": ">=15.0.0",
-    "react": ">=19.3.0"
-  },
-  "peerDependenciesMeta": {
-    "next": {
-      "optional": true
-    }
   },
   "engines": {
     "node": ">=22.12.0"

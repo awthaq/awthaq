@@ -3,7 +3,7 @@ ID: "PCS-004"
 Title: "Decision cache has no TTL or staleness upper bound: FIFO capacity eviction only"
 Level: medium
 Category: "security"
-Status: needs-triage
+Status: wontfix
 Package: "qadi"
 Source: "packages/qadi/node_modules/@qadi/core/src/DecisionCache.ts:289"
 Auditor: "permission-caching-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `qadi` · reported by **Permission Caching Specialist** (`permission-caching-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -44,3 +44,5 @@ Add an optional per-entry or global TTL to decisionCacheLayer (time-checked on h
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `qadi-decision-cache-invalidation`. Evidence at HEAD ec065a7: `../qadi/packages/core/src/DecisionCache.ts:291`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`.
+
+**Wontfix (2026-09-29):** Not implemented, deliberately. qadi's ADR-QD-031 rejects a TTL on the decision cache (a time-bounded cache needs a clock and therefore a determinism story against INV-QD-008, and 'stale for at most N seconds' is a claim about the caller's tolerance qadi cannot make); the scope is the caller's rather than the duration. awthaq closes the staleness hole a different way: the default wiring is a per-request cache (`RequestDecisionCacheLive`, PCS-001) which has no staleness window at all, and the opt-in app-scope cache is cleared by `DecisionCacheInvalidationLive` on every membership/role/hook event (PCS-002). Overriding an upstream ADR from this repo for a knob no awthaq wiring uses (a TTL is meaningless on a per-request cache) would be speculative. What a user who insists on an app-scope cache with a hard staleness bound does instead: keep the cache and run `DecisionCache.clear` on a schedule (`Effect.repeat(cache.clear, Schedule.spaced(Duration.seconds(5)))` in a scoped layer), or open the upstream ADR in ../qadi.
