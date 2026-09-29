@@ -44,7 +44,7 @@ Save this as `server.ts` inside a clone of this repository (it imports workspace
 ```ts
 import { createServer } from "node:http";
 import { Auth, AuthEvents, RateLimits, Sessions, Users, Accounts, Verification } from "@awthaq/core";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
 import { Encryption, KeyProvider, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthCore } from "@awthaq/api";
 import { Password } from "@awthaq/password";
@@ -110,10 +110,24 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
-// 5. Swap these ports for your own: a real mailer (SMTP/SES/Resend/...)
-//    in place of this console stand-in, and — if you want breach
-//    checking or a persistent rate-limit store — `PasswordHasher`'s and
-//    `RateLimiter`'s other layers instead of the defaults below.
+// 5. The rate limiter enforces the limits every plugin registers (the
+//    sign-in / sign-up / reset rules) against a shared SQL store, so the
+//    limits hold across replicas and restarts. `RateLimiter.layerPermissive`
+//    disables limiting: tests only, never production. If the store is
+//    unreachable, `RateLimiter.layer` fails open by default; see
+//    `RateLimiter.config`.
+const RateLimiterMigrated = Layer.effectDiscard(RateLimiterStoreSql.migrate).pipe(
+  Layer.provide(SqlLive),
+);
+const RateLimiterLive = RateLimiter.layer.pipe(
+  Layer.provide(RateLimiterStoreSql.layerStoreSql),
+  Layer.provide(RateLimiterMigrated),
+  Layer.provide(SqlLive),
+);
+
+//    Swap the remaining ports for your own: a real mailer
+//    (SMTP/SES/Resend/...) in place of this console stand-in, and — if you
+//    want breach checking — `Password.config(...)`.
 const consoleMailer = Layer.succeed(
   Mailer.Mailer,
   Mailer.Mailer.of({
@@ -136,7 +150,7 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(AuthenticationLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(
-    Layer.mergeAll(PasswordHasher.layerArgon2id, consoleMailer, RateLimiter.layerPermissive).pipe(
+    Layer.mergeAll(PasswordHasher.layerArgon2id, consoleMailer, RateLimiterLive).pipe(
       Layer.provideMerge(NodeCrypto.layer),
     ),
   ),
@@ -213,7 +227,7 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 |---|---|---|
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt` |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
-| `RateLimiter` | `layerPermissive` (no real limiting) | `layer` over `layerStoreMemory`, or your own `RateLimiterStore` |
+| `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `layer` over the bounded, single-process `layerStoreMemory`, or your own `RateLimiterStore`; `layerPermissive` disables limiting (tests only) |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEY`) | a KMS-backed `KeyProvider` (implement the port directly) |
 
 `Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach checking, off by default) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.

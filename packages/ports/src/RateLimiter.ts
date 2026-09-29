@@ -23,18 +23,17 @@
 // claim over a single `Ref`.
 //
 // BEH-EA-105's fail-open default belongs to `layer` (the `consume` logic),
-// not to a store: `layerStoreMemory` is a plain in-process `Ref` and cannot
-// itself become unreachable, so there is no outage for it to fail open
-// against today. A store that legitimately can go unreachable (Redis, a SQL
-// pool) is a documented future `RateLimiterStore` implementation — its
-// `increment` would carry a real error channel for `layer` to catch and
-// fail open (or, per BEH-EA-105's opt-out, reject) against; nothing about
-// `layer`'s own shape needs to change to add one.
+// not to a store. `layerStoreMemory` is a plain in-process `Ref` and cannot
+// itself become unreachable, but a store that can (a SQL pool, Redis) carries
+// a real error channel, `RateLimiterStoreUnavailable` (RBS-004), which
+// `layer` catches and, per `RateLimiterConfig.onStoreUnavailable`, either
+// fails open (the default) or rejects, so an outage of this defense-in-depth
+// mechanism never surfaces as an unrelated 5xx.
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
-import type * as Duration from "effect/Duration";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
@@ -51,6 +50,15 @@ import * as Ref from "effect/Ref";
  */
 export class RateLimitExceeded extends Data.TaggedError("RateLimitExceeded")<{
   readonly retryAfterMillis: number;
+}> {}
+
+/**
+ * RBS-004: a shared store (SQL, Redis) could not be reached or answered
+ * unusably. `RateLimiter.layer` handles it per `RateLimiterConfig`; it never
+ * reaches a caller of `consume`.
+ */
+export class RateLimiterStoreUnavailable extends Data.TaggedError("RateLimiterStoreUnavailable")<{
+  readonly cause: unknown;
 }> {}
 
 export interface ConsumeInput {
@@ -75,12 +83,39 @@ export interface Bucket {
 
 /** The atomic primitive BEH-EA-105 requires of any backing store: one round trip both reads and advances a bucket. */
 export interface RateLimiterStoreShape {
-  readonly increment: (key: string, window: Duration.Input) => Effect.Effect<Bucket>;
+  readonly increment: (
+    key: string,
+    window: Duration.Input,
+  ) => Effect.Effect<Bucket, RateLimiterStoreUnavailable>;
 }
 
 export class RateLimiterStore extends Context.Service<RateLimiterStore, RateLimiterStoreShape>()(
   "awthaq/ports/RateLimiterStore",
 ) {}
+
+export interface RateLimiterConfigShape {
+  /**
+   * BEH-EA-105: what `consume` does when the store is unavailable. `"allow"`
+   * (the default) proceeds unthrottled and logs a warning; `"reject"` fails
+   * closed with `RateLimitExceeded`.
+   */
+  readonly onStoreUnavailable: "allow" | "reject";
+  /** The `retryAfterMillis` a fail-closed rejection carries — there is no bucket to derive one from. */
+  readonly unavailableRetryAfter: Duration.Input;
+}
+
+const defaultRateLimiterConfig: RateLimiterConfigShape = {
+  onStoreUnavailable: "allow",
+  unavailableRetryAfter: "1 second",
+};
+
+/** BEH-EA-017's `Context.Reference`-with-default pattern: fail-open unless an application says otherwise. */
+export const RateLimiterConfig = Context.Reference("awthaq/ports/RateLimiterConfig", {
+  defaultValue: () => defaultRateLimiterConfig,
+});
+
+export const config = (partial: Partial<RateLimiterConfigShape>) =>
+  Layer.succeed(RateLimiterConfig, { ...defaultRateLimiterConfig, ...partial });
 
 /**
  * BEH-EA-105/109: the swappable half — `consume`'s logic (compare to
@@ -93,9 +128,26 @@ export const layer: Layer.Layer<RateLimiter, never, RateLimiterStore> = Layer.ef
   RateLimiter,
   Effect.gen(function* () {
     const store = yield* RateLimiterStore;
+    const policy = yield* RateLimiterConfig;
+    // RBS-004: only the failure cause is logged, never the bucket key (BEH-EA-108).
+    const onUnavailable = (error: RateLimiterStoreUnavailable) =>
+      Effect.logWarning("awthaq: rate-limit store unavailable", error.cause).pipe(
+        Effect.andThen(
+          policy.onStoreUnavailable === "allow"
+            ? Effect.succeed(undefined)
+            : Effect.fail(
+                new RateLimitExceeded({
+                  retryAfterMillis: Duration.toMillis(policy.unavailableRetryAfter),
+                }),
+              ),
+        ),
+      );
     const consume: RateLimiterShape["consume"] = (input) =>
       Effect.gen(function* () {
-        const bucket = yield* store.increment(input.key, input.window);
+        const bucket = yield* store
+          .increment(input.key, input.window)
+          .pipe(Effect.catchTag("RateLimiterStoreUnavailable", onUnavailable));
+        if (bucket === undefined) return;
         if (bucket.count <= input.limit) return;
         const now = yield* DateTime.now;
         const retryAfterMillis = Math.max(
@@ -214,6 +266,9 @@ export const layerStoreMemory = layerStoreMemoryWith({
  * BEH-EA-112: a limiter that never rejects, under any iteration count —
  * `TestAuth.layer`'s own default, so a test that signs in fifty times in a
  * loop doesn't fail for a reason that has nothing to do with what it tests.
+ *
+ * Tests only, never production (NHS-005): it disables every rate-limit rule
+ * every plugin registers. Production wiring is `layer` over a store.
  */
 export const layerPermissive: Layer.Layer<RateLimiter> = Layer.succeed(
   RateLimiter,

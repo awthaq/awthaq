@@ -10,7 +10,7 @@ import * as DateTime from "effect/DateTime";
 import * as HashMap from "effect/HashMap";
 
 /** The map size below which pruning is skipped: it is an O(n) scan, so small dev/test maps never pay for it. */
-export const pruneThreshold = 10_000;
+const pruneThreshold = 10_000;
 
 /** Drops every entry whose expiry is at or before `now`. */
 export const pruneExpired = <K, V>(

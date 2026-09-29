@@ -57,3 +57,5 @@ Implement a Redis (INCR+EXPIRE or Lua) or Postgres (upsert-and-return) store aga
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `ratelimit-distributed-store`. Duplicate of `RBS-004` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/ports/src/RateLimiter.ts:26`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `RBS-004-rate-limiting-brute-force-specialist` — closed by its fix (see that issue's Resolved comment).

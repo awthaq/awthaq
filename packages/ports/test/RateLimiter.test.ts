@@ -4,6 +4,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as TestClock from "effect/testing/TestClock";
 import * as RateLimiter from "../src/RateLimiter.ts";
 
@@ -131,6 +132,51 @@ describe("RateLimiter.layerStoreMemoryWith (RBS-003 bounded memory store)", () =
           maxBuckets: 2,
           sweepInterval: Duration.minutes(1),
         }),
+      ),
+    ),
+  );
+});
+
+describe("RateLimiter.layer store outage (RBS-004, BEH-EA-105)", () => {
+  const DownStore = Layer.succeed(
+    RateLimiter.RateLimiterStore,
+    RateLimiter.RateLimiterStore.of({
+      increment: () => Effect.fail(new RateLimiter.RateLimiterStoreUnavailable({ cause: "down" })),
+    }),
+  );
+  const input = { key: "signin:alice", limit: 1, window: Duration.seconds(10) };
+
+  it.effect("fails open and logs a warning by default when the store is unavailable", () =>
+    Effect.gen(function* () {
+      const messages: Array<string> = [];
+      const capture = Logger.make<unknown, void>((options) => {
+        if (options.logLevel === "Warn") messages.push(String(options.message));
+      });
+      const limiter = yield* RateLimiter.RateLimiter;
+      yield* limiter.consume(input).pipe(Effect.provide(Logger.layer([capture])));
+      assert.strictEqual(messages.length, 1);
+      // BEH-EA-108: the log line must not leak the bucket key (emails, IPs).
+      assert.isFalse(messages.some((message) => message.includes("alice")));
+    }).pipe(Effect.provide(RateLimiter.layer.pipe(Layer.provide(DownStore)))),
+  );
+
+  it.effect("the reject policy fails RateLimitExceeded with the configured retry hint", () =>
+    Effect.gen(function* () {
+      const limiter = yield* RateLimiter.RateLimiter;
+      const failure = yield* limiter.consume(input).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "RateLimitExceeded");
+      assert.strictEqual(failure.retryAfterMillis, 2_000);
+    }).pipe(
+      Effect.provide(
+        RateLimiter.layer.pipe(
+          Layer.provide(DownStore),
+          Layer.provide(
+            RateLimiter.config({
+              onStoreUnavailable: "reject",
+              unavailableRetryAfter: Duration.seconds(2),
+            }),
+          ),
+        ),
       ),
     ),
   );
