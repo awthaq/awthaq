@@ -35,16 +35,20 @@ import {
   currentSubjectLayer,
   decisionCacheLayer,
   DecisionCache,
+  eq,
   evaluate,
   EvaluationServicesNone,
+  hasAttribute,
   hasRelationship,
   isAllowed,
+  literal,
   makeSubject,
 } from "@qadi/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as DecisionCacheInvalidation from "../src/DecisionCacheInvalidation.ts";
+import * as Resolvers from "../src/Resolvers.ts";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
@@ -104,6 +108,7 @@ const RelationshipsLive = OrganizationQadi.relationships.pipe(
 const AppLive = Layer.mergeAll(
   EvaluationServicesNone,
   RelationshipsLive,
+  Resolvers.UserAttributes,
   DecisionCacheInvalidation.DecisionCacheInvalidationLive,
 ).pipe(
   Layer.provideMerge(decisionCacheLayer({ capacity: 64 })),
@@ -208,6 +213,27 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
 
         assert.isFalse(yield* decide("member", record.id, "owner-del"));
       }),
+    );
+
+    // AAPS-005: awthaq-owned user attributes (emailVerified/name) are covered too.
+    it.effect(
+      "a cached Deny on hasAttribute(emailVerified) becomes Allow after Users.verifyEmail",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const user = yield* users.create({ email: "verify-cache@example.com", name: "Verify" });
+          const policy = hasAttribute(Resolvers.userAttr("emailVerified"), eq(literal(true)));
+          const ask = evaluate(policy).pipe(
+            Effect.provide(currentSubjectLayer(makeSubject({ id: `user:${user.id}` }))),
+            Effect.map(isAllowed),
+          );
+          assert.isFalse(yield* ask);
+          assert.isFalse(yield* ask);
+
+          yield* users.verifyEmail(user.id);
+
+          assert.isTrue(yield* ask);
+        }),
     );
 
     it.effect("removeTeamMember clears the cache so team-member denies", () =>

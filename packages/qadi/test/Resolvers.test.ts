@@ -8,7 +8,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import { AttributeResolver, makeSubjectId, obligation } from "@qadi/core";
+import * as Schema from "effect/Schema";
+import { AttributeResolver, exists, hasAttribute, makeSubjectId, obligation } from "@qadi/core";
 import * as Resolvers from "../src/Resolvers.ts";
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
@@ -320,5 +321,50 @@ describe("UserAttributes memoizes the user record per request (AAPS-004)", () =>
       yield* attributeResolver.resolve(subjectId, "name");
       assert.strictEqual(counter.lookups, 2);
     }).pipe(Effect.provide(CountingAttributes)),
+  );
+});
+
+// AAPS-003: the attribute names UserAttributes answers are typed, so a policy
+// author's typo fails to compile instead of silently reading "no value".
+describe("typed user attribute names (AAPS-003)", () => {
+  it("userAttr accepts exactly the declared names and returns them unchanged", () => {
+    assert.strictEqual(Resolvers.userAttr("email"), "email");
+    assert.strictEqual(Resolvers.userAttr("emailVerified"), "emailVerified");
+    // The typed name feeds qadi's own `hasAttribute` unchanged.
+    assert.strictEqual(hasAttribute(Resolvers.userAttr("name"), exists())._tag, "HasAttribute");
+    // @ts-expect-error a misspelled attribute is a compile error, not a silent miss
+    assert.strictEqual(Resolvers.userAttr("emailVerifed"), "emailVerifed");
+  });
+
+  it("the declared schemas decode what the resolver returns, and reject other shapes", () => {
+    assert.strictEqual(
+      Schema.decodeUnknownSync(Resolvers.UserAttributeSchemas.email)("a@b.c"),
+      "a@b.c",
+    );
+    assert.strictEqual(
+      Schema.decodeUnknownSync(Resolvers.UserAttributeSchemas.emailVerified)(true),
+      true,
+    );
+    assert.throws(() =>
+      Schema.decodeUnknownSync(Resolvers.UserAttributeSchemas.emailVerified)("yes"),
+    );
+    assert.deepStrictEqual([...Resolvers.UserAttributeNames].sort(), [
+      "email",
+      "emailVerified",
+      "name",
+    ]);
+  });
+
+  it.effect("every declared name resolves to a value its own schema decodes", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const attributeResolver = yield* AttributeResolver;
+      const user = yield* users.create({ email: "typed@example.com", name: "Typed" });
+      const subjectId = makeSubjectId(`user:${user.id}`);
+      for (const name of Resolvers.UserAttributeNames) {
+        const value = yield* attributeResolver.resolve(subjectId, name);
+        Schema.decodeUnknownSync(Resolvers.UserAttributeSchemas[name])(value);
+      }
+    }).pipe(Effect.provide(AttributesLayer)),
   );
 });

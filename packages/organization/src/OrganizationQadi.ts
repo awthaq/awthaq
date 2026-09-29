@@ -44,6 +44,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Record from "effect/Record";
+import * as Schema from "effect/Schema";
 import {
   AttributeResolver,
   AttributeResolveError,
@@ -258,7 +260,18 @@ export const relationships = Layer.effect(
  * alongside the `Layer` itself — mirrors `@awthaq/qadi`'s own
  * `Resolvers.UserAttributeNames`, for the identical reason.
  */
-export const OrganizationAttributeNames = ["organizationCount", "ownedOrganizationCount"] as const;
+export const OrganizationAttributeSchemas = {
+  organizationCount: Schema.Number,
+  ownedOrganizationCount: Schema.Number,
+};
+
+/** AAPS-003: valid `attributes` names, derived from `OrganizationAttributeSchemas`. */
+export type OrganizationAttributeName = keyof typeof OrganizationAttributeSchemas;
+
+export const OrganizationAttributeNames = Record.keys(OrganizationAttributeSchemas);
+
+/** AAPS-003: a policy author's typed attribute name — a typo is a compile error, not a silent "no value". */
+export const orgAttr = <const N extends OrganizationAttributeName>(name: N): N => name;
 
 export const attributes = Layer.effect(
   AttributeResolver,

@@ -92,7 +92,8 @@ with no invalidation code to forget to wire.
 > the cache from every organization/team observe hook. Providing the cache above
 > request scope without it knowingly accepts the backend-revocation staleness
 > window. The bridge covers only state awthaq's own plugins own (organization and
-> team membership, dynamic-role statements); an application-owned
+> team membership, dynamic-role statements, and awthaq's own user attributes —
+> `emailVerified`/`name`, via `Hooks.AfterUserAttributesChanged`); an application-owned
 > `AttributeResolver`/`RelationshipResolver` — for example the
 > `hasResourceAttribute("ownerId", ...)` over your own `Project` table below — must
 > call `DecisionCache.clear` from its own mutations. Provide the bridge once,

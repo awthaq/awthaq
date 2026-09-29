@@ -25,7 +25,9 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Record from "effect/Record";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import type { Obligation, ObligationHandler } from "@qadi/core";
 import { AttributeResolver, AttributeResolveError, obligation } from "@qadi/core";
@@ -68,7 +70,44 @@ const USER_SUBJECT_PREFIX = "user:";
  * `AttributeResolvers.attributeResolverRegistry` call never hand-copies a
  * list that can drift from `resolve`'s own `switch` below.
  */
-export const UserAttributeNames = ["email", "emailVerified", "name"] as const;
+/**
+ * AAPS-003: the one declaration of what `UserAttributes` answers — a schema per
+ * attribute name. Everything else derives from it: `UserAttributeName` (the
+ * union of valid names), `UserAttributeNames` (the registry's declared list),
+ * `userAttr` (a policy author's typed name), and the per-attribute readers
+ * below, which the compiler forces to cover every declared name.
+ */
+export const UserAttributeSchemas = {
+  email: Schema.String,
+  emailVerified: Schema.Boolean,
+  name: Schema.String,
+};
+
+export type UserAttributeName = keyof typeof UserAttributeSchemas;
+
+export const UserAttributeNames = Record.keys(UserAttributeSchemas);
+
+/**
+ * A policy author's typed attribute name: `hasAttribute(userAttr("emailVerified"), ...)`
+ * compiles, `userAttr("emailVerifed")` does not — a typo against this producer
+ * fails at compile time instead of reading as "no value" at request time.
+ */
+export const userAttr = <const N extends UserAttributeName>(name: N): N => name;
+
+const isUserAttributeName = (attribute: string): attribute is UserAttributeName =>
+  Object.hasOwn(UserAttributeSchemas, attribute);
+
+// One reader per declared name, typed by that name's own schema — adding a name
+// to `UserAttributeSchemas` without a reader here is a compile error.
+const userAttributeReaders: {
+  readonly [N in UserAttributeName]: (
+    user: Users.UserRecord,
+  ) => Schema.Schema.Type<(typeof UserAttributeSchemas)[N]>;
+} = {
+  email: (user) => user.email,
+  emailVerified: (user) => user.emailVerified,
+  name: (user) => user.name,
+};
 
 type UserLookup = Effect.Effect<Option.Option<Users.UserRecord>, AttributeResolveError>;
 
@@ -101,7 +140,9 @@ export const UserAttributes: Layer.Layer<AttributeResolver, never, Users.Users> 
             onSome: Effect.succeed,
             onNone: () =>
               Ref.make(HashMap.empty<Users.UserId, UserLookup>()).pipe(
-                Effect.tap((ref) => Effect.sync(() => userLookupsByRequest.set(request.value, ref))),
+                Effect.tap((ref) =>
+                  Effect.sync(() => userLookupsByRequest.set(request.value, ref)),
+                ),
               ),
           }),
         );
@@ -121,17 +162,8 @@ export const UserAttributes: Layer.Layer<AttributeResolver, never, Users.Users> 
         const userId = Users.UserId(subjectId.slice(USER_SUBJECT_PREFIX.length));
         return memoizedLookup(userId, attribute).pipe(
           Effect.map((found): unknown => {
-            if (Option.isNone(found)) return undefined;
-            switch (attribute) {
-              case "email":
-                return found.value.email;
-              case "emailVerified":
-                return found.value.emailVerified;
-              case "name":
-                return found.value.name;
-              default:
-                return undefined;
-            }
+            if (Option.isNone(found) || !isUserAttributeName(attribute)) return undefined;
+            return userAttributeReaders[attribute](found.value);
           }),
         );
       },
