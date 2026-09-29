@@ -26,7 +26,7 @@ import {
   TeamRecords,
 } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { Auth, Retention } from "@awthaq/core";
+import { Auth, Retention, SecuritySignals } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
 import { AuthHttp, Authentication, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
@@ -159,8 +159,15 @@ const audited = AuthorizationAudit.auditAuthorizationAnnotations(built.api);
 //    CSG-003: `Retention.layerScheduled` is the opt-in retention sweep (expired sessions,
 //    old verification rows; the audit trail is kept for ever unless `Retention.config`
 //    sets a window). It shares the app's own stores, so it lives in the same layer graph.
+//    CSG-008: `SecuritySignals.layer` turns the published breach signals into incidents (log line,
+//    metric, and an `IncidentSink` if one is provided).
 const ServerLive = HttpRouter.serve(
-  Layer.mergeAll(BodyLimit.layer, RequestContext.layer, Retention.layerScheduled).pipe(
+  Layer.mergeAll(
+    BodyLimit.layer,
+    RequestContext.layer,
+    Retention.layerScheduled,
+    SecuritySignals.layer,
+  ).pipe(
     Layer.provideMerge(AppLayer),
   ),
 ).pipe(

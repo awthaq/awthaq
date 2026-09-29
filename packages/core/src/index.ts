@@ -45,6 +45,7 @@ export * as Migrations from "./Migrations.ts";
 export * as Observability from "./Observability.ts";
 export * as RateLimits from "./RateLimits.ts";
 export * as Retention from "./Retention.ts";
+export * as SecuritySignals from "./SecuritySignals.ts";
 export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";
