@@ -1245,6 +1245,156 @@ describe("Organization", () => {
     );
   });
 
+  // OHS-004 (decision: option 2): a team membership carries a role; team-scoped
+  // statements (`teamStatements`, default `lead` -> team:update) apply to that
+  // team and its subtree, on top of the org-level statements, canGrant-guarded.
+  describe("team roles (OHS-004)", () => {
+    const teamsOn = {
+      enabled: true,
+      maximumTeams: Number.POSITIVE_INFINITY,
+      maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+      allowRemovingAllTeams: true,
+    };
+    const layerWith = (teamStatements?: Organization.OrganizationConfigShape["teamStatements"]) =>
+      buildLayer({ teams: teamsOn, ...(teamStatements === undefined ? {} : { teamStatements }) });
+
+    const setup = Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      for (const id of ["lead-1", "worker-1", "worker-2"]) {
+        yield* organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId(id),
+          role: ["member"],
+        });
+      }
+      const eng = yield* organization.createTeam(owner, org.id, "Engineering");
+      const platform = yield* organization.createTeam(owner, org.id, "Platform", eng.id);
+      const sales = yield* organization.createTeam(owner, org.id, "Sales");
+      yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("lead-1"), ["lead"]);
+      return { organization, owner, org, eng, platform, sales, lead: asCaller("lead-1") };
+    });
+
+    it.effect("a team lead can manage their own team's roster but not another team's", () =>
+      Effect.gen(function* () {
+        const { organization, org, eng, sales, lead } = yield* setup;
+        const added = yield* organization.addTeamMember(lead, org.id, eng.id, Users.UserId("worker-1"));
+        assert.deepStrictEqual(added.role, ["member"]);
+        yield* organization.removeTeamMember(lead, org.id, eng.id, Users.UserId("worker-1"));
+
+        const denied = yield* organization
+          .addTeamMember(lead, org.id, sales.id, Users.UserId("worker-1"))
+          .pipe(Effect.flip);
+        assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
+        // A plain org member with no team role has no authority anywhere.
+        const plain = yield* organization
+          .addTeamMember(asCaller("worker-2"), org.id, eng.id, Users.UserId("worker-1"))
+          .pipe(Effect.flip);
+        assert.strictEqual(plain._tag, "OrganizationPermissionDenied");
+      }).pipe(Effect.provide(layerWith())),
+    );
+
+    it.effect("a lead's authority flows down the subtree, never up or sideways", () =>
+      Effect.gen(function* () {
+        const { organization, org, eng, platform, sales, lead } = yield* setup;
+        // Down: the lead of Engineering renames and staffs its child team.
+        yield* organization.updateTeam(lead, org.id, platform.id, "Platform Eng");
+        yield* organization.addTeamMember(lead, org.id, platform.id, Users.UserId("worker-1"));
+        // Up/sideways: a lead of the child cannot touch the parent.
+        yield* organization.addTeamMember(asCaller("owner-1"), org.id, platform.id, Users.UserId("worker-2"), ["lead"]);
+        const up = yield* organization
+          .updateTeam(asCaller("worker-2"), org.id, eng.id, "Nope")
+          .pipe(Effect.flip);
+        assert.strictEqual(up._tag, "OrganizationPermissionDenied");
+        const sideways = yield* organization.updateTeam(lead, org.id, sales.id, "Nope").pipe(Effect.flip);
+        assert.strictEqual(sideways._tag, "OrganizationPermissionDenied");
+      }).pipe(Effect.provide(layerWith())),
+    );
+
+    it.effect("org admin retains authority over every team", () =>
+      Effect.gen(function* () {
+        const { organization, org, eng, sales } = yield* setup;
+        yield* organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId("admin-1"),
+          role: ["admin"],
+        });
+        const admin = asCaller("admin-1");
+        yield* organization.addTeamMember(admin, org.id, eng.id, Users.UserId("worker-1"));
+        yield* organization.addTeamMember(admin, org.id, sales.id, Users.UserId("worker-1"), ["lead"]);
+      }).pipe(Effect.provide(layerWith())),
+    );
+
+    it.effect("team roles are canGrant-guarded and must be known", () =>
+      Effect.gen(function* () {
+        const { organization, org, eng, lead } = yield* setup;
+        // Peer grant: the lead holds everything `lead` confers.
+        yield* organization.addTeamMember(lead, org.id, eng.id, Users.UserId("worker-1"), ["lead"]);
+        const escalation = yield* organization
+          .addTeamMember(lead, org.id, eng.id, Users.UserId("worker-2"), ["chief"])
+          .pipe(Effect.flip);
+        assert.strictEqual(escalation._tag, "RolePermissionEscalation");
+        const unknown = yield* organization
+          .addTeamMember(lead, org.id, eng.id, Users.UserId("worker-2"), ["no-such-role"])
+          .pipe(Effect.flip);
+        assert.strictEqual(unknown._tag, "UnknownTeamRole");
+        // The org owner may confer the stronger role.
+        yield* organization.addTeamMember(asCaller("owner-1"), org.id, eng.id, Users.UserId("worker-2"), ["chief"]);
+      }).pipe(
+        Effect.provide(
+          layerWith({ lead: { team: ["update"] }, chief: { team: ["update", "delete"] } }),
+        ),
+      ),
+    );
+
+    it.effect("updateTeamMemberRole changes the role under the same guards", () =>
+      Effect.gen(function* () {
+        const { organization, owner, org, eng, lead } = yield* setup;
+        yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("worker-1"), ["chief"]);
+        // The lead cannot demote a member who out-privileges them.
+        const outranked = yield* organization
+          .updateTeamMemberRole(lead, org.id, eng.id, Users.UserId("worker-1"), ["member"])
+          .pipe(Effect.flip);
+        assert.strictEqual(outranked._tag, "RolePermissionEscalation");
+
+        yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("worker-2"));
+        const promoted = yield* organization.updateTeamMemberRole(
+          lead,
+          org.id,
+          eng.id,
+          Users.UserId("worker-2"),
+          ["lead"],
+        );
+        assert.deepStrictEqual(promoted.role, ["lead"]);
+        const missing = yield* organization
+          .updateTeamMemberRole(owner, org.id, eng.id, Users.UserId("nobody"), ["lead"])
+          .pipe(Effect.flip);
+        assert.strictEqual(missing._tag, "TeamMembershipNotFound");
+      }).pipe(
+        Effect.provide(
+          layerWith({ lead: { team: ["update"] }, chief: { team: ["update", "delete"] } }),
+        ),
+      ),
+    );
+
+    it.effect("a lead cannot delete a team, or move one outside their own subtree", () =>
+      Effect.gen(function* () {
+        const { organization, org, platform, sales, lead } = yield* setup;
+        const remove = yield* organization.removeTeam(lead, org.id, platform.id).pipe(Effect.flip);
+        assert.strictEqual(remove._tag, "OrganizationPermissionDenied");
+        const toSales = yield* organization
+          .moveTeam(lead, org.id, platform.id, Option.some(sales.id))
+          .pipe(Effect.flip);
+        assert.strictEqual(toSales._tag, "OrganizationPermissionDenied");
+        const toRoot = yield* organization
+          .moveTeam(lead, org.id, platform.id, Option.none())
+          .pipe(Effect.flip);
+        assert.strictEqual(toRoot._tag, "OrganizationPermissionDenied");
+      }).pipe(Effect.provide(layerWith())),
+    );
+  });
+
   // MTI-002: listTeams/listTeamMembers used to take no caller at all — any
   // authenticated principal of the deployment could enumerate another
   // tenant's team names and rosters. Mirrors the identical

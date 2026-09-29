@@ -276,6 +276,15 @@ export interface OrganizationTeamMemberAddedEvent {
   readonly userId: UserId;
 }
 
+/** OHS-004: published by `@awthaq/organization`'s `updateTeamMemberRole`. */
+export interface OrganizationTeamMemberRoleUpdatedEvent {
+  readonly _tag: "auth.organization.teamMemberRoleUpdated";
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly userId: UserId;
+  readonly role: ReadonlyArray<string>;
+}
+
 /** Published by `@awthaq/organization`'s `removeTeamMember`. */
 export interface OrganizationTeamMemberRemovedEvent {
   readonly _tag: "auth.organization.teamMemberRemoved";
@@ -371,6 +380,7 @@ export type AuthEvent =
   | OrganizationTeamMovedEvent
   | OrganizationTeamDeletedEvent
   | OrganizationTeamMemberAddedEvent
+  | OrganizationTeamMemberRoleUpdatedEvent
   | OrganizationTeamMemberRemovedEvent
   | OrganizationPermissionDeniedEvent
   | AuthorizationDeniedEvent

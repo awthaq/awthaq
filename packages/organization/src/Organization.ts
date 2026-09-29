@@ -59,6 +59,16 @@ export interface OrganizationConfigShape {
     readonly maximumMembersPerTeam: number;
     readonly allowRemovingAllTeams: boolean;
   };
+  /**
+   * OHS-004: team-scoped roles a `TeamMembershipRecord` can hold, each mapped to
+   * the `team` statements it confers on *that team and its descendants*, on top of
+   * whatever the caller's organization roles already grant. `team:create` lets a
+   * holder create child teams under the team, `team:update` rename/move it and
+   * manage its roster and roles, `team:delete` remove it. `member` (no
+   * statements) is always defined and is the default; the default `lead` may
+   * update its team.
+   */
+  readonly teamStatements: Readonly<Record<string, PermissionEngine.Statements>>;
   readonly invitationExpiresIn: Duration.Duration;
   readonly invitationLimit: number;
   readonly cancelPendingInvitationsOnReInvite: boolean;
@@ -79,6 +89,7 @@ const defaultOrganizationConfig: OrganizationConfigShape = {
     maximumMembersPerTeam: Number.POSITIVE_INFINITY,
     allowRemovingAllTeams: false,
   },
+  teamStatements: { lead: { team: ["update"] } },
   invitationExpiresIn: Duration.hours(48),
   invitationLimit: 100,
   cancelPendingInvitationsOnReInvite: false,
@@ -505,6 +516,7 @@ export interface OrganizationShape {
     organizationId: string,
     teamId: string,
     targetUserId: Users.UserId,
+    role?: ReadonlyArray<string> | undefined,
   ) => Effect.Effect<
     TeamRecords.TeamMembershipRecord,
     | OrganizationApi.OrganizationNotFound
@@ -514,6 +526,26 @@ export interface OrganizationShape {
     | OrganizationApi.MembershipNotFound
     | OrganizationApi.TeamMemberLimitReached
     | OrganizationApi.AlreadyTeamMember
+    | OrganizationApi.RolePermissionEscalation
+    | OrganizationApi.UnknownTeamRole
+    | HookPoint.HookAborted
+  >;
+  /** OHS-004: needs `team:update` on the team (org-level, or a team role held on it or an ancestor); `canGrant`-guarded like org roles. */
+  readonly updateTeamMemberRole: (
+    caller: Api.UserPrincipal,
+    organizationId: string,
+    teamId: string,
+    targetUserId: Users.UserId,
+    role: ReadonlyArray<string>,
+  ) => Effect.Effect<
+    TeamRecords.TeamMembershipRecord,
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.TeamsDisabled
+    | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.TeamNotFound
+    | OrganizationApi.TeamMembershipNotFound
+    | OrganizationApi.RolePermissionEscalation
+    | OrganizationApi.UnknownTeamRole
     | HookPoint.HookAborted
   >;
   readonly removeTeamMember: (
@@ -653,6 +685,7 @@ const toTeamMembershipDto = (
     id: record.id,
     teamId: record.teamId,
     userId: record.userId,
+    role: record.role,
     createdAt: DateTime.formatIso(record.createdAt),
   });
 
@@ -1083,6 +1116,24 @@ export const OrganizationHandlers = HttpApiBuilder.group(
           params.organizationId,
           params.teamId,
           Users.UserId(payload.userId),
+          payload.role,
+        );
+        return toTeamMembershipDto(record);
+      }),
+      updateTeamMemberRole: Effect.fnUntraced(function* ({
+        params,
+        payload,
+      }: {
+        params: OrganizationApi.TeamMemberParams;
+        payload: OrganizationApi.UpdateTeamMemberRolePayload;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        const record = yield* organization.updateTeamMemberRole(
+          caller,
+          params.organizationId,
+          params.teamId,
+          Users.UserId(params.userId),
+          payload.role,
         );
         return toTeamMembershipDto(record);
       }),
@@ -1443,6 +1494,15 @@ const organizationMigrations: Migrations.Migrations = [
       yield* sql`CREATE UNIQUE INDEX organization_team_membership_team_user ON organization_team_membership(teamId, userId)`;
     }),
   },
+  // OHS-004: a team membership carries team-scoped role names (JSON array, like
+  // `organization_membership.role`); every existing row is a plain `member`.
+  {
+    name: "organization_team_membership_role",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE organization_team_membership ADD COLUMN role TEXT NOT NULL DEFAULT '["member"]'`;
+    }),
+  },
   // OHS-001 (wayfinder ticket 34): a team may sit under one parent. `parentId` is
   // the write-side adjacency; `organization_team_closure` is the read model — one
   // row per (ancestor, descendant) pair, self rows at depth 0 — so ancestors and
@@ -1541,6 +1601,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const afterDeleteTeam = yield* OrganizationHooks.AfterDeleteTeam;
       const beforeAddTeamMember = yield* OrganizationHooks.BeforeAddTeamMember;
       const afterAddTeamMember = yield* OrganizationHooks.AfterAddTeamMember;
+      const beforeUpdateTeamMemberRole = yield* OrganizationHooks.BeforeUpdateTeamMemberRole;
+      const afterUpdateTeamMemberRole = yield* OrganizationHooks.AfterUpdateTeamMemberRole;
       const beforeRemoveTeamMember = yield* OrganizationHooks.BeforeRemoveTeamMember;
       const afterRemoveTeamMember = yield* OrganizationHooks.AfterRemoveTeamMember;
 
@@ -1596,11 +1658,47 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        * `OrganizationPermissionDenied` (403) is reserved for a *member* who lacks
        * the requested statement.
        */
+      /**
+       * OHS-004: the team-role statements a `TeamMembershipRecord` may hold —
+       * `member` (nothing) plus whatever `OrganizationConfig.teamStatements` defines.
+       */
+      const teamRoleStatements: ReadonlyMap<string, PermissionEngine.Statements> = new Map([
+        ["member", {}],
+        ...Object.entries(orgConfig.teamStatements),
+      ]);
+
+      /**
+       * OHS-004: what the caller's *team* roles confer on `teamId`: the statements of
+       * every role they hold on that team or any ancestor of it (authority flows down
+       * the subtree, never up or sideways).
+       */
+      const teamRoleAuthority = (callerId: Users.UserId, organizationId: string, teamId: string) =>
+        Effect.gen(function* () {
+          const ancestors = yield* teams.getAncestors(organizationId, teamId);
+          let authority: PermissionEngine.Statements = {};
+          for (const id of [teamId, ...ancestors.map((team) => team.id)]) {
+            const held = yield* teams.findTeamMembership(id, callerId);
+            if (Option.isSome(held)) {
+              authority = PermissionEngine.mergeStatements(
+                authority,
+                PermissionEngine.effectivePermissions(held.value.role, teamRoleStatements),
+              );
+            }
+          }
+          return authority;
+        });
+
+      /**
+       * `teamId`, when given, widens the check for the `team` resource with the
+       * caller's team-scoped roles (`teamRoleAuthority`) — org-level statements are
+       * always the default, a team role only ever adds.
+       */
       const requirePermission = (
         callerId: Users.UserId,
         organizationId: string,
         resource: string,
         action: string,
+        teamId?: string,
       ) =>
         Effect.gen(function* () {
           // PERS-005: every PermissionEngine denial leaves a durable who/what/why.
@@ -1618,7 +1716,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             yield* denied("notMember");
             return yield* Effect.fail(new OrganizationApi.OrganizationNotFound());
           }
-          const effective = yield* effectivePermissionsOf(organizationId, membership.value);
+          const orgEffective = yield* effectivePermissionsOf(organizationId, membership.value);
+          const effective =
+            teamId !== undefined && resource === "team"
+              ? PermissionEngine.mergeStatements(
+                  orgEffective,
+                  yield* teamRoleAuthority(callerId, organizationId, teamId),
+                )
+              : orgEffective;
           if (!PermissionEngine.hasPermission(effective, resource, action)) {
             yield* denied("missingStatement");
             return yield* Effect.fail(new OrganizationApi.OrganizationPermissionDenied());
@@ -1654,6 +1759,40 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const held = PermissionEngine.effectivePermissions(granter.role, byRole);
           const requested = PermissionEngine.effectivePermissions(roleNames, byRole);
           if (!PermissionEngine.canGrant(requested, held)) {
+            return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
+          }
+        });
+
+      /**
+       * OHS-004: the same guards as `requireGrantable`/`requireOutranks`, for team roles —
+       * the names must be defined, and what they confer (and, when re-roling, what the
+       * target already holds) must be within the granter's authority over this team.
+       */
+      const requireGrantableTeamRole = (
+        granterId: Users.UserId,
+        organizationId: string,
+        teamId: string,
+        roleNames: ReadonlyArray<string>,
+        current?: ReadonlyArray<string>,
+      ) =>
+        Effect.gen(function* () {
+          if (roleNames.some((name) => !teamRoleStatements.has(name))) {
+            return yield* Effect.fail(new OrganizationApi.UnknownTeamRole());
+          }
+          const granter = yield* requireMembership(granterId, organizationId);
+          const held = PermissionEngine.mergeStatements(
+            yield* effectivePermissionsOf(organizationId, granter),
+            yield* teamRoleAuthority(granterId, organizationId, teamId),
+          );
+          const requested = PermissionEngine.effectivePermissions(roleNames, teamRoleStatements);
+          const outranked =
+            current === undefined
+              ? {}
+              : PermissionEngine.effectivePermissions(current, teamRoleStatements);
+          if (
+            !PermissionEngine.canGrant(requested, held) ||
+            !PermissionEngine.canGrant(outranked, held)
+          ) {
             return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
           }
         });
@@ -2717,7 +2856,15 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, name, parentId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
-          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "create");
+          // OHS-004: a nested team needs `team:create` on its parent (a team role held
+          // on the parent or an ancestor suffices); a root team needs it org-level.
+          yield* requirePermission(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "team",
+            "create",
+            parentId,
+          );
           if (parentId !== undefined) yield* requireTeam(organizationId, parentId);
           const count = yield* teams.countTeamsByOrganization(organizationId);
           if (count >= orgConfig.teams.maximumTeams) {
@@ -2749,7 +2896,18 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, teamId, parentId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
-          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "update");
+          // OHS-004: authority over the team *and* over its destination — a move can
+          // hand a subtree to another team's leads, so the target's own authority is
+          // required too; the root is org-level.
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requirePermission(callerId, organizationId, "team", "update", teamId);
+          yield* requirePermission(
+            callerId,
+            organizationId,
+            "team",
+            "update",
+            Option.getOrUndefined(parentId),
+          );
           yield* requireTeam(organizationId, teamId);
           if (Option.isSome(parentId)) yield* requireTeam(organizationId, parentId.value);
           const vetoed = yield* veto(
@@ -2820,7 +2978,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, teamId, name) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
-          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "update");
+          yield* requirePermission(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "team",
+            "update",
+            teamId,
+          );
           yield* requireTeam(organizationId, teamId);
           const vetoed = yield* veto(
             "organization.team.update.before",
@@ -2843,7 +3007,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
-          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "delete");
+          yield* requirePermission(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "team",
+            "delete",
+            teamId,
+          );
           yield* requireTeam(organizationId, teamId);
           const count = yield* teams.countTeamsByOrganization(organizationId);
           if (count <= 1 && !orgConfig.teams.allowRemovingAllTeams) {
@@ -2892,11 +3062,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       );
 
       const addTeamMember: OrganizationShape["addTeamMember"] = Effect.fnUntraced(
-        function* (caller, organizationId, teamId, targetUserId) {
+        function* (caller, organizationId, teamId, targetUserId, role = ["member"]) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
-          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "update");
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requirePermission(callerId, organizationId, "team", "update", teamId);
           const team = yield* requireTeam(organizationId, teamId);
+          yield* requireGrantableTeamRole(callerId, organizationId, teamId, role);
           const targetMembership = yield* members.findByUserAndOrg(targetUserId, organizationId);
           if (Option.isNone(targetMembership)) {
             return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
@@ -2906,7 +3078,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           }
           yield* veto(
             "organization.team.member.add.before",
-            beforeAddTeamMember.run({ organizationId, teamId, userId: targetUserId }),
+            beforeAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role }),
           );
           // OHS-003: a second add is refused — it would over-count `memberCount`.
           const onTeam = yield* teams.findTeamMembership(teamId, targetUserId);
@@ -2914,7 +3086,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             return yield* Effect.fail(new OrganizationApi.AlreadyTeamMember());
           }
           const record = yield* teams
-            .addTeamMember({ teamId, userId: targetUserId })
+            .addTeamMember({ teamId, userId: targetUserId, role })
             .pipe(
               Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
                 Effect.fail(new OrganizationApi.AlreadyTeamMember()),
@@ -2926,8 +3098,48 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             teamId,
             userId: targetUserId,
           });
-          yield* afterAddTeamMember.run({ organizationId, teamId, userId: targetUserId });
+          yield* afterAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role });
           return record;
+        },
+      );
+
+      const updateTeamMemberRole: OrganizationShape["updateTeamMemberRole"] = Effect.fnUntraced(
+        function* (caller, organizationId, teamId, targetUserId, role) {
+          yield* requireOrganization(organizationId);
+          yield* requireTeamsEnabled;
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requirePermission(callerId, organizationId, "team", "update", teamId);
+          yield* requireTeam(organizationId, teamId);
+          const target = yield* teams.findTeamMembership(teamId, targetUserId);
+          if (Option.isNone(target)) {
+            return yield* Effect.fail(new OrganizationApi.TeamMembershipNotFound());
+          }
+          yield* requireGrantableTeamRole(callerId, organizationId, teamId, role, target.value.role);
+          yield* veto(
+            "organization.team.member.updateRole.before",
+            beforeUpdateTeamMemberRole.run({ organizationId, teamId, userId: targetUserId, role }),
+          );
+          const updated = yield* teams
+            .updateTeamMemberRole(teamId, targetUserId, role)
+            .pipe(
+              Effect.catchTag("TeamMembershipRecordNotFound", () =>
+                Effect.fail(new OrganizationApi.TeamMembershipNotFound()),
+              ),
+            );
+          yield* events.publish({
+            _tag: "auth.organization.teamMemberRoleUpdated",
+            organizationId,
+            teamId,
+            userId: targetUserId,
+            role,
+          });
+          yield* afterUpdateTeamMemberRole.run({
+            organizationId,
+            teamId,
+            userId: targetUserId,
+            role,
+          });
+          return updated;
         },
       );
 
@@ -2935,7 +3147,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, teamId, targetUserId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
-          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "update");
+          yield* requirePermission(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "team",
+            "update",
+            teamId,
+          );
           yield* requireTeam(organizationId, teamId);
           yield* veto(
             "organization.team.member.remove.before",
@@ -3028,6 +3246,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         removeTeam,
         listTeamMembers,
         addTeamMember,
+        updateTeamMemberRole,
         removeTeamMember,
         setActiveTeam,
         attributesFor,

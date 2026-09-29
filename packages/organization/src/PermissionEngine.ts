@@ -52,7 +52,8 @@ export const defaultStatements: Readonly<Record<"owner" | "admin" | "member", St
 export const isBuiltInRole = (name: string): boolean =>
   Object.prototype.hasOwnProperty.call(defaultStatements, name);
 
-const mergeStatements = (a: Statements, b: Statements): Statements => {
+/** OHS-004: the union of two statement sets — org-level authority plus team-scoped authority. */
+export const mergeStatements = (a: Statements, b: Statements): Statements => {
   const merged: Record<string, ReadonlyArray<string>> = { ...a };
   for (const [resource, actions] of Object.entries(b)) {
     const existing = merged[resource] ?? [];

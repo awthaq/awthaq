@@ -159,6 +159,13 @@ export class UnknownOrgRole extends Schema.TaggedError<UnknownOrgRole>()(
   { httpApiStatus: 422 },
 ) {}
 
+/** OHS-004: a team role name that `OrganizationConfig.teamStatements` (plus the default `member`) does not define. */
+export class UnknownTeamRole extends Schema.TaggedError<UnknownTeamRole>()(
+  "UnknownTeamRole",
+  {},
+  { httpApiStatus: 422 },
+) {}
+
 export class OrgRoleNameTaken extends Schema.TaggedError<OrgRoleNameTaken>()(
   "OrgRoleNameTaken",
   {},
@@ -412,8 +419,16 @@ export const TeamMemberParams = Schema.Struct({
 });
 export type TeamMemberParams = typeof TeamMemberParams.Type;
 
-export const AddTeamMemberPayload = Schema.Struct({ userId: Schema.String });
+export const AddTeamMemberPayload = Schema.Struct({
+  userId: Schema.String,
+  /** OHS-004: team role names to confer; defaults to `["member"]`. */
+  role: Schema.optional(Schema.Array(Schema.String)),
+});
 export type AddTeamMemberPayload = typeof AddTeamMemberPayload.Type;
+
+/** OHS-004 */
+export const UpdateTeamMemberRolePayload = Schema.Struct({ role: Schema.Array(Schema.String) });
+export type UpdateTeamMemberRolePayload = typeof UpdateTeamMemberRolePayload.Type;
 
 export const SetActiveTeamPayload = Schema.Struct({ teamId: Schema.NullOr(Schema.String) });
 export type SetActiveTeamPayload = typeof SetActiveTeamPayload.Type;
@@ -433,6 +448,7 @@ export class TeamMembershipDto extends Schema.Class<TeamMembershipDto>("TeamMemb
   id: Schema.String,
   teamId: Schema.String,
   userId: Schema.String,
+  role: Schema.Array(Schema.String),
   createdAt: Schema.String,
 }) {}
 
@@ -844,9 +860,32 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         MembershipNotFound,
         TeamMemberLimitReached,
         AlreadyTeamMember,
+        RolePermissionEscalation,
+        UnknownTeamRole,
         HookPoint.HookAborted,
       ],
     }),
+  )
+  .add(
+    HttpApiEndpoint.patch(
+      "updateTeamMemberRole",
+      "/organization/:organizationId/teams/:teamId/members/:userId",
+      {
+        params: TeamMemberParams,
+        payload: UpdateTeamMemberRolePayload,
+        success: TeamMembershipDto,
+        error: [
+          OrganizationNotFound,
+          TeamsDisabled,
+          OrganizationPermissionDenied,
+          TeamNotFound,
+          TeamMembershipNotFound,
+          RolePermissionEscalation,
+          UnknownTeamRole,
+          HookPoint.HookAborted,
+        ],
+      },
+    ),
   )
   .add(
     HttpApiEndpoint.delete(

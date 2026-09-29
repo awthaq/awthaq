@@ -592,6 +592,100 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     assert.strictEqual(removeRes.status, 204);
   });
 
+  it("team roles (OHS-004): a lead manages their team over HTTP; role changes are canGrant-guarded", async () => {
+    const { handler, issueSessionCookieHeader, withServices } = buildHandler({
+      teams: {
+        enabled: true,
+        maximumTeams: Number.POSITIVE_INFINITY,
+        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+        allowRemovingAllTeams: true,
+      },
+    });
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const leadCookie = await issueSessionCookieHeader("lead-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie: ownerCookie },
+    );
+    const record = (await created.json()) as { id: string };
+    for (const id of ["lead-1", "worker-1"]) {
+      await withServices(
+        MembershipRecords.MembershipRecords.use((members) =>
+          members.create({
+            organizationId: record.id,
+            userId: Users.UserId(id),
+            role: ["member"],
+          }),
+        ),
+      );
+    }
+    const base = `/organization/${record.id}/teams`;
+    const eng = (await (
+      await request(handler, "POST", base, { name: "Eng" }, { cookie: ownerCookie })
+    ).json()) as { id: string };
+    const sales = (await (
+      await request(handler, "POST", base, { name: "Sales" }, { cookie: ownerCookie })
+    ).json()) as { id: string };
+
+    const promoted = await request(
+      handler,
+      "POST",
+      `${base}/${eng.id}/members`,
+      { userId: "lead-1", role: ["lead"] },
+      { cookie: ownerCookie },
+    );
+    assert.strictEqual(promoted.status, 200);
+    assert.deepStrictEqual(((await promoted.json()) as { role: ReadonlyArray<string> }).role, ["lead"]);
+
+    // The lead staffs their own team ...
+    const added = await request(
+      handler,
+      "POST",
+      `${base}/${eng.id}/members`,
+      { userId: "worker-1" },
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(added.status, 200);
+    // ... but not another one.
+    const other = await request(
+      handler,
+      "POST",
+      `${base}/${sales.id}/members`,
+      { userId: "worker-1" },
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(other.status, 403);
+
+    const rerole = await request(
+      handler,
+      "PATCH",
+      `${base}/${eng.id}/members/worker-1`,
+      { role: ["lead"] },
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(rerole.status, 200);
+    const unknown = await request(
+      handler,
+      "PATCH",
+      `${base}/${eng.id}/members/worker-1`,
+      { role: ["nope"] },
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(unknown.status, 422);
+    // The default lead holds only team:update, so deleting its team is still refused.
+    const escalate = await request(
+      handler,
+      "DELETE",
+      `${base}/${eng.id}`,
+      undefined,
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(escalate.status, 403);
+  });
+
   it("teams hierarchy (OHS-001): nested create, ancestors/descendants, move, cycle and has-children conflicts", async () => {
     const { handler, issueSessionCookieHeader } = buildHandler({
       teams: {

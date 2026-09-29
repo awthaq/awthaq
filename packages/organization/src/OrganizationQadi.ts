@@ -104,6 +104,9 @@ export class ResourceOrganizationLookup extends Context.Service<
  *   `requirePermission` gates the plugin's own endpoints with, so a qadi policy
  *   and the plugin's own gating can never disagree.
  * - `team-member` — the subject is on the team `resourceId` names.
+ * - `team-role:<name>` — the subject holds that team role on the team `resourceId`
+ *   names *or any of its ancestors* (OHS-004: team authority flows down the subtree,
+ *   exactly as the plugin's own gating applies it).
  *
  * Anything else is `"Unknown"` — qadi's documented answer for a relation the
  * resolver has no answer for — and so is an organization-scoped relation whose
@@ -115,6 +118,7 @@ export const relations = {
   admin: "admin",
   owner: "owner",
   teamMember: "team-member",
+  teamRole: <const Name extends string>(name: Name): `team-role:${Name}` => `team-role:${name}`,
   role: <const Name extends string>(name: Name): `has-role:${Name}` => `has-role:${name}`,
   permission: <const Resource extends string, const Action extends string>(
     resource: Resource,
@@ -125,6 +129,7 @@ export const relations = {
 type ParsedRelation =
   | { readonly _tag: "member" }
   | { readonly _tag: "team" }
+  | { readonly _tag: "team-role"; readonly name: string }
   | { readonly _tag: "role"; readonly name: string }
   | { readonly _tag: "permission"; readonly resource: string; readonly action: string };
 
@@ -142,6 +147,7 @@ const parseRelation = (relation: string): ParsedRelation | undefined => {
   if (colon <= 0 || colon === relation.length - 1) return undefined;
   const head = relation.slice(0, colon);
   const tail = relation.slice(colon + 1);
+  if (head === "team-role") return { _tag: "team-role", name: tail };
   return head === "has-role"
     ? { _tag: "role", name: tail }
     : { _tag: "permission", resource: head, action: tail };
@@ -182,6 +188,19 @@ export const relationships = Layer.effect(
             if (Option.isSome(membership)) return "Related" as const;
             const team = yield* teams.findTeamByIdAnyOrg(resourceId);
             return Option.isSome(team) ? ("Unrelated" as const) : ("Unknown" as const);
+          }
+
+          if (parsed._tag === "team-role") {
+            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
+            if (Option.isNone(team)) return "Unknown" as const;
+            const ancestors = yield* teams.getAncestors(team.value.organizationId, resourceId);
+            for (const id of [resourceId, ...ancestors.map((row) => row.id)]) {
+              const held = yield* teams.findTeamMembership(id, userId);
+              if (Option.isSome(held) && held.value.role.includes(parsed.name)) {
+                return "Related" as const;
+              }
+            }
+            return "Unrelated" as const;
           }
 
           // ticket 13: `member` at depth >= 1 asks the application which

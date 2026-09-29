@@ -134,6 +134,31 @@ const suite = (name: string, layer: Layer.Layer<TeamRecords.TeamRecords, unknown
       }).pipe(Effect.provide(layer)),
     );
 
+    // OHS-004: a team membership carries role names, "member" by default.
+    it.effect("team memberships default to the member role and updateTeamMemberRole replaces it", () =>
+      Effect.gen(function* () {
+        const records = yield* TeamRecords.TeamRecords;
+        const team = yield* records.createTeam({ organizationId: orgId, name: "Eng" });
+        const plain = yield* records.addTeamMember({ teamId: team.id, userId: Users.UserId("u-1") });
+        assert.deepStrictEqual(plain.role, ["member"]);
+        const lead = yield* records.addTeamMember({
+          teamId: team.id,
+          userId: Users.UserId("u-2"),
+          role: ["lead", "auditor"],
+        });
+        assert.deepStrictEqual(lead.role, ["lead", "auditor"]);
+
+        const updated = yield* records.updateTeamMemberRole(team.id, Users.UserId("u-1"), ["lead"]);
+        assert.deepStrictEqual(updated.role, ["lead"]);
+        const found = yield* records.findTeamMembership(team.id, Users.UserId("u-1"));
+        assert.deepStrictEqual(Option.map(found, (m) => m.role), Option.some(["lead"]));
+        const failure = yield* records
+          .updateTeamMemberRole(team.id, Users.UserId("nobody"), ["lead"])
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "TeamMembershipRecordNotFound");
+      }).pipe(Effect.provide(layer)),
+    );
+
     // ---- OHS-001 (wayfinder ticket 34): parentId adjacency + closure read model ----
     const names = (teams: ReadonlyArray<TeamRecords.TeamRecord>) => teams.map((t) => t.name);
     const seedTree = Effect.gen(function* () {

@@ -55,6 +55,8 @@ interface TeamMembershipFields {
   readonly id: string;
   readonly teamId: string;
   readonly userId: Users.UserId;
+  /** OHS-004: team-scoped role names (`["member"]` by default), resolved through `OrganizationConfig.teamStatements`. */
+  readonly role: ReadonlyArray<string>;
   readonly createdAt: DateTime.Utc;
 }
 
@@ -157,7 +159,14 @@ export interface TeamRecordsShape {
   readonly addTeamMember: (input: {
     readonly teamId: string;
     readonly userId: Users.UserId;
+    readonly role?: ReadonlyArray<string> | undefined;
   }) => Effect.Effect<TeamMembershipRecord, TeamMembershipRecordAlreadyExists>;
+  /** OHS-004: replaces a team membership's role names. */
+  readonly updateTeamMemberRole: (
+    teamId: string,
+    userId: Users.UserId,
+    role: ReadonlyArray<string>,
+  ) => Effect.Effect<TeamMembershipRecord, TeamMembershipRecordNotFound>;
   /** Decrements the owning team's `memberCount`. */
   readonly removeTeamMember: (
     teamId: string,
@@ -199,6 +208,8 @@ interface State {
   readonly teams: HashMap.HashMap<string, TeamRecord>;
   readonly memberships: HashMap.HashMap<string, TeamMembershipRecord>;
 }
+
+const DEFAULT_TEAM_ROLE: ReadonlyArray<string> = ["member"];
 
 const membershipKeyOf = (teamId: string, userId: string): string => `${teamId}:${userId}`;
 
@@ -428,6 +439,7 @@ export const layerMemory = Layer.effect(
         id,
         teamId: input.teamId,
         userId: input.userId,
+        role: input.role ?? DEFAULT_TEAM_ROLE,
         createdAt: now,
       });
       const key = membershipKeyOf(input.teamId, input.userId);
@@ -461,6 +473,25 @@ export const layerMemory = Layer.effect(
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
     });
+
+    const updateTeamMemberRole: TeamRecordsShape["updateTeamMemberRole"] = (teamId, userId, role) =>
+      Ref.modify(
+        state,
+        (
+          s,
+        ): readonly [Result.Result<TeamMembershipRecord, TeamMembershipRecordNotFound>, State] => {
+          const key = membershipKeyOf(teamId, userId);
+          const existing = HashMap.get(s.memberships, key);
+          if (Option.isNone(existing)) {
+            return [Result.fail(teamMembershipNotFound(teamId, userId)), s] as const;
+          }
+          const updated = brandTeamMembership({ ...existing.value, role });
+          return [
+            Result.succeed(updated),
+            { ...s, memberships: HashMap.set(s.memberships, key, updated) },
+          ] as const;
+        },
+      ).pipe(Effect.flatMap(Effect.fromResult));
 
     const removeTeamMember: TeamRecordsShape["removeTeamMember"] = (teamId, userId) =>
       Ref.modify(
@@ -553,6 +584,7 @@ export const layerMemory = Layer.effect(
       removeTeam,
       removeAllTeamsForOrganization,
       addTeamMember,
+      updateTeamMemberRole,
       removeTeamMember,
       removeUserFromOrganizationTeams,
       findTeamMembership,
@@ -588,14 +620,20 @@ const TeamMembershipRow = Schema.Struct({
   id: Schema.String,
   teamId: Schema.String,
   userId: Schema.String,
+  role: Schema.String,
   createdAt: Schema.DateTimeUtcFromString,
 });
+
+/** `role` is a JSON array in a TEXT column, exactly like `organization_membership.role`. */
+const RoleNames = Schema.Array(Schema.String);
+const decodeRoleNames = Schema.decodeUnknownSync(Schema.fromJsonString(RoleNames));
 
 const toTeamMembershipRecord = (row: typeof TeamMembershipRow.Type): TeamMembershipRecord =>
   brandTeamMembership({
     id: row.id,
     teamId: row.teamId,
     userId: Users.UserId(row.userId),
+    role: decodeRoleNames(row.role),
     createdAt: row.createdAt,
   });
 
@@ -732,12 +770,23 @@ export const layerSql = Layer.effect(
         id: Schema.String,
         teamId: Schema.String,
         userId: Schema.String,
+        role: Schema.String,
         createdAt: Schema.DateTimeUtcFromString,
       }),
       Result: TeamMembershipRow,
       execute: (r) => sql`
-          INSERT INTO organization_team_membership (id, teamId, userId, createdAt)
-          VALUES (${r.id}, ${r.teamId}, ${r.userId}, ${r.createdAt})
+          INSERT INTO organization_team_membership (id, teamId, userId, role, createdAt)
+          VALUES (${r.id}, ${r.teamId}, ${r.userId}, ${r.role}, ${r.createdAt})
+          RETURNING *
+        `,
+    });
+
+    const updateTeamMemberRoleQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ teamId: Schema.String, userId: Schema.String, role: Schema.String }),
+      Result: TeamMembershipRow,
+      execute: (r) => sql`
+          UPDATE organization_team_membership SET role = ${r.role}
+          WHERE teamId = ${r.teamId} AND userId = ${r.userId}
           RETURNING *
         `,
     });
@@ -989,6 +1038,7 @@ export const layerSql = Layer.effect(
               id,
               teamId: input.teamId,
               userId: input.userId,
+              role: JSON.stringify(input.role ?? DEFAULT_TEAM_ROLE),
               createdAt: now,
             });
             yield* adjustMemberCount(input.teamId, 1);
@@ -1010,6 +1060,17 @@ export const layerSql = Layer.effect(
           Effect.catchTag("NoSuchElementError", Effect.die),
         );
     });
+
+    const updateTeamMemberRole: TeamRecordsShape["updateTeamMemberRole"] = (teamId, userId, role) =>
+      updateTeamMemberRoleQuery({ teamId, userId, role: JSON.stringify(role) }).pipe(
+        Effect.orDie,
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(teamMembershipNotFound(teamId, userId)),
+            onSome: (row) => Effect.succeed(toTeamMembershipRecord(row)),
+          }),
+        ),
+      );
 
     const removeTeamMember: TeamRecordsShape["removeTeamMember"] = (teamId, userId) =>
       sql
@@ -1075,6 +1136,7 @@ export const layerSql = Layer.effect(
       removeTeam,
       removeAllTeamsForOrganization,
       addTeamMember,
+      updateTeamMemberRole,
       removeTeamMember,
       removeUserFromOrganizationTeams,
       findTeamMembership,

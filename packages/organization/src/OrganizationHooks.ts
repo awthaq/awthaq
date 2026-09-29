@@ -261,13 +261,26 @@ const TeamMemberInput = Schema.Struct({
   teamId: Schema.String,
   userId: Schema.String,
 });
+/** OHS-004: adding and re-roling carry the team role names being conferred. */
+const TeamMemberRoleInput = Schema.Struct({
+  ...TeamMemberInput.fields,
+  role: Schema.Array(Schema.String),
+});
 export class BeforeAddTeamMember extends HookPoint.veto<BeforeAddTeamMember>()(
   "organization.team.member.add.before",
-  TeamMemberInput,
+  TeamMemberRoleInput,
 ) {}
 export class AfterAddTeamMember extends HookPoint.observe<AfterAddTeamMember>()(
   "organization.team.member.add.after",
-  TeamMemberInput,
+  TeamMemberRoleInput,
+) {}
+export class BeforeUpdateTeamMemberRole extends HookPoint.veto<BeforeUpdateTeamMemberRole>()(
+  "organization.team.member.updateRole.before",
+  TeamMemberRoleInput,
+) {}
+export class AfterUpdateTeamMemberRole extends HookPoint.observe<AfterUpdateTeamMemberRole>()(
+  "organization.team.member.updateRole.after",
+  TeamMemberRoleInput,
 ) {}
 
 export class BeforeRemoveTeamMember extends HookPoint.veto<BeforeRemoveTeamMember>()(
@@ -324,6 +337,8 @@ export const OrganizationHooksLive = Layer.mergeAll(
   AfterDeleteTeam.layer,
   BeforeAddTeamMember.layer,
   AfterAddTeamMember.layer,
+  BeforeUpdateTeamMemberRole.layer,
+  AfterUpdateTeamMemberRole.layer,
   BeforeRemoveTeamMember.layer,
   AfterRemoveTeamMember.layer,
 );

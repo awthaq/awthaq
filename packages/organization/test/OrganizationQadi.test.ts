@@ -290,6 +290,33 @@ describe("OrganizationQadi", () => {
     }).pipe(Effect.provide(QadiLive)),
   );
 
+  // OHS-004: `team-role:<name>` answers from the team membership row, and, like the
+  // plugin's own gating, a role held on a team applies to its whole subtree.
+  it.effect("team-role:<name> is Related on the team and its descendants, not on other teams", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      yield* organization.addMember({
+        organizationId: record.id,
+        userId: Users.UserId("lead-1"),
+        role: ["member"],
+      });
+      const eng = yield* organization.createTeam(owner, record.id, "Engineering");
+      const platform = yield* organization.createTeam(owner, record.id, "Platform", eng.id);
+      const sales = yield* organization.createTeam(owner, record.id, "Sales");
+      yield* organization.addTeamMember(owner, record.id, eng.id, Users.UserId("lead-1"), ["lead"]);
+
+      const lead = OrganizationQadi.relations.teamRole("lead");
+      const chief = OrganizationQadi.relations.teamRole("chief");
+      assert.strictEqual(yield* check(lead, eng.id, "lead-1"), "Related");
+      assert.strictEqual(yield* check(lead, platform.id, "lead-1"), "Related");
+      assert.strictEqual(yield* check(lead, sales.id, "lead-1"), "Unrelated");
+      assert.strictEqual(yield* check(chief, eng.id, "lead-1"), "Unrelated");
+      assert.strictEqual(yield* check(lead, "no-such-team", "lead-1"), "Unknown");
+    }).pipe(Effect.provide(QadiLive)),
+  );
+
   // RZS-005: malformed questions are distinguishable from negatives.
   it.effect("relations naming no organization or team answer Unknown, not Unrelated", () =>
     Effect.gen(function* () {
