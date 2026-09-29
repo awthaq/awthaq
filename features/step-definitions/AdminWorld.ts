@@ -70,6 +70,7 @@ const UsersLive = Layer.effect(
                   name: id,
                   metadata: Option.none(),
                   image: Option.none(),
+                  tenantId: Option.none(),
                   status: "active" as const,
                   statusReason: Option.none(),
                   suspendedUntil: Option.none(),

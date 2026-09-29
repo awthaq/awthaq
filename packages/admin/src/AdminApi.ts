@@ -200,6 +200,8 @@ export class ImpersonationRecordDto extends Schema.Class<ImpersonationRecordDto>
   expiresAt: Schema.NullOr(Schema.String),
   endedAt: Schema.NullOr(Schema.String),
   endedBy: Schema.NullOr(Schema.Literals(["self", "forcedByAdmin", "expired"])),
+  /** IDS-002: the tenant the episode ran under; null for an untenanted (single-tenant) episode. */
+  tenantId: Schema.NullOr(Schema.String),
 }) {}
 
 /** BAM-005: the wire shape of `@awthaq/core`'s `UserRecord`. */
@@ -213,6 +215,8 @@ export class UserDto extends Schema.Class<UserDto>("AdminUserDto")({
   status: Schema.Literals(["active", "suspended"]),
   statusReason: Schema.NullOr(Schema.String),
   suspendedUntil: Schema.NullOr(Schema.String),
+  /** DRS-001: the tenant in context when the user was created; null for a single-tenant deployment. */
+  tenantId: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 }) {}

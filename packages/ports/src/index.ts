@@ -36,5 +36,6 @@ export * as PasswordHasherWorkerPool from "./PasswordHasherWorkerPool.ts";
 export * as RateLimiter from "./RateLimiter.ts";
 export * as RefreshingCache from "./RefreshingCache.ts";
 export * as SqlTransaction from "./SqlTransaction.ts";
+export * as Tenant from "./Tenant.ts";
 export * as WebAuthn from "./WebAuthn.ts";
 export * as WebCrypto from "./WebCrypto.ts";

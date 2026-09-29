@@ -18,7 +18,7 @@
 // declare `migrations` on their own `AuthPlugin.Service` options; `Auth.ts`
 // already aggregates and dependency-orders those (`renumberMigrations`).
 
-// N11: these ids (1-23) live in the migrator's default `effect_sql_migrations`
+// N11: these ids (1-25) live in the migrator's default `effect_sql_migrations`
 // ledger. The plugin list (`@awthaq/core`'s `Migrations.run`) numbers from 1
 // too and therefore uses its own tracking table (`awthaq_plugin_migrations`);
 // the migrator skips any id at or below the newest one recorded, so two id
@@ -524,6 +524,64 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       sqlite: () =>
         sql`CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique ON users (phone) WHERE phone IS NOT NULL`,
       orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // DRS-001/EP-001 (wayfinder ticket 18, ADR-EA-018): the tenant attribution
+  // column. Opaque, nullable `TEXT` — never a foreign key (the tenant is an
+  // `Organization` row, and core cannot reference a plugin's table) and never
+  // backfilled: `NULL` is "no tenant", which is every row a single-tenant
+  // deployment ever writes. Quoted camelCase like every other column here (the
+  // ticket's `tenant_id` spelling is not this schema's convention). Six tables:
+  // the five ticket 18 names plus `auth_audit_log`, which post-dates it.
+  migration(24, "add_tenant_id_columns", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        Effect.gen(function* () {
+          yield* sql`ALTER TABLE users ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE accounts ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE sessions ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE verification_tokens ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE verification_reservations ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE auth_audit_log ADD COLUMN "tenantId" TEXT`;
+        }),
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`ALTER TABLE users ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE accounts ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE sessions ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE verification_tokens ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE verification_reservations ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE auth_audit_log ADD COLUMN tenantId TEXT`;
+        }),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // DRS-001/DRS-005: a tenant-routed read prunes on `("tenantId", "userId")` for
+  // the two per-user partitioned tables (the leading column also serves a
+  // tenant-only predicate, so they get no separate single-column index); the
+  // directory (`users`/`accounts`), reservations and audit log get one on
+  // `"tenantId"` alone. `IF NOT EXISTS`, per the SSMS-006 index convention.
+  migration(25, "create_tenant_id_indexes", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        Effect.gen(function* () {
+          yield* sql`CREATE INDEX IF NOT EXISTS users_tenant_id ON users("tenantId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS accounts_tenant_id ON accounts("tenantId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS sessions_tenant_user ON sessions("tenantId", "userId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS verification_tokens_tenant_user ON verification_tokens("tenantId", "userId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS verification_reservations_tenant_id ON verification_reservations("tenantId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS auth_audit_log_tenant_id ON auth_audit_log("tenantId")`;
+        }),
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`CREATE INDEX IF NOT EXISTS users_tenant_id ON users(tenantId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS accounts_tenant_id ON accounts(tenantId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS sessions_tenant_user ON sessions(tenantId, userId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS verification_tokens_tenant_user ON verification_tokens(tenantId, userId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS verification_reservations_tenant_id ON verification_reservations(tenantId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS auth_audit_log_tenant_id ON auth_audit_log(tenantId)`;
+        }),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
 ]);

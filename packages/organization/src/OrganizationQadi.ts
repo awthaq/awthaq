@@ -183,16 +183,29 @@ export const relationships = Layer.effect(
           const userId = userIdFromSubject(subjectId);
           if (userId === undefined) return "Unrelated" as const;
 
+          // EP-003 (ADR-EA-018): a suspended organization confers nothing —
+          // membership answers must not open a door the plugin's own gating shut.
+          const isSuspended = (organizationId: string) =>
+            orgs
+              .findById(organizationId)
+              .pipe(
+                Effect.map((found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt)),
+              );
+
           if (parsed._tag === "team") {
+            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
+            if (Option.isSome(team) && (yield* isSuspended(team.value.organizationId))) {
+              return "Unrelated" as const;
+            }
             const membership = yield* teams.findTeamMembership(resourceId, userId);
             if (Option.isSome(membership)) return "Related" as const;
-            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
             return Option.isSome(team) ? ("Unrelated" as const) : ("Unknown" as const);
           }
 
           if (parsed._tag === "team-role") {
             const team = yield* teams.findTeamByIdAnyOrg(resourceId);
             if (Option.isNone(team)) return "Unknown" as const;
+            if (yield* isSuspended(team.value.organizationId)) return "Unrelated" as const;
             const ancestors = yield* teams.getAncestors(team.value.organizationId, resourceId);
             for (const id of [resourceId, ...ancestors.map((row) => row.id)]) {
               const held = yield* teams.findTeamMembership(id, userId);
@@ -226,6 +239,8 @@ export const relationships = Layer.effect(
                   ),
                 )
               : resourceId;
+
+          if (yield* isSuspended(organizationId)) return "Unrelated" as const;
 
           // A subject that is simply not in an organization is a genuine
           // negative; an id naming no organization at all is malformed.

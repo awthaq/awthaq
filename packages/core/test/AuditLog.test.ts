@@ -27,6 +27,7 @@ const Migrated = Layer.effectDiscard(
         id TEXT PRIMARY KEY,
         eventTag TEXT NOT NULL,
         actorUserId TEXT,
+        tenantId TEXT,
         occurredAt TEXT NOT NULL,
         correlationId TEXT,
         payload TEXT NOT NULL

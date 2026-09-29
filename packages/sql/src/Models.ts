@@ -229,8 +229,21 @@ export const resolveDialect = (sql: SqlClient.SqlClient): Effect.Effect<Dialect>
 const insertOnly = <S extends Schema.Top>(schema: S) =>
   schema.pipe(Model.FieldExcept(["update", "jsonUpdate"]));
 
+/**
+ * DRS-001/EP-001 (ADR-EA-018): the opaque tenant attribution column. Database
+ * variants only — no JSON variant, so a client-supplied body can never name its
+ * own tenant — and no `update`: a row is stamped once, at insert, from the
+ * ambient `TenantContext` (`Repositories.ts` reads it; `NULL` when unset). The
+ * constructor default keeps every existing insert call site compiling.
+ */
+const tenantIdField = Model.Field({
+  select: Schema.NullOr(Schema.String),
+  insert: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+});
+
 const userFields = {
   id: Model.UuidV7Insert(UserId),
+  tenantId: tenantIdField,
   email: insertOnly(
     Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
   ),
@@ -283,6 +296,7 @@ const userFields = {
  */
 const accountFields = {
   id: Model.UuidV7Insert(AccountId),
+  tenantId: tenantIdField,
   userId: UserId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   providerId: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   subject: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
@@ -330,6 +344,7 @@ const accountFields = {
  */
 const sessionFields = {
   id: Model.UuidV7Insert(SessionId),
+  tenantId: tenantIdField,
   userId: UserId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   // Ticket 01: rotation overwrites this on the same throttled touch write
   // that already refreshes `lastActiveAt`/`idleExpiresAt`, so — unlike
@@ -398,6 +413,7 @@ const sessionFields = {
  */
 const verificationTokenFields = {
   id: Model.UuidV7Insert(VerificationTokenId),
+  tenantId: tenantIdField,
   identifier: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   /**
    * BCR-003 (.issues/high): nullable — not every token names a real user at
@@ -492,6 +508,7 @@ const pgModels = () => {
     "VerificationReservation",
   )({
     identifier: Schema.String,
+    tenantId: tenantIdField,
     expiresAt: pgFields.dateTime,
   }) {}
 
@@ -546,6 +563,7 @@ const sqliteModels = () => {
     "VerificationReservation",
   )({
     identifier: Schema.String,
+    tenantId: tenantIdField,
     expiresAt: sqliteFields.dateTime,
   }) {}
 
@@ -568,9 +586,12 @@ const sqliteModels = () => {
  * never overridden globally, because the ambient client is shared with the
  * host application's tables.
  */
-export const makeModels = (dialect: Dialect) => (dialect === "pg" ? pgModels() : sqliteModels());
+export type SqlModels = ReturnType<typeof pgModels> | ReturnType<typeof sqliteModels>;
 
-export type SqlModels = ReturnType<typeof makeModels>;
+// DRS-001: annotated because adding the tenant column to six entities pushed the
+// inferred union past the compiler's declaration-serialization limit (TS7056).
+export const makeModels = (dialect: Dialect): SqlModels =>
+  dialect === "pg" ? pgModels() : sqliteModels();
 
 // The decoded `Type` side is identical across dialects (only `Encoded`
 // differs), so these dialect-independent aliases are what callers name.

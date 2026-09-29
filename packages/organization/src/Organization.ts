@@ -46,15 +46,46 @@ import * as TeamRecords from "./TeamRecords.ts";
 
 // ---- config -------------------------------------------------------------------
 
+/**
+ * EP-006: per-organization quota overrides, merged over the static
+ * `OrganizationConfigShape` values at decision time by `limitsFor`.
+ */
+export interface OrganizationLimits {
+  readonly membershipLimit?: number;
+  readonly invitationLimit?: number;
+  readonly maximumTeams?: number;
+  readonly maximumMembersPerTeam?: number;
+  readonly maximumRolesPerOrganization?: number;
+}
+
 export interface OrganizationConfigShape {
   /** spec.md: role assigned to the creating user. */
   readonly creatorRole: "owner" | "admin";
   /** spec.md: fail-open by default — every caller may create an organization unless configured otherwise. */
   readonly allowUserToCreateOrganization: (userId: Users.UserId) => Effect.Effect<boolean>;
-  /** Max organizations a single user may own (own = holds `owner` on it). `Infinity` = unlimited. */
+  /**
+   * Max organizations a single user may own (own = holds `owner` on it).
+   * EP-006: finite by default (10) so an open sign-up cannot mint unbounded
+   * tenants; `Infinity` opts out.
+   */
   readonly organizationLimit: number;
   /** Max memberships per organization. */
   readonly membershipLimit: number;
+  /**
+   * EP-006 (ADR-EA-018): quota overrides for one organization, consulted at
+   * decision time and merged over the static limits (`membershipLimit`,
+   * `invitationLimit`, `teams.maximumTeams`, `teams.maximumMembersPerTeam`,
+   * `dynamicAccessControl.maximumRolesPerOrganization`) — so a plan tier or a
+   * negotiated quota changes without redeploying or reconfiguring the plugin
+   * tuple. Unset means every organization uses the static values.
+   */
+  readonly limitsFor?: (organizationId: string) => Effect.Effect<OrganizationLimits>;
+  /**
+   * DRS-007: the residency vocabulary an organization's `homeRegion` must come
+   * from (`["eu-west", "us-east"]`). Empty by default, which refuses any
+   * `homeRegion` — a deployment that pins tenants opts in by listing regions.
+   */
+  readonly regions: ReadonlyArray<string>;
   readonly disableOrganizationDeletion: boolean;
   /** Custom static roles an application layers on top of `PermissionEngine.defaultStatements`. */
   readonly permissionStatements: Readonly<Record<string, PermissionEngine.Statements>>;
@@ -87,8 +118,9 @@ export interface OrganizationConfigShape {
 const defaultOrganizationConfig: OrganizationConfigShape = {
   creatorRole: "owner",
   allowUserToCreateOrganization: () => Effect.succeed(true),
-  organizationLimit: Number.POSITIVE_INFINITY,
+  organizationLimit: 10,
   membershipLimit: 100,
+  regions: [],
   disableOrganizationDeletion: false,
   permissionStatements: {},
   dynamicAccessControl: { enabled: false, maximumRolesPerOrganization: Number.POSITIVE_INFINITY },
@@ -102,8 +134,17 @@ const defaultOrganizationConfig: OrganizationConfigShape = {
   invitationExpiresIn: Duration.hours(48),
   invitationLimit: 100,
   cancelPendingInvitationsOnReInvite: false,
-  requireEmailVerificationOnInvitation: false,
+  // EP-010: an invitation is addressed to an email, so membership is conferred
+  // only on a verified owner of that address; `false` restores the old behavior.
+  requireEmailVerificationOnInvitation: true,
 };
+
+/**
+ * DRS-007: the pure routing helper — an application maps an organization to its
+ * shard or database with this, never by reading the record's storage shape.
+ */
+export const homeRegionOf = (record: OrganizationRecords.OrganizationRecord): Option.Option<string> =>
+  record.homeRegion;
 
 export const OrganizationConfig: Context.Reference<OrganizationConfigShape> = Context.Reference(
   "awthaq/organization/Config",
@@ -133,11 +174,13 @@ export interface OrganizationShape {
     readonly slug: string;
     readonly logo?: string | undefined;
     readonly metadata?: string | undefined;
+    readonly homeRegion?: string | undefined;
   }) => Effect.Effect<
     OrganizationRecords.OrganizationRecord,
     | OrganizationApi.OrganizationSlugTaken
     | OrganizationApi.OrganizationCreationNotAllowed
     | OrganizationApi.OrganizationLimitReached
+    | OrganizationApi.UnknownRegion
     | HookPoint.HookAborted
   >;
   readonly checkSlug: (slug: string) => Effect.Effect<boolean>;
@@ -172,12 +215,14 @@ export interface OrganizationShape {
       readonly slug?: string | undefined;
       readonly logo?: string | null | undefined;
       readonly metadata?: string | null | undefined;
+      readonly homeRegion?: string | null | undefined;
     },
   ) => Effect.Effect<
     OrganizationRecords.OrganizationRecord,
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.OrganizationSlugTaken
     | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.UnknownRegion
     | HookPoint.HookAborted
   >;
   readonly delete: (
@@ -622,6 +667,8 @@ const toOrganizationDto = (
     slug: record.slug,
     logo: Option.getOrNull(record.logo),
     metadata: Option.getOrNull(record.metadata),
+    homeRegion: Option.getOrNull(record.homeRegion),
+    suspended: Option.isSome(record.suspendedAt),
     createdAt: DateTime.formatIso(record.createdAt),
   });
 
@@ -1526,7 +1573,94 @@ const organizationMigrations: Migrations.Migrations = [
       yield* sql`INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth) SELECT id, id, 0 FROM organization_team`;
     }),
   },
+  // DRS-007: the residency region, from `OrganizationConfig.regions`. Nullable
+  // — every existing organization simply has none.
+  {
+    name: "organization_org_home_region",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE organization_org ADD COLUMN "homeRegion" TEXT`;
+    }),
+  },
+  // EP-004 (ADR-EA-018): an organization's own OIDC/OAuth2 identity provider. No
+  // foreign keys, like every table here; the client secret is an `Encryption`
+  // envelope. Email domains get their own table so a domain routes to exactly one
+  // connection across all organizations (`domain` is `UNIQUE`, not the primary key:
+  // SQLite reports a primary-key clash as a generic constraint error, not a unique violation).
+  {
+    name: "organization_oauth_connection",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE organization_oauth_connection (
+            id TEXT PRIMARY KEY,
+            "organizationId" TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            issuer TEXT,
+            "discoveryUrl" TEXT,
+            "authorizationEndpoint" TEXT,
+            "tokenEndpoint" TEXT,
+            "jwksUri" TEXT,
+            "userinfoEndpoint" TEXT,
+            "clientId" TEXT NOT NULL,
+            "clientSecret" TEXT,
+            scopes TEXT NOT NULL,
+            "createdAt" TIMESTAMPTZ NOT NULL,
+            "updatedAt" TIMESTAMPTZ NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE organization_oauth_connection (
+            id TEXT PRIMARY KEY,
+            "organizationId" TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            issuer TEXT,
+            "discoveryUrl" TEXT,
+            "authorizationEndpoint" TEXT,
+            "tokenEndpoint" TEXT,
+            "jwksUri" TEXT,
+            "userinfoEndpoint" TEXT,
+            "clientId" TEXT NOT NULL,
+            "clientSecret" TEXT,
+            scopes TEXT NOT NULL,
+            "createdAt" TEXT NOT NULL,
+            "updatedAt" TEXT NOT NULL
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+      yield* sql`CREATE INDEX organization_oauth_connection_organization_id ON organization_oauth_connection("organizationId")`;
+      yield* sql`
+        CREATE TABLE organization_oauth_connection_domain (
+          domain TEXT NOT NULL UNIQUE,
+          "connectionId" TEXT NOT NULL,
+          "organizationId" TEXT NOT NULL
+        )`;
+      yield* sql`CREATE INDEX organization_oauth_connection_domain_connection_id ON organization_oauth_connection_domain("connectionId")`;
+    }),
+  },
+  // EP-003: platform suspension. `NULL` = active; a timestamp = suspended since.
+  {
+    name: "organization_org_suspended_at",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`ALTER TABLE organization_org ADD COLUMN "suspendedAt" TIMESTAMPTZ`,
+        sqlite: () => sql`ALTER TABLE organization_org ADD COLUMN "suspendedAt" TEXT`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
 ];
+
+// EP-001 (ADR-EA-018): the opt-in tenant middleware, reachable as `Organization.tenantMiddleware`.
+export {
+  layer as tenantMiddleware,
+  layerWithConfig as tenantMiddlewareWithConfig,
+  layerWithConfigAndRls as tenantMiddlewareWithConfigAndRls,
+  layerWithRls as tenantMiddlewareWithRls,
+} from "./TenantMiddleware.ts";
 
 // ---- plugin ---------------------------------------------------------------------
 
@@ -1546,6 +1680,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       "organization_team_closure",
       "organization_role",
       "organization_active_context",
+      "organization_oauth_connection",
+      "organization_oauth_connection_domain",
     ],
   },
 ) {
@@ -1565,7 +1701,15 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       // for an in-memory composition, `layerSql` over the real client otherwise.
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const crypto = yield* Crypto.Crypto;
-      const orgConfig = yield* OrganizationConfig;
+      // EP-007 (ADR-EA-018): the configuration in force is decided per operation, not frozen at
+      // layer build. A `provideService(OrganizationConfig, ...)` in the *calling* fiber (the tenant
+      // middleware does this from a `TenantConfig`) overrides for that request; with none, the
+      // build-time value applies exactly as before — so `Layer.provide(Organization.config(...))`
+      // keeps meaning what it always meant.
+      const builtConfig = yield* OrganizationConfig;
+      const configNow = Effect.contextWith((context: Context.Context<never>) =>
+        Effect.succeed(Context.getOrUndefined(context, OrganizationConfig) ?? builtConfig),
+      );
       const beforeCreate = yield* OrganizationHooks.BeforeCreateOrganization;
       const afterCreate = yield* OrganizationHooks.AfterCreateOrganization;
       const beforeUpdate = yield* OrganizationHooks.BeforeUpdateOrganization;
@@ -1631,18 +1775,20 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       /** Static statements plus, when dynamic access control is enabled, every custom role this organization has defined. */
       const statementsByRole = (organizationId: string) =>
-        orgConfig.dynamicAccessControl.enabled
-          ? orgRoles.listByOrganization(organizationId).pipe(
-              Effect.map((rows) => {
-                const dynamic: Record<string, PermissionEngine.Statements> = {};
-                for (const row of rows) dynamic[row.role] = row.permission;
-                return PermissionEngine.statementsByRoleFrom(
-                  orgConfig.permissionStatements,
-                  dynamic,
-                );
-              }),
-            )
-          : Effect.succeed(PermissionEngine.statementsByRoleFrom(orgConfig.permissionStatements));
+        Effect.flatMap(configNow, (orgConfig) =>
+          orgConfig.dynamicAccessControl.enabled
+            ? orgRoles.listByOrganization(organizationId).pipe(
+                Effect.map((rows) => {
+                  const dynamic: Record<string, PermissionEngine.Statements> = {};
+                  for (const row of rows) dynamic[row.role] = row.permission;
+                  return PermissionEngine.statementsByRoleFrom(
+                    orgConfig.permissionStatements,
+                    dynamic,
+                  );
+                }),
+              )
+            : Effect.succeed(PermissionEngine.statementsByRoleFrom(orgConfig.permissionStatements)),
+        );
 
       const effectivePermissionsOf = (
         organizationId: string,
@@ -1663,10 +1809,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        * OHS-004: the team-role statements a `TeamMembershipRecord` may hold —
        * `member` (nothing) plus whatever `OrganizationConfig.teamStatements` defines.
        */
-      const teamRoleStatements: ReadonlyMap<string, PermissionEngine.Statements> = new Map([
-        ["member", {}],
-        ...Object.entries(orgConfig.teamStatements),
-      ]);
+      const teamRoleStatementsNow = Effect.map(
+        configNow,
+        (orgConfig): ReadonlyMap<string, PermissionEngine.Statements> =>
+          new Map([["member", {}], ...Object.entries(orgConfig.teamStatements)]),
+      );
 
       /**
        * OHS-004: what the caller's *team* roles confer on `teamId`: the statements of
@@ -1675,6 +1822,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        */
       const teamRoleAuthority = (callerId: Users.UserId, organizationId: string, teamId: string) =>
         Effect.gen(function* () {
+          const teamRoleStatements = yield* teamRoleStatementsNow;
           const ancestors = yield* teams.getAncestors(organizationId, teamId);
           let authority: PermissionEngine.Statements = {};
           for (const id of [teamId, ...ancestors.map((team) => team.id)]) {
@@ -1777,6 +1925,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         current?: ReadonlyArray<string>,
       ) =>
         Effect.gen(function* () {
+          const teamRoleStatements = yield* teamRoleStatementsNow;
           if (roleNames.some((name) => !teamRoleStatements.has(name))) {
             return yield* Effect.fail(new OrganizationApi.UnknownTeamRole());
           }
@@ -1824,14 +1973,51 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           ),
         );
 
+      /**
+       * EP-003 (ADR-EA-018): a suspended organization answers exactly like an
+       * unknown one (MTI-009 — a denial never reveals a tenant), for members and
+       * outsiders alike; only the platform administrator's surface reads it.
+       * `list` still returns it, flagged `suspended`, so a member sees why.
+       */
       const requireOrganization = (organizationId: string) =>
         orgs.findById(organizationId).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.fail(new OrganizationApi.OrganizationNotFound()),
-              onSome: Effect.succeed,
+              onSome: (record) =>
+                Option.isSome(record.suspendedAt)
+                  ? Effect.fail(new OrganizationApi.OrganizationNotFound())
+                  : Effect.succeed(record),
             }),
           ),
+        );
+
+      /** EP-006: the static limits with this organization's `limitsFor` overrides merged over them. */
+      const limitsOf = (organizationId: string) =>
+        Effect.flatMap(configNow, (orgConfig) =>
+          (orgConfig.limitsFor === undefined
+            ? Effect.succeed<OrganizationLimits>({})
+            : orgConfig.limitsFor(organizationId)
+          ).pipe(
+            Effect.map((override) => ({
+              membershipLimit: override.membershipLimit ?? orgConfig.membershipLimit,
+              invitationLimit: override.invitationLimit ?? orgConfig.invitationLimit,
+              maximumTeams: override.maximumTeams ?? orgConfig.teams.maximumTeams,
+              maximumMembersPerTeam:
+                override.maximumMembersPerTeam ?? orgConfig.teams.maximumMembersPerTeam,
+              maximumRolesPerOrganization:
+                override.maximumRolesPerOrganization ??
+                orgConfig.dynamicAccessControl.maximumRolesPerOrganization,
+            })),
+          ),
+        );
+
+      /** DRS-007: a `homeRegion` must come from the configured vocabulary. */
+      const requireKnownRegion = (region: string | null | undefined) =>
+        Effect.flatMap(configNow, (orgConfig) =>
+          region === undefined || region === null || orgConfig.regions.includes(region)
+            ? Effect.void
+            : Effect.fail(new OrganizationApi.UnknownRegion({ region })),
         );
 
       const create: OrganizationShape["create"] = Effect.fnUntraced(function* ({
@@ -1840,8 +2026,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         slug,
         logo,
         metadata,
+        homeRegion,
       }) {
+        const orgConfig = yield* configNow;
         const callerId = Users.UserId(caller.ref.id);
+        yield* requireKnownRegion(homeRegion);
         const allowed = yield* orgConfig.allowUserToCreateOrganization(callerId);
         if (!allowed)
           return yield* Effect.fail(new OrganizationApi.OrganizationCreationNotAllowed());
@@ -1858,7 +2047,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         );
 
         const record = yield* orgs
-          .create({ name: vetoed.name, slug: vetoed.slug, logo, metadata })
+          .create({ name: vetoed.name, slug: vetoed.slug, logo, metadata, homeRegion })
           .pipe(
             Effect.catchTag("OrganizationRecordSlugTaken", () =>
               Effect.fail(new OrganizationApi.OrganizationSlugTaken()),
@@ -1932,6 +2121,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization",
             "update",
           );
+          yield* requireKnownRegion(input.homeRegion);
           const vetoed = yield* veto(
             "organization.update.before",
             beforeUpdate.run({ organizationId, name: input.name, slug: input.slug }),
@@ -1955,7 +2145,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const delete_: OrganizationShape["delete"] = Effect.fnUntraced(
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
-          if (orgConfig.disableOrganizationDeletion) {
+          if ((yield* configNow).disableOrganizationDeletion) {
             return yield* Effect.fail(new OrganizationApi.OrganizationDeletionDisabled());
           }
           yield* requirePermission(
@@ -2189,7 +2379,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       }) {
         yield* requireOrganization(organizationId);
         const count = yield* members.countByOrganization(organizationId);
-        if (count >= orgConfig.membershipLimit) {
+        if (count >= (yield* limitsOf(organizationId)).membershipLimit) {
           return yield* Effect.fail(new OrganizationApi.MembershipLimitReached());
         }
         const vetoed = yield* veto(
@@ -2232,9 +2422,20 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           ),
         );
 
+      /** EP-003: the active-context paths read memberships directly, so they check suspension themselves. */
+      const isSuspended = (organizationId: string) =>
+        orgs
+          .findById(organizationId)
+          .pipe(
+            Effect.map((found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt)),
+          );
+
       const getActiveMember: OrganizationShape["getActiveMember"] = Effect.fnUntraced(
         function* (caller) {
           const organizationId = yield* activeOrganizationOf(caller);
+          if (yield* isSuspended(organizationId)) {
+            return yield* Effect.fail(new OrganizationApi.NoActiveOrganization());
+          }
           const membership = yield* members.findByUserAndOrg(
             Users.UserId(caller.ref.id),
             organizationId,
@@ -2255,7 +2456,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             return yield* activeContext.unsetOrganization(caller.sessionId, callerId);
           }
           const membership = yield* members.findByUserAndOrg(callerId, organizationId);
-          if (Option.isNone(membership))
+          if (Option.isNone(membership) || (yield* isSuspended(organizationId)))
             return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
           // MTI-001: the membership record is the witness the setter requires.
           return yield* activeContext.setOrganization(caller.sessionId, membership.value);
@@ -2315,6 +2516,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const invite: OrganizationShape["invite"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
+          const orgConfig = yield* configNow;
           const organizationRecord = yield* requireOrganization(organizationId);
           const callerId = Users.UserId(caller.ref.id);
           const inviter = yield* requirePermission(
@@ -2325,7 +2527,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
 
           const pendingCount = yield* invitations.countPendingByInviter(callerId);
-          if (pendingCount >= orgConfig.invitationLimit) {
+          if (pendingCount >= (yield* limitsOf(organizationId)).invitationLimit) {
             return yield* Effect.fail(new OrganizationApi.InvitationLimitReached());
           }
 
@@ -2385,6 +2587,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                   invitationId: record.id,
                   organizationId,
                   organizationName: organizationRecord.name,
+                  // EP-005: the mail is rendered to the tenant's own users, so it
+                  // carries the tenant's presentation data, not the host's.
+                  organizationLogo: Option.getOrNull(organizationRecord.logo),
                   role: record.role,
                 },
               })
@@ -2506,7 +2711,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (!ownsEmail(user, record.email)) {
             return yield* Effect.fail(new OrganizationApi.InvitationEmailMismatch());
           }
-          if (orgConfig.requireEmailVerificationOnInvitation && !Users.isEmailVerified(user)) {
+          if (
+            (yield* configNow).requireEmailVerificationOnInvitation &&
+            !Users.isEmailVerified(user)
+          ) {
             return yield* Effect.fail(new OrganizationApi.EmailVerificationRequired());
           }
 
@@ -2520,7 +2728,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           }
 
           const count = yield* members.countByOrganization(record.organizationId);
-          if (count >= orgConfig.membershipLimit) {
+          if (count >= (yield* limitsOf(record.organizationId)).membershipLimit) {
             return yield* Effect.fail(new OrganizationApi.MembershipLimitReached());
           }
 
@@ -2534,7 +2742,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 }),
               ),
             );
-            if (team.memberCount >= orgConfig.teams.maximumMembersPerTeam) {
+            if (
+              team.memberCount >= (yield* limitsOf(record.organizationId)).maximumMembersPerTeam
+            ) {
               return yield* Effect.fail(new OrganizationApi.TeamMemberLimitReached());
             }
           }
@@ -2718,9 +2928,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       // ---- dynamic access control -----------------------------------------------
 
-      const requireDynamicAccessControlEnabled = orgConfig.dynamicAccessControl.enabled
-        ? Effect.void
-        : Effect.fail(new OrganizationApi.DynamicAccessControlDisabled());
+      const requireDynamicAccessControlEnabled = Effect.flatMap(configNow, (orgConfig) =>
+        orgConfig.dynamicAccessControl.enabled
+          ? Effect.void
+          : Effect.fail(new OrganizationApi.DynamicAccessControlDisabled()),
+      );
 
       const createRole: OrganizationShape["createRole"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
@@ -2733,7 +2945,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // application-defined static role's name.
           if (
             PermissionEngine.isBuiltInRole(input.role) ||
-            Object.hasOwn(orgConfig.permissionStatements, input.role)
+            Object.hasOwn((yield* configNow).permissionStatements, input.role)
           ) {
             return yield* Effect.fail(new OrganizationApi.ReservedOrgRoleName());
           }
@@ -2744,7 +2956,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           }
 
           const count = yield* orgRoles.countByOrganization(organizationId);
-          if (count >= orgConfig.dynamicAccessControl.maximumRolesPerOrganization) {
+          if (count >= (yield* limitsOf(organizationId)).maximumRolesPerOrganization) {
             return yield* Effect.fail(new OrganizationApi.RoleLimitReached());
           }
 
@@ -2865,9 +3077,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       // ---- teams --------------------------------------------------------------
 
-      const requireTeamsEnabled = orgConfig.teams.enabled
-        ? Effect.void
-        : Effect.fail(new OrganizationApi.TeamsDisabled());
+      const requireTeamsEnabled = Effect.flatMap(configNow, (orgConfig) =>
+        orgConfig.teams.enabled ? Effect.void : Effect.fail(new OrganizationApi.TeamsDisabled()),
+      );
 
       const requireTeam = (organizationId: string, teamId: string) =>
         teams.findTeamById(organizationId, teamId).pipe(
@@ -2894,7 +3106,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           if (parentId !== undefined) yield* requireTeam(organizationId, parentId);
           const count = yield* teams.countTeamsByOrganization(organizationId);
-          if (count >= orgConfig.teams.maximumTeams) {
+          if (count >= (yield* limitsOf(organizationId)).maximumTeams) {
             return yield* Effect.fail(new OrganizationApi.TeamLimitReached());
           }
           const vetoed = yield* veto(
@@ -3048,7 +3260,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           yield* requireTeam(organizationId, teamId);
           const count = yield* teams.countTeamsByOrganization(organizationId);
-          if (count <= 1 && !orgConfig.teams.allowRemovingAllTeams) {
+          if (count <= 1 && !(yield* configNow).teams.allowRemovingAllTeams) {
             return yield* Effect.fail(new OrganizationApi.LastTeamCannotBeRemoved());
           }
           // OHS-001: refuse before the veto hook runs; the records layer re-checks atomically.
@@ -3109,7 +3321,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         if (Option.isNone(targetMembership)) {
           return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
         }
-        if (team.memberCount >= orgConfig.teams.maximumMembersPerTeam) {
+        if (team.memberCount >= (yield* limitsOf(organizationId)).maximumMembersPerTeam) {
           return yield* Effect.fail(new OrganizationApi.TeamMemberLimitReached());
         }
         yield* veto(

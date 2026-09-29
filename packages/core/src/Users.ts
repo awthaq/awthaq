@@ -26,6 +26,7 @@ import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./E
 import * as HookPoint from "./HookPoint.ts";
 import * as Hooks from "./Hooks.ts";
 import type * as Phone from "./Phone.ts";
+import * as Tenant from "./Tenant.ts";
 
 /**
  * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s own
@@ -113,6 +114,13 @@ export interface UserRecord {
   readonly metadata: Option.Option<string>;
   /** BAM-009/NAM-009: an avatar URL, client-writable like `name`. */
   readonly image: Option.Option<string>;
+  /**
+   * DRS-001 (ADR-EA-018): the tenant in context when this user was created —
+   * an opaque key, `None` for a single-tenant deployment. Attribution only: the
+   * users table is the global identity directory (DRS-005), so it never
+   * narrows sign-in lookups.
+   */
+  readonly tenantId: Option.Option<string>;
   /** SCP-001: written only by `setStatus`; consulted by `assertCanSignIn`. */
   readonly status: UserStatus;
   /** SCP-001/BAM-005: the operator's note for a suspension; never sent to the suspended user. */
@@ -530,12 +538,14 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           ),
         );
         const timestamp = yield* now;
+        const tenantId = yield* Tenant.TenantContext;
         const record: UserRecord = {
           id,
           identity: identityFromInput(identity),
           name: input.name,
           metadata: Option.fromNullishOr(input.metadata),
           image: Option.fromNullishOr(input.image),
+          tenantId,
           status: "active",
           statusReason: Option.none(),
           suspendedUntil: Option.none(),
@@ -823,6 +833,7 @@ const toUserRecord = (row: SqlModels.User): Effect.Effect<UserRecord> =>
     name: row.name,
     metadata: Option.fromNullOr(row.metadata),
     image: Option.fromNullOr(row.image),
+    tenantId: Option.fromNullOr(row.tenantId),
     status: row.status,
     statusReason: Option.fromNullOr(row.statusReason),
     suspendedUntil: Option.fromNullOr(row.suspendedUntil),

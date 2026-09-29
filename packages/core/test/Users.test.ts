@@ -15,6 +15,7 @@ import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Hooks from "../src/Hooks.ts";
 import * as Phone from "../src/Phone.ts";
+import * as Tenant from "../src/Tenant.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
 import * as Users from "../src/Users.ts";
 
@@ -535,6 +536,40 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
           assert.strictEqual(results.filter((r) => r.created).length, 1);
           assert.strictEqual(new Set(results.map((r) => r.user.id)).size, 1);
         }).pipe(Effect.provide(layer)),
+    );
+
+    // DRS-001/DRS-005 (ADR-EA-018): the ambient tenant is attribution on the
+    // user row; the users table stays the global identity directory.
+    it.effect("DRS-001: create stamps the ambient tenant, and none leaves it None", () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const tenanted = yield* users
+          .create({ identity: { _tag: "Email", email: "t1@example.com" }, name: "T1" })
+          .pipe(Tenant.withTenant("tenant-1"));
+        assert.deepStrictEqual(tenanted.tenantId, Option.some("tenant-1"));
+        const plain = yield* users.create({
+          identity: { _tag: "Email", email: "plain@example.com" },
+          name: "Plain",
+        });
+        assert.isTrue(Option.isNone(plain.tenantId));
+        const reread = yield* users.findById(tenanted.id);
+        assert.deepStrictEqual(reread.tenantId, Option.some("tenant-1"));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("DRS-005: another tenant's request still resolves the same identity", () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        yield* users
+          .create({ identity: { _tag: "Email", email: "dir@example.com" }, name: "Dir" })
+          .pipe(Tenant.withTenant("tenant-a"));
+        const found = yield* users.findByEmail("dir@example.com").pipe(Tenant.withTenant("tenant-b"));
+        assert.isTrue(Option.isSome(found));
+        const clash = yield* users
+          .create({ identity: { _tag: "Email", email: "dir@example.com" }, name: "Dir 2" })
+          .pipe(Tenant.withTenant("tenant-b"), Effect.flip);
+        assert.strictEqual(clash._tag, "EmailAlreadyExists");
+      }).pipe(Effect.provide(layer)),
     );
   });
 };

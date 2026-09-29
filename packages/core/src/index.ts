@@ -49,6 +49,7 @@ export * as SecretHash from "./SecretHash.ts";
 export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";
+export * as Tenant from "./Tenant.ts";
 export * as UserImport from "./UserImport.ts";
 export * as Users from "./Users.ts";
 export * as Verification from "./Verification.ts";

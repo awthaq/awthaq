@@ -13,7 +13,9 @@
       "@awthaq/core": ["../core/src/index.ts"],
       "@awthaq/sql": ["../sql/src/index.ts"],
       "@awthaq/ports": ["../ports/src/index.ts"],
-      "@awthaq/api": ["../api/src/index.ts"]
+      "@awthaq/api": ["../api/src/index.ts"],
+      "@awthaq/oauth": ["../oauth/src/index.ts"],
+      "@awthaq/oauth/presets": ["../oauth/src/presets/index.ts"]
     }
   },
   "references": [
@@ -31,6 +33,9 @@
     },
     {
       "path": "../api/tsconfig.src.json"
+    },
+    {
+      "path": "../oauth/tsconfig.src.json"
     }
   ]
 }

@@ -239,6 +239,70 @@ export interface AdminSessionRevokedEvent {
 }
 
 /**
+ * EP-003 (ADR-EA-018): published by `@awthaq/admin`'s `AdminTenants.suspendOrganization`,
+ * after the organization is marked suspended. `reason` is the operator's note, `null`
+ * when none was given.
+ */
+export interface AdminOrganizationSuspendedEvent {
+  readonly _tag: "auth.admin.organizationSuspended";
+  readonly adminUserId: UserId;
+  readonly organizationId: string;
+  readonly reason: string | null;
+}
+
+/** EP-003: published by `AdminTenants.unsuspendOrganization`, after the suspension is lifted. */
+export interface AdminOrganizationUnsuspendedEvent {
+  readonly _tag: "auth.admin.organizationUnsuspended";
+  readonly adminUserId: UserId;
+  readonly organizationId: string;
+}
+
+/**
+ * CWM-002 (ADR-EA-023): published by `@awthaq/scim` when a directory connection provisions a
+ * user (a repeat `POST` that converges on an existing one publishes nothing). `connectionId`
+ * names the SCIM connection, `organizationId` its organization.
+ */
+export interface ScimUserProvisionedEvent {
+  readonly _tag: "auth.scim.userProvisioned";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** CWM-002: published after a SCIM `active: false` (or `DELETE`, by default) suspended the user and revoked every session. */
+export interface ScimUserDeactivatedEvent {
+  readonly _tag: "auth.scim.userDeactivated";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** CWM-002: published after a SCIM `active: true` lifted a suspension that same connection made. */
+export interface ScimUserReactivatedEvent {
+  readonly _tag: "auth.scim.userReactivated";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** CWM-002: published after a SCIM `DELETE` configured to erase removed the user. */
+export interface ScimUserDeletedEvent {
+  readonly _tag: "auth.scim.userDeleted";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** CWM-002: published when a SCIM connection creates, updates or deletes a group (an organization team). */
+export interface ScimGroupChangedEvent {
+  readonly _tag: "auth.scim.groupChanged";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly change: "created" | "updated" | "deleted";
+}
+
+/**
  * ECS-006: published by `awthaq seed admin` after it grants the administrative role
  * (BEH-EA-206). `outcome` says whether the account was created or an existing one
  * promoted; `forced` that the grant went past an existing administrator. Carries the
@@ -587,6 +651,13 @@ export type AuthEvent =
   | AdminUserBannedEvent
   | AdminUserUnbannedEvent
   | AdminSessionRevokedEvent
+  | AdminOrganizationSuspendedEvent
+  | AdminOrganizationUnsuspendedEvent
+  | ScimUserProvisionedEvent
+  | ScimUserDeactivatedEvent
+  | ScimUserReactivatedEvent
+  | ScimUserDeletedEvent
+  | ScimGroupChangedEvent
   | AdminSeededEvent
   | AdminSeedRefusedEvent
   | ImportCompletedEvent

@@ -40,6 +40,26 @@ const ALLOWLIST: ReadonlyArray<{ readonly match: RegExp; readonly why: string }>
     why: "listByIds: ids come from the caller's own memberships (MembershipRecords.listByUser)",
   },
   {
+    match: /^SELECT \* FROM organization_org (WHERE \(createdAt, id\) > .* )?ORDER BY createdAt, id LIMIT /,
+    why: "listPage (EP-003): the platform administrator's cross-tenant listing, reachable only through Admin.layerWithTenants' canAdministerTenants gate",
+  },
+  {
+    match: /^SELECT c\.\* FROM organization_oauth_connection c JOIN organization_oauth_connection_domain d ON /,
+    why: "findByEmailDomain (EP-004): home-realm discovery is deliberately cross-organization — a domain routes to exactly one connection",
+  },
+  {
+    match: /^SELECT domain, connectionId FROM organization_oauth_connection_domain WHERE connectionId IN /,
+    why: "domainsOf (EP-004): child rows of connection rows a tenant-keyed query (or the discovery lookup) already selected",
+  },
+  {
+    match: /^DELETE FROM organization_oauth_connection_domain WHERE connectionId = /,
+    why: "replaceDomains/remove (EP-004): keyed by a connection id that an organization-scoped findById just resolved",
+  },
+  {
+    match: /^UPDATE organization_org SET suspendedAt = .* WHERE id = /,
+    why: "setSuspended (EP-003): tenant root state, written only by the platform administrator surface",
+  },
+  {
     match: /^UPDATE organization_org SET .* WHERE id = /,
     why: "tenant root update, after the membership-gated Organization.update",
   },

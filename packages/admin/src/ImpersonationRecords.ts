@@ -19,7 +19,7 @@
 // ledger and cross-checks the read model against it, so a rewrite that bypassed
 // the triggers is reported with the exact first episode/link it touched.
 
-import { AuditChain, Users } from "@awthaq/core";
+import { AuditChain, Tenant, Users } from "@awthaq/core";
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -57,6 +57,11 @@ export interface ImpersonationRecord {
   readonly expiresAt: Option.Option<DateTime.Utc>;
   readonly endedAt: Option.Option<DateTime.Utc>;
   readonly endedBy: Option.Option<EndedBy>;
+  /**
+   * IDS-002 (ADR-EA-018): the ambient tenant when the episode started — `None`
+   * for a single-tenant deployment. Frozen with the rest of the start facts.
+   */
+  readonly tenantId: Option.Option<string>;
 }
 
 /**
@@ -69,6 +74,11 @@ export interface ImpersonationRecord {
 export class ImpersonationRecordNotFound extends Data.TaggedError("ImpersonationRecordNotFound")<{
   readonly message: string;
 }> {}
+
+/** IDS-002: `anyTenant` lifts the confinement to the ambient tenant — for the superadmin path and maintenance. */
+export interface TenantScope {
+  readonly anyTenant?: boolean | undefined;
+}
 
 /** ESS-006/BEH-EA-036: keyset position of the history — `(startedAt, id)`, newest-first. */
 export interface ImpersonationCursor {
@@ -102,7 +112,17 @@ export interface ChainBreak {
 export const DEFAULT_PAGE_SIZE = 50;
 
 export interface ImpersonationRecordsShape {
-  /** BEH-EA-215: inserts one durable audit row at the moment `impersonate` issues a session. */
+  /**
+   * BEH-EA-215: inserts one durable audit row at the moment `impersonate` issues a
+   * session, stamped with the ambient `TenantContext` (IDS-002).
+   *
+   * IDS-002: `findBySessionId`, `endEpisode` and `list` see only the *ambient*
+   * tenant's episodes (`None` sees the untenanted ones, i.e. everything in a
+   * single-tenant deployment) unless the caller passes `{ anyTenant: true }`, which
+   * `Admin` does only for a caller that passes `canAdministerTenants` (and for its
+   * own tenant-blind "is this an impersonation session" classification);
+   * `closeExpired` and `verifyChain` are maintenance over every tenant.
+   */
   readonly create: (input: {
     readonly adminUserId: UserId;
     readonly targetUserId: UserId;
@@ -113,11 +133,13 @@ export interface ImpersonationRecordsShape {
   }) => Effect.Effect<ImpersonationRecord>;
   readonly findBySessionId: (
     sessionId: string,
+    scope?: TenantScope,
   ) => Effect.Effect<Option.Option<ImpersonationRecord>>;
   /** Sets `endedAt`/`endedBy` exactly once — fails `ImpersonationRecordNotFound` for an unknown or already-ended session id. */
   readonly endEpisode: (
     sessionId: string,
     endedBy: EndedBy,
+    scope?: TenantScope,
   ) => Effect.Effect<ImpersonationRecord, ImpersonationRecordNotFound>;
   /**
    * IDS-004: atomically closes every still-open episode whose `expiresAt` is at
@@ -131,11 +153,14 @@ export interface ImpersonationRecordsShape {
    * `(startedAt, id)`; `active: true` narrows to episodes with no `endedAt`
    * yet. Never loads more than `limit + 1` rows.
    */
-  readonly list: (input?: {
-    readonly active?: boolean | undefined;
-    readonly cursor?: ImpersonationCursor | undefined;
-    readonly limit?: number | undefined;
-  }) => Effect.Effect<ImpersonationPage>;
+  readonly list: (
+    input?: {
+      readonly active?: boolean | undefined;
+      readonly cursor?: ImpersonationCursor | undefined;
+      readonly limit?: number | undefined;
+    },
+    scope?: TenantScope,
+  ) => Effect.Effect<ImpersonationPage>;
   /**
    * ALF-005: verifies the whole hash-chained ledger and that every episode row still
    * matches it. Resolves `None` when intact, else the first anomaly. Reads everything
@@ -153,6 +178,10 @@ const notFound = (sessionId: string): ImpersonationRecordNotFound =>
   new ImpersonationRecordNotFound({
     message: `awthaq: no active impersonation episode for session: ${sessionId}`,
   });
+
+/** IDS-002: `None` matches `None` (the untenanted episodes), `Some(x)` matches only `Some(x)`. */
+const sameTenant = (episode: Option.Option<string>, ambient: Option.Option<string>): boolean =>
+  Option.isNone(episode) ? Option.isNone(ambient) : Option.getOrNull(ambient) === episode.value;
 
 /** Newest-first with `id` as the tiebreak, the same total order the SQL `ORDER BY startedAt DESC, id DESC` gives. */
 const newestFirst = (
@@ -208,6 +237,9 @@ const startedPayload = (record: ImpersonationRecord): string =>
     record.reason,
     DateTime.formatIso(record.startedAt),
     iso(record.expiresAt),
+    // IDS-002: appended only when set, so every link written before the tenant
+    // column existed (and every single-tenant one) still recomputes byte-for-byte.
+    ...Option.match(record.tenantId, { onNone: () => [], onSome: (tenantId) => [tenantId] }),
   ]);
 
 /** `None` for a row that is not (or no longer) ended — it cannot match any "ended" link. */
@@ -315,6 +347,7 @@ export const layerMemory = Layer.effect(
     const create: ImpersonationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
+      const tenantId = yield* Tenant.TenantContext;
       const record: ImpersonationRecord = {
         id,
         adminUserId: input.adminUserId,
@@ -325,21 +358,30 @@ export const layerMemory = Layer.effect(
         expiresAt: Option.some(input.expiresAt),
         endedAt: Option.none(),
         endedBy: Option.none(),
+        tenantId,
       };
       yield* Ref.update(state, (s) => HashMap.set(s, id, record));
       yield* append("started", record.id, startedPayload(record));
       return record;
     });
 
-    const findBySessionId: ImpersonationRecordsShape["findBySessionId"] = (sessionId) =>
-      Ref.get(state).pipe(
-        Effect.map((s) => Array.from(HashMap.values(s)).find((row) => row.sessionId === sessionId)),
-        Effect.map(Option.fromNullishOr),
-      );
+    const findBySessionId: ImpersonationRecordsShape["findBySessionId"] = (sessionId, scope) =>
+      Effect.gen(function* () {
+        const tenant = yield* Tenant.TenantContext;
+        const s = yield* Ref.get(state);
+        return Option.fromNullishOr(
+          Array.from(HashMap.values(s)).find(
+            (row) =>
+              row.sessionId === sessionId &&
+              (scope?.anyTenant === true || sameTenant(row.tenantId, tenant)),
+          ),
+        );
+      });
 
-    const endEpisode: ImpersonationRecordsShape["endEpisode"] = (sessionId, endedBy) =>
+    const endEpisode: ImpersonationRecordsShape["endEpisode"] = (sessionId, endedBy, scope) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
+        const tenant = yield* Tenant.TenantContext;
         const outcome = yield* Ref.modify(
           state,
           (
@@ -349,7 +391,9 @@ export const layerMemory = Layer.effect(
             RecordsState,
           ] => {
             const existing = Array.from(HashMap.values(s)).find(
-              (row) => row.sessionId === sessionId,
+              (row) =>
+                row.sessionId === sessionId &&
+                (scope?.anyTenant === true || sameTenant(row.tenantId, tenant)),
             );
             if (existing === undefined || Option.isSome(existing.endedAt)) {
               return [Result.fail(notFound(sessionId)), s] as const;
@@ -404,19 +448,20 @@ export const layerMemory = Layer.effect(
         return [closed, next] as const;
       });
 
-    const list: ImpersonationRecordsShape["list"] = (input) =>
-      Ref.get(state).pipe(
-        Effect.map((s) => {
-          const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
-          const cursor = input?.cursor;
-          const rows = newestFirst(Array.from(HashMap.values(s))).filter(
-            (row) =>
-              (input?.active !== true || Option.isNone(row.endedAt)) &&
-              (cursor === undefined || isBeforeCursor(row, cursor)),
-          );
-          return toPage(rows.slice(0, limit + 1), limit);
-        }),
-      );
+    const list: ImpersonationRecordsShape["list"] = (input, scope) =>
+      Effect.gen(function* () {
+        const tenant = yield* Tenant.TenantContext;
+        const s = yield* Ref.get(state);
+        const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
+        const cursor = input?.cursor;
+        const rows = newestFirst(Array.from(HashMap.values(s))).filter(
+          (row) =>
+            (scope?.anyTenant === true || sameTenant(row.tenantId, tenant)) &&
+            (input?.active !== true || Option.isNone(row.endedAt)) &&
+            (cursor === undefined || isBeforeCursor(row, cursor)),
+        );
+        return toPage(rows.slice(0, limit + 1), limit);
+      });
 
     const verifyChain: ImpersonationRecordsShape["verifyChain"] = Effect.gen(function* () {
       const entries = yield* Ref.get(ledger);
@@ -443,6 +488,7 @@ const makeImpersonationRow = (wire: SqlModels.DialectWire) =>
     expiresAt: wire.nullableDateTime,
     endedAt: wire.nullableDateTime,
     endedBy: Schema.NullOr(EndedBySchema),
+    tenantId: Schema.NullOr(Schema.String),
   });
 
 type ImpersonationRow = ReturnType<typeof makeImpersonationRow>["Type"];
@@ -457,6 +503,7 @@ const toRecord = (row: ImpersonationRow): ImpersonationRecord => ({
   expiresAt: Option.fromNullishOr(row.expiresAt),
   endedAt: Option.fromNullishOr(row.endedAt),
   endedBy: Option.fromNullishOr(row.endedBy),
+  tenantId: Option.fromNullishOr(row.tenantId),
 });
 
 const LedgerRow = Schema.Struct({
@@ -555,22 +602,29 @@ export const layerSql = Layer.effect(
         reason: Schema.String,
         startedAt: wire.dateTime,
         expiresAt: wire.dateTime,
+        tenantId: Schema.NullOr(Schema.String),
       }),
       Result: ImpersonationRow,
       execute: (r) => sql`
           INSERT INTO admin_impersonation
-            (id, "adminUserId", "targetUserId", "sessionId", reason, "startedAt", "expiresAt", "endedAt", "endedBy")
+            (id, "adminUserId", "targetUserId", "sessionId", reason, "startedAt", "expiresAt", "endedAt", "endedBy", "tenantId")
           VALUES
-            (${r.id}, ${r.adminUserId}, ${r.targetUserId}, ${r.sessionId}, ${r.reason}, ${r.startedAt}, ${r.expiresAt}, NULL, NULL)
+            (${r.id}, ${r.adminUserId}, ${r.targetUserId}, ${r.sessionId}, ${r.reason}, ${r.startedAt}, ${r.expiresAt}, NULL, NULL, ${r.tenantId})
           RETURNING *
         `,
     });
 
     const findBySessionIdQuery = SqlSchema.findOneOption({
-      Request: Schema.String,
+      Request: Schema.Struct({
+        sessionId: Schema.String,
+        tenantId: Schema.NullOr(Schema.String),
+        anyTenant: Schema.Boolean,
+      }),
       Result: ImpersonationRow,
-      execute: (sessionId) =>
-        sql`SELECT * FROM admin_impersonation WHERE "sessionId" = ${sessionId}`,
+      execute: (r) =>
+        r.anyTenant
+          ? sql`SELECT * FROM admin_impersonation WHERE "sessionId" = ${r.sessionId}`
+          : sql`SELECT * FROM admin_impersonation WHERE "sessionId" = ${r.sessionId} AND "tenantId" IS NOT DISTINCT FROM ${r.tenantId}`,
     });
 
     const endEpisodeQuery = SqlSchema.findOneOption({
@@ -578,13 +632,23 @@ export const layerSql = Layer.effect(
         sessionId: Schema.String,
         endedAt: wire.dateTime,
         endedBy: EndedBySchema,
+        tenantId: Schema.NullOr(Schema.String),
+        anyTenant: Schema.Boolean,
       }),
       Result: ImpersonationRow,
-      execute: (r) => sql`
-          UPDATE admin_impersonation SET "endedAt" = ${r.endedAt}, "endedBy" = ${r.endedBy}
-          WHERE "sessionId" = ${r.sessionId} AND "endedAt" IS NULL
-          RETURNING *
-        `,
+      execute: (r) =>
+        r.anyTenant
+          ? sql`
+              UPDATE admin_impersonation SET "endedAt" = ${r.endedAt}, "endedBy" = ${r.endedBy}
+              WHERE "sessionId" = ${r.sessionId} AND "endedAt" IS NULL
+              RETURNING *
+            `
+          : sql`
+              UPDATE admin_impersonation SET "endedAt" = ${r.endedAt}, "endedBy" = ${r.endedBy}
+              WHERE "sessionId" = ${r.sessionId} AND "endedAt" IS NULL
+                AND "tenantId" IS NOT DISTINCT FROM ${r.tenantId}
+              RETURNING *
+            `,
     });
 
     // IDS-004: one statement, so a racing reader can never close (and announce) the same row twice.
@@ -605,10 +669,13 @@ export const layerSql = Layer.effect(
         cursorStartedAt: wire.nullableDateTime,
         cursorId: Schema.NullOr(Schema.String),
         limit: Schema.Int,
+        tenantId: Schema.NullOr(Schema.String),
+        anyTenant: Schema.Boolean,
       }),
       Result: ImpersonationRow,
       execute: (r) => {
         const conditions = [
+          ...(r.anyTenant ? [] : [sql`"tenantId" IS NOT DISTINCT FROM ${r.tenantId}`]),
           ...(r.active ? [sql`"endedAt" IS NULL`] : []),
           ...(r.cursorStartedAt === null || r.cursorId === null
             ? []
@@ -623,6 +690,7 @@ export const layerSql = Layer.effect(
     const create: ImpersonationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
+      const tenantId = Option.getOrNull(yield* Tenant.TenantContext);
       return yield* inTransaction(
         Effect.gen(function* () {
           const row = yield* insert({
@@ -633,6 +701,7 @@ export const layerSql = Layer.effect(
             reason: input.reason,
             startedAt: now,
             expiresAt: input.expiresAt,
+            tenantId,
           });
           const record = toRecord(row);
           yield* append("started", record.id, startedPayload(record));
@@ -641,15 +710,23 @@ export const layerSql = Layer.effect(
       ).pipe(Effect.orDie);
     });
 
-    const findBySessionId: ImpersonationRecordsShape["findBySessionId"] = (sessionId) =>
-      findBySessionIdQuery(sessionId).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+    const findBySessionId: ImpersonationRecordsShape["findBySessionId"] = (sessionId, scope) =>
+      Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+        Effect.flatMap((tenantId) =>
+          findBySessionIdQuery({ sessionId, tenantId, anyTenant: scope?.anyTenant === true }),
+        ),
+        Effect.map(Option.map(toRecord)),
+        Effect.orDie,
+      );
 
-    const endEpisode: ImpersonationRecordsShape["endEpisode"] = (sessionId, endedBy) =>
+    const endEpisode: ImpersonationRecordsShape["endEpisode"] = (sessionId, endedBy, scope) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
+        const tenantId = Option.getOrNull(yield* Tenant.TenantContext);
+        const anyTenant = scope?.anyTenant === true;
         const updated = yield* inTransaction(
           Effect.gen(function* () {
-            const row = yield* endEpisodeQuery({ sessionId, endedAt: now, endedBy });
+            const row = yield* endEpisodeQuery({ sessionId, endedAt: now, endedBy, tenantId, anyTenant });
             const record = Option.map(row, toRecord);
             if (Option.isSome(record)) yield* appendEnded(record.value);
             return record;
@@ -668,14 +745,19 @@ export const layerSql = Layer.effect(
         }),
       ).pipe(Effect.orDie);
 
-    const list: ImpersonationRecordsShape["list"] = (input) => {
+    const list: ImpersonationRecordsShape["list"] = (input, scope) => {
       const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
-      return listQuery({
-        active: input?.active === true,
-        cursorStartedAt: input?.cursor?.startedAt ?? null,
-        cursorId: input?.cursor?.id ?? null,
-        limit,
-      }).pipe(
+      return Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+        Effect.flatMap((tenantId) =>
+          listQuery({
+            active: input?.active === true,
+            cursorStartedAt: input?.cursor?.startedAt ?? null,
+            cursorId: input?.cursor?.id ?? null,
+            limit,
+            tenantId,
+            anyTenant: scope?.anyTenant === true,
+          }),
+        ),
         Effect.map((rows) => toPage(rows.map(toRecord), limit)),
         Effect.orDie,
       );

@@ -74,6 +74,9 @@
       "path": "packages/migrate-firebase"
     },
     {
+      "path": "packages/scim"
+    },
+    {
       "path": "features"
     },
     {

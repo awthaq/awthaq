@@ -3,7 +3,7 @@ ID: "IDS-002"
 Title: "No tenant or organization scoping anywhere in the impersonation path"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/ImpersonationRecords.ts:45"
 Auditor: "impersonation-delegation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `admin` · reported by **Impersonation & Delegation Specialist** (`impersonation-delegation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `admin-impersonation-gate-target`. Evidence at HEAD ec065a7: `packages/admin/src/ImpersonationRecords.ts:43`. Fix: Stamp the ambient tenant (ticket 18's TenantContext) on every episode and scope list/forceStop to it; cross-tenant access only through the superadmin predicate from ticket 19. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
 
 **Plan note (2026-09-29):** Left open by P05. Blocked by DRS-001 (ticket 18 TenantContext) which does not exist in the repo yet (no TenantContext in packages/*/src). The admin-side prerequisite is done: IDS-001 landed canManageEpisode and the target-aware gate, so a host can already scope stop/list per episode. Remaining once DRS-001 lands: nullable tenantId column + index on admin_impersonation, ImpersonationRecord.tenantId stamped from TenantContext, list/findBySessionId/endEpisode scoped by the ambient tenant, ImpersonationRecordDto.tenantId, and the superadmin canAdministerTenants override (that predicate is introduced by BAM-005).
+
+**Resolved (2026-09-29):** Impersonation is tenant-scoped (ADR-EA-018, amended BEH-EA-215/217/219). admin_impersonation gains "tenantId" (admin migration, indexed; the immutability triggers are recreated to freeze it, Postgres via CREATE OR REPLACE FUNCTION); ImpersonationRecord.tenantId, stamped from the ambient TenantContext on create. The ledger payload appends the tenant only when set, so every pre-tenancy and single-tenant link still verifies byte-for-byte. findBySessionId/endEpisode/list are confined to the ambient tenant (IS NOT DISTINCT FROM; an untenanted request sees the untenanted rows, i.e. all of them in a single-tenant deployment) unless the caller passes the new optional { anyTenant: true } scope, which Admin does only for a caller passing AdminConfig.canAdministerTenants (fail-closed default) and for its own tenant-blind is-this-an-impersonation-session classification (so another tenant impersonation session is never treated as an ordinary session by the user-session endpoints); closeExpired/verifyChain are maintenance over every tenant. The impersonation and user-admin gates now receive tenantId, the default episode gate the episode own tenant; ImpersonationRecordDto and the admin UserDto expose tenantId. Deviation from the dossier: findBySessionId takes an explicit anyTenant scope rather than relying on Tenant.withoutTenant (None means untenanted rows, not all rows). Tests: ImpersonationRecords (memory, SQL, Postgres) stamping, confinement, cross-tenant end refused, closeExpired over every tenant, tenantId frozen by the trigger; Admin gate sees the tenant, plain admin confined vs superadmin cross-tenant list/forceStop, single-tenant unchanged, cross-tenant impersonation session not exposed by listUserSessions.
