@@ -48,3 +48,5 @@ Add workspace-wide coverage.thresholds (lines/branches starting modestly, e.g. 7
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `coverage-enforcement`. Duplicate of `MM-004` — closed by that issue's fix. Evidence at HEAD ec065a7: `vitest.config.ts:21`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `MM-004-mattia-manzati` — closed by its fix (see that issue's Resolved comment).

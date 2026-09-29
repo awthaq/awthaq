@@ -3,7 +3,7 @@ ID: "MM-003"
 Title: "@effect/tsgo pinned exact but typescript caret — patched pair can drift"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "package.json:36"
 Auditor: "mattia-manzati"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Mattia Manzati — Effect Developer Tooling** (`mattia-manzati`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Pin `typescript` exact in the catalog (7.0.2) and bump it in lockstep with @effe
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `dev-scripts-tooling`. Evidence at HEAD ec065a7: `package.json:36`. Fix: Pin typescript exactly and make the pair move together. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** pnpm-workspace.yaml catalog: typescript 7.0.2 exact, @effect/tsgo 0.45.0 in the catalog (root package.json uses catalog:), with a comment on why; dependabot gets a `typescript-toolchain` group (typescript, @effect/tsgo, @effect/language-service) listed before the broader @effect/* group. Lockfile refreshed.

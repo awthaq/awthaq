@@ -3,7 +3,7 @@ ID: "MM-006"
 Title: "Privileged release workflow uses tag-pinned actions while check.yml pins SHAs"
 Level: medium
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: ".github/workflows/release.yml:32"
 Auditor: "mattia-manzati"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `—` · reported by **Mattia Manzati — Effect Developer Tooling** (`mattia-manzati`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Pin all release.yml actions to the same full SHAs check.yml uses (with version c
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `ci-release-hardening`. Evidence at HEAD ec065a7: `.github/workflows/release.yml:32`. Fix: SHA-pin every action in release.yml (reuse check.yml's SHAs; resolve changesets/action's v1 tag to a commit), make zizmor enforce hash-pinning repo-wide, and gate release on a green Check run. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** release.yml: every action pinned to a commit SHA with a version comment (changesets/action v1.9.0 resolved via ls-remote), permissions {} at the top and per-job least privilege, gated on the Check workflow through workflow_call (check.yml gained the trigger and a deadlock-free concurrency group), npm 11.5.1 for OIDC trusted publishing, NPM_CONFIG_PROVENANCE, persist-credentials off except where changesets/action needs the token (zizmor ignore with reason). New .github/zizmor.yml enforces hash-pin repo-wide. `zizmor --offline .github/workflows` reports only low-severity notes; no unpinned `uses:` remains.
