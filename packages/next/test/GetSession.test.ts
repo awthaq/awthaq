@@ -23,7 +23,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
-import { applyRotatedSession, getSession } from "../src/index.ts";
+import { applyRotatedSession, getSession } from "../src/GetSession.ts";
 import type { HeadersLike } from "../src/index.ts";
 
 const TestLayer = Layer.mergeAll(
@@ -82,6 +82,16 @@ const headersWithCookie = (cookieHeader: string | null): HeadersLike => ({
 
 const cookieHeaderFor = (token: Redacted.Redacted<string>): string =>
   `${Api.SessionCookie.key}=${Redacted.value(token)}`;
+
+describe("@awthaq/next public entry (RRS-002)", () => {
+  // Dynamic import: the lint config forbids static barrel imports in tests,
+  // and this is the one place the barrel itself is the subject.
+  it("exports the whole ticket-16 rotation pair, so a Server Action can deliver session.rotated", async () => {
+    const entry = await import("../src/index.ts");
+    assert.strictEqual(entry.getSession, getSession);
+    assert.strictEqual(entry.applyRotatedSession, applyRotatedSession);
+  });
+});
 
 describe("getSession (BEH-EA-185)", () => {
   it("resolves undefined when the Cookie header is absent", () =>
