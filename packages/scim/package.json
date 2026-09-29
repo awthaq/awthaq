@@ -25,14 +25,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
     "@awthaq/organization": "workspace:*",
+    "@awthaq/ports": "workspace:*",
     "@awthaq/sql": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@awthaq/ports": "workspace:*",
+    "@awthaq/api": "workspace:*",
     "@awthaq/server": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",

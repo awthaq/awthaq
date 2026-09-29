@@ -29,12 +29,12 @@
     "@awthaq/core": "workspace:*",
     "@awthaq/oauth": "workspace:*",
     "@awthaq/ports": "workspace:*",
-    "@awthaq/server": "workspace:*",
     "@awthaq/sql": "workspace:*",
     "@qadi/core": "^0.7.0",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/server": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
