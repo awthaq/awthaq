@@ -87,7 +87,7 @@ describe("Jwt.Jwt.migrations", () => {
   it.effect("creates both jwt_signing_key and jwt_token_revocation from a fresh database", () =>
     Effect.gen(function* () {
       const applied = yield* Migrations.run(Jwt.Jwt.migrations);
-      assert.strictEqual(applied.length, 3);
+      assert.strictEqual(applied.length, 4);
       const sql = yield* SqlClient.SqlClient;
       // A working `SELECT` against each table is the real proof — a
       // missing table fails the query itself, not merely the migration

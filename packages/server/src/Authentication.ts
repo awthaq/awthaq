@@ -76,9 +76,16 @@ export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succe
  * response); this middleware never adds its own recovery for it.
  */
 export interface PostAuthResponseHookShape {
+  /**
+   * PDR-003: `context.scheme` names the credential that authenticated the
+   * request, so a hook can treat a cookie-authenticated browser request
+   * differently from a bearer-authenticated API client (e.g. `@awthaq/jwt`'s
+   * `mirrorResponses: "bearer"`).
+   */
   readonly decorate: (
     principal: Api.Principal,
     response: HttpServerResponse.HttpServerResponse,
+    context: { readonly scheme: "cookie" | "bearer" },
   ) => Effect.Effect<HttpServerResponse.HttpServerResponse>;
 }
 
@@ -184,12 +191,10 @@ export const resolveSession = (
     const memoized = yield* Effect.cached(
       raw === ""
         ? Effect.fail(new Api.Unauthenticated())
-        : sessions
-            .verify(Redacted.make(raw))
-            .pipe(
-              Effect.catchTag("PlatformError", Effect.die),
-              Effect.mapError(() => new Api.Unauthenticated()),
-            ),
+        : sessions.verify(Redacted.make(raw)).pipe(
+            Effect.catchTag("PlatformError", Effect.die),
+            Effect.mapError(() => new Api.Unauthenticated()),
+          ),
     );
     yield* Ref.update(cache, HashMap.set(raw, memoized));
     return yield* memoized;
@@ -286,7 +291,7 @@ export const AuthenticationLive: Layer.Layer<
                   deliverRotation(scheme, rotated, response).pipe(
                     Effect.flatMap((withRotation) =>
                       Effect.flatMap(PostAuthResponseHook, (hook) =>
-                        hook.decorate(principal, withRotation),
+                        hook.decorate(principal, withRotation, { scheme }),
                       ),
                     ),
                   ),
@@ -343,7 +348,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
                   deliverRotation(scheme, rotated, response).pipe(
                     Effect.flatMap((withRotation) =>
                       Effect.flatMap(PostAuthResponseHook, (hook) =>
-                        hook.decorate(principal, withRotation),
+                        hook.decorate(principal, withRotation, { scheme }),
                       ),
                     ),
                   ),

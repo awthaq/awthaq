@@ -366,6 +366,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
+      '@awthaq/ports':
+        specifier: workspace:*
+        version: link:../ports
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
@@ -373,9 +376,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/ports':
-        specifier: workspace:*
-        version: link:../ports
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test

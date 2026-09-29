@@ -3,7 +3,7 @@ ID: "JJS-007"
 Title: "signJWT/verifyJWT asymmetry: the general-purpose verifier mandates sub, rejecting tokens signJWT can mint"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/JwtCodec.ts:253"
 Auditor: "jwt-jwk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `jwt` · reported by **JWT/JWK Specialist** (`jwt-jwk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Move the sub requirement out of JwtCodec.verify into the principal-scoped verify
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-claims-codec-hardening`. Evidence at HEAD ec065a7: `packages/jwt/src/JwtCodec.ts:253`. Fix: Move the `sub` requirement out of `JwtCodec.verify` into the principal-scoped verifiers; give `verifyJWT` its own implementation. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** JwtCodec.verify gained requireSubject (default true; sub check moved out of the codec's unconditional path); Jwt.verify passes true, verifyJWT is a distinct implementation with false; verify.ts VerifierOptions.requireSubject. Tests: packages/jwt/test/JwtTokenClasses.test.ts 'signJWT({ machine }) verifies via verifyJWT', 'Jwt.verify still rejects a principal token without sub'; JwtCodec.test.ts requireSubject false case.

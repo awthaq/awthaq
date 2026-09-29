@@ -45,7 +45,7 @@ REQUIREMENT: `User`, `Account`, `Session`, and `VerificationToken` MUST each
 class Account extends Model.Class<Account>("Account")({
   id: Model.UuidV7Insert,
   passwordHash: Model.Sensitive(Schema.String),
-  accessToken: Model.Sensitive(Schema.Redacted(Schema.String))
+  accessToken: Model.Sensitive(Schema.NullOr(Schema.String))
 }) {}
 ```
 
@@ -55,6 +55,8 @@ REQUIREMENT: A field declared `Model.Sensitive` MUST be excluded from every
              handler can accidentally serialize it into an HTTP response
              merely by returning the entity value.
 ```
+
+The shipped `Account` model types its token columns as plain nullable strings, not `Schema.Redacted`: `Schema.Redacted`'s *encoded* form is itself a wrapped value and cannot be bound as a SQL parameter, so the repository stratum cannot carry it. The boundary is deliberate (SMS-007): a repository row holds the plaintext token in memory only transiently, the database holds AES-GCM ciphertext bound to the row and column through additional authenticated data (`ports/Encryption`), `Redacted` appears at the `Encryption` seam and again from core's domain records upward (`ProviderTokenSet.accessToken` is `Redacted<string>`), and JSON exclusion is guaranteed by `Model.Sensitive` regardless of the value's wrapper type.
 
 `archive/PRD.md` §12 and §18 both require this: "`Model.Sensitive` for hashes and secrets so they never appear in JSON variants," and separately, "contract tests assert no `Redacted` value reaches spans or events." `better-auth/01-core-domain/01-entities-and-invariants.md` §6.1 documents the analogous rule in better-auth's schema (`returned:false` on `password`, `accessToken`, `refreshToken`, `idToken`) as a per-field attribute a schema author must set correctly; awthaq's plan folds the same guarantee into `Model.Sensitive` so the exclusion is a type-level fact about the field, not an attribute that could be omitted.
 

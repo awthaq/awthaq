@@ -23,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Accounts from "../src/Accounts.ts";
 import * as Users from "../src/Users.ts";
 
@@ -411,3 +412,37 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
 
 suite("Accounts (layerMemory)", MemoryLayer);
 suite("Accounts (layerSql)", SqlTestLayer);
+
+// SMS-002: only the SQL layer holds ciphertext, so an undecryptable token is
+// a `layerSql`-only scenario.
+describe("Accounts (layerSql) undecryptable provider tokens (SMS-002)", () => {
+  const tokens = {
+    accessToken: Redacted.make("access"),
+    refreshToken: Option.none<Redacted.Redacted<string>>(),
+    accessTokenExpiresAt: Option.none<DateTime.Utc>(),
+    refreshTokenExpiresAt: Option.none<DateTime.Utc>(),
+    scope: Option.none<string>(),
+    tokenType: Option.none<string>(),
+  };
+
+  it.effect("findProviderTokens fails ProviderTokensUnreadable for an undecryptable row", () =>
+    Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const sql = yield* SqlClient.SqlClient;
+      const account = yield* accounts.link({
+        userId,
+        providerId: "google",
+        subject: "sub-unreadable",
+        tokens,
+      });
+      yield* sql`UPDATE accounts SET "accessToken" = 'garbage' WHERE id = ${account.id}`;
+      const failure = yield* accounts.findProviderTokens(account.id).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "ProviderTokensUnreadable");
+      // Identity reads and a fresh token write are unaffected by the bad column.
+      yield* accounts.findById(account.id);
+      yield* accounts.updateProviderTokens(account.id, tokens);
+      const healed = yield* accounts.findProviderTokens(account.id);
+      assert.strictEqual(Redacted.value(Option.getOrThrow(healed).accessToken), "access");
+    }).pipe(Effect.provide(SqlTestLayer)),
+  );
+});

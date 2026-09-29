@@ -678,7 +678,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         // request state (`input.state`/`input.cookieState`) to get here,
         // even though it's the server's own ciphertext underneath.
         const codeVerifier = yield* encryption.decrypt(flow.codeVerifier, identifier).pipe(
-          Effect.map(Redacted.value),
+          Effect.map((decrypted) => Redacted.value(decrypted.plaintext)),
           Effect.catchTags({
             DecryptionFailed: () => new OAuthApi.OAuthCallbackFailed(),
             UnknownKeyId: () => new OAuthApi.OAuthCallbackFailed(),
@@ -688,7 +688,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           flow.nonce === undefined
             ? undefined
             : yield* encryption.decrypt(flow.nonce, identifier).pipe(
-                Effect.map(Redacted.value),
+                Effect.map((decrypted) => Redacted.value(decrypted.plaintext)),
                 Effect.catchTags({
                   DecryptionFailed: () => new OAuthApi.OAuthCallbackFailed(),
                   UnknownKeyId: () => new OAuthApi.OAuthCallbackFailed(),

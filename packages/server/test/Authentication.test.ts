@@ -276,6 +276,44 @@ describe("Authentication", () => {
     );
   });
 
+  // PDR-003: a hook can tell a cookie-authenticated request from a bearer one.
+  it.effect("PostAuthResponseHook.decorate receives the authenticating scheme", () => {
+    const schemes = Effect.runSync(Ref.make<ReadonlyArray<string>>([]));
+    const TappedHook = Layer.succeed(Authentication.PostAuthResponseHook, {
+      decorate: (
+        _principal: Api.Principal,
+        response: HttpServerResponse.HttpServerResponse,
+        context: { readonly scheme: "cookie" | "bearer" },
+      ) => Ref.update(schemes, (seen) => [...seen, context.scheme]).pipe(Effect.as(response)),
+    });
+    return Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const { token } = yield* sessions.issue({ userId });
+      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      yield* client.required.whoAmI({
+        headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+      });
+      yield* client.required.whoAmI({
+        headers: { authorization: `Bearer ${Redacted.value(token)}` },
+      });
+      assert.deepStrictEqual(yield* Ref.get(schemes), ["cookie", "bearer"]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
+          Layer.provideMerge(Authentication.AuthenticationLive),
+          Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provide(TappedHook),
+          Layer.provideMerge(Sessions.layerMemory),
+          Layer.provideMerge(AuthEvents.layer),
+          Layer.provideMerge(AuditLog.layerMemory),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provideMerge(TestServices),
+        ),
+      ),
+    );
+  });
+
   // Spec-fidelity fix: `.scratch/jwt/spec.md`'s own "Automatic response
   // mirroring" decision consults `PostAuthResponseHook` only "immediately
   // after a successful `resolvePrincipal`" — the anonymous principal

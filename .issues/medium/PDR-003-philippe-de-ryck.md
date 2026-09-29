@@ -3,7 +3,7 @@ ID: "PDR-003"
 Title: "JWT plugin mirrors a bearer token onto every authenticated response via x-jwt-token with no opt-out"
 Level: medium
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/Jwt.ts:162"
 Auditor: "philippe-de-ryck"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `jwt` · reported by **Philippe De Ryck — Web Application Security Trainer** (`philippe-de-ryck`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Make the mirroring opt-in via JwtConfig (e.g. mirrorOnResponses: false by defaul
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-response-mirroring-opt-in`. Evidence at HEAD ec065a7: `packages/jwt/src/Jwt.ts:215`. Fix: Make response mirroring a `JwtConfig` choice (`"off" | "bearer" | "always"`), pass the auth scheme to `PostAuthResponseHook.decorate`, and log rather than silently swallow sign failures. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B (opt-in knob, default off) per plan; user may revisit. JwtConfig.mirrorResponses: off (default) | bearer | always; @awthaq/server PostAuthResponseHookShape.decorate gained a third argument { scheme: cookie | bearer } (packages/server/src/Authentication.ts, two call sites); Jwt.ts PostAuthResponseHookLive honours the mode and logs (Effect.logWarning) instead of silently swallowing sign failures; comments and README rewritten. Tests: AuthHttp.test.ts 'default config: GET /session carries no x-jwt-token header', 'mirrorResponses: always ...', 'mirrorResponses: bearer: a cookie-authenticated request gets no header, a bearer-authenticated one does' (default test red first); server/test/Authentication.test.ts 'PostAuthResponseHook.decorate receives the authenticating scheme'.
