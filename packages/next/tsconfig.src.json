@@ -10,6 +10,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@awthaq/api": ["../api/src/index.ts"],
+      "@awthaq/client": ["../client/src/index.ts"],
       "@awthaq/core": ["../core/src/index.ts"],
       "@awthaq/server": ["../server/src/index.ts"]
     }
@@ -17,6 +18,9 @@
   "references": [
     {
       "path": "../api/tsconfig.src.json"
+    },
+    {
+      "path": "../client/tsconfig.src.json"
     },
     {
       "path": "../core/tsconfig.src.json"

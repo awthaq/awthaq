@@ -11,6 +11,9 @@
 export { applyRotatedSession, getSession } from "./GetSession.ts";
 export type { HeadersLike, Session } from "./GetSession.ts";
 // RSC-005/NF-11-4: RSC-safe seeds for @awthaq/react's Providers.
+// BO-002: the typed in-process client for server actions.
+export { makeServerActionClient, serverActionClient } from "./ServerActionClient.ts";
+export type { ServerActionOptions } from "./ServerActionClient.ts";
 export { toInitialSession, toInitialSubject } from "./Seed.ts";
 export type { SubjectLike } from "./Seed.ts";
 export { hasSessionCookie } from "./HasSessionCookie.ts";

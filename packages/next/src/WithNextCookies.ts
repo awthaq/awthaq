@@ -58,7 +58,7 @@ const isSameSite = (value: string): value is "lax" | "strict" | "none" =>
  * bridge doesn't translate should still have its name/value/known
  * attributes written, not be dropped entirely.
  */
-const parseSetCookie = (
+export const parseSetCookie = (
   header: string,
 ): { readonly name: string; readonly value: string; readonly options: CookieSetOptions } => {
   const segments = header.split(";").map((segment) => segment.trim());

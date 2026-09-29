@@ -1,9 +1,11 @@
 # @awthaq/next
 
 Next.js adapter: `getSession` (the real, database-verified boundary),
-`hasSessionCookie` (the optimistic, `proxy.ts`-only check), and
+`hasSessionCookie` (the optimistic, `proxy.ts`-only check),
+`serverActionClient` (a typed in-process client for server actions),
 `withNextCookies` (bridges a `Set-Cookie` produced by awthaq's composed
-HTTP router into Next's own cookie jar). See
+HTTP router into Next's own cookie jar) and `toInitialSession` /
+`toInitialSubject` (RSC-safe seeds for `@awthaq/react`'s `Providers`). See
 [`spec/behaviors/24-nextjs-ssr.md`](../../spec/behaviors/24-nextjs-ssr.md)
 (BEH-EA-185/188/189) and
 [`.scratch/next-package/spec.md`](../../.scratch/next-package/spec.md) for
@@ -37,9 +39,17 @@ declare global {
 
 const make = () => {
   const made = ManagedRuntime.make(AppLayer);
-  const dispose = () => void made.dispose();
-  process.once("SIGINT", dispose);
-  process.once("SIGTERM", dispose);
+  // `dispose()` closes the Layer scope (pools, finalizers): await it before
+  // exiting, but bound it so one stuck finalizer cannot hang shutdown.
+  const shutdown = async () => {
+    await Promise.race([made.dispose(), new Promise((resolve) => setTimeout(resolve, 10_000))]);
+    process.exit(0);
+  };
+  // Registered only here, inside `make()`, so a dev-server hot reload that
+  // re-evaluates this module but finds `globalThis.__appRuntime` already set
+  // never stacks a second pair of handlers.
+  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown());
   return made;
 };
 
@@ -47,7 +57,10 @@ export const runtime = (globalThis.__appRuntime ??= make());
 ```
 
 Every Server Component, server action, and Route Handler imports this one
-`runtime`, never constructs its own.
+`runtime`, never constructs its own. Fibers started with `runtime.runPromise`
+are not children of the runtime's scope, so `dispose()` does not wait for
+in-flight requests; if you need that, count them yourself (increment before a
+`runPromise`, decrement in `finally`) and drain the counter before disposing.
 
 ## `proxy.ts`: the optimistic redirect
 
@@ -77,8 +90,14 @@ reject anyway; it is never itself the boundary.
 ```ts
 // app/projects/page.tsx
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { getSession } from "@awthaq/next";
 import { runtime } from "../lib/runtime.ts";
+
+// A page derived from the session must be dynamic. `headers()` already makes a
+// route dynamic implicitly; the explicit export survives refactors and partial
+// prerendering. Never cache a shell that contains session data.
+export const dynamic = "force-dynamic";
 
 export default async function Page() {
   const session = await getSession(await headers(), runtime);
@@ -150,34 +169,69 @@ subject only, and drops a payload for anyone else (or one with no seeded
 session) — the gate then re-decides on the client exactly as it would without
 hydration.
 
-## A server action that bridges cookies
+## Server actions: a typed in-process client
+
+`serverActionClient(api, { handler, headers, jar })` is an `HttpApiClient` over
+your own composed `api` whose transport calls your own web handler in-process
+— so `client.password.signIn(...)` is typed for whichever plugin set you
+composed, and the action's cookies and client metadata ride along:
+
+```ts
+// app/lib/handler.ts — built once, next to the pinned runtime
+import "server-only";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import { AppRoutesLayer } from "./layer.ts"; // AuthHttp.routes(AppApi, ...) plus your services
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __appHandler: ReturnType<typeof HttpRouter.toWebHandler> | undefined;
+}
+
+export const { handler } = (globalThis.__appHandler ??= HttpRouter.toWebHandler(AppRoutesLayer));
+```
 
 ```ts
 // app/actions.ts
 "use server";
-import { cookies } from "next/headers";
-import { withNextCookies } from "@awthaq/next";
-import { runtime } from "./lib/runtime.ts";
-import { AppApi } from "./lib/api.ts"; // your own composed HttpApi/router
+import { cookies, headers } from "next/headers";
+import { serverActionClient } from "@awthaq/next";
+import { AppApi } from "./lib/api.ts";
+import { handler } from "./lib/handler.ts";
 
 export async function signIn(email: string, password: string) {
-  const request = new Request("http://internal/sign-in", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-    headers: { "content-type": "application/json" },
+  const client = await serverActionClient(AppApi, {
+    handler,
+    headers: await headers(),
+    jar: await cookies(),
+    mode: "result", // resolve a typed Result<A, E> instead of rejecting
   });
-  const { handler } = await runtime.runPromise(/* build your web handler from AppApi */);
-  const response = await handler(request);
-  withNextCookies(response, await cookies());
-  return response.ok;
+  const result = await client.password.signIn({ payload: { email, password } });
+  return result._tag === "Success" ? "ok" : result.failure._tag; // e.g. "InvalidCredentials"
 }
 ```
 
-`withNextCookies` only ever harvests a `Set-Cookie` that awthaq's own
+What it does for you:
+
+- forwards the action's `Cookie`, `User-Agent` and `X-Forwarded-For` to the
+  handler (not `Origin`/`Sec-Fetch-Site`: with neither present the CSRF site
+  check has nothing to reject on, and the double-submit check still runs);
+- echoes the `__Host-csrf` cookie as `x-csrf-token`, and — for a cold action
+  with no CSRF cookie yet — retries the rejected call once with the fresh
+  cookie the 403 minted, so the first mutation succeeds;
+- writes every `Set-Cookie` the handler produced into Next's jar
+  (`withNextCookies`), so the browser gets the session cookie.
+
+Without `mode`, methods reject with the endpoint's tagged contract error. The
+Effect-native form is `makeServerActionClient(api, options)`; an api whose
+groups need client middleware beyond CSRF's must use it and provide that layer
+(the Promise form refuses to compile rather than silently skip it). Build one
+client per action invocation — it carries that request's cookie state. This
+package still constructs no runtime: the `handler` is yours.
+
+`withNextCookies(response, jar)` stays exported for callers who dispatch
+themselves: it only harvests a `Set-Cookie` that awthaq's own
 `HttpApiBuilder.securitySetCookie` calls already produce (sign-in, sign-up,
-CSRF rotation) — it takes a `Response` and a cookie jar, nothing more, so it
-composes with however your app already dispatches requests against its own
-composed router.
+CSRF rotation) — it takes a `Response` and a cookie jar, nothing more.
 
 ## Session rotation and `applyRotatedSession`
 

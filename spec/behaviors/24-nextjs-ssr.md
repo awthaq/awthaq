@@ -110,6 +110,8 @@ REQUIREMENT: A server action that triggers a `Set-Cookie` (a new session
 
 `usage-examples-v4.md` §13 shows exactly this shape. React Server Components and the framework layer around server actions don't expose a raw HTTP response for an ordinary Effect program to write `Set-Cookie` onto directly — `withNextCookies` exists specifically to carry that header across the boundary into `next/headers`' cookie API, which is the only thing on the Next.js side actually allowed to write cookies from within a server action.
 
+**Implementation (BO-002).** The shipped surface is `serverActionClient`/`makeServerActionClient` (`@awthaq/next`): an `HttpApiClient` over the application's own composed `api` whose in-process transport dispatches to the application's web handler, forwards the action's `Cookie`/`User-Agent`/`X-Forwarded-For`, echoes the CSRF cookie as `x-csrf-token` (with the bootstrap retry of BEH-EA-170 for a cold action), and passes every response through `withNextCookies` into the action's jar. `withNextCookies` itself stays exported for callers who dispatch on their own.
+
 _Previous: [BEH-EA-188](24-nextjs-ssr.md#beh-ea-188-proxyts-is-an-optimistic-redirect-never-the-boundary) | Next: [BEH-EA-190](24-nextjs-ssr.md#beh-ea-190-server-actions-re-resolve-the-subject-per-invocation)_
 
 ## BEH-EA-190: Server actions re-resolve the subject per invocation

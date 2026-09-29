@@ -487,6 +487,9 @@ importers:
       '@awthaq/api':
         specifier: workspace:*
         version: link:../api
+      '@awthaq/client':
+        specifier: workspace:*
+        version: link:../client
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
