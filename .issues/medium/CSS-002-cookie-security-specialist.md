@@ -3,7 +3,7 @@ ID: "CSS-002"
 Title: "No cookie expiry anywhere: sign-out, revoke-all, and account deletion leave the dead __Host-session in the browser jar"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Session.ts:84"
 Auditor: "cookie-security-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `server` · reported by **Cookie Security Specialist** (`cookie-security-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ On signOut, revoke-all, and deleteUser, call HttpApiBuilder.securitySetCookie(Ap
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-cookie-expiry`. Evidence at HEAD ec065a7: `packages/server/src/Session.ts:84`. Fix: Expire __Host-session on every response that ends the caller's own session: signOut, revokeAll, revoke when the target is the current session, deleteUser, and the EHA-009 'current row missing' path. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/server/src/internal/SessionCookie.ts expireSessionCookie (a pre-response handler using HttpServerResponse.expireCookie with Path=/, Secure, HttpOnly, SameSite=Strict, so a __Host- cookie is accepted). Called from Session.ts signOut, revokeAll, revoke (only when target === current session), the EHA-009 vanished-session path, and Account.ts deleteUser; stale api/Session.ts comment fixed; spec BEH-EA-055 paragraph. Tests (server/test/AuthHttp.test.ts, real toHandled path): sign-out, revoke-all, revoke-own-id and DELETE /user each expire the cookie with the exact attributes; revoking another session does not. Next-adapter README recipe (step 5) belongs to the frontend program and was not done.

@@ -6,11 +6,13 @@
 // against that same group's own contract).
 
 import { AuthCore, Api, SessionContract } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { Sessions } from "@awthaq/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import { currentUser } from "./internal/CurrentUser.ts";
+import { expireSessionCookie } from "./internal/SessionCookie.ts";
 
 const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
@@ -23,32 +25,13 @@ const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>
   });
 
 /**
- * `Authentication` (required, not `OptionalAuthentication`) already refuses
- * the request with `Unauthenticated` before a handler ever runs, so
- * `CurrentPrincipal` here is never `Anonymous` in practice; a principal
- * kind with no `sessionId` (`ApiKey`/`Service`) reaching this group at all
- * is a wiring defect this pass doesn't need to recover from, not a
- * request-level condition a caller can act on.
- */
-const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentPrincipal> =
-  Effect.gen(function* () {
-    const principal = yield* Api.CurrentPrincipal;
-    if (principal._tag !== "User") {
-      return yield* Effect.die(
-        new Error(`awthaq: session group reached with a non-User principal: ${principal._tag}`),
-      );
-    }
-    return principal;
-  });
-
-/**
  * `Sessions.Sessions` is an ordinary ambient domain service, safe to
  * resolve once here — in the group-builder generator itself, which runs
  * once at `Layer`-build time — and close over from every handler below,
  * the same way `@effect/platform`'s own `HttpApiBuilder.group` examples
  * resolve a domain service once and reuse it per handler. Only
  * `Api.CurrentPrincipal` (genuinely different per request) is read inside
- * each individual handler.
+ * each individual handler, through `currentUser` (GC-003).
  */
 export const SessionHandlers = HttpApiBuilder.group(
   AuthCore.AuthCoreApi,
@@ -58,23 +41,24 @@ export const SessionHandlers = HttpApiBuilder.group(
 
     return handlers.handleAll({
       current: Effect.fnUntraced(function* () {
-        const principal = yield* currentUserPrincipal;
-        const userId = Users.UserId(principal.ref.id);
-        const sessionId = Sessions.SessionId(principal.sessionId);
+        const { userId, sessionId } = yield* currentUser;
         // TIR-003/ESS-005: a keyed lookup, never `list` + `find` — a user
         // with many historical sessions used to push the current one off the
         // list's first page and turn this into a 500.
         const item = yield* sessions.findOwned(userId, sessionId);
         if (Option.isNone(item)) {
-          return yield* Effect.die(new Error("awthaq: current session missing after verify"));
+          // EHA-009: the session was revoked (or expired) between the
+          // middleware's verify and this read — a concurrent revoke, not a
+          // server fault. Answer what the caller needs to act on: a typed
+          // 401 and an expired cookie, so its session atom clears.
+          yield* expireSessionCookie;
+          return yield* Effect.fail(new Api.Unauthenticated());
         }
         return toDto({ ...item.value, current: true });
       }),
 
       list: Effect.fnUntraced(function* () {
-        const principal = yield* currentUserPrincipal;
-        const userId = Users.UserId(principal.ref.id);
-        const sessionId = Sessions.SessionId(principal.sessionId);
+        const { userId, sessionId } = yield* currentUser;
         const items = yield* sessions.list(userId, sessionId);
         return items.map(toDto);
       }),
@@ -83,11 +67,13 @@ export const SessionHandlers = HttpApiBuilder.group(
       // from another tab a moment earlier), the caller's goal — "this
       // session is no longer valid" — is already true, so a concurrent
       // `SessionNotFound` here is swallowed rather than surfaced as an error.
+      // CSS-002: the caller's own session ended, so its cookie is expired.
       signOut: Effect.fnUntraced(function* () {
-        const principal = yield* currentUserPrincipal;
+        const { sessionId } = yield* currentUser;
         yield* sessions
-          .revoke(Sessions.SessionId(principal.sessionId))
+          .revoke(sessionId)
           .pipe(Effect.catchTag("SessionNotFound", () => Effect.void));
+        yield* expireSessionCookie;
       }),
 
       // BEH-EA-086/ADR-EA-013: a foreign or unknown target id answers
@@ -98,8 +84,9 @@ export const SessionHandlers = HttpApiBuilder.group(
       }: {
         payload: SessionContract.RevokePayload;
       }) {
-        const principal = yield* currentUserPrincipal;
-        const userId = Users.UserId(principal.ref.id);
+        const { userId, sessionId } = yield* currentUser;
+        // The one wire-to-domain re-brand in this package (GC-003): the
+        // payload id is untrusted input, not a verified session's own id.
         const targetId = Sessions.SessionId(payload.id);
         // GC-005: ownership is enforced atomically by the domain operation
         // (no list-then-check, no 200-row cap); a foreign id and an unknown
@@ -107,21 +94,23 @@ export const SessionHandlers = HttpApiBuilder.group(
         yield* sessions
           .revokeOwned(userId, targetId)
           .pipe(Effect.catchTag("SessionNotFound", () => new SessionContract.SessionNotFound()));
+        // CSS-002: revoking one's own current session ends it too; revoking a
+        // different device's session leaves this cookie alone.
+        if (targetId === sessionId) yield* expireSessionCookie;
       }),
 
       revokeOthers: Effect.fnUntraced(function* () {
-        const principal = yield* currentUserPrincipal;
-        const userId = Users.UserId(principal.ref.id);
-        const sessionId = Sessions.SessionId(principal.sessionId);
+        const { userId, sessionId } = yield* currentUser;
         yield* sessions.revokeOthers(userId, sessionId);
       }),
 
       // Ticket 02: truly all, no exceptions — kills the caller's own
-      // current session too, as a natural consequence of "all" meaning all.
+      // current session too, as a natural consequence of "all" meaning all;
+      // CSS-002: so its cookie is expired as well.
       revokeAll: Effect.fnUntraced(function* () {
-        const principal = yield* currentUserPrincipal;
-        const userId = Users.UserId(principal.ref.id);
+        const { userId } = yield* currentUser;
         yield* sessions.revokeAll(userId);
+        yield* expireSessionCookie;
       }),
     });
   }),

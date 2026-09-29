@@ -9,25 +9,19 @@ import { Accounts, Sessions, Users, Verification } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import { currentUser } from "./internal/CurrentUser.ts";
+import { HandlerInvariantViolation } from "./internal/Defects.ts";
+import { expireSessionCookie } from "./internal/SessionCookie.ts";
 
 /**
- * Mirrors `Session.ts`'s own `currentUserPrincipal` exactly — `Account`
- * carries the same `Authentication` middleware, so the same invariant
- * (a non-`User` principal reaching a required-auth group is a wiring
- * defect, not a request-level condition) applies here too.
+ * The principal an `account` handler runs as. Also keeps `@awthaq/api`'s
+ * `Authentication`/`CsrfProtection` middleware nameable for declaration
+ * emit — `AccountHandlers`'s inferred type mentions them, and TS2883 fires
+ * when this file holds no reference to that module.
  */
-const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentPrincipal> =
-  Effect.gen(function* () {
-    const principal = yield* Api.CurrentPrincipal;
-    if (principal._tag !== "User") {
-      return yield* Effect.die(
-        new Error(`awthaq: account group reached with a non-User principal: ${principal._tag}`),
-      );
-    }
-    return principal;
-  });
+export type AccountPrincipal = Api.UserPrincipal;
 
-const toDto = (user: Users.UserRecord): AccountContract.AccountDto =>
+const toDto =(user: Users.UserRecord): AccountContract.AccountDto =>
   new AccountContract.AccountDto({
     id: user.id,
     email: user.email,
@@ -51,8 +45,7 @@ export const AccountHandlers = HttpApiBuilder.group(
       }: {
         payload: AccountContract.UpdateProfilePayload;
       }) {
-        const principal = yield* currentUserPrincipal;
-        const userId = Users.UserId(principal.ref.id);
+        const { userId } = yield* currentUser;
         // The token was validated at authentication time; the user it
         // names must still exist — a `UserNotFound` here is a defect, not
         // a request-level condition the caller can act on.
@@ -60,7 +53,12 @@ export const AccountHandlers = HttpApiBuilder.group(
           .updateProfile(userId, payload)
           .pipe(
             Effect.catchTag("UserNotFound", () =>
-              Effect.die(new Error(`awthaq: authenticated user missing: ${userId}`)),
+              Effect.die(
+                new HandlerInvariantViolation({
+                  invariant: "AuthenticatedUserMissing",
+                  message: `awthaq: authenticated user missing: ${userId}`,
+                }),
+              ),
             ),
           );
         return toDto(updated);
@@ -98,8 +96,7 @@ export const AccountHandlers = HttpApiBuilder.group(
       // and `admin_impersonation` (the last a genuine audit-retention
       // tension, not a mechanical gap).
       deleteUser: Effect.fnUntraced(function* () {
-        const principal = yield* currentUserPrincipal;
-        const userId = Users.UserId(principal.ref.id);
+        const { userId } = yield* currentUser;
         yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
@@ -115,7 +112,12 @@ export const AccountHandlers = HttpApiBuilder.group(
                 .delete(userId)
                 .pipe(
                   Effect.catchTag("UserNotFound", () =>
-                    Effect.die(new Error(`awthaq: authenticated user missing: ${userId}`)),
+                    Effect.die(
+                      new HandlerInvariantViolation({
+                        invariant: "AuthenticatedUserMissing",
+                        message: `awthaq: authenticated user missing: ${userId}`,
+                      }),
+                    ),
                   ),
                 );
             }),
@@ -125,6 +127,9 @@ export const AccountHandlers = HttpApiBuilder.group(
           // `.pipe(Effect.orDie)` in this codebase already treats one
           // (see `OAuth.ts`'s identical `SqlTransaction` usage).
           .pipe(Effect.orDie);
+        // CSS-002: the account (and this request's own session) is gone, so
+        // the browser's now-dead cookie is expired with the response.
+        yield* expireSessionCookie;
       }),
     });
   }),

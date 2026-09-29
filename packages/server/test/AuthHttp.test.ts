@@ -18,8 +18,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Path from "effect/Path";
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Cookies from "effect/unstable/http/Cookies";
 import * as Etag from "effect/unstable/http/Etag";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -28,6 +33,8 @@ import * as Account from "../src/Account.ts";
 import * as Authentication from "../src/Authentication.ts";
 import * as AuthHttp from "../src/AuthHttp.ts";
 import * as Csrf from "../src/Csrf.ts";
+import { currentUser } from "../src/internal/CurrentUser.ts";
+import { HandlerInvariantViolation } from "../src/internal/Defects.ts";
 import * as Session from "../src/Session.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
@@ -304,6 +311,170 @@ describe("AuthHttp + Session (real HTTP)", () => {
         assert.strictEqual(aResponse.status, 200);
       }),
     ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
+// CSS-002: pre-response handlers only run under `HttpEffect.toHandled`, so
+// these tests drive the router the way a real server does and read the
+// cookies of the response actually written.
+const sendHandled = (
+  path: string,
+  options: { readonly method: string; readonly token: Redacted.Redacted<string>; readonly body?: unknown },
+) =>
+  Effect.gen(function* () {
+    const router = yield* HttpRouter.HttpRouter;
+    let written: HttpServerResponse.HttpServerResponse | undefined;
+    yield* HttpEffect.toHandled(router.asHttpEffect(), (_request, response) =>
+      Effect.sync(() => {
+        written = response;
+      }),
+    ).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request(`http://localhost${path}`, {
+            method: options.method,
+            headers: {
+              ...cookieHeader(options.token),
+              ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+            },
+            ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+          }),
+        ),
+      ),
+    );
+    if (written === undefined) return yield* Effect.die("no response was written");
+    return written;
+  });
+
+const assertSessionCookieExpired = (response: HttpServerResponse.HttpServerResponse) => {
+  const cookie = Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME);
+  assert.isTrue(Option.isSome(cookie), "the session cookie must be expired on this response");
+  if (Option.isNone(cookie)) return;
+  assert.strictEqual(cookie.value.value, "");
+  assert.strictEqual(cookie.value.options?.maxAge, 0);
+  assert.strictEqual(cookie.value.options?.path, "/");
+  assert.isTrue(cookie.value.options?.secure);
+  assert.isTrue(cookie.value.options?.httpOnly);
+  assert.strictEqual(cookie.value.options?.sameSite, "strict");
+};
+
+describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)", () => {
+  it.effect("POST /session/sign-out expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/sign-out", { method: "POST", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("POST /session/revoke-all expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke-all", { method: "POST", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("POST /session/revoke with the caller's own id expires the cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token, session } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke", {
+          method: "POST",
+          token,
+          body: { id: session.id },
+        });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("revoking a different session does NOT expire the caller's cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const current = yield* sessions.issue({ userId });
+        const other = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke", {
+          method: "POST",
+          token: current.token,
+          body: { id: other.session.id },
+        });
+        assert.strictEqual(response.status, 204);
+        assert.isTrue(Option.isNone(Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME)));
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("DELETE /user expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const user = yield* users.create({ email: "delete-me@example.com", name: "Del" });
+        const { token } = yield* sessions.issue({ userId: user.id });
+        const response = yield* sendHandled("/user", { method: "DELETE", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
+// EHA-009: the session was revoked between the middleware's verify and the
+// handler's keyed read — a typed 401 with an expired cookie, not a 500.
+const VanishingSessions: typeof Sessions.layerMemory = Layer.effect(
+  Sessions.Sessions,
+  Effect.gen(function* () {
+    const real = yield* Sessions.Sessions;
+    return { ...real, findOwned: () => Effect.succeed(Option.none()) };
+  }),
+).pipe(Layer.provide(Sessions.layerMemory));
+
+describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)", () => {
+  it.effect("GET /session answers 401 Unauthenticated and expires the cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session", { method: "GET", token });
+        assert.strictEqual(response.status, 401);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(makeAppLayer(VanishingSessions))),
+  );
+});
+
+describe("server handler invariants (GC-003/GC-008)", () => {
+  it.effect("a non-User principal reaching a required-auth group dies with HandlerInvariantViolation", () =>
+    Effect.gen(function* () {
+      const exit = yield* currentUser.pipe(
+        Effect.provideService(
+          Api.CurrentPrincipal,
+          new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }) }),
+        ),
+        Effect.exit,
+      );
+      assert.isTrue(Exit.isFailure(exit));
+      if (!Exit.isFailure(exit)) return;
+      assert.isTrue(Cause.hasDies(exit.cause));
+      const defect = Cause.squash(exit.cause);
+      assert.instanceOf(defect, HandlerInvariantViolation);
+      if (defect instanceof HandlerInvariantViolation) {
+        assert.strictEqual(defect.invariant, "NonUserPrincipal");
+      }
+    }),
   );
 });
 

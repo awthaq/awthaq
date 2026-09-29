@@ -12,7 +12,7 @@
 import * as Schema from "effect/Schema";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { Authentication, CsrfProtection } from "./Api.ts";
+import { Authentication, CsrfProtection, Unauthenticated } from "./Api.ts";
 
 /** One row of `list` — the wire shape of `@awthaq/core`'s `SessionListItem`. */
 export class SessionDto extends Schema.Class<SessionDto>("SessionDto")({
@@ -40,7 +40,9 @@ export const RevokePayload = Schema.Struct({ id: Schema.String });
 export type RevokePayload = typeof RevokePayload.Type;
 
 export const SessionGroup = HttpApiGroup.make("session")
-  .add(HttpApiEndpoint.get("current", "/session", { success: SessionDto }))
+  // EHA-009: a session revoked between the middleware's verify and the
+  // handler's read answers a typed 401 (with an expired cookie), not a 500.
+  .add(HttpApiEndpoint.get("current", "/session", { success: SessionDto, error: Unauthenticated }))
   .add(HttpApiEndpoint.get("list", "/session/list", { success: Schema.Array(SessionDto) }))
   .add(HttpApiEndpoint.post("signOut", "/session/sign-out"))
   .add(
@@ -53,8 +55,8 @@ export const SessionGroup = HttpApiGroup.make("session")
   // Upstream-hardening map, ticket 02: completes the `revoke`/
   // `revokeOthers`/`revokeAll` naming symmetry — kills every session for
   // the caller, no exceptions, including the caller's own current
-  // session. No payload, no response cookie-clearing, matching
-  // `signOut`'s existing precedent.
+  // session. No payload. CSS-002: like `signOut`, the response expires the
+  // `__Host-session` cookie (`@awthaq/server`'s handlers do this).
   .add(HttpApiEndpoint.post("revokeAll", "/session/revoke-all"))
   // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`
   // declared last (outermost, runs first — see `AuthorizedSubject.ts`'s

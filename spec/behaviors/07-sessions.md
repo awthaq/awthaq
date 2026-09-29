@@ -128,6 +128,8 @@ REQUIREMENT: The session cookie MUST be named with the `__Host-` prefix,
 
 `archive/design/usage-examples-v4.md` §5.3 and `archive/PRD.md` §18 both fix this exact attribute set as a secure default requiring no configuration: the `__Host-` prefix is itself an enforcement mechanism (browsers refuse to accept such a cookie unless it also satisfies `Secure`, `Path=/`, and no `Domain`), so misconfiguring any of the other attributes away from their secure defaults is designed to make the cookie simply not set, rather than silently set it insecurely.
 
+**The cookie is expired when the caller's own session ends (CSS-002).** Every response that ends the caller's own session MUST also expire `__Host-session` (empty value, `Max-Age=0`, epoch `Expires`, with `Secure` and `Path=/` so a browser accepts the write): `signOut`, `revokeAll`, `revoke` when the target is the caller's current session, account deletion, and the "current session vanished" `401` on `GET /session` (EHA-009). Revoking a *different* session leaves the cookie intact. A handler-written session cookie (this expiry, a fresh sign-in) takes precedence over a rotated secret delivered for the same request (BEH-EA-052).
+
 ## BEH-EA-056: Session-secret verification is a constant-time comparison over a fixed-length hash
 
 ```text
