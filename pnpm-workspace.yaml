@@ -14,13 +14,13 @@ packages:
 # releases are, so a resolution conflict on mismatch should be loud, not
 # silent. Revisit once effect 4.0.0 ships stable.
 catalog:
-  effect: 4.0.0-rc.116
-  "@effect/platform-node": 4.0.0-rc.116
-  "@effect/sql-sqlite-node": 4.0.0-rc.116
-  "@effect/sql-pg": 4.0.0-rc.116
-  "@effect/sql-libsql": 4.0.0-rc.116
-  "@effect/vitest": 4.0.0-rc.116
-  "@effect/atom-react": 4.0.0-rc.116
+  effect: 4.0.0-rc.117
+  "@effect/platform-node": 4.0.0-rc.117
+  "@effect/sql-sqlite-node": 4.0.0-rc.117
+  "@effect/sql-pg": 4.0.0-rc.117
+  "@effect/sql-libsql": 4.0.0-rc.117
+  "@effect/vitest": 4.0.0-rc.117
+  "@effect/atom-react": 4.0.0-rc.117
   vitest: 5.0.0
   "@vitest/coverage-v8": 5.0.0
   # Exact, like `@effect/tsgo` below: `effect-tsgo patch` (the root `prepare`) patches the
