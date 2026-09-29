@@ -25,9 +25,10 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
-import * as OAuth from "./OAuth.ts";
-import * as OAuthProvider from "./OAuthProvider.ts";
+import * as OAuthConfig from "./OAuthConfig.ts";
+import type * as OAuthProvider from "./OAuthProvider.ts";
+import * as OAuthProviders from "./OAuthProviders.ts";
+import * as ProviderHttp from "./ProviderHttp.ts";
 import * as ProviderResponses from "./ProviderResponses.ts";
 
 /** No account, no stored tokens for it, or a stored access token expired with no refresh token to recover it. */
@@ -79,6 +80,7 @@ const refresh = (
   accountId: Accounts.AccountId,
   provider: OAuthProvider.ResolvedProvider,
   refreshToken: Redacted.Redacted<string>,
+  timeout: Duration.Duration,
 ): Effect.Effect<Redacted.Redacted<string>, OAuthRefreshFailed> =>
   Effect.gen(function* () {
     const form: Record<string, string> = {
@@ -92,9 +94,15 @@ const refresh = (
     // ESS-003: the same schema the code exchange uses — a body without a
     // string `access_token` fails the decode and normalizes to
     // `OAuthRefreshFailed` below.
+    // ECF-001: bounded by the token-exchange deadline, request plus decode.
+    // Not retried: a refresh token may rotate on use, so a replay after an
+    // ambiguous failure could strand the account.
     const body = yield* httpClient
       .post(provider.tokenEndpoint, { body: HttpBody.urlParams(form) })
-      .pipe(Effect.flatMap(HttpIncomingMessage.schemaBodyJson(ProviderResponses.TokenResponseSchema)));
+      .pipe(
+        Effect.flatMap(ProviderHttp.decodeBody(ProviderResponses.TokenResponseSchema)),
+        Effect.timeout(timeout),
+      );
     const now = yield* DateTime.now;
     const accessToken = Redacted.make(body.access_token);
     // RFC 6749 §6: a provider MAY omit `refresh_token` to mean "keep using
@@ -139,16 +147,10 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const accounts = yield* Accounts.Accounts;
     const httpClient = yield* HttpClient.HttpClient;
-    const config_ = yield* OAuth.OAuthConfig;
-
-    // BEH-EA-127's own reasoning, reapplied here: resolved once at boot,
-    // the same as `OAuth.layer`'s own registry — a mismatched or
-    // unfetchable discovery document dies at startup, not mid-request.
-    const resolved = yield* Effect.all(
-      config_.providers.map((provider) => OAuthProvider.resolve(httpClient, provider)),
-    );
-    const registry = new Map<string, OAuthProvider.ResolvedProvider>();
-    for (const provider of resolved) registry.set(provider.id, provider);
+    const config_ = yield* OAuthConfig.OAuthConfig;
+    // NAM-004: the one shared, already-resolved registry — the same instance
+    // `OAuth.layer` reads, so discovery is fetched once per process.
+    const providers = yield* OAuthProviders.OAuthProviders;
 
     const withAccessToken: OAuthTokenAccessShape["withAccessToken"] = (accountId, use) =>
       Effect.gen(function* () {
@@ -162,7 +164,6 @@ export const layer: Layer.Layer<
               }),
           ),
         );
-        const provider = registry.get(account.providerId);
         const stored = yield* accounts.findProviderTokens(accountId).pipe(
           Effect.catchTag(
             "AccountNotFound",
@@ -173,7 +174,7 @@ export const layer: Layer.Layer<
               }),
           ),
         );
-        if (provider === undefined || Option.isNone(stored)) {
+        if (!providers.has(account.providerId) || Option.isNone(stored)) {
           return yield* Effect.fail(
             new OAuthTokenUnavailable({
               accountId,
@@ -198,16 +199,30 @@ export const layer: Layer.Layer<
             }),
           );
         }
+        // Resolved only now that a refresh is actually needed: a lazily
+        // discovered provider that is down must not break a still-live token.
+        const provider = yield* providers.get(account.providerId).pipe(
+          Effect.mapError(
+            () =>
+              new OAuthRefreshFailed({
+                accountId,
+                message: `awthaq: provider ${account.providerId} is unavailable for account ${accountId}`,
+              }),
+          ),
+        );
         const refreshed = yield* refresh(
           httpClient,
           accounts,
           accountId,
           provider,
           tokens.refreshToken.value,
+          config_.httpTimeouts.tokenExchange,
         );
         return yield* use(refreshed);
       });
 
     return OAuthTokenAccess.of({ withAccessToken });
   }),
-);
+  // Layers memoize by reference, so a composition that also builds
+  // `OAuth.layer` shares this exact registry instance (NAM-004).
+).pipe(Layer.provide(OAuthProviders.layer));

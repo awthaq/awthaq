@@ -27,10 +27,27 @@ export class ProviderNotFound extends Schema.TaggedError<ProviderNotFound>()(
 ) {}
 
 /**
- * BEH-EA-122: covers every one of a callback's indistinguishable failure
- * reasons uniformly — malformed/unknown/replayed/expired flow state, a
- * correlation-cookie mismatch, a mix-up (`iss`) mismatch, a token-exchange
- * failure, or a failed `id_token` claim/signature check. Collapsing all of
+ * EEM-004: the provider itself could not be reached in time — a transport
+ * failure, a deadline overrun (ECF-001), or a 5xx/429 answer from its token,
+ * JWKS, userinfo or discovery endpoint. A 503, distinct from the 400
+ * `OAuthCallbackFailed` so a client can tell "try again shortly" from "this
+ * flow is dead". Field-less like every uniform error here: it can only be
+ * reached after state, cookie and PKCE validation of a flow the caller
+ * initiated, so distinguishing it leaks nothing an attacker could use.
+ */
+export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()(
+  "ProviderUnavailable",
+  {},
+  { httpApiStatus: 503 },
+) {}
+
+/**
+ * BEH-EA-122: covers every one of a callback's indistinguishable *protocol*
+ * failure reasons uniformly — malformed/unknown/replayed/expired flow state,
+ * a correlation-cookie mismatch, a mix-up (`iss`) mismatch, a token endpoint
+ * that answered but rejected the exchange (or returned a body that doesn't
+ * decode), or a failed `id_token` claim/signature check. Transport, timeout
+ * and 5xx failures are `ProviderUnavailable`, split out (EEM-004). Collapsing all of
  * these into one shape is deliberate (research/05-oauth-oidc.md's Q88
  * "unknown state, expired state, and nonce mismatch all ... the same
  * generic ?error" guidance, applied to a typed response instead of a
@@ -89,7 +106,7 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       // for `?link=true` from an anonymous caller — `OptionalAuthentication`
       // itself never fails (BEH-EA-029/068's own doc comment), it only
       // ever resolves `CurrentPrincipal`, defaulting to anonymous.
-      error: [ProviderNotFound, Api.Unauthenticated],
+      error: [ProviderNotFound, ProviderUnavailable, Api.Unauthenticated],
     }),
   )
   .add(
@@ -102,6 +119,7 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       // when a `Hooks.BeforeSessionIssue` tap diverts.
       error: [
         ProviderNotFound,
+        ProviderUnavailable,
         OAuthCallbackFailed,
         AccountExists,
         Api.RateLimited,

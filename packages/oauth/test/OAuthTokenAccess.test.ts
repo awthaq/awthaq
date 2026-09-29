@@ -12,35 +12,15 @@ import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as TestClock from "effect/testing/TestClock";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
-
-interface FakeRoutes {
-  readonly [urlFragment: string]: unknown;
-}
-
-const fakeHttpClient = (routes: FakeRoutes): Layer.Layer<HttpClient.HttpClient> =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) => {
-      const match = Object.entries(routes).find(([fragment]) => request.url.includes(fragment));
-      if (match === undefined) {
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 })),
-        );
-      }
-      const body = typeof match[1] === "function" ? (match[1] as () => unknown)() : match[1];
-      return Effect.succeed(
-        HttpClientResponse.fromWeb(request, new Response(JSON.stringify(body), { status: 200 })),
-      );
-    }),
-  );
+import { fakeHttpClient, hangingRoute, type FakeRoutes } from "./FakeProvider.ts";
 
 const acme = (): OAuthProvider.OAuthProviderConfig =>
   OAuthProvider.oauth2({
@@ -56,12 +36,14 @@ const acme = (): OAuthProvider.OAuthProviderConfig =>
     mapProfile: (claims) => ({ subject: claims["id"] as string }),
   });
 
-const buildLayer = (httpRoutes: FakeRoutes) =>
+const buildLayer = (httpRoutes: FakeRoutes, config?: Partial<OAuth.OAuthConfigInput>) =>
   OAuthTokenAccess.layer.pipe(
     Layer.provideMerge(Accounts.layerMemory),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provide(fakeHttpClient(httpRoutes)),
-    Layer.provide(OAuth.config({ providers: [acme()], baseUrl: "https://app.example.com" })),
+    Layer.provide(
+      OAuth.config({ providers: [acme()], baseUrl: "https://app.example.com", ...config }),
+    ),
   );
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
@@ -302,4 +284,40 @@ describe("OAuthTokenAccess", () => {
       Effect.provide(buildLayer({ "/token": { access_token: "at-new", expires_in: "3600" } })),
     ),
   );
+
+  it.effect("ECF-001: a hung refresh call fails OAuthRefreshFailed after the deadline", () => {
+    const hang = hangingRoute();
+    return Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const now = yield* DateTime.now;
+      const account = yield* accounts.link({
+        userId,
+        providerId: "acme",
+        subject: "sub-refresh-hangs",
+        tokens: {
+          accessToken: Redacted.make("at-old"),
+          refreshToken: Option.some(Redacted.make("rt-old")),
+          accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
+          refreshTokenExpiresAt: Option.none(),
+          scope: Option.none(),
+          tokenType: Option.none(),
+        },
+      });
+      const tokenAccess = yield* OAuthTokenAccess.OAuthTokenAccess;
+      const fiber = yield* Effect.forkChild(
+        tokenAccess.withAccessToken(account.id, () => Effect.void).pipe(Effect.flip),
+      );
+      yield* hang.reached;
+      yield* TestClock.adjust(Duration.seconds(3));
+      const failure = yield* Fiber.join(fiber);
+      assert.strictEqual(failure._tag, "OAuthRefreshFailed");
+    }).pipe(
+      Effect.provide(
+        buildLayer(
+          { "/token": hang.route },
+          { httpTimeouts: { tokenExchange: Duration.seconds(3) } },
+        ),
+      ),
+    );
+  });
 });

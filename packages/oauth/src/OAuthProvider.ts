@@ -11,13 +11,15 @@
 // same way this plugin's own tests do with synthetic ids ("okta", "acme").
 
 import * as Config from "effect/Config";
+import * as Data from "effect/Data";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import * as Jwt from "./Jwt.ts";
+import * as ProviderHttp from "./ProviderHttp.ts";
 
 export interface OAuthEndpoints {
   readonly authorizationEndpoint: string;
@@ -30,6 +32,24 @@ export interface OAuthEndpoints {
 /** BEH-EA-121: a provider that rejects PKCE outright (documented per-provider, never a general escape hatch). */
 export interface OAuthProviderQuirks {
   readonly skipPkce?: boolean;
+}
+
+/**
+ * NAM-004: when a provider's discovery document is fetched.
+ *
+ * - `"boot"` (the default): resolved once while the plugin's layer builds —
+ *   an unreachable or mismatching document fails startup (BEH-EA-127), after
+ *   the discovery GET's own retries.
+ * - `"lazy"`: resolved on first use and refreshed every `refresh` (default
+ *   one hour). While discovery is unreachable the provider answers
+ *   `ProviderUnavailable` (503) without blocking the rest of the auth
+ *   runtime; a fetched issuer that mismatches (or a malformed document)
+ *   disables the provider permanently with a logged defect — BEH-EA-127
+ *   still fails closed, just at first use instead of boot.
+ */
+export interface OAuthDiscoveryPolicy {
+  readonly mode: "boot" | "lazy";
+  readonly refresh?: Duration.Duration;
 }
 
 export interface OAuthProfile {
@@ -65,6 +85,8 @@ export interface OAuthProviderConfig {
   readonly scopes: ReadonlyArray<string>;
   readonly pkce: true;
   readonly quirks?: OAuthProviderQuirks;
+  /** NAM-004: only meaningful with a `discoveryUrl`. */
+  readonly discovery?: OAuthDiscoveryPolicy;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
@@ -119,23 +141,40 @@ const DiscoveryDocumentSchema = Schema.Struct({
 });
 
 /**
- * BEH-EA-127: runs once, at plugin boot (this plugin's own `make`, per
- * provider) — never per-request. A mismatched or unfetchable discovery
- * document (or a provider missing endpoints it needed) is a deployment
- * defect, not a request-level condition, so this dies rather than
- * returning a typed error: exactly BEH-EA-127's "registration fails at
- * boot... no request-serving code path is ever reached."
+ * NAM-004: the discovery endpoint could not be *reached* (transport failure,
+ * deadline overrun, 5xx after retries) — as opposed to reached and wrong,
+ * which is a defect. The one failure `resolve` returns typed, so the caller
+ * chooses between failing boot (`"boot"` mode) and answering 503 (`"lazy"`).
+ */
+export class DiscoveryUnavailable extends Data.TaggedError("DiscoveryUnavailable")<{
+  readonly providerId: string;
+  readonly message: string;
+}> {}
+
+/**
+ * BEH-EA-127: a mismatched discovery document, a malformed one, or a
+ * provider missing endpoints it needed is a deployment defect, not a
+ * request-level condition, so those die rather than returning a typed
+ * error — exactly BEH-EA-127's "registration fails ... no request-serving
+ * code path is ever reached". Only an *unreachable* discovery endpoint is a
+ * typed `DiscoveryUnavailable` (NAM-004). `httpClient` should be the
+ * retrying client (ERS-003); `discoveryTimeout` bounds the GET (ECF-001).
  */
 export const resolve = (
   httpClient: HttpClient.HttpClient,
   config: OAuthProviderConfig,
-): Effect.Effect<ResolvedProvider> =>
+  options: { readonly discoveryTimeout: Duration.Duration },
+): Effect.Effect<ResolvedProvider, DiscoveryUnavailable> =>
   Effect.gen(function* () {
-    const clientId = yield* config.clientId;
+    const clientId = yield* config.clientId.pipe(Effect.orDie);
     const clientSecret =
-      config.clientSecret === undefined ? Option.none() : Option.some(yield* config.clientSecret);
+      config.clientSecret === undefined
+        ? Option.none()
+        : Option.some(yield* config.clientSecret.pipe(Effect.orDie));
     const configuredIssuer =
-      config.issuer === undefined ? Option.none() : Option.some(yield* config.issuer);
+      config.issuer === undefined
+        ? Option.none()
+        : Option.some(yield* config.issuer.pipe(Effect.orDie));
 
     if (config.kind === "oidc" && Option.isNone(configuredIssuer)) {
       return yield* Effect.die(
@@ -176,16 +215,24 @@ export const resolve = (
     let userinfoEndpoint = config.endpoints?.userinfoEndpoint;
 
     if (config.discoveryUrl !== undefined) {
-      const discoveryUrl = yield* config.discoveryUrl;
+      const discoveryUrl = yield* config.discoveryUrl.pipe(Effect.orDie);
       const document = yield* httpClient.get(discoveryUrl).pipe(
-        Effect.flatMap(HttpIncomingMessage.schemaBodyJson(DiscoveryDocumentSchema)),
+        Effect.flatMap(ProviderHttp.decodeBody(DiscoveryDocumentSchema)),
+        Effect.timeout(options.discoveryTimeout),
         Effect.catch((error) =>
-          Effect.die(
-            new Error(
-              `awthaq/oauth: provider "${config.id}" discovery document is invalid ` +
-                `or unfetchable: ${error.message}`,
-            ),
-          ),
+          ProviderHttp.isUnavailable(error)
+            ? Effect.fail(
+                new DiscoveryUnavailable({
+                  providerId: config.id,
+                  message: `awthaq/oauth: provider "${config.id}" discovery is unreachable: ${error.message}`,
+                }),
+              )
+            : Effect.die(
+                new Error(
+                  `awthaq/oauth: provider "${config.id}" discovery document is invalid ` +
+                    `or unfetchable: ${error.message}`,
+                ),
+              ),
         ),
       );
       if (Option.isSome(configuredIssuer) && document.issuer !== configuredIssuer.value) {
@@ -243,7 +290,7 @@ export const resolve = (
       skipPkce,
       mapProfile: config.mapProfile,
     };
-  }).pipe(Effect.orDie);
+  });
 
 // Re-exported so a caller validating an `id_token` doesn't need its own
 // import of the internal verifier module.

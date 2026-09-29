@@ -25,14 +25,17 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as TestClock from "effect/testing/TestClock";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
+import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
+import { FakeReply, fakeHttpClient, hangingRoute, type FakeRoutes } from "./FakeProvider.ts";
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
 // requires `Encryption` — a fixed test key, isolated from the real
@@ -91,29 +94,6 @@ const optionalField = <K extends string, V>(
 ): { readonly [P in K]: V } | {} =>
   value === undefined ? {} : ({ [key]: value } as { [P in K]: V });
 
-// ---- fake HttpClient: routes by URL substring, form/JSON bodies alike ----
-
-interface FakeRoutes {
-  readonly [urlFragment: string]: unknown;
-}
-
-const fakeHttpClient = (routes: FakeRoutes): Layer.Layer<HttpClient.HttpClient> =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) => {
-      const match = Object.entries(routes).find(([fragment]) => request.url.includes(fragment));
-      if (match === undefined) {
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 })),
-        );
-      }
-      const body = typeof match[1] === "function" ? (match[1] as () => unknown)() : match[1];
-      return Effect.succeed(
-        HttpClientResponse.fromWeb(request, new Response(JSON.stringify(body), { status: 200 })),
-      );
-    }),
-  );
-
 // ---- shared core/domain layers ----
 
 const CoreLive = Layer.mergeAll(
@@ -135,6 +115,8 @@ const buildLayer = (options: {
   readonly linking?: "explicit" | { readonly trustedProviders: ReadonlyArray<string> };
   readonly trustedOrigins?: ReadonlyArray<string>;
   readonly httpRoutes?: FakeRoutes;
+  readonly httpTimeouts?: OAuth.OAuthConfigInput["httpTimeouts"];
+  readonly retry?: OAuth.OAuthConfigInput["retry"];
 }) =>
   OAuth.OAuth.layer.pipe(
     // `OAuthApi.OAuthGroup`'s own `.middleware(Api.OptionalAuthentication)`
@@ -169,6 +151,9 @@ const buildLayer = (options: {
         linking: options.linking ?? "explicit",
         trustedOrigins: options.trustedOrigins ?? [],
         baseUrl,
+        // Zero backoff by default: a retry never sleeps on the TestClock.
+        retry: { base: Duration.zero, ...options.retry },
+        ...(options.httpTimeouts === undefined ? {} : { httpTimeouts: options.httpTimeouts }),
       }),
     ),
   );
@@ -791,6 +776,291 @@ describe("OAuth", () => {
         assert.include(message, "openid");
       }),
     );
+  });
+
+  describe("outbound provider calls: deadlines, retries, 503 channel (ECF-001/EEM-004/ERS-003/NAM-004)", () => {
+    /**
+     * Forks `effect`, waits until its outbound call is pending on the hung
+     * route, advances the TestClock by `by`, and joins — no real waiting.
+     */
+    const afterAdvancing = <A, E, R>(
+      hang: ReturnType<typeof hangingRoute>,
+      by: Duration.Duration,
+      effect: Effect.Effect<A, E, R>,
+    ) =>
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(effect);
+        yield* hang.reached;
+        yield* TestClock.adjust(by);
+        return yield* Fiber.join(fiber);
+      });
+
+    const acmeCallback = Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+      return yield* oauth
+        .callback("acme", { code: "c1", state, iss: undefined, cookieState: state })
+        .pipe(Effect.flip);
+    });
+
+    const acmeRoutes = {
+      "/token": { access_token: "at-1" },
+      "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
+    };
+
+    it.effect("ECF-001: a token endpoint that never answers fails ProviderUnavailable at its deadline", () => {
+      const hang = hangingRoute();
+      return Effect.gen(function* () {
+        const failure = yield* afterAdvancing(hang, Duration.seconds(3), acmeCallback);
+        assert.strictEqual(failure._tag, "ProviderUnavailable");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: { ...acmeRoutes, "/token": hang.route },
+            httpTimeouts: { tokenExchange: Duration.seconds(3) },
+          }),
+        ),
+      );
+    });
+
+    it.effect("ECF-001: a userinfo endpoint that never answers fails ProviderUnavailable at its deadline", () => {
+      const hang = hangingRoute();
+      return Effect.gen(function* () {
+        const failure = yield* afterAdvancing(hang, Duration.seconds(3), acmeCallback);
+        assert.strictEqual(failure._tag, "ProviderUnavailable");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: { ...acmeRoutes, "/userinfo": hang.route },
+            httpTimeouts: { userinfo: Duration.seconds(3) },
+            retry: { times: 0 },
+          }),
+        ),
+      );
+    });
+
+    it.effect("ECF-001: a discovery endpoint that never answers dies at boot at its deadline", () => {
+      const hang = hangingRoute();
+      return Effect.gen(function* () {
+        const exit = yield* afterAdvancing(
+          hang,
+          Duration.seconds(3),
+          Effect.void.pipe(
+            Effect.provide(
+              buildLayer({
+                providers: [okta()],
+                httpRoutes: { ".well-known/openid-configuration": hang.route },
+                httpTimeouts: { discovery: Duration.seconds(3) },
+                retry: { times: 0 },
+              }),
+            ),
+            Effect.exit,
+          ),
+        );
+        if (exit._tag === "Success") return assert.fail("expected boot to die");
+        assert.include(Cause.pretty(exit.cause), "unreachable");
+      });
+    });
+
+    it.effect("EEM-004: a token endpoint answering 503 is ProviderUnavailable, not OAuthCallbackFailed", () =>
+      Effect.gen(function* () {
+        const failure = yield* acmeCallback;
+        assert.strictEqual(failure._tag, "ProviderUnavailable");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: { ...acmeRoutes, "/token": new FakeReply(503) },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("EEM-004: a token endpoint answering 400 invalid_grant is still OAuthCallbackFailed", () =>
+      Effect.gen(function* () {
+        const failure = yield* acmeCallback;
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: { ...acmeRoutes, "/token": new FakeReply(400, { error: "invalid_grant" }) },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("EEM-004: a userinfo 401 is a protocol failure, never mistaken for a claim set", () =>
+      Effect.gen(function* () {
+        const failure = yield* acmeCallback;
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: { ...acmeRoutes, "/userinfo": new FakeReply(401, { error: "invalid_token" }) },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("ERS-003: a token endpoint that 503s is NOT retried (the code is single-use)", () => {
+      let tokenCalls = 0;
+      return Effect.gen(function* () {
+        const failure = yield* acmeCallback;
+        assert.strictEqual(failure._tag, "ProviderUnavailable");
+        assert.strictEqual(tokenCalls, 1);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              ...acmeRoutes,
+              "/token": () => {
+                tokenCalls += 1;
+                return new FakeReply(503);
+              },
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("ERS-003: a userinfo endpoint that 503s once then succeeds still completes the sign-in", () => {
+      let userinfoCalls = 0;
+      return Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+        const outcome = yield* oauth.callback("acme", {
+          code: "c1",
+          state,
+          iss: undefined,
+          cookieState: state,
+        });
+        assert.isDefined(outcome.session);
+        assert.strictEqual(userinfoCalls, 2);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              ...acmeRoutes,
+              "/userinfo": () => {
+                userinfoCalls += 1;
+                return userinfoCalls === 1
+                  ? new FakeReply(503)
+                  : { id: "acme-user-1", email: "ada@example.com" };
+              },
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("ERS-003/NAM-004: a discovery endpoint that fails once at boot still registers the provider", () => {
+      let discoveryCalls = 0;
+      return Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { location } = yield* oauth.authorize("okta", { callbackURL: undefined, link: undefined });
+        assert.include(location, "https://okta.example.com/authorize");
+        assert.strictEqual(discoveryCalls, 2);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta()],
+            httpRoutes: {
+              ".well-known/openid-configuration": () => {
+                discoveryCalls += 1;
+                return discoveryCalls === 1 ? new FakeReply(503) : oktaDiscovery;
+              },
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("NAM-004: a lazy provider whose discovery is down boots, answers 503, then recovers", () => {
+      let discoveryUp = false;
+      return Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        // The rest of the runtime is unaffected by the down provider.
+        const other = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+        assert.include(other.location, "https://acme.example.com/authorize");
+        const down = yield* oauth
+          .authorize("okta", { callbackURL: undefined, link: undefined })
+          .pipe(Effect.flip);
+        assert.strictEqual(down._tag, "ProviderUnavailable");
+        discoveryUp = true;
+        const { location } = yield* oauth.authorize("okta", { callbackURL: undefined, link: undefined });
+        assert.include(location, "https://okta.example.com/authorize");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme(), okta({ discovery: { mode: "lazy" } })],
+            retry: { times: 0 },
+            httpRoutes: {
+              ".well-known/openid-configuration": () =>
+                discoveryUp ? oktaDiscovery : new FakeReply(503),
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("NAM-004: a lazy provider whose fetched issuer mismatches never serves a request", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const first = yield* oauth
+          .authorize("okta", { callbackURL: undefined, link: undefined })
+          .pipe(Effect.flip);
+        assert.strictEqual(first._tag, "ProviderUnavailable");
+        const second = yield* oauth
+          .authorize("okta", { callbackURL: undefined, link: undefined })
+          .pipe(Effect.flip);
+        assert.strictEqual(second._tag, "ProviderUnavailable");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta({ discovery: { mode: "lazy" } })],
+            httpRoutes: {
+              ".well-known/openid-configuration": {
+                ...oktaDiscovery,
+                issuer: "https://attacker.example.com/oauth2/default",
+              },
+            },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("NAM-004: OAuth and OAuthTokenAccess share one resolved registry (discovery fetched once)", () => {
+      let discoveryCalls = 0;
+      const both = Layer.merge(OAuth.OAuth.layer, OAuthTokenAccess.layer).pipe(
+        Layer.provide(Authentication.OptionalAuthenticationLive),
+        Layer.provide(Authentication.PrincipalResolverLive),
+        Layer.provideMerge(CoreLive),
+        Layer.provideMerge(RateLimiter.layerPermissive),
+        Layer.provideMerge(RateLimits.layer),
+        Layer.provideMerge(SqlTransaction.layerNoop),
+        Layer.provideMerge(ClientAddress.layerDirect),
+        Layer.provideMerge(EncryptionLive),
+        Layer.provide(
+          fakeHttpClient({
+            ".well-known/openid-configuration": () => {
+              discoveryCalls += 1;
+              return oktaDiscovery;
+            },
+          }),
+        ),
+        Layer.provide(OAuth.config({ providers: [okta()], baseUrl })),
+      );
+      return Effect.gen(function* () {
+        yield* OAuthTokenAccess.OAuthTokenAccess;
+        assert.strictEqual(discoveryCalls, 1);
+      }).pipe(Effect.provide(both));
+    });
   });
 
   describe("BEH-EA-128: callback destination is validated, never echoed", () => {
@@ -1433,6 +1703,91 @@ describe("OAuth", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
       }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
+    );
+
+    it.effect("ECF-001: a JWKS endpoint that never answers fails ProviderUnavailable at its deadline", () => {
+      const hang = hangingRoute();
+      return Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = oidcClaims(location, { sub: "hang-sub" });
+        const fiber = yield* Effect.forkChild(
+          oauth
+            .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+            .pipe(Effect.flip),
+        );
+        yield* hang.reached;
+        yield* TestClock.adjust(Duration.seconds(3));
+        const failure = yield* Fiber.join(fiber);
+        assert.strictEqual(failure._tag, "ProviderUnavailable");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta()],
+            httpRoutes: { ...idTokenRoutes(), "/jwks": hang.route },
+            httpTimeouts: { jwks: Duration.seconds(3) },
+            retry: { times: 0 },
+          }),
+        ),
+      );
+    });
+
+    it.effect("ERS-003: a JWKS endpoint that 503s once then succeeds still verifies the id_token", () => {
+      let jwksCalls = 0;
+      return Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = oidcClaims(location, { sub: "retry-sub", email: "retry@example.com" });
+        const outcome = yield* oauth.callback("okta", {
+          code: "c1",
+          state,
+          iss: undefined,
+          cookieState: state,
+        });
+        assert.isDefined(outcome.session);
+        assert.strictEqual(jwksCalls, 2);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta()],
+            httpRoutes: {
+              ...idTokenRoutes(),
+              "/jwks": () => {
+                jwksCalls += 1;
+                return jwksCalls === 1 ? new FakeReply(503) : { keys: [jwk] };
+              },
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("EEM-004: a JWKS endpoint that keeps answering 503 is ProviderUnavailable", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = oidcClaims(location, { sub: "down-sub" });
+        const failure = yield* oauth
+          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "ProviderUnavailable");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta()],
+            httpRoutes: { ...idTokenRoutes(), "/jwks": new FakeReply(503) },
+          }),
+        ),
+      ),
     );
   });
 

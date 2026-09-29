@@ -3,7 +3,7 @@ ID: "ECF-001"
 Title: "No deadline on any outbound HTTP call: five third-party calls can pin auth request fibers"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:208"
 Auditor: "effect-concurrency-fiber-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `oauth` · reported by **Effect Concurrency & Fiber Specialist** (`effect-concurrency-fiber-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — evidence quote matches `packages/oauth/src/OAuth.ts:208` exactly, and `grep -rn "Effect.timeout" packages/*/src` returns zero hits repo-wide; `OAuthProvider.ts:140` (discovery) and `Password.ts:215` (HIBP) confirm the other undeadlined outbound calls too. Fix is a mechanical `Effect.timeout` wrap at each site. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-outbound-resilience`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:244`. Fix: Give every outbound provider call a policy deadline, configurable per call class, and map a timeout into the typed failure channel. (effort M). Full dossier: `.plan/slices/03-oauth-flow.md`.
+
+**Resolved (2026-09-29):** OAuthConfig.httpTimeouts (tokenExchange 10s/jwks 5s/userinfo 5s/discovery 10s, per-call-class, merged from partials) now bounds every outbound call in packages/oauth: exchangeCode, fetchAndCacheJwks, userinfo, OAuthTokenAccess.refresh and OAuthProvider.resolve's discovery GET, each wrapping request+decode in Effect.timeout; overrun -> ProviderUnavailable (OAuthRefreshFailed on the refresh port, die at boot for discovery). Tests (OAuth.test.ts 'outbound provider calls', OAuthTokenAccess.test.ts): hung token/userinfo/JWKS/discovery/refresh endpoints fail at the deadline under TestClock (FakeProvider.hangingRoute); mutation-checked red (Effect.timeout removed -> hung-token test times out). Deferred (other programs' files, same root cause): packages/jwt/src/verify.ts JWKS fetch (slice 04/P03) and Password.ts HIBP (P07). Gates: tsc -b + tsconfig.test.json (only pre-existing packages/react TS2883), vitest 855 pass, test:bdd, spec:verify:strict, oxlint packages/oauth, pnpm circular.

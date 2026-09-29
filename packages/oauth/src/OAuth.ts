@@ -33,7 +33,6 @@ import {
   Verification,
 } from "@awthaq/core";
 import { ClientAddress, Encryption, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -46,42 +45,27 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Jwt from "./Jwt.ts";
 import * as OAuthApi from "./OAuthApi.ts";
+import { OAuthConfig } from "./OAuthConfig.ts";
 import * as OAuthProvider from "./OAuthProvider.ts";
+import * as OAuthProviders from "./OAuthProviders.ts";
+import * as ProviderHttp from "./ProviderHttp.ts";
 import * as ProviderResponses from "./ProviderResponses.ts";
 
-export interface OAuthConfigShape {
-  readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
-  /** BEH-EA-123/124: `"explicit"` (default) or an opt-in, per-provider trusted-email-match auto-link list. */
-  readonly linking: "explicit" | { readonly trustedProviders: ReadonlyArray<string> };
-  /** BEH-EA-128: the allowlist a `callbackURL` must resolve to an origin in, or fall back to `defaultCallbackURL`. */
-  readonly trustedOrigins: ReadonlyArray<string>;
-  /** BEH-EA-128/354: `redirect_uri` is always derived from this, never from request input. */
-  readonly baseUrl: string;
-  readonly defaultCallbackURL: string;
-}
-
-const defaultOAuthConfig: OAuthConfigShape = {
-  providers: [],
-  linking: "explicit",
-  trustedOrigins: [],
-  baseUrl: "http://localhost:3000",
-  defaultCallbackURL: "/",
-};
-
-/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
-export const OAuthConfig: Context.Reference<OAuthConfigShape> = Context.Reference(
-  "awthaq/oauth/Config",
-  { defaultValue: () => defaultOAuthConfig },
-);
-
-export const config = (partial: Partial<OAuthConfigShape>): Layer.Layer<never> =>
-  Layer.succeed(OAuthConfig, { ...defaultOAuthConfig, ...partial });
+// The policy knobs live in `OAuthConfig.ts` (so the shared provider registry
+// can read them without a module cycle); re-exported so `OAuth.config(...)`
+// and `OAuth.OAuthConfig` are unchanged for callers.
+export { OAuthConfig, config } from "./OAuthConfig.ts";
+export type {
+  OAuthConfigInput,
+  OAuthConfigShape,
+  OAuthHttpTimeouts,
+  OAuthRetryPolicy,
+} from "./OAuthConfig.ts";
 
 const OAUTH_STATE_COOKIE = "__Host-oauth-state";
 const FLOW_TTL = Duration.minutes(10);
@@ -231,7 +215,8 @@ const exchangeCode = (
   httpClient: HttpClient.HttpClient,
   provider: OAuthProvider.ResolvedProvider,
   input: { readonly code: string; readonly codeVerifier: string; readonly redirectUri: string },
-): Effect.Effect<TokenSet, OAuthApi.OAuthCallbackFailed> =>
+  timeout: Duration.Duration,
+): Effect.Effect<TokenSet, OAuthApi.OAuthCallbackFailed | OAuthApi.ProviderUnavailable> =>
   Effect.gen(function* () {
     const form: Record<string, string> = {
       grant_type: "authorization_code",
@@ -245,9 +230,15 @@ const exchangeCode = (
     }
     // ESS-003: decoded at the boundary — a body without a string
     // `access_token` (or with a mistyped member) fails the schema, typed.
+    // ECF-001: the deadline covers the request and its body decode. ERS-003:
+    // this is the one call that is never retried — the authorization code is
+    // single-use (RFC 6749 §4.1.2), so `httpClient` here is the plain client.
     const body = yield* httpClient
       .post(provider.tokenEndpoint, { body: HttpBody.urlParams(form) })
-      .pipe(Effect.flatMap(HttpIncomingMessage.schemaBodyJson(ProviderResponses.TokenResponseSchema)));
+      .pipe(
+        Effect.flatMap(ProviderHttp.decodeBody(ProviderResponses.TokenResponseSchema)),
+        Effect.timeout(timeout),
+      );
     return {
       accessToken: body.access_token,
       idToken: body.id_token,
@@ -256,7 +247,7 @@ const exchangeCode = (
       scope: body.scope,
       tokenType: body.token_type,
     };
-  }).pipe(Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())));
+  }).pipe(Effect.catch((error) => Effect.fail(ProviderHttp.toCallbackFailure(error))));
 
 /** BE-002: the `TokenSet` half of the `Accounts.ProviderTokenSet` conversion — see `TokenSet`'s own comment. */
 const toProviderTokenSet = (tokens: TokenSet, now: DateTime.Utc): Accounts.ProviderTokenSet => ({
@@ -312,7 +303,11 @@ const verifyIdToken = (
   provider: OAuthProvider.ResolvedProvider,
   idToken: string,
   nonce: string | undefined,
-): Effect.Effect<Record<string, unknown>, OAuthApi.OAuthCallbackFailed> =>
+  jwksTimeout: Duration.Duration,
+): Effect.Effect<
+  Record<string, unknown>,
+  OAuthApi.OAuthCallbackFailed | OAuthApi.ProviderUnavailable
+> =>
   Effect.gen(function* () {
     if (Option.isNone(provider.jwksUri)) {
       return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
@@ -331,14 +326,18 @@ const verifyIdToken = (
     // identical shape). A malformed body now fails typed as
     // `OAuthCallbackFailed`, the same as every other check in this
     // function, instead of flowing forward fully typed into `findKey`.
+    // ECF-001/EEM-004/ERS-003: `httpClient` is the retrying client; the
+    // deadline covers request plus decode, and a transport/timeout/5xx
+    // failure is `ProviderUnavailable`, a rejected/malformed document a 400.
     const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(
-      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),
+      Effect.flatMap(ProviderHttp.decodeBody(Jwt.JwksDocumentSchema)),
+      Effect.timeout(jwksTimeout),
       Effect.tap((jwks) =>
         Ref.update(jwksCache, (cache) =>
           HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),
         ),
       ),
-      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
+      Effect.catch((error) => Effect.fail(ProviderHttp.toCallbackFailure(error))),
     );
 
     // JJS-001/KRS-004/OIT-002: a TTL'd-out entry is treated the same as a
@@ -350,13 +349,15 @@ const verifyIdToken = (
         ? cachedEntry.value.jwks
         : yield* fetchAndCacheJwks;
 
-    const verified = yield* Jwt.findKey(jwks, decoded.header.kid).pipe(
+    const jwk = yield* Jwt.findKey(jwks, decoded.header.kid).pipe(
       // A `kid` cache miss gets exactly one refetch — the provider may
       // have rotated keys since this process last cached them.
       Effect.catch(() =>
         fetchAndCacheJwks.pipe(Effect.flatMap((fresh) => Jwt.findKey(fresh, decoded.header.kid))),
       ),
-      Effect.flatMap((jwk) => Jwt.verifyRs256(jwk, decoded.signingInput, decoded.signature)),
+      Effect.catchTag("JwtVerificationError", () => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
+    );
+    const verified = yield* Jwt.verifyRs256(jwk, decoded.signingInput, decoded.signature).pipe(
       Effect.mapError(() => new OAuthApi.OAuthCallbackFailed()),
     );
     if (!verified) return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
@@ -463,7 +464,7 @@ export interface OAuthShape {
     },
   ) => Effect.Effect<
     { readonly location: string; readonly state: string },
-    OAuthApi.ProviderNotFound
+    OAuthApi.ProviderNotFound | OAuthApi.ProviderUnavailable
   >;
   readonly callback: (
     providerId: string,
@@ -490,6 +491,7 @@ export interface OAuthShape {
         | undefined;
     },
     | OAuthApi.ProviderNotFound
+    | OAuthApi.ProviderUnavailable
     | OAuthApi.OAuthCallbackFailed
     | OAuthApi.AccountExists
     | Api.RateLimited
@@ -516,6 +518,10 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const config_ = yield* OAuthConfig;
       const crypto = yield* Crypto.Crypto;
       const httpClient = yield* HttpClient.HttpClient;
+      const providers = yield* OAuthProviders.OAuthProviders;
+      // ERS-003: the retrying client serves the idempotent GETs (JWKS,
+      // userinfo); `httpClient` stays plain for the single-use code exchange.
+      const readClient = ProviderHttp.retrying(httpClient, config_.retry);
       const jwksCache = yield* Ref.make(HashMap.empty<string, JwksCacheEntry>());
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
@@ -555,22 +561,16 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         });
       yield* registerCallbackRule.pipe(Effect.orDie);
 
-      // BEH-EA-127: resolved once, at boot — a mismatched or unfetchable
-      // discovery document dies here, before any request is ever served.
-      const resolved = yield* Effect.all(
-        config_.providers.map((provider) => OAuthProvider.resolve(httpClient, provider)),
-      );
-      const registry = new Map<string, OAuthProvider.ResolvedProvider>();
-      for (const provider of resolved) registry.set(provider.id, provider);
+      // BEH-EA-127/NAM-004: resolved by the shared `OAuthProviders` registry
+      // — boot-mode providers while this layer builds (a mismatched or
+      // unfetchable discovery document dies before any request is served),
+      // lazy ones on first use.
 
       const trustedProviders =
         config_.linking === "explicit" ? [] : config_.linking.trustedProviders;
 
       const authorize: OAuthShape["authorize"] = Effect.fnUntraced(function* (providerId, input) {
-        const provider = registry.get(providerId);
-        if (provider === undefined) {
-          return yield* Effect.fail(new OAuthApi.ProviderNotFound({ providerId }));
-        }
+        const provider = yield* providers.get(providerId);
         const callbackURL = resolveCallbackURL(
           input.callbackURL,
           config_.trustedOrigins,
@@ -632,10 +632,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
             ),
           );
-        const provider = registry.get(providerId);
-        if (provider === undefined) {
-          return yield* Effect.fail(new OAuthApi.ProviderNotFound({ providerId }));
-        }
+        const provider = yield* providers.get(providerId);
         // BEH-EA-122: the correlation cookie and the returned `state` must
         // agree before the (single-use) Verification entry is even
         // consumed — an attacker who tricks a victim's browser into
@@ -694,18 +691,26 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         }
 
         const redirectUri = `${config_.baseUrl}/oauth/${providerId}/callback`;
-        const tokens = yield* exchangeCode(httpClient, provider, {
-          code: input.code,
-          codeVerifier,
-          redirectUri,
-        });
+        const tokens = yield* exchangeCode(
+          httpClient,
+          provider,
+          { code: input.code, codeVerifier, redirectUri },
+          config_.httpTimeouts.tokenExchange,
+        );
         const exchangedAt = yield* DateTime.now;
 
         const idClaims: Record<string, unknown> | undefined =
           provider.kind === "oidc"
             ? tokens.idToken === undefined
               ? yield* Effect.fail(new OAuthApi.OAuthCallbackFailed())
-              : yield* verifyIdToken(httpClient, jwksCache, provider, tokens.idToken, nonce)
+              : yield* verifyIdToken(
+                readClient,
+                jwksCache,
+                provider,
+                tokens.idToken,
+                nonce,
+                config_.httpTimeouts.jwks,
+              )
             : undefined;
 
         // A plain `"oauth2"` provider (no `id_token` at all, e.g. GitHub)
@@ -717,13 +722,14 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const userinfoClaims: Record<string, unknown> | undefined = Option.isSome(
           provider.userinfoEndpoint,
         )
-          ? yield* httpClient
+          ? yield* readClient
               .get(provider.userinfoEndpoint.value, {
                 headers: { authorization: `Bearer ${tokens.accessToken}` },
               })
               .pipe(
-                Effect.flatMap(HttpIncomingMessage.schemaBodyJson(ProviderResponses.UserinfoSchema)),
-                Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
+                Effect.flatMap(ProviderHttp.decodeBody(ProviderResponses.UserinfoSchema)),
+                Effect.timeout(config_.httpTimeouts.userinfo),
+                Effect.catch((error) => Effect.fail(ProviderHttp.toCallbackFailure(error))),
               )
           : undefined;
 
@@ -883,5 +889,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       return OAuth.of({ authorize, callback });
     }),
-  });
+    // NAM-004: the shared provider registry, provided here so callers need
+    // not wire it; Layers memoize by reference, so `OAuthTokenAccess.layer`
+    // in the same composition reuses this very instance.
+  }).pipe(Layer.provide(OAuthProviders.layer));
 }

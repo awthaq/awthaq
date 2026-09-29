@@ -26,19 +26,19 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthApi from "../src/OAuthApi.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
+import { FakeReply, fakeHttpClient, type FakeRoutes } from "./FakeProvider.ts";
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
 // requires `Encryption` — a fixed test key, isolated from the real
@@ -57,29 +57,6 @@ const EncryptionLive = Encryption.layer.pipe(
   ),
   Layer.provide(NodeCrypto.layer),
 );
-
-interface FakeRoutes {
-  readonly [urlFragment: string]: unknown;
-}
-
-const fakeHttpClient = (routes: FakeRoutes): Layer.Layer<HttpClient.HttpClient> =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) => {
-      const match = Object.entries(routes).find(([fragment]) => request.url.includes(fragment));
-      if (match === undefined) {
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 })),
-        );
-      }
-      return Effect.succeed(
-        HttpClientResponse.fromWeb(
-          request,
-          new Response(JSON.stringify(match[1]), { status: 200 }),
-        ),
-      );
-    }),
-  );
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -115,28 +92,47 @@ const acme = OAuthProvider.oauth2({
   }),
 });
 
-const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
-  Layer.provide(OAuth.OAuth.layer),
-  Layer.provide(Authentication.OptionalAuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(RateLimiter.layerPermissive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(ClientAddress.layerDirect),
-  Layer.provideMerge(EncryptionLive),
-  Layer.provide(
-    fakeHttpClient({
-      "/token": { access_token: "at-1" },
-      "/userinfo": { id: "acme-sub-1", email: "acme-user@example.com" },
-    }),
-  ),
-  Layer.provide(
-    OAuth.config({ providers: [acme], linking: "explicit", trustedOrigins: [], baseUrl }),
-  ),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
-);
+const defaultRoutes = {
+  "/token": { access_token: "at-1" },
+  "/userinfo": { id: "acme-sub-1", email: "acme-user@example.com" },
+};
+
+const buildAppLayer = (options: {
+  readonly routes?: FakeRoutes;
+  /** A real, enforcing limiter instead of the permissive one every other test uses. */
+  readonly enforcing?: boolean;
+  readonly config?: OAuth.OAuthConfigInput;
+}) =>
+  AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
+    Layer.provide(OAuth.OAuth.layer),
+    Layer.provide(Authentication.OptionalAuthenticationLive),
+    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provideMerge(CoreLive),
+    Layer.provideMerge(
+      options.enforcing === true
+        ? RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))
+        : RateLimiter.layerPermissive,
+    ),
+    Layer.provideMerge(RateLimits.layer),
+    Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(ClientAddress.layerDirect),
+    Layer.provideMerge(EncryptionLive),
+    Layer.provide(fakeHttpClient(options.routes ?? defaultRoutes)),
+    Layer.provide(
+      OAuth.config({
+        providers: [acme],
+        linking: "explicit",
+        trustedOrigins: [],
+        baseUrl,
+        retry: { base: Duration.zero },
+        ...options.config,
+      }),
+    ),
+    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
+
+const AppLayer = buildAppLayer({});
 
 /**
  * A real, enforcing limiter — every other test in this file uses
@@ -144,28 +140,30 @@ const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.jso
  * the one dedicated layer that opts back into real enforcement, mirroring
  * `@awthaq/password`'s own dedicated throttle test.
  */
-const ThrottledAppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
-  Layer.provide(OAuth.OAuth.layer),
-  Layer.provide(Authentication.OptionalAuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(ClientAddress.layerDirect),
-  Layer.provideMerge(EncryptionLive),
-  Layer.provide(
-    fakeHttpClient({
-      "/token": { access_token: "at-1" },
-      "/userinfo": { id: "acme-sub-1", email: "acme-user@example.com" },
-    }),
-  ),
-  Layer.provide(
-    OAuth.config({ providers: [acme], linking: "explicit", trustedOrigins: [], baseUrl }),
-  ),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
-);
+const ThrottledAppLayer = buildAppLayer({ enforcing: true });
+
+/** Runs authorize then callback against `layer`, returning the callback response. */
+const runCallback = (layer: typeof AppLayer) =>
+  Effect.gen(function* () {
+    const { handler } = HttpRouter.toWebHandler(layer);
+    const authorizeResponse = yield* Effect.promise(() =>
+      handler(new Request("http://localhost/oauth/acme/authorize")),
+    );
+    const location = authorizeResponse.headers.get("location");
+    const stateCookie = authorizeResponse.headers.get("set-cookie");
+    if (location === null || stateCookie === null) {
+      throw new Error("expected authorize to redirect with a state cookie");
+    }
+    const state = new URL(location).searchParams.get("state");
+    return yield* Effect.promise(() =>
+      handler(
+        new Request(
+          `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
+          { headers: { cookie: stateCookie.split(";")[0] ?? "" } },
+        ),
+      ),
+    );
+  });
 
 describe("AuthHttp + OAuth (real HTTP)", () => {
   it.effect(
@@ -265,6 +263,30 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
         handler(new Request("http://localhost/oauth/acme/callback?code=cN&state=bogus")),
       );
       assert.strictEqual(throttled.status, 429);
+    }),
+  );
+
+  it.effect("EEM-004: a token endpoint answering 503 yields HTTP 503 ProviderUnavailable", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(
+        buildAppLayer({ routes: { ...defaultRoutes, "/token": new FakeReply(503) } }),
+      );
+      assert.strictEqual(response.status, 503);
+      const body = yield* Effect.promise(() => response.json());
+      assert.deepStrictEqual(body, { _tag: "ProviderUnavailable" });
+    }),
+  );
+
+  it.effect("EEM-004: a token endpoint answering 400 invalid_grant still yields HTTP 400", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(
+        buildAppLayer({
+          routes: { ...defaultRoutes, "/token": new FakeReply(400, { error: "invalid_grant" }) },
+        }),
+      );
+      assert.strictEqual(response.status, 400);
+      const body = yield* Effect.promise(() => response.json());
+      assert.deepStrictEqual(body, { _tag: "OAuthCallbackFailed" });
     }),
   );
 

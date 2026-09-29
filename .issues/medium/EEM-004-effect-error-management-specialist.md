@@ -3,7 +3,7 @@ ID: "EEM-004"
 Title: "OAuth provider transport failures collapse into the same 400 OAuthCallbackFailed as caller errors"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:219"
 Auditor: "effect-error-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `oauth` · reported by **Effect Typed Error Management Specialist** (`effect-error-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Add a ProviderUnavailable Schema.TaggedError (httpApiStatus 503, empty payload) 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-outbound-resilience`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:269`. Fix: Add ProviderUnavailable (503) for transport, timeout and 5xx failures of the token/JWKS/userinfo endpoints. Keep OAuthCallbackFailed (400) for protocol rejections. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New OAuthApi.ProviderUnavailable (503, field-less) on authorize+callback; ProviderHttp.decodeBody sorts status (5xx/429 -> ProviderServerError, other non-2xx -> ProviderRejectedError) and ProviderHttp.toCallbackFailure maps transport/timeout/5xx to 503 and protocol/decode failures to 400. Also fixes a latent hole: a userinfo 401 JSON body is no longer accepted as a claim set. Tests: AuthHttp.test.ts 'token endpoint answering 503 yields HTTP 503' (red: was 400) and 'invalid_grant still 400'; OAuth.test.ts 503/400/userinfo-401/JWKS-503 domain tests. BEH-EA-122 amended. OAuthTokenAccess keeps a single OAuthRefreshFailed (the optional OAuthProviderUnavailable split was not done). Gates as ECF-001.
