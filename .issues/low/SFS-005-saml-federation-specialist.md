@@ -3,7 +3,7 @@ ID: "SFS-005"
 Title: "Single-algorithm RS256 equality gate is the only algorithm-policy precedent"
 Level: low
 Category: "security"
-Status: needs-triage
+Status: wontfix
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:242"
 Auditor: "saml-federation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `oauth` · reported by **SAML Federation Specialist** (`saml-federation-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -55,3 +55,5 @@ When the SamlSigner port is specified, define the algorithm allow-list as data (
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:313`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/03-oauth-flow.md`.
+
+**Wontfix (2026-09-29):** Overtaken by events. The single RS256 equality gate this cited (`OAuth.ts`, id_token) is gone: `Jwt.ts` now has an explicit `SigningAlg` table (RS256, PS256, ES256, ES384, EdDSA; AOMS-005) chosen from discovery data rather than the token header, with HS256/`none` refused (OIT-009). SAML has its own allow-list as data (`packages/saml/src/XmlSignatureNode.ts`: rsa-sha256/rsa-sha512 signatures, sha256/sha512 digests) with weak or confusable algorithms (SHA-1, DSA, HMAC, inclusive c14n, XSLT/XPath transforms) refused and named in the log. The 'named-weak with a configured response' option is deliberately not offered: refusing outright is the safer default for a pre-release library.
