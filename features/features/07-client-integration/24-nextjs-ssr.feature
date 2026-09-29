@@ -1,10 +1,4 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @client-integration @nextjs-ssr
-@skip @unwired
 Feature: Next.js Server Rendering
 
   # BEH-EA-185 — spec/behaviors/24-nextjs-ssr.md
@@ -49,6 +43,10 @@ Feature: Next.js Server Rendering
       Then the resulting payload is plain JSON
       And it carries no evaluation trace by default
 
+    # @skip: needs a rendered React tree: @testing-library/react and react-dom are not dependencies
+    # of features/; covered by packages/react/test/ProvidersSeeds.test.tsx ('a server-decided Can
+    # renders its verdict on first paint, not pending')
+    @skip
     @REQ-EA-527
     Scenario: The client does not re-decide the server's policies from scratch before hydration completes
       Given a page whose gates were already decided server-side and dehydrated
@@ -186,6 +184,10 @@ Feature: Next.js Server Rendering
       When the client computes "hydrateDecisions(qadiAtoms, decisions, subject)" and passes the result as "QadiProvider"'s "initialValues"
       Then the atoms are seeded from that payload before "QadiProvider" mounts
 
+    # @skip: needs a rendered React tree (Can on first paint): @testing-library/react and react-dom
+    # are not dependencies of features/; covered by packages/react/test/ProvidersSeeds.test.tsx ('a
+    # server-decided Can renders its verdict on first paint, not pending')
+    @skip
     @REQ-EA-543
     Scenario: A gate for a policy already decided server-side renders its real verdict immediately
       Given a policy the server already decided during page render, included in the dehydrated "decisions" payload
@@ -193,6 +195,11 @@ Feature: Next.js Server Rendering
       Then it renders the server's real verdict immediately
       And it does not render "pending" merely because the client has not yet run its own evaluation
 
+    # @skip: needs a rendered React tree with a browser-only attribute resolver:
+    # @testing-library/react is not a dependency of features/; covered by
+    # packages/react/test/ProvidersSeeds.test.tsx ('without decisions the same gate is pending on
+    # first paint (the control)')
+    @skip
     @REQ-EA-544
     Scenario: A gate depending on a browser-only attribute resolver correctly stays pending after hydration
       Given a policy whose attribute resolver can only run in the browser and was not evaluated server-side

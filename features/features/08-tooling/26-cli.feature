@@ -1,10 +1,4 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @tooling @cli
-@skip @unwired
 Feature: CLI
 
   # BEH-EA-201 — spec/behaviors/26-cli.md
@@ -34,6 +28,16 @@ Feature: CLI
         | "sameSite" relaxed to "lax"                                |
         | a mutating endpoint without CSRF protection               |
         | an oversized request body limit                           |
+
+    # A Mailer or RateLimiter is a service inside the application Layer, so doctor can only see it when it
+    # builds that Layer (BEH-EA-201's `--build`); without the flag those two are invisible to it by design.
+    Scenario Outline: doctor --build reports each insecure default that lives in the application Layer
+      Given an application configured with <insecure default>
+      When "awthaq doctor --build" runs
+      Then it reports <insecure default> as an insecure default
+
+      Examples:
+        | insecure default                                          |
         | a development mailer configured in a production environment |
         | a permissive rate limiter configured in a production environment |
 
@@ -91,9 +95,9 @@ Feature: CLI
 
     @REQ-EA-581
     Scenario: routes lists an endpoint with its method, path, group, plugin, and middleware chain
-      Given a composed "AuthApi" contract with an endpoint "POST /password/sign-in" owned by group "password" and plugin "Password", protected by "RateLimiter" middleware
+      Given a composed "AuthApi" contract with an endpoint "POST /password/sign-in" owned by group "password" and plugin "Password", protected by "CsrfProtection" middleware
       When "awthaq routes" runs
-      Then the listing includes a row for "POST /password/sign-in" carrying its method, path, owning group "password", owning plugin "Password", and its "RateLimiter" middleware
+      Then the listing includes a row for "POST /password/sign-in" carrying its method, path, owning group "password", owning plugin "Password", and its "CsrfProtection" middleware
 
     @REQ-EA-582
     Scenario: routes omits no endpoint present in the compiled contract
@@ -247,6 +251,12 @@ Feature: CLI
   @BEH-EA-207
   Rule: import migrates users from a named source framework
 
+    # @skip: the outline mixes validated adapters (better-auth, firebase), which needs the
+    # better-auth/firebase export fixtures and their legacy-hash verifiers
+    # (@awthaq/migrate-better-auth, @awthaq/migrate-firebase), which are not dependencies of
+    # features/; covered by packages/cli/test/Import.test.ts; the unvalidated rows are wired by the
+    # new scenario after REQ-EA-662
+    @skip
     @REQ-EA-596
     Scenario Outline: import accepts each named source framework and translates a validated one
       Given an export from "<framework>"
@@ -261,6 +271,10 @@ Feature: CLI
         | authjs      |
         | lucia       |
 
+    # @skip: needs the better-auth/firebase export fixtures and their legacy-hash verifiers
+    # (@awthaq/migrate-better-auth, @awthaq/migrate-firebase), which are not dependencies of
+    # features/; covered by packages/cli/test/Import.test.ts
+    @skip
     @REQ-EA-597
     Scenario: A source field with no awthaq equivalent is reported rather than silently dropped
       Given a source export containing a field awthaq's Model.Class shapes have no equivalent for
@@ -274,6 +288,10 @@ Feature: CLI
       When the application boots
       Then it does not depend on "awthaq import" existing
 
+    # @skip: process guidance about how an adapter mapping is validated before use (a statement
+    # about the migration effort, not a runtime behavior); the refusal of unvalidated adapters is
+    # wired by the scenario after REQ-EA-662
+    @skip
     @REQ-EA-599
     Scenario: import's source-framework mappings are not assumed correct without validation against real exports
       Given "awthaq import"'s mapping for "better-auth", "authjs", or "lucia"
@@ -281,6 +299,10 @@ Feature: CLI
       Then it is expected to have been built and validated against a real export from that source first
       And it is not assumed correct from this specification alone
 
+    # @skip: needs the better-auth/firebase export fixtures and their legacy-hash verifiers
+    # (@awthaq/migrate-better-auth, @awthaq/migrate-firebase), which are not dependencies of
+    # features/; covered by packages/cli/test/Import.test.ts
+    @skip
     @REQ-EA-657
     Scenario: import without --yes reports a plan and writes nothing
       Given a better-auth export with users and accounts
@@ -288,12 +310,20 @@ Feature: CLI
       Then per-table row counts, the unmapped-field report and conflict counts are printed
       And no row is written
 
+    # @skip: needs the better-auth/firebase export fixtures and their legacy-hash verifiers
+    # (@awthaq/migrate-better-auth, @awthaq/migrate-firebase), which are not dependencies of
+    # features/; covered by packages/cli/test/Import.test.ts
+    @skip
     @REQ-EA-658
     Scenario: import --yes writes the previewed rows
       Given a better-auth export with users and accounts
       When "awthaq import --from better-auth --yes" runs
       Then the previewed rows are written through the Users and Accounts domain services
 
+    # @skip: needs the better-auth/firebase export fixtures and their legacy-hash verifiers
+    # (@awthaq/migrate-better-auth, @awthaq/migrate-firebase), which are not dependencies of
+    # features/; covered by packages/cli/test/Import.test.ts
+    @skip
     @REQ-EA-659
     Scenario: a failing batch is rolled back and reported with its source row ids
       Given an import whose second batch fails
@@ -302,12 +332,20 @@ Feature: CLI
       And it is reported with its source row ids and error tag
       And the checkpoint stays at the last committed batch
 
+    # @skip: needs the better-auth/firebase export fixtures and their legacy-hash verifiers
+    # (@awthaq/migrate-better-auth, @awthaq/migrate-firebase), which are not dependencies of
+    # features/; covered by packages/cli/test/Import.test.ts
+    @skip
     @REQ-EA-660
     Scenario: a re-run resumes from the last committed batch without duplicating rows
       Given an import that stopped after a failed batch
       When "awthaq import --from better-auth --yes" runs again against the same source
       Then rows already imported are skipped and never inserted twice
 
+    # @skip: needs the better-auth/firebase export fixtures and their legacy-hash verifiers
+    # (@awthaq/migrate-better-auth, @awthaq/migrate-firebase), which are not dependencies of
+    # features/; covered by packages/cli/test/Import.test.ts
+    @skip
     @REQ-EA-661
     Scenario: a completed import publishes auth.import.completed
       Given a better-auth export with users and accounts
@@ -319,6 +357,16 @@ Feature: CLI
       Given no adapter registered under "mystery"
       When "awthaq import --from mystery" runs
       Then it fails with the usage exit code listing the supported sources
+
+    Scenario Outline: import refuses a source whose adapter is registered but not yet validated
+      Given a registered adapter for "<framework>" that has not been validated against a real export
+      When "awthaq import --from <framework> --source ./no-such-export --yes" runs
+      Then it is refused with a typed not-yet-validated error
+
+      Examples:
+        | framework |
+        | authjs    |
+        | lucia     |
 
   # BEH-EA-208 — spec/behaviors/26-cli.md
   @BEH-EA-208
@@ -424,6 +472,11 @@ Feature: CLI
   @BEH-EA-227
   Rule: Session commands are outbound-only clients of a running auth server
 
+    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
+    # authorization endpoints (no device-authorization plugin ships,
+    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
+    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
+    @skip
     @REQ-EA-670
     Scenario: login polls the device endpoint as an outbound client and never opens a listener
       Given a running auth server offering the device authorization endpoints
@@ -431,12 +484,22 @@ Feature: CLI
       Then it polls "/device/token" as an outbound client
       And it never starts a listener
 
+    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
+    # authorization endpoints (no device-authorization plugin ships,
+    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
+    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
+    @skip
     @REQ-EA-671
     Scenario: login honors slow_down
       Given a device token endpoint that answers "slow_down"
       When "awthaq login" polls
       Then the poll interval widens
 
+    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
+    # authorization endpoints (no device-authorization plugin ships,
+    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
+    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
+    @skip
     @REQ-EA-672
     Scenario: login exits non-zero on expired_token
       Given a device token endpoint that answers "expired_token"
@@ -444,6 +507,11 @@ Feature: CLI
       Then it exits with the authentication code
       And it tells the user to run "awthaq login" again
 
+    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
+    # authorization endpoints (no device-authorization plugin ships,
+    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
+    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
+    @skip
     @REQ-EA-673
     Scenario: AWTHAQ_TOKEN bypasses the device flow and the credential store
       Given "AWTHAQ_TOKEN" is set to a valid token
@@ -451,6 +519,11 @@ Feature: CLI
       Then it uses that token without contacting the device endpoints
       And it never writes the credential store
 
+    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
+    # authorization endpoints (no device-authorization plugin ships,
+    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
+    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
+    @skip
     @REQ-EA-674
     Scenario: login --token stores nothing when the token is invalid
       Given a token the server rejects
@@ -468,12 +541,21 @@ Feature: CLI
   @BEH-EA-228
   Rule: CLI credentials live in a CredentialStore, never a plaintext dotfile by default
 
+    # @skip: needs a reachable OS-native credential store (macOS Keychain / libsecret), which a CI
+    # runner does not have; the keychain backend is covered against a fake `security`/`secret-tool`
+    # in packages/cli/test/CredentialStore.test.ts
+    @skip
     @REQ-EA-676
     Scenario: login stores the credential in the OS keychain when available
       Given a reachable OS-native credential store
       When "awthaq login --token" succeeds
       Then the credential is stored there and no credentials file is written
 
+    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
+    # authorization endpoints (no device-authorization plugin ships,
+    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
+    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
+    @skip
     @REQ-EA-677
     Scenario: the fallback credentials file is created 0600 and a warning is printed
       Given no reachable OS-native credential store
@@ -481,6 +563,11 @@ Feature: CLI
       Then "credentials.json" is created with mode 0600 in a 0700 directory
       And a warning is printed once
 
+    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
+    # authorization endpoints (no device-authorization plugin ships,
+    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
+    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
+    @skip
     @REQ-EA-678
     Scenario: AWTHAQ_TOKEN is never persisted
       Given "AWTHAQ_TOKEN" is set
