@@ -28,14 +28,14 @@ import * as ApiKeyApi from "../src/ApiKeyApi.ts";
 import * as ApiKeyClientRecords from "../src/ApiKeyClientRecords.ts";
 import * as ApiKeyRecords from "../src/ApiKeyRecords.ts";
 
-export const ORIGIN = "http://localhost:3000";
+const ORIGIN = "http://localhost:3000";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
 const CSRF_SECRET = "api-key-test-csrf-secret-padded-to-thirty-two-bytes";
-export const CSRF_TOKEN = (() => {
+const CSRF_TOKEN = (() => {
   // `<iat>.<random>.<hmac(iat.random)>` (CDS-006).
   const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
   return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
@@ -62,7 +62,7 @@ const describePrincipal = Effect.gen(function* () {
  * Two probe groups an application would declare: one for machine callers
  * (`MachineAuthentication`) and one that assumes a session (`Authentication`).
  */
-export const ProbeApi = HttpApi.make("auth")
+const ProbeApi = HttpApi.make("auth")
   .add(
     HttpApiGroup.make("probeMachine")
       .add(HttpApiEndpoint.get("whoAmI", "/probe/machine", { success: Schema.String }))
