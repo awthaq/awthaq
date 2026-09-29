@@ -51,7 +51,9 @@ const subjectApi = HttpApi.make("auth").add(SubjectContract.SubjectGroup);
 export const BaseUrl = Schema.String.pipe(
   Schema.check(
     Schema.makeFilter((value: string) =>
-      URL.canParse(value) && /^https?:\/\//.test(value) ? undefined : "an http(s) URL of the auth server",
+      URL.canParse(value) && /^https?:\/\//.test(value)
+        ? undefined
+        : "an http(s) URL of the auth server",
     ),
   ),
 );
@@ -64,9 +66,7 @@ const bearerFor = Effect.fnUntraced(function* (credential: Credential) {
     get: Ref.get(current),
     set: (token) =>
       Ref.set(current, Option.some(token)).pipe(
-        Effect.andThen(
-          store.set({ baseUrl: credential.baseUrl, token }).pipe(Effect.ignore),
-        ),
+        Effect.andThen(store.set({ baseUrl: credential.baseUrl, token }).pipe(Effect.ignore)),
       ),
     clear: Ref.set(current, Option.none()),
   };
@@ -88,7 +88,9 @@ const currentSession = Effect.fnUntraced(function* (credential: Credential) {
   return yield* client.session.current().pipe(
     Effect.catchTag(
       "Unauthenticated",
-      unauthenticated("the server rejected the token (expired, revoked or wrong server); run `awthaq login` again"),
+      unauthenticated(
+        "the server rejected the token (expired, revoked or wrong server); run `awthaq login` again",
+      ),
     ),
     Effect.mapError((error) =>
       error._tag === "AuthenticationRequired" ? error : unreachable(credential.baseUrl)(),
@@ -167,14 +169,15 @@ export const logout = Effect.gen(function* () {
       return true;
     }).pipe(Effect.orElseSucceed(() => false));
     if (!revoked) {
-      yield* out.warn("awthaq: could not revoke the session on the server; the local credential is cleared anyway");
+      yield* out.warn(
+        "awthaq: could not revoke the session on the server; the local credential is cleared anyway",
+      );
     }
   }
   yield* store.clear;
-  yield* Output.report(
-    { loggedOut: Option.isSome(credential) },
-    (value) => [value.loggedOut ? "logged out" : "not logged in"],
-  );
+  yield* Output.report({ loggedOut: Option.isSome(credential) }, (value) => [
+    value.loggedOut ? "logged out" : "not logged in",
+  ]);
 });
 
 /** BEH-EA-227: who the stored credential resolves to; `AuthenticationRequired` (exit 8) when there is none or it is rejected. */
@@ -183,7 +186,8 @@ export const whoami = Effect.gen(function* () {
   const found = yield* store.get;
   if (Option.isNone(found) || found.value.baseUrl === "") {
     return yield* new AuthenticationRequired({
-      message: "not logged in: run `awthaq login --token …` (or set AWTHAQ_TOKEN and AWTHAQ_BASE_URL)",
+      message:
+        "not logged in: run `awthaq login --token …` (or set AWTHAQ_TOKEN and AWTHAQ_BASE_URL)",
     });
   }
   const credential = found.value;

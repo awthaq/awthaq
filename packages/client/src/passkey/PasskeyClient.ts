@@ -249,7 +249,7 @@ const authenticate = (
     const { ceremonyId, options: optionsJSON } = yield* client[
       "passkey.authenticate"
     ].authenticateOptions({
-      payload: { ...(options?.email === undefined ? {} : { email: options.email }) },
+      payload: options?.email === undefined ? {} : { email: options.email },
     });
     const credential = yield* Effect.tryPromise({
       try: () => startAuthentication({ optionsJSON, useBrowserAutofill }),

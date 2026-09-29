@@ -54,3 +54,5 @@ Provide a dev-only KeyProvider layer that generates and warns (or persists to .e
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `README.md:171`. Fix: Add an explicit, opt-in `KeyProvider.layerEphemeral` (random 32-byte key generated at layer build, loud warning that ciphertext won't survive a restart) for dev/examples; keep layerEnv as the production path. Do not silently auto-fallback from layerEnv (that would lose encrypted data in a misconfigured prod). (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Not done in P19 (docs-only program): KeyProvider.layerEphemeral is a source change in packages/ports (plus a test and an example wiring), outside spec/README/docs. The README already documents the production path (AWTHAQ_ENCRYPTION_KEYS, key generation one-liner); add the 'layerEphemeral (dev only)' cell to the Configuration table when the layer exists.

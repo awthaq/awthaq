@@ -15,6 +15,7 @@ import {
   Hooks,
   AuthEvents,
   Sessions,
+  UserFields,
   Users,
   Verification,
 } from "@awthaq/core";
@@ -32,6 +33,7 @@ import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as Etag from "effect/unstable/http/Etag";
 import * as Headers from "effect/unstable/http/Headers";
@@ -124,6 +126,17 @@ const makeAppLayer = (
   );
 
 const AppLayer = makeAppLayer(Sessions.layerMemory);
+
+// SAM-004: the same app over a composition that declares two `billing` fields, one of them server-only.
+const FieldsAppLayer = makeAppLayer(Sessions.layerMemory).pipe(
+  Layer.provideMerge(
+    UserFields.layer({
+      billing_plan: UserFields.serverOnly(Schema.Literals(["free", "pro"])),
+      billing_nickname: UserFields.field(Schema.String),
+      billing_seats: UserFields.field(Schema.Number),
+    }),
+  ),
+);
 
 // TIR-003/ESS-005/GC-005: a `Sessions` whose `list` never contains the
 // caller's own session — what the SQL layer's 200-row page cap used to do to
@@ -488,8 +501,14 @@ describe("GET /user/export (CSG-005)", () => {
           const accounts = yield* Accounts.Accounts;
           const sessions = yield* Sessions.Sessions;
           const audit = yield* AuditLog.AuditLog;
-          const user = yield* users.create({ identity: { _tag: "Email", email: "export-me@example.com" }, name: "Exp" });
-          const other = yield* users.create({ identity: { _tag: "Email", email: "not-me@example.com" }, name: "Other" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "export-me@example.com" },
+            name: "Exp",
+          });
+          const other = yield* users.create({
+            identity: { _tag: "Email", email: "not-me@example.com" },
+            name: "Other",
+          });
           yield* accounts.link({ userId: user.id, providerId: "google", subject: "sub-exp" });
           yield* accounts.link({ userId: other.id, providerId: "google", subject: "sub-other" });
           const { token } = yield* sessions.issue({ userId: user.id });
@@ -566,7 +585,10 @@ describe("GET /user/export (CSG-005)", () => {
       Effect.gen(function* () {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ identity: { _tag: "Email", email: "hammer@example.com" }, name: "H" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "hammer@example.com" },
+          name: "H",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
         for (let i = 0; i < 5; i += 1) {
           const ok = yield* sendHandled("/user/export", { method: "GET", token });
@@ -611,7 +633,10 @@ describe("server handler invariants (GC-003/GC-008)", () => {
         const exit = yield* currentUser.pipe(
           Effect.provideService(
             Api.CurrentPrincipal,
-            new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }), scopes: [] }),
+            new Api.ApiKeyPrincipal({
+              ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }),
+              scopes: [],
+            }),
           ),
           Effect.exit,
         );
@@ -827,6 +852,115 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           assert.isTrue(Option.isSome((yield* users.findById(user.id)).image));
           assert.strictEqual((yield* patch({ name: "Img 2", image: null })).status, 200);
           assert.isTrue(Option.isNone((yield* users.findById(user.id)).image));
+        }),
+      ).pipe(Effect.provide(AppLayer)),
+  );
+
+  // SAM-004/BEH-EA-048: plugin-declared fields ride the profile payload; the registry decides who may write what.
+  it.effect(
+    "SAM-004: PATCH /user writes client-writable declared fields, refuses server-only and undeclared ones, and the DTO carries them",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const router = yield* HttpRouter.HttpRouter;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "fields@example.com" },
+            name: "Fields",
+          });
+          yield* users.setFields(user.id, { billing_plan: "pro" });
+          const issued = yield* sessions.issue({ userId: user.id });
+
+          const patch = (body: unknown) =>
+            router.asHttpEffect().pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                HttpServerRequest.fromWeb(
+                  new Request("http://localhost/user", {
+                    method: "PATCH",
+                    headers: { ...cookieHeader(issued.token), "content-type": "application/json" },
+                    body: JSON.stringify(body),
+                  }),
+                ),
+              ),
+            );
+
+          const ok = yield* patch({
+            name: "Fields",
+            fields: { billing_nickname: "Countess", billing_seats: 3 },
+          });
+          assert.strictEqual(ok.status, 200);
+          // The server-only value the user cannot write is readable, alongside what they just wrote.
+          assert.deepStrictEqual(((yield* jsonBody(ok)) as { fields: unknown }).fields, {
+            billing_plan: "pro",
+            billing_nickname: "Countess",
+            billing_seats: 3,
+          });
+
+          // A server-only field is 403 and, as a whole-patch refusal, leaves the client-writable one unchanged.
+          const forbidden = yield* patch({
+            name: "Renamed",
+            fields: { billing_nickname: "Changed", billing_plan: "free" },
+          });
+          assert.strictEqual(forbidden.status, 403);
+          const undeclared = yield* patch({ name: "Fields", fields: { billing_ghost: "x" } });
+          assert.strictEqual(undeclared.status, 422);
+          const invalid = yield* patch({ name: "Fields", fields: { billing_seats: "many" } });
+          assert.strictEqual(invalid.status, 422);
+          const stored = yield* users.getFields(user.id);
+          assert.deepStrictEqual(stored, {
+            billing_plan: "pro",
+            billing_nickname: "Countess",
+            billing_seats: 3,
+          });
+          assert.strictEqual((yield* users.findById(user.id)).name, "Fields");
+
+          // Omitting `fields` leaves them; null clears one; the DTO still carries the rest.
+          const cleared = yield* patch({ name: "Fields", fields: { billing_nickname: null } });
+          assert.deepStrictEqual(((yield* jsonBody(cleared)) as { fields: unknown }).fields, {
+            billing_plan: "pro",
+            billing_seats: 3,
+          });
+          const untouched = yield* patch({ name: "Fields" });
+          assert.deepStrictEqual(((yield* jsonBody(untouched)) as { fields: unknown }).fields, {
+            billing_plan: "pro",
+            billing_seats: 3,
+          });
+        }),
+      ).pipe(Effect.provide(FieldsAppLayer)),
+  );
+
+  it.effect(
+    "SAM-004: a composition that declares no field answers `fields: {}` and refuses any",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const router = yield* HttpRouter.HttpRouter;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "nofields@example.com" },
+            name: "None",
+          });
+          const issued = yield* sessions.issue({ userId: user.id });
+          const patch = (body: unknown) =>
+            router.asHttpEffect().pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                HttpServerRequest.fromWeb(
+                  new Request("http://localhost/user", {
+                    method: "PATCH",
+                    headers: { ...cookieHeader(issued.token), "content-type": "application/json" },
+                    body: JSON.stringify(body),
+                  }),
+                ),
+              ),
+            );
+          const plain = yield* patch({ name: "None" });
+          assert.deepStrictEqual(((yield* jsonBody(plain)) as { fields: unknown }).fields, {});
+          const refused = yield* patch({ name: "None", fields: { billing_plan: "pro" } });
+          assert.strictEqual(refused.status, 422);
         }),
       ).pipe(Effect.provide(AppLayer)),
   );

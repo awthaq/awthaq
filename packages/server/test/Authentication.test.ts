@@ -511,13 +511,15 @@ const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
   );
 
 describe("MA-004: a session-store outage answers 503", () => {
-  it.effect("an authenticated route with a cookie answers 503 StoreUnavailable, not 401 or 500", () =>
-    Effect.gen(function* () {
-      const response = yield* serve("/ok", {
-        cookie: `${Sessions.SESSION_COOKIE_NAME}=some-id.some-secret`,
-      });
-      assert.strictEqual(response.status, 503);
-    }).pipe(Effect.provide(OutageLayer)),
+  it.effect(
+    "an authenticated route with a cookie answers 503 StoreUnavailable, not 401 or 500",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=some-id.some-secret`,
+        });
+        assert.strictEqual(response.status, 503);
+      }).pipe(Effect.provide(OutageLayer)),
   );
 });
 

@@ -102,8 +102,7 @@ export const unauthorized = (detail = "Bearer token required") =>
   new ScimUnauthorized(errorBody(401, detail));
 export const badRequest = (detail: string, scimType = "invalidValue") =>
   new ScimBadRequest(errorBody(400, detail, scimType));
-export const notFound = (detail = "Resource not found") =>
-  new ScimNotFound(errorBody(404, detail));
+export const notFound = (detail = "Resource not found") => new ScimNotFound(errorBody(404, detail));
 export const conflict = (detail: string) => new ScimConflict(errorBody(409, detail, "uniqueness"));
 export const forbidden = (detail: string) => new ScimForbidden(errorBody(403, detail));
 export const unavailable = () =>

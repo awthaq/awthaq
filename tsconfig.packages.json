@@ -63,6 +63,18 @@
     },
     {
       "path": "packages/jwt/tsconfig.src.json"
+    },
+    {
+      "path": "packages/migrate-auth0/tsconfig.src.json"
+    },
+    {
+      "path": "packages/migrate-better-auth/tsconfig.src.json"
+    },
+    {
+      "path": "packages/migrate-firebase/tsconfig.src.json"
+    },
+    {
+      "path": "packages/scim/tsconfig.src.json"
     }
   ]
 }

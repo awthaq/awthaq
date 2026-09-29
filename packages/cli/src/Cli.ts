@@ -108,11 +108,15 @@ const doctor = Command.make(
   "doctor",
   {
     build: Flag.Boolean("build").pipe(
-      Flag.withDescription("Also build the application Layer once (never serving it) and audit what it provides"),
+      Flag.withDescription(
+        "Also build the application Layer once (never serving it) and audit what it provides",
+      ),
       Flag.withDefault(false),
     ),
     production: Flag.Boolean("production").pipe(
-      Flag.withDescription("Audit as a production environment (default: the module's `production`, then NODE_ENV)"),
+      Flag.withDescription(
+        "Audit as a production environment (default: the module's `production`, then NODE_ENV)",
+      ),
       Flag.withDefault(false),
     ),
   },
@@ -145,7 +149,11 @@ const doctor = Command.make(
 
 const configList = Command.make("list", {}, () =>
   withOutput(load.pipe(Effect.flatMap(ConfigList.show))),
-).pipe(Command.withDescription("List every declared configuration input, its default and its override (secrets redacted)"));
+).pipe(
+  Command.withDescription(
+    "List every declared configuration input, its default and its override (secrets redacted)",
+  ),
+);
 
 const configCommand = Command.make("config").pipe(
   Command.withDescription("Inspect configuration"),
@@ -167,7 +175,9 @@ const pluginList = Command.make(
   (args) =>
     withOutput(
       load.pipe(
-        Effect.flatMap((config) => Plugin.show(config.auth, { graph: args.graph, format: args.format })),
+        Effect.flatMap((config) =>
+          Plugin.show(config.auth, { graph: args.graph, format: args.format }),
+        ),
       ),
     ),
 ).pipe(Command.withDescription("List installed plugins in the linker's order"));
@@ -192,7 +202,9 @@ const openapi = Command.make(
   (args) =>
     withOutput(
       load.pipe(
-        Effect.flatMap((config) => Openapi.emit(config.auth, { out: Option.getOrUndefined(args.out) })),
+        Effect.flatMap((config) =>
+          Openapi.emit(config.auth, { out: Option.getOrUndefined(args.out) }),
+        ),
       ),
     ),
 ).pipe(Command.withDescription("Emit the aggregated OpenAPI document"));
@@ -209,7 +221,11 @@ const migrationStatus = Command.make("status", { databaseUrl: databaseUrlFlag },
       ),
     ),
   ),
-).pipe(Command.withDescription("Report applied and pending migrations against both ledgers (exit 7 on drift)"));
+).pipe(
+  Command.withDescription(
+    "Report applied and pending migrations against both ledgers (exit 7 on drift)",
+  ),
+);
 
 const migrationApply = Command.make(
   "apply",
@@ -236,12 +252,16 @@ const migrationApply = Command.make(
             yes: args.yes,
             dryRun: args.dryRun,
             allowEmpty: args.allowEmpty,
-          }).pipe(Effect.provide(Database.layerFrom(config, Option.getOrUndefined(args.databaseUrl)))),
+          }).pipe(
+            Effect.provide(Database.layerFrom(config, Option.getOrUndefined(args.databaseUrl))),
+          ),
         ),
       ),
     ),
 ).pipe(
-  Command.withDescription("Print the ordered pending plan, refuse on drift, apply with --yes (core first, then plugins)"),
+  Command.withDescription(
+    "Print the ordered pending plan, refuse on drift, apply with --yes (core first, then plugins)",
+  ),
 );
 
 const migrationCommand = Command.make("migration").pipe(
@@ -259,7 +279,9 @@ const seedAdmin = Command.make(
       Flag.withDescription("The administrator's email (validated like the sign-up payload's)"),
     ),
     name: Flag.String("name").pipe(
-      Flag.withDescription("Display name for a newly created account (default: the email's local part)"),
+      Flag.withDescription(
+        "Display name for a newly created account (default: the email's local part)",
+      ),
       Flag.optional,
     ),
     role: Flag.String("role").pipe(
@@ -271,7 +293,9 @@ const seedAdmin = Command.make(
       Flag.withDefault(false),
     ),
     promptPassword: Flag.Boolean("prompt-password").pipe(
-      Flag.withDescription("Prompt for a password credential (or set AWTHAQ_SEED_ADMIN_PASSWORD); never pass one on argv"),
+      Flag.withDescription(
+        "Prompt for a password credential (or set AWTHAQ_SEED_ADMIN_PASSWORD); never pass one on argv",
+      ),
       Flag.withDefault(false),
     ),
   },
@@ -299,7 +323,9 @@ const seedAdmin = Command.make(
         });
       }),
     ),
-).pipe(Command.withDescription("Create or promote the first administrator through Users and Roles"));
+).pipe(
+  Command.withDescription("Create or promote the first administrator through Users and Roles"),
+);
 
 const seedCommand = Command.make("seed").pipe(
   Command.withDescription("Provision data through the domain services"),
@@ -312,7 +338,9 @@ const loginCommand = Command.make(
   "login",
   {
     token: Flag.Redacted("token").pipe(
-      Flag.withDescription("A session token or service token (prefer AWTHAQ_TOKEN: argv shows in process listings)"),
+      Flag.withDescription(
+        "A session token or service token (prefer AWTHAQ_TOKEN: argv shows in process listings)",
+      ),
       Flag.withFallbackConfig(Config.Redacted("AWTHAQ_TOKEN")),
       Flag.optional,
     ),
@@ -331,28 +359,38 @@ const loginCommand = Command.make(
 );
 
 const logoutCommand = Command.make("logout", {}, () => withOutput(Session.logout)).pipe(
-  Command.withDescription("Clear the stored credential and revoke the session server-side (best effort)"),
+  Command.withDescription(
+    "Clear the stored credential and revoke the session server-side (best effort)",
+  ),
 );
 
 const whoamiCommand = Command.make("whoami", {}, () => withOutput(Session.whoami)).pipe(
-  Command.withDescription("Print who the stored credential resolves to (exit 8 when not logged in)"),
+  Command.withDescription(
+    "Print who the stored credential resolves to (exit 8 when not logged in)",
+  ),
 );
 
 const importCommand = Command.make(
   "import",
   {
     from: Flag.Literals("from", Sources.sourceNames).pipe(
-      Flag.withDescription(`The source framework: ${Sources.sourceNames.join(" | ")} (authjs and lucia are registered but not yet validated)`),
+      Flag.withDescription(
+        `The source framework: ${Sources.sourceNames.join(" | ")} (authjs and lucia are registered but not yet validated)`,
+      ),
     ),
     source: Flag.String("source").pipe(
-      Flag.withDescription("The export: sqlite:<path> | postgres://… (better-auth), the users.json path (firebase)"),
+      Flag.withDescription(
+        "The export: sqlite:<path> | postgres://… (better-auth), the users.json path (firebase)",
+      ),
     ),
     sourceOption: Flag.KeyValuePair("source-option").pipe(
       Flag.withDescription("Adapter input, key=value (firebase: hash-config=<hash_config.json>)"),
       Flag.withDefault({}),
     ),
     issuer: Flag.KeyValuePair("issuer").pipe(
-      Flag.withDescription("OAuth issuer per provider id, provider=issuer (the value your OAuth provider config sets)"),
+      Flag.withDescription(
+        "OAuth issuer per provider id, provider=issuer (the value your OAuth provider config sets)",
+      ),
       Flag.withDefault({}),
     ),
     yes: Flag.Boolean("yes").pipe(
@@ -373,7 +411,9 @@ const importCommand = Command.make(
       Flag.withDefault(100),
     ),
     report: Flag.String("report").pipe(
-      Flag.withDescription("Write the per-row report (unmapped fields, unmappable rows, failures) to this JSON file"),
+      Flag.withDescription(
+        "Write the per-row report (unmapped fields, unmappable rows, failures) to this JSON file",
+      ),
       Flag.optional,
     ),
   },

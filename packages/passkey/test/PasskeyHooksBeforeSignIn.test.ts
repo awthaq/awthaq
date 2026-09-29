@@ -76,59 +76,60 @@ const TestLayer = Passkey.Passkey.layer.pipe(
 );
 
 describe("Passkey authenticateVerify BeforeSignIn hook (NAM-002)", () => {
-  it.effect(
-    "a BeforeSignIn veto tap denies authenticateVerify's sign-in with HookAborted",
-    () =>
-      Effect.gen(function* () {
-        const passkey = yield* Passkey.Passkey;
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
+  it.effect("a BeforeSignIn veto tap denies authenticateVerify's sign-in with HookAborted", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
 
-        const user = yield* users.create({ identity: { _tag: "Email", email: "bo@example.com" }, name: "Bo" });
-        const registerSession = yield* sessions.issue({ userId: user.id });
-        const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
-        yield* passkey.registerVerify(user.id, registerSession.session.id, {
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "bo@example.com" },
+        name: "Bo",
+      });
+      const registerSession = yield* sessions.issue({ userId: user.id });
+      const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
+      yield* passkey.registerVerify(user.id, registerSession.session.id, {
+        credential: {
+          id: "cred-mock-1",
+          rawId: "cred-mock-1",
+          type: "public-key",
+          response: {
+            clientDataJSON: buildClientDataJSON({
+              type: "webauthn.create",
+              challenge: extractChallenge(registerOptions),
+              origin: ORIGIN,
+            }),
+            attestationObject: "",
+          },
+        },
+      });
+
+      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
+      const clientDataJSON = buildClientDataJSON({
+        type: "webauthn.get",
+        challenge: extractChallenge(options),
+        origin: ORIGIN,
+      });
+
+      const aborted = yield* passkey
+        .authenticateVerify({
+          ceremonyId,
           credential: {
             id: "cred-mock-1",
             rawId: "cred-mock-1",
             type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.create",
-                challenge: extractChallenge(registerOptions),
-                origin: ORIGIN,
-              }),
-              attestationObject: "",
-            },
+            response: { clientDataJSON, authenticatorData: "", signature: "" },
           },
-        });
-
-        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-        const clientDataJSON = buildClientDataJSON({
-          type: "webauthn.get",
-          challenge: extractChallenge(options),
-          origin: ORIGIN,
-        });
-
-        const aborted = yield* passkey
-          .authenticateVerify({
-            ceremonyId,
-            credential: {
-              id: "cred-mock-1",
-              rawId: "cred-mock-1",
-              type: "public-key",
-              response: { clientDataJSON, authenticatorData: "", signature: "" },
-            },
-          })
-          .pipe(
-            Effect.flip,
-            Effect.flatMap((error) =>
-              error._tag === "HookAborted" ? Effect.succeed(error) : Effect.die(error),
-            ),
-          );
-        assert.strictEqual(aborted.point, "auth.user.signIn");
-        assert.strictEqual(aborted.code, "PASSKEY_DENIED:passkey");
-      }).pipe(Effect.provide(TestLayer)),
+        })
+        .pipe(
+          Effect.flip,
+          Effect.flatMap((error) =>
+            error._tag === "HookAborted" ? Effect.succeed(error) : Effect.die(error),
+          ),
+        );
+      assert.strictEqual(aborted.point, "auth.user.signIn");
+      assert.strictEqual(aborted.code, "PASSKEY_DENIED:passkey");
+    }).pipe(Effect.provide(TestLayer)),
   );
 
   // CSD-004: a refused assertion is the passkey strategy's failure signal.

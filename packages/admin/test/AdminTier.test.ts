@@ -116,7 +116,9 @@ describe("AR-003: the admin tier", () => {
         AuthHttp.routes(auth.publicApi).pipe(
           Layer.provide(AuthHttp.coreHandlers),
           // CSG-001/CSG-005: the account handlers call core's erasure and export, and rate limit the export.
-          Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive)),
+          Layer.provide(
+            Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive),
+          ),
           Layer.provide(AuthenticationLive),
           Layer.provide(CsrfProtectionLive),
           Layer.provideMerge(SqlTransaction.layerNoop),

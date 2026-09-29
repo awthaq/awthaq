@@ -3,7 +3,7 @@ ID: "IDS-009"
 Title: "Spec docs still claim impersonation is unimplemented while shipping code exists"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/27-admin-impersonation.md:15"
 Auditor: "impersonation-delegation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **Impersonation & Delegation Specialist** (`impersonation-delegation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Replace pre-implementation banners with the effective-behavior status (matching 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-status-banner-sweep`. Evidence at HEAD ec065a7: `spec/behaviors/27-admin-impersonation.md:15`. Fix: Replace the 27-admin-impersonation.md banner with implementation pointers, rewrite INV-EA-014's Enforcement cell to name the existing tests, and refresh packages/admin/README.md and model 15. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/behaviors/27-admin-impersonation.md banner now points at packages/admin and its tests; INV-EA-014's Enforcement cell names packages/core/test/Sessions.test.ts (BEH-EA-209/210) and packages/admin/test/{Admin,AuthHttp,ImpersonationRecords}.test.ts; spec/models/15-admin-impersonation.md is Shipped-Unpublished with a real What-is-missing and Verification. packages/admin/README.md already carried no banner (check:readmes green). Gates: pnpm run typecheck clean, pnpm run spec:verify:strict 28/28, pnpm run check:readmes green.

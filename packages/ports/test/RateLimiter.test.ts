@@ -168,7 +168,10 @@ describe("RateLimiter.layer escalation (RBS-009)", () => {
   it.effect("the penalty is capped at maxPenalty", () =>
     Effect.gen(function* () {
       const limiter = yield* RateLimiter.RateLimiter;
-      const capped = { ...escalating, escalation: { factor: 10, maxPenalty: Duration.seconds(30) } };
+      const capped = {
+        ...escalating,
+        escalation: { factor: 10, maxPenalty: Duration.seconds(30) },
+      };
       for (let i = 0; i < 4; i++) {
         yield* limiter.consume(capped).pipe(Effect.ignore);
         yield* limiter.consume(capped).pipe(Effect.ignore);
@@ -274,7 +277,6 @@ describe("RateLimiter.layerPermissive (BEH-EA-112)", () => {
     }).pipe(Effect.provide(RateLimiter.layerPermissive)),
   );
 
-
   it.effect("never rejects, no matter how many times it is consumed", () =>
     Effect.gen(function* () {
       const limiter = yield* RateLimiter.RateLimiter;
@@ -284,23 +286,27 @@ describe("RateLimiter.layerPermissive (BEH-EA-112)", () => {
     }).pipe(Effect.provide(RateLimiter.layerPermissive)),
   );
 
-  it.effect("declares itself permissive, so a registry can warn that rules are inert (RBS-007)", () =>
-    Effect.gen(function* () {
-      const limiter = yield* RateLimiter.RateLimiter;
-      assert.isTrue(limiter.permissive === true);
-    }).pipe(Effect.provide(RateLimiter.layerPermissive)),
+  it.effect(
+    "declares itself permissive, so a registry can warn that rules are inert (RBS-007)",
+    () =>
+      Effect.gen(function* () {
+        const limiter = yield* RateLimiter.RateLimiter;
+        assert.isTrue(limiter.permissive === true);
+      }).pipe(Effect.provide(RateLimiter.layerPermissive)),
   );
 });
 
 describe("RateLimiter.layerMemory (RBS-007)", () => {
-  it.effect("is the one-line real limiter: the N+1th consume is refused, and it is not permissive", () =>
-    Effect.gen(function* () {
-      const limiter = yield* RateLimiter.RateLimiter;
-      assert.isFalse(limiter.permissive === true);
-      const input = { key: "signin:carol", limit: 3, window: Duration.seconds(10) };
-      for (let i = 0; i < 3; i++) yield* limiter.consume(input);
-      const failure = yield* limiter.consume(input).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "RateLimitExceeded");
-    }).pipe(Effect.provide(RateLimiter.layerMemory)),
+  it.effect(
+    "is the one-line real limiter: the N+1th consume is refused, and it is not permissive",
+    () =>
+      Effect.gen(function* () {
+        const limiter = yield* RateLimiter.RateLimiter;
+        assert.isFalse(limiter.permissive === true);
+        const input = { key: "signin:carol", limit: 3, window: Duration.seconds(10) };
+        for (let i = 0; i < 3; i++) yield* limiter.consume(input);
+        const failure = yield* limiter.consume(input).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RateLimitExceeded");
+      }).pipe(Effect.provide(RateLimiter.layerMemory)),
   );
 });

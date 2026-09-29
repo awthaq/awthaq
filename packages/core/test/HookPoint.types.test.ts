@@ -18,7 +18,8 @@ describe("HookPoint types (INV-EA-005)", () => {
     const unsatisfied = () =>
       // @ts-expect-error — `BeforeThing` is required but nothing provides it
       Effect.runPromise(Layer.launch(tap));
-    const satisfied = () => Effect.runPromise(Layer.launch(tap.pipe(Layer.provide(BeforeThing.layer))));
+    const satisfied = () =>
+      Effect.runPromise(Layer.launch(tap.pipe(Layer.provide(BeforeThing.layer))));
     void unsatisfied;
     void satisfied;
   });

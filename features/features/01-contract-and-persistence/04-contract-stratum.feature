@@ -1,7 +1,7 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @foundations @contract
 @skip @unwired
@@ -241,7 +241,7 @@ Feature: The Contract Stratum
       Then composition is rejected
       And the outcome does not depend on which plugin was added to the array last
 
-    @REQ-EA-640
+    @REQ-EA-681
     Scenario: The composed api is the one served document, carrying core's session and account groups
       Given a plugin tuple containing "password"
       When "Auth.make" composes the tuple

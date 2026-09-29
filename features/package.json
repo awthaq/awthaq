@@ -20,7 +20,6 @@
     "@effect-cucumber/vitest": "^0.10.1",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
-    "@qadi/core": "^0.7.0",
     "@types/node": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",

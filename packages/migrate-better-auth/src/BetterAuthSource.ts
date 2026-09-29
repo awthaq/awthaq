@@ -136,7 +136,9 @@ const optionalSecret = (value: string | null | undefined) =>
     : Option.some(Redacted.make(value));
 
 const optionalString = (value: string | null | undefined) =>
-  value === null || value === undefined || value === "" ? Option.none<string>() : Option.some(value);
+  value === null || value === undefined || value === ""
+    ? Option.none<string>()
+    : Option.some(value);
 
 /** Maps one better-auth user (and its accounts) onto the domain-service import shape. */
 export const mapUser = (
@@ -170,10 +172,15 @@ export const mapUser = (
             }),
         ),
       );
-      for (const found of unmappedColumns("account", rawAccount, MAPPED_ACCOUNT_COLUMNS)) unmapped.add(found);
+      for (const found of unmappedColumns("account", rawAccount, MAPPED_ACCOUNT_COLUMNS))
+        unmapped.add(found);
 
       if (account.providerId === CREDENTIAL_PROVIDER_ID) {
-        if (account.password === null || account.password === undefined || account.password === "") {
+        if (
+          account.password === null ||
+          account.password === undefined ||
+          account.password === ""
+        ) {
           unmapped.add("account.credential-without-password");
           continue;
         }
@@ -219,7 +226,9 @@ export const mapUser = (
         identity: { _tag: "Email", email: decodedUser.email },
         name: decodedUser.name,
         verified: decodedUser.emailVerified === true || decodedUser.emailVerified === 1,
-        ...(hasData(decodedUser.image) && decodedUser.image !== null && decodedUser.image !== undefined
+        ...(hasData(decodedUser.image) &&
+        decodedUser.image !== null &&
+        decodedUser.image !== undefined
           ? { image: decodedUser.image }
           : {}),
         credentials,
@@ -246,22 +255,24 @@ export const read = (options?: { readonly batchSize?: number | undefined }) => {
   return Stream.paginate("", (cursor) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const users = yield* sql<Record<string, unknown>>`SELECT * FROM ${sql("user")} WHERE id > ${cursor} ORDER BY id LIMIT ${batchSize}`.pipe(
+      const users = yield* sql<
+        Record<string, unknown>
+      >`SELECT * FROM ${sql("user")} WHERE id > ${cursor} ORDER BY id LIMIT ${batchSize}`.pipe(
         Effect.mapError(readFailure("user")),
       );
       const ids = users.flatMap((row) => (typeof row["id"] === "string" ? [row["id"]] : []));
       const accounts =
         ids.length === 0
           ? []
-          : yield* sql<Record<string, unknown>>`SELECT * FROM ${sql("account")} WHERE ${sql("userId")} IN ${sql.in(ids)} ORDER BY id`.pipe(
+          : yield* sql<
+              Record<string, unknown>
+            >`SELECT * FROM ${sql("account")} WHERE ${sql("userId")} IN ${sql.in(ids)} ORDER BY id`.pipe(
               Effect.mapError(readFailure("account")),
             );
-      const rows = users.map(
-        (user): RawUser => ({
-          user,
-          accounts: accounts.filter((account) => account["userId"] === user["id"]),
-        }),
-      );
+      const rows = users.map((user): RawUser => ({
+        user,
+        accounts: accounts.filter((account) => account["userId"] === user["id"]),
+      }));
       const last = ids.at(-1);
       return page(
         rows,

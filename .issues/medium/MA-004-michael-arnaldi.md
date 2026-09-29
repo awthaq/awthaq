@@ -3,7 +3,7 @@ ID: "MA-004"
 Title: "Environmental failures (SqlError, SchemaError, PlatformError) are systematically routed to the defect channel"
 Level: medium
 Category: "architecture"
-Status: ready-for-human
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:478"
 Auditor: "michael-arnaldi"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `core` · reported by **Michael Arnaldi — Creator of Effect** (`michael-arnaldi`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,4 @@ _Triage notes and discussion append here._
 
 **Plan note (2026-09-29):** landed for Sessions, Verification, Accounts and Users (E channels, layerSql seams, layerMemory crypto PlatformError -> StoreUnavailable, `Errors.storeUnavailable`/`orStoreUnavailable`, the Authentication/Optional/Admin/Csrf middleware declaring it so an outage answers 503 with a request-scoped outage record so the security chain's fall-through cannot turn it back into 401, qadi's extractor mapping it to SubjectExtractionFailed, the nine `catchTag("PlatformError", Effect.die)` bridges removed). Tests: core Sessions/Verification/Accounts/Users infrastructure-failure suites, server Authentication 503. **Still open:** `AuditLog` (P10 owns it; its `record` path still `orDie`s SqlError and the crypto PlatformError), the per-endpoint 503 mention in features/03-http-layer/11-http-error-mapping.feature (feature is skipped and unwired), and the Schedule-based retry helper for SQLITE_BUSY (SEA-002). Status left ready-for-human until AuditLog follows the same helper.
 
+**Resolved (2026-09-29):** P21a: finished the remaining part. AuditLog record/list/replay/pseudonymizeActor/purge now fail with typed StoreUnavailable (layerSql orStoreUnavailable; DataExport/Retention/EventRelay carry it, decode errors still die/are typed). Audit-write policy made explicit: AuthEvents.AuditWritePolicy read at layer build, default bestEffort (log + awthaq_audit_write_failed_total{tag}, operation succeeds, bus still delivers), 'required' (AuthEvents.auditWritePolicy('required')) dies with the StoreUnavailable = the old fail-closed behaviour; note this flips the previous implicit fail-closed default to fail-open per the brief - documented in ADR-EA-028 1.1 and BEH-EA-100. SEA-002 retry half: Errors.retryTransient (Schedule.exponential 25ms jittered, 3 retries, only retryable SqlError) wraps Sessions.issue's statement/transaction and the verify touch; appendix 04 updated. Tests: AuditLog.test.ts 'AuditLog infrastructure failures (MA-004)' (3 tests; would die pre-change), Sessions.test.ts three SEA-002 retry tests (retry succeeds, bounded at 4 attempts, non-retryable not retried). Feature: 'StoreUnavailable | 503' example row added to the (still @skip @unwired) 11-http-error-mapping BEH-EA-088 outline - no separate skipped outage scenario existed to un-skip. Gates: typecheck, full test 2542 passed, test:bdd, spec:verify:strict, oxlint core (only the pre-existing HttpApiTypes error).

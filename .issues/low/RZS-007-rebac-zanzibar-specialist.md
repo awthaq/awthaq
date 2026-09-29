@@ -3,7 +3,7 @@ ID: "RZS-007"
 Title: "Behavior spec claims pre-implementation while the resolver ships, hiding the spec/code divergence"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/21-qadi-resolvers-obligations.md:15"
 Auditor: "rebac-zanzibar-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **ReBAC / Zanzibar-style Specialist** (`rebac-zanzibar-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Update the doc-control header to reflect shipped state, add a deviation note in 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `spec-behavior-code-reconcile`. Evidence at HEAD ec065a7: `spec/behaviors/21-qadi-resolvers-obligations.md:15`. Fix: Only the banner needs fixing; the code deviation note already exists and the REQUIREMENT stays (ticket 13 makes the code meet it). Sequence after RZS-001 so the banner can truthfully say BEH-EA-161/162/163/165 are implemented. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/behaviors/21-qadi-resolvers-obligations.md banner replaced with per-behavior pointers (161 Resolvers.UserAttributes, 162 OrganizationQadi.relationships with ResourceOrganizationLookup, 163 relationshipResolverFromEdges, 165 Resolvers.reauth/ObligationHandlers.reauth, 164 an application composition over AuditLog). RZS-001 had landed, so BEH-EA-162 already documents the shipped walk; requirement texts unchanged.

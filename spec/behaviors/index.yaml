@@ -92,6 +92,6 @@ entries:
   - id: "BEH-EA-246"
     file: "30-scim.md"
     title: "SCIM Provisioning"
-  - id: "BEH-EA-255"
+  - id: "BEH-EA-258"
     file: "31-webhooks.md"
     title: "Outbound Webhooks"

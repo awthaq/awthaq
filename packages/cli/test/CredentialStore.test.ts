@@ -29,7 +29,10 @@ interface Call {
 }
 
 /** A fake OS credential store: `security` (macOS) or `secret-tool` (Linux) semantics over a Map. */
-const fakeExec = (kind: "security" | "secret-tool", options?: { readonly refuseWrites?: boolean }) => {
+const fakeExec = (
+  kind: "security" | "secret-tool",
+  options?: { readonly refuseWrites?: boolean },
+) => {
   const calls: Array<Call> = [];
   const secrets = new Map<string, string>();
   const exec: CredentialStore.ExecShape = {
@@ -47,7 +50,9 @@ const fakeExec = (kind: "security" | "secret-tool", options?: { readonly refuseW
           }
           if (verb === "find-generic-password") {
             const found = secrets.get("awthaq-cli");
-            return found === undefined ? { exitCode: 44, stdout: "" } : { exitCode: 0, stdout: `${found}\n` };
+            return found === undefined
+              ? { exitCode: 44, stdout: "" }
+              : { exitCode: 0, stdout: `${found}\n` };
           }
           if (verb === "delete-generic-password") {
             secrets.delete("awthaq-cli");
@@ -61,7 +66,9 @@ const fakeExec = (kind: "security" | "secret-tool", options?: { readonly refuseW
           }
           if (verb === "lookup") {
             const found = secrets.get("awthaq-cli");
-            return found === undefined ? { exitCode: 1, stdout: "" } : { exitCode: 0, stdout: found };
+            return found === undefined
+              ? { exitCode: 1, stdout: "" }
+              : { exitCode: 0, stdout: found };
           }
           if (verb === "clear") {
             secrets.delete("awthaq-cli");
@@ -86,22 +93,41 @@ const scratch = Effect.gen(function* () {
       stderr.push(values.map(String).join(" "));
     },
   };
-  return { fs, path, dir, file: path.join(dir, "cfg", "awthaq", "credentials.json"), stderr, capturing };
+  return {
+    fs,
+    path,
+    dir,
+    file: path.join(dir, "cfg", "awthaq", "credentials.json"),
+    stderr,
+    capturing,
+  };
 });
 
 const makeStore = (platform: string, exec: CredentialStore.ExecShape) =>
   Effect.gen(function* () {
     const s = yield* scratch;
-    const store = yield* CredentialStore.make({ platform, exec, fs: s.fs, path: s.path, file: s.file }).pipe(
-      Effect.provideService(Console.Console, s.capturing),
-    );
-    return { ...s, store, withConsole: <A, E>(e: Effect.Effect<A, E>) => e.pipe(Effect.provideService(Console.Console, s.capturing)) };
+    const store = yield* CredentialStore.make({
+      platform,
+      exec,
+      fs: s.fs,
+      path: s.path,
+      file: s.file,
+    }).pipe(Effect.provideService(Console.Console, s.capturing));
+    return {
+      ...s,
+      store,
+      withConsole: <A, E>(e: Effect.Effect<A, E>) =>
+        e.pipe(Effect.provideService(Console.Console, s.capturing)),
+    };
   });
 
 describe("file fallback (no OS store: Windows here)", () => {
   it.effect("writes credentials.json mode 0600 in a 0700 directory and warns once", () =>
     Effect.gen(function* () {
-      const { store, fs, file, stderr, withConsole } = yield* makeStore("win32", fakeExec("security").exec);
+      const { store, fs, file, stderr, withConsole } = yield* makeStore(
+        "win32",
+        fakeExec("security").exec,
+      );
       yield* withConsole(store.set(credential));
       yield* withConsole(store.set(credential));
       const stat = yield* fs.stat(file);
@@ -142,26 +168,28 @@ describe("file fallback (no OS store: Windows here)", () => {
 });
 
 describe("OS-native backends (fake security / secret-tool)", () => {
-  it.effect("macOS: the credential goes to the keychain over stdin — never on argv — and no file is written", () =>
-    Effect.gen(function* () {
-      const fake = fakeExec("security");
-      const { store, fs, file, stderr, withConsole } = yield* makeStore("darwin", fake.exec);
-      yield* withConsole(store.set(credential));
-      assert.strictEqual(store.backend, "keychain");
-      assert.isFalse(yield* fs.exists(file));
-      assert.deepStrictEqual(stderr, []);
-      for (const call of fake.calls) {
-        assert.notInclude(call.args.join(" "), TOKEN);
-        assert.notInclude(Buffer.from(call.args.join(" "), "utf8").toString("base64"), TOKEN);
-      }
-      const setCall = fake.calls.find((call) => call.args[0] === "-i");
-      assert.isDefined(setCall?.stdin);
-      const back = yield* store.get;
-      assert.strictEqual(Option.isSome(back) ? Redacted.value(back.value.token) : "", TOKEN);
-      assert.strictEqual(Option.isSome(back) ? back.value.baseUrl : "", "https://auth.acme.com");
-      yield* store.clear;
-      assert.isTrue(Option.isNone(yield* store.get));
-    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  it.effect(
+    "macOS: the credential goes to the keychain over stdin — never on argv — and no file is written",
+    () =>
+      Effect.gen(function* () {
+        const fake = fakeExec("security");
+        const { store, fs, file, stderr, withConsole } = yield* makeStore("darwin", fake.exec);
+        yield* withConsole(store.set(credential));
+        assert.strictEqual(store.backend, "keychain");
+        assert.isFalse(yield* fs.exists(file));
+        assert.deepStrictEqual(stderr, []);
+        for (const call of fake.calls) {
+          assert.notInclude(call.args.join(" "), TOKEN);
+          assert.notInclude(Buffer.from(call.args.join(" "), "utf8").toString("base64"), TOKEN);
+        }
+        const setCall = fake.calls.find((call) => call.args[0] === "-i");
+        assert.isDefined(setCall?.stdin);
+        const back = yield* store.get;
+        assert.strictEqual(Option.isSome(back) ? Redacted.value(back.value.token) : "", TOKEN);
+        assert.strictEqual(Option.isSome(back) ? back.value.baseUrl : "", "https://auth.acme.com");
+        yield* store.clear;
+        assert.isTrue(Option.isNone(yield* store.get));
+      }).pipe(Effect.scoped, Effect.provide(Platform)),
   );
 
   it.effect("Linux: secret-tool store reads the secret from stdin", () =>
@@ -177,16 +205,18 @@ describe("OS-native backends (fake security / secret-tool)", () => {
     }).pipe(Effect.scoped, Effect.provide(Platform)),
   );
 
-  it.effect("a native store that refuses the write (headless Linux) falls back to the 0600 file, with a warning", () =>
-    Effect.gen(function* () {
-      const fake = fakeExec("secret-tool", { refuseWrites: true });
-      const { store, fs, file, stderr, withConsole } = yield* makeStore("linux", fake.exec);
-      yield* withConsole(store.set(credential));
-      assert.strictEqual((yield* fs.stat(file)).mode & 0o777, 0o600);
-      assert.strictEqual(stderr.length, 1);
-      const back = yield* store.get;
-      assert.strictEqual(Option.isSome(back) ? Redacted.value(back.value.token) : "", TOKEN);
-    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  it.effect(
+    "a native store that refuses the write (headless Linux) falls back to the 0600 file, with a warning",
+    () =>
+      Effect.gen(function* () {
+        const fake = fakeExec("secret-tool", { refuseWrites: true });
+        const { store, fs, file, stderr, withConsole } = yield* makeStore("linux", fake.exec);
+        yield* withConsole(store.set(credential));
+        assert.strictEqual((yield* fs.stat(file)).mode & 0o777, 0o600);
+        assert.strictEqual(stderr.length, 1);
+        const back = yield* store.get;
+        assert.strictEqual(Option.isSome(back) ? Redacted.value(back.value.token) : "", TOKEN);
+      }).pipe(Effect.scoped, Effect.provide(Platform)),
   );
 
   it.effect("a missing native binary (spawn failure) also falls back to the file", () =>
@@ -207,7 +237,9 @@ describe("AWTHAQ_TOKEN override", () => {
     Effect.gen(function* () {
       const fake = fakeExec("security");
       const { store, fs, file, withConsole } = yield* makeStore("darwin", fake.exec);
-      yield* withConsole(store.set({ baseUrl: "https://stored.example.com", token: Redacted.make("stored-token") }));
+      yield* withConsole(
+        store.set({ baseUrl: "https://stored.example.com", token: Redacted.make("stored-token") }),
+      );
       const before = fake.calls.length;
       const overridden = yield* CredentialStore.withEnvOverride(store).pipe(
         withEnv({ AWTHAQ_TOKEN: TOKEN, AWTHAQ_BASE_URL: "https://ci.example.com" }),

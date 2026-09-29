@@ -296,9 +296,7 @@ describe("HookPoint.observe — JH-002: taps run sequentially in resolved order"
       yield* TestClock.adjust("1 second");
       yield* Fiber.await(fiber);
       assert.deepStrictEqual(log, ["a", "b"]);
-    }).pipe(
-      Effect.provide(Layer.mergeAll(Slow, Fast).pipe(Layer.provideMerge(AfterSignIn.layer))),
-    );
+    }).pipe(Effect.provide(Layer.mergeAll(Slow, Fast).pipe(Layer.provideMerge(AfterSignIn.layer))));
   });
 
   it.effect("a failing observer is counted in awthaq_hook_observer_error_total", () => {
@@ -324,23 +322,26 @@ describe("HookPoint — JH-004: tap outputs are checked against the point's own 
   // Refinements the static type cannot see: a tap can satisfy `{ n: number }` and still hand back `-1`.
   const Positive = Schema.Struct({ n: Schema.Number.check(Schema.isGreaterThan(0)) });
 
-  it.effect("a veto tap returning a value that fails the point schema is a defect naming the point", () => {
-    class BeforeCount extends HookPoint.veto<BeforeCount>()("auth.count", Positive) {}
-    const Bad = BeforeCount.tap(() => Effect.succeed({ n: -1 }));
-    return Effect.gen(function* () {
-      const point = yield* BeforeCount;
-      const exit = yield* Effect.exit(point.run({ n: 1 }));
-      assert.isTrue(Exit.isFailure(exit));
-      if (Exit.isFailure(exit)) {
-        const defect = Cause.squash(exit.cause);
-        assert.instanceOf(defect, HookPoint.HookTapOutputInvalid);
-        if (defect instanceof HookPoint.HookTapOutputInvalid) {
-          assert.strictEqual(defect.point, "awthaq/hook/auth.count");
-          assert.strictEqual(defect.owner, "app");
+  it.effect(
+    "a veto tap returning a value that fails the point schema is a defect naming the point",
+    () => {
+      class BeforeCount extends HookPoint.veto<BeforeCount>()("auth.count", Positive) {}
+      const Bad = BeforeCount.tap(() => Effect.succeed({ n: -1 }));
+      return Effect.gen(function* () {
+        const point = yield* BeforeCount;
+        const exit = yield* Effect.exit(point.run({ n: 1 }));
+        assert.isTrue(Exit.isFailure(exit));
+        if (Exit.isFailure(exit)) {
+          const defect = Cause.squash(exit.cause);
+          assert.instanceOf(defect, HookPoint.HookTapOutputInvalid);
+          if (defect instanceof HookPoint.HookTapOutputInvalid) {
+            assert.strictEqual(defect.point, "awthaq/hook/auth.count");
+            assert.strictEqual(defect.owner, "app");
+          }
         }
-      }
-    }).pipe(Effect.provide(Bad.pipe(Layer.provideMerge(BeforeCount.layer))));
-  });
+      }).pipe(Effect.provide(Bad.pipe(Layer.provideMerge(BeforeCount.layer))));
+    },
+  );
 
   it.effect("a divert tap's diverted value must match the outcome schema", () => {
     class BeforeIssue extends HookPoint.divert<BeforeIssue>()(

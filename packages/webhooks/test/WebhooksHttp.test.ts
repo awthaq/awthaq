@@ -1,4 +1,4 @@
-// BEH-EA-261 (spec/behaviors/31-webhooks.md), over real HTTP: the admin group behind the admin-tier
+// BEH-EA-264 (spec/behaviors/31-webhooks.md), over real HTTP: the admin group behind the admin-tier
 // authentication and CSRF, the fail-closed gate, the secret shown once on the wire, and the typed errors.
 import { Api } from "@awthaq/api";
 import { Sessions, Users } from "@awthaq/core";

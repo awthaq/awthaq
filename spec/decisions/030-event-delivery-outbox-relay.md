@@ -10,7 +10,7 @@
 > | Status | Accepted — relay and the first-party webhooks plugin implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (CWM-004, MAPS-010, D2); 1.1 (2026-09-29): the first-party `@awthaq/webhooks` plugin is built (Decision 7 rewritten; [BEH-EA-255 through 262](../behaviors/31-webhooks.md)) |
+> | Change History | 1.0 (2026-09-29): Initial release (CWM-004, MAPS-010, D2); 1.1 (2026-09-29): the first-party `@awthaq/webhooks` plugin is built (Decision 7 rewritten; [BEH-EA-258 through 265](../behaviors/31-webhooks.md)) |
 
 ---
 

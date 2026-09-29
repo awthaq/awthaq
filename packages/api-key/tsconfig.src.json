@@ -14,7 +14,8 @@
       "@awthaq/sql": ["../sql/src/index.ts"],
       "@awthaq/ports": ["../ports/src/index.ts"],
       "@awthaq/api": ["../api/src/index.ts"],
-      "@awthaq/jwt": ["../jwt/src/index.ts"]
+      "@awthaq/jwt": ["../jwt/src/index.ts"],
+      "@awthaq/jwt/verify": ["../jwt/src/verify.ts"]
     }
   },
   "references": [

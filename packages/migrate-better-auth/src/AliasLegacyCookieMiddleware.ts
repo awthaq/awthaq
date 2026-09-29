@@ -38,7 +38,7 @@ export const make = (options: {
         if (request.cookies[name] !== undefined) return request;
         const legacyValue = request.cookies[options.legacyCookieName];
         if (legacyValue === undefined) return request;
-        const existing = request.headers.cookie ?? "";
+        const existing = request.headers["cookie"] ?? "";
         const rewritten =
           existing.length > 0 ? `${existing}; ${name}=${legacyValue}` : `${name}=${legacyValue}`;
         return request.modify({ headers: Headers.set(request.headers, "cookie", rewritten) });

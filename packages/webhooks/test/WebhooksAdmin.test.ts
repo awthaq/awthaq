@@ -1,4 +1,4 @@
-// BEH-EA-261/262 (spec/behaviors/31-webhooks.md): the administrator's surface — fail-closed by default,
+// BEH-EA-264/262 (spec/behaviors/31-webhooks.md): the administrator's surface — fail-closed by default,
 // secret shown once and stored sealed, the SSRF floor and filter validation at registration, rotation,
 // the delivery log and manual redrive, and the per-administrator rate limit.
 import { Api } from "@awthaq/api";

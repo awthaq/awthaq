@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-06 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §13 and, by comparison, `better-auth/01-core-domain/01-entities-and-invariants.md` — not code that has shipped.
+> Implemented in `@awthaq/core` (`Users.ts`, `Accounts.ts`, `DataExport.ts`; tests `packages/core/test/Users.test.ts`, `Accounts.test.ts`, `AccountExport.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §13 and, by comparison, `better-auth/01-core-domain/01-entities-and-invariants.md`.
 
 ## BEH-EA-041: A User is identified by a case-insensitively unique email
 
@@ -170,7 +170,7 @@ REQUIREMENT: A field a plugin contributes to `User`, `Account`, or `Session`
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §6.2 documents this as the extension mechanism's sharpest edge and assigns blame precisely: a plugin that omits the write-gate on a system-authority field it contributes is the party responsible for the resulting corruption, "not the base system, and not whichever other plugin later trusts the now-corrupted field as authoritative." awthaq's plan inherits the same default and the same blame rule, while narrowing where a plugin may contribute such a field at all — per BEH-EA-040, a shared-table extension is scalar-only and mediated by a declared extension point, which shrinks, but does not eliminate, the surface this rule has to cover.
 
-**Interim guidance until the extension point ships (SAM-004).** The typed `userFields` extension point (`AuthPlugin` option, linker-enforced `${id}_${field}` columns, typed `getFields`/`setFields`, `clientWritable` gating of the HTTP profile payload) is not implemented: nothing in the shipped code contributes a field to `User`. Meanwhile application data belongs in `UserRecord.metadata` — an opaque, server-only-writable string that no HTTP payload can set (`UpdateProfilePayload` is `{ name, image }`; `metadata` is written only by trusted server code such as an import or the admin surface) — or in a plugin-prefixed side table keyed by `UserId`. Anything a policy or an authorization decision may rely on MUST live in one of those two server-only places and MUST NOT be a client-writable field; the only client-writable profile fields today are `name` and `image`.
+**As shipped (SAM-004, ADR-EA-035).** A plugin declares typed scalar user fields (`AuthPlugin.Service`'s `userFields`; `UserFields.field(schema)` is client-writable, `UserFields.serverOnly(schema)` is not), the linker generates their `${plugin id}_${field}` columns (BEH-EA-040), and `Users.getFields`/`setFields` (typed through `Users.typedFields(auth.userFields)`) read and write them. **Writability follows this behavior's rule:** a field is writable through the HTTP profile payload (`PATCH /user`'s `fields`, `Users.setFields` with `source: "client"`) unless its plugin declared it `serverOnly`, in which case only trusted server code (`source: "server"`, the default) can write it and a request that names it is `UserFieldNotWritable` (403); an undeclared key or a value its schema refuses is a 422, and a patch is validated as a whole before anything is stored. The base system provides no protection for a field it did not define, so anything a policy or an authorization decision may rely on MUST be declared `serverOnly` (or live in the server-only `metadata` / a plugin-prefixed side table); `AccountDto.fields` shows a user every field they hold, including server-only ones. The typed client helper (`UserFields.client(auth.userFields)`) leaves server-only keys out of what it encodes at compile time. A declared field does not change `UserRecord`: it is read with `getFields`. Account and Session extension are not built.
 
 ## BEH-EA-254: A person can export everything the system holds about them as one document, and no plugin can be left out
 

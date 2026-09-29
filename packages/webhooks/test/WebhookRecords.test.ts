@@ -1,4 +1,4 @@
-// BEH-EA-259/260 (spec/behaviors/31-webhooks.md): `WebhookRecords`, one contract suite over both layers.
+// BEH-EA-262/260 (spec/behaviors/31-webhooks.md): `WebhookRecords`, one contract suite over both layers.
 // `layerSql` is migrated through the plugin's own real `migrations` (and, under `pnpm run test:pg`,
 // runs on Postgres), so the unique (endpoint, event) pair is a real database constraint.
 import { Migrations } from "@awthaq/core";

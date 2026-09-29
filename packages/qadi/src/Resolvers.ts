@@ -234,7 +234,10 @@ const reauthHandler: ObligationHandler<
   Effect.gen(function* () {
     for (const duty of obligations) {
       if (duty.id !== REAUTH_OBLIGATION_ID) {
-        return yield* Defects.invalidConfiguration("onObligations", `awthaq: ObligationHandlers.reauth cannot discharge obligation "${duty.id}"`);
+        return yield* Defects.invalidConfiguration(
+          "onObligations",
+          `awthaq: ObligationHandlers.reauth cannot discharge obligation "${duty.id}"`,
+        );
       }
     }
     if (obligations.length === 0) return;
@@ -245,7 +248,10 @@ const reauthHandler: ObligationHandler<
     for (const duty of obligations) {
       const value = duty.attributes["maxAgeSeconds"];
       if (!isValidMaxAge(value)) {
-        return yield* Defects.invalidConfiguration("maxAgeSeconds", "awthaq: reauth obligation is missing a finite, non-negative numeric maxAgeSeconds");
+        return yield* Defects.invalidConfiguration(
+          "maxAgeSeconds",
+          "awthaq: reauth obligation is missing a finite, non-negative numeric maxAgeSeconds",
+        );
       }
       windows.push(value);
     }

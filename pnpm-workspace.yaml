@@ -23,7 +23,11 @@ catalog:
   "@effect/atom-react": 4.0.0-rc.116
   vitest: 5.0.0
   "@vitest/coverage-v8": 5.0.0
-  typescript: ^7.0.0
+  # Exact, like `@effect/tsgo` below: `effect-tsgo patch` (the root `prepare`) patches the
+  # installed typescript binary for one specific pairing, so a caret range here could
+  # drift the pair apart on a lockfile refresh (MM-003). Bump both together.
+  typescript: 7.0.2
+  "@effect/tsgo": 0.45.0
   "@types/node": ^22.12.0
   hash-wasm: ^4.12.0
   # Same versions qadi's own root catalog (../qadi/pnpm-workspace.yaml) pins

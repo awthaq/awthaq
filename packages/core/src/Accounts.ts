@@ -144,7 +144,9 @@ export interface AccountsShape {
     subject: string,
     issuer?: string,
   ) => Effect.Effect<Option.Option<AccountRecord>, StoreUnavailable>;
-  readonly listByUser: (userId: UserId) => Effect.Effect<ReadonlyArray<AccountRecord>, StoreUnavailable>;
+  readonly listByUser: (
+    userId: UserId,
+  ) => Effect.Effect<ReadonlyArray<AccountRecord>, StoreUnavailable>;
   /**
    * BE-002: `OAuthTokenAccess.withAccessToken` (`@awthaq/oauth`) is the
    * first caller that needs an account's own `providerId` given only an
@@ -153,11 +155,16 @@ export interface AccountsShape {
    * lookup direction (`findByProviderSubject` needs the provider/subject
    * to find the id, not the other way around).
    */
-  readonly findById: (id: AccountId) => Effect.Effect<AccountRecord, AccountNotFound | StoreUnavailable>;
+  readonly findById: (
+    id: AccountId,
+  ) => Effect.Effect<AccountRecord, AccountNotFound | StoreUnavailable>;
   /** BEH-EA-044: reads back a credential hash `link` stored, if any. */
   readonly findCredentialHash: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<Redacted.Redacted<PasswordHasher.PhcHash>>, AccountNotFound | StoreUnavailable>;
+  ) => Effect.Effect<
+    Option.Option<Redacted.Redacted<PasswordHasher.PhcHash>>,
+    AccountNotFound | StoreUnavailable
+  >;
   /** BEH-EA-116: rehash-on-login writes a fresh hash for the same row. */
   readonly updateCredentialHash: (
     id: AccountId,
@@ -170,7 +177,10 @@ export interface AccountsShape {
    */
   readonly findProviderTokens: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<ProviderTokenSet>, AccountNotFound | ProviderTokensUnreadable | StoreUnavailable>;
+  ) => Effect.Effect<
+    Option.Option<ProviderTokenSet>,
+    AccountNotFound | ProviderTokensUnreadable | StoreUnavailable
+  >;
   /**
    * BE-002: every successful OAuth sign-in against an already-linked
    * account writes a fresh token set here — the re-authentication branch
@@ -183,7 +193,9 @@ export interface AccountsShape {
     tokens: ProviderTokenSet,
   ) => Effect.Effect<void, AccountNotFound | StoreUnavailable>;
   /** BEH-EA-045: refused when `id` is the user's only remaining Account. */
-  readonly unlink: (id: AccountId) => Effect.Effect<void, AccountNotFound | LastAccountRefusal | StoreUnavailable>;
+  readonly unlink: (
+    id: AccountId,
+  ) => Effect.Effect<void, AccountNotFound | LastAccountRefusal | StoreUnavailable>;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 09/10: whole-user
    * deletion's own cascade — deliberately bypasses `unlink`'s last-account
@@ -234,54 +246,55 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
     const state = yield* Ref.make(emptyState);
     const crypto = yield* Crypto.Crypto;
 
-    const link: AccountsShape["link"] = Effect.fnUntraced(function* (input) {
-      const key = providerSubjectKey(input.providerId, input.subject, input.issuer);
-      const id = AccountId(yield* crypto.randomUUIDv7);
-      const now = yield* DateTime.now;
-      const record: AccountRecord = {
-        id,
-        userId: input.userId,
-        providerId: input.providerId,
-        subject: input.subject,
-        issuer: input.issuer === undefined ? Option.none() : Option.some(input.issuer),
-        createdAt: now,
-        updatedAt: now,
-      };
-      const outcome = yield* Ref.modify(
-        state,
-        (s): readonly [Result.Result<AccountRecord, AccountAlreadyLinked>, State] => {
-          if (HashMap.has(s.byProviderSubject, key)) {
+    const link: AccountsShape["link"] = Effect.fnUntraced(
+      function* (input) {
+        const key = providerSubjectKey(input.providerId, input.subject, input.issuer);
+        const id = AccountId(yield* crypto.randomUUIDv7);
+        const now = yield* DateTime.now;
+        const record: AccountRecord = {
+          id,
+          userId: input.userId,
+          providerId: input.providerId,
+          subject: input.subject,
+          issuer: input.issuer === undefined ? Option.none() : Option.some(input.issuer),
+          createdAt: now,
+          updatedAt: now,
+        };
+        const outcome = yield* Ref.modify(
+          state,
+          (s): readonly [Result.Result<AccountRecord, AccountAlreadyLinked>, State] => {
+            if (HashMap.has(s.byProviderSubject, key)) {
+              return [
+                Result.fail(
+                  new AccountAlreadyLinked({
+                    message: "awthaq: account already linked",
+                    providerId: input.providerId,
+                    subject: input.subject,
+                  }),
+                ),
+                s,
+              ] as const;
+            }
             return [
-              Result.fail(
-                new AccountAlreadyLinked({
-                  message: "awthaq: account already linked",
-                  providerId: input.providerId,
-                  subject: input.subject,
-                }),
-              ),
-              s,
+              Result.succeed(record),
+              {
+                byId: HashMap.set(s.byId, id, record),
+                byProviderSubject: HashMap.set(s.byProviderSubject, key, id),
+                credentialHashes:
+                  input.credentialHash === undefined
+                    ? s.credentialHashes
+                    : HashMap.set(s.credentialHashes, id, input.credentialHash),
+                providerTokens:
+                  input.tokens === undefined
+                    ? s.providerTokens
+                    : HashMap.set(s.providerTokens, id, input.tokens),
+              },
             ] as const;
-          }
-          return [
-            Result.succeed(record),
-            {
-              byId: HashMap.set(s.byId, id, record),
-              byProviderSubject: HashMap.set(s.byProviderSubject, key, id),
-              credentialHashes:
-                input.credentialHash === undefined
-                  ? s.credentialHashes
-                  : HashMap.set(s.credentialHashes, id, input.credentialHash),
-              providerTokens:
-                input.tokens === undefined
-                  ? s.providerTokens
-                  : HashMap.set(s.providerTokens, id, input.tokens),
-            },
-          ] as const;
-        },
-      );
-      return yield* Effect.fromResult(outcome);
-    },
-    Effect.catchTag("PlatformError", storeUnavailable("Accounts.link")),
+          },
+        );
+        return yield* Effect.fromResult(outcome);
+      },
+      Effect.catchTag("PlatformError", storeUnavailable("Accounts.link")),
     );
 
     const findByProviderSubject: AccountsShape["findByProviderSubject"] = (
@@ -594,7 +607,9 @@ export const layerSql: Layer.Layer<
           SqlError: storeUnavailable("Accounts.unlink"),
         }),
       );
-      const siblings = yield* repo.listByUser(account.userId).pipe(orStoreUnavailable("Accounts.unlink"));
+      const siblings = yield* repo
+        .listByUser(account.userId)
+        .pipe(orStoreUnavailable("Accounts.unlink"));
       if (siblings.length <= 1) {
         return yield* Effect.fail(
           new LastAccountRefusal({
@@ -607,7 +622,9 @@ export const layerSql: Layer.Layer<
     });
 
     const unlink: AccountsShape["unlink"] = (id) =>
-      sql.withTransaction(performUnlink(id)).pipe(Effect.catchTag("SqlError", storeUnavailable("Accounts.unlink")));
+      sql
+        .withTransaction(performUnlink(id))
+        .pipe(Effect.catchTag("SqlError", storeUnavailable("Accounts.unlink")));
 
     const deleteAllByUser: AccountsShape["deleteAllByUser"] = (userId) =>
       repo.deleteAllByUser(userId).pipe(orStoreUnavailable("Accounts.deleteAllByUser"));

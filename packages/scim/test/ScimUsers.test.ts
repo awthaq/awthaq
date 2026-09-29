@@ -70,16 +70,18 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
     }).pipe(Effect.provide(ScimLive({ baseUrl: Option.some("https://id.acme.example") }))),
   );
 
-  it.effect("a directory user without an email becomes an Anonymous identity, never a synthetic address", () =>
-    Effect.gen(function* () {
-      const { connection } = yield* seedConnection();
-      const users = yield* Users.Users;
-      const created = yield* provision(connection, "svc-account-17");
-      const user = yield* users.findById(Users.UserId(created.id));
-      assert.strictEqual(user.identity._tag, "Anonymous");
-      assert.strictEqual(created.userName, "svc-account-17");
-      assert.isUndefined(created.emails);
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "a directory user without an email becomes an Anonymous identity, never a synthetic address",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const users = yield* Users.Users;
+        const created = yield* provision(connection, "svc-account-17");
+        const user = yield* users.findById(Users.UserId(created.id));
+        assert.strictEqual(user.identity._tag, "Anonymous");
+        assert.strictEqual(created.userName, "svc-account-17");
+        assert.isUndefined(created.emails);
+      }).pipe(Effect.provide(ScimLive())),
   );
 
   it.effect("a repeat POST with the same externalId converges instead of duplicating", () =>
@@ -132,86 +134,103 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       const b = yield* seedConnection("Entra");
       const scim = yield* Scim.Scim;
       const created = yield* provision(b.connection, "bo@acme.example");
-      assert.strictEqual((yield* scim.getUser(a.connection, created.id).pipe(Effect.flip))._tag, "ScimNotFound");
+      assert.strictEqual(
+        (yield* scim.getUser(a.connection, created.id).pipe(Effect.flip))._tag,
+        "ScimNotFound",
+      );
       assert.strictEqual(
         (yield* patch(a.connection, created.id, [{ op: "replace", value: { active: false } }]).pipe(
           Effect.flip,
         ))._tag,
         "ScimNotFound",
       );
-      assert.strictEqual((yield* scim.deleteUser(a.connection, created.id).pipe(Effect.flip))._tag, "ScimNotFound");
+      assert.strictEqual(
+        (yield* scim.deleteUser(a.connection, created.id).pipe(Effect.flip))._tag,
+        "ScimNotFound",
+      );
       assert.strictEqual((yield* scim.listUsers(a.connection, {})).totalResults, 0);
       // Untouched for its owner.
       assert.isTrue((yield* scim.getUser(b.connection, created.id)).active);
     }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("a user that exists but was never provisioned by the connection is simply not found", () =>
-    Effect.gen(function* () {
-      const { connection } = yield* seedConnection();
-      const users = yield* Users.Users;
-      const scim = yield* Scim.Scim;
-      const stranger = yield* users.create({
-        identity: { _tag: "Email", email: "stranger@elsewhere.example" },
-        name: "S",
-      });
-      assert.strictEqual((yield* scim.getUser(connection, stranger.id).pipe(Effect.flip))._tag, "ScimNotFound");
-      const deactivate = yield* patch(connection, stranger.id, [
-        { op: "replace", path: "active", value: false },
-      ]).pipe(Effect.flip);
-      assert.strictEqual(deactivate._tag, "ScimNotFound");
-      assert.strictEqual((yield* users.findById(stranger.id)).status, "active");
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "a user that exists but was never provisioned by the connection is simply not found",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const users = yield* Users.Users;
+        const scim = yield* Scim.Scim;
+        const stranger = yield* users.create({
+          identity: { _tag: "Email", email: "stranger@elsewhere.example" },
+          name: "S",
+        });
+        assert.strictEqual(
+          (yield* scim.getUser(connection, stranger.id).pipe(Effect.flip))._tag,
+          "ScimNotFound",
+        );
+        const deactivate = yield* patch(connection, stranger.id, [
+          { op: "replace", path: "active", value: false },
+        ]).pipe(Effect.flip);
+        assert.strictEqual(deactivate._tag, "ScimNotFound");
+        assert.strictEqual((yield* users.findById(stranger.id)).status, "active");
+      }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("list filters by userName and externalId, pages with startIndex/count, and rejects other filters", () =>
-    Effect.gen(function* () {
-      const { connection } = yield* seedConnection();
-      const scim = yield* Scim.Scim;
-      for (const n of [1, 2, 3, 4, 5]) {
-        yield* provision(connection, `u${n}@acme.example`, { externalId: `dir-${n}` });
-        // Listing is oldest-first by creation time: give each user its own millisecond.
-        yield* TestClock.adjust(Duration.millis(1));
-      }
-      const byName = yield* scim.listUsers(connection, { filter: 'userName eq "u3@acme.example"' });
-      assert.strictEqual(byName.totalResults, 1);
-      assert.strictEqual(byName.Resources[0]?.externalId, "dir-3");
-      const byExternal = yield* scim.listUsers(connection, { filter: 'externalId eq "dir-4"' });
-      assert.strictEqual(byExternal.Resources[0]?.userName, "u4@acme.example");
-      assert.strictEqual(
-        (yield* scim.listUsers(connection, { filter: 'userName eq "nobody"' })).totalResults,
-        0,
-      );
-      const page = yield* scim.listUsers(connection, { startIndex: 2, count: 2 });
-      assert.strictEqual(page.totalResults, 5);
-      assert.strictEqual(page.startIndex, 2);
-      assert.strictEqual(page.itemsPerPage, 2);
-      assert.deepStrictEqual(
-        page.Resources.map((resource) => resource.userName),
-        ["u2@acme.example", "u3@acme.example"],
-      );
-      const zero = yield* scim.listUsers(connection, { count: 0 });
-      assert.strictEqual(zero.Resources.length, 0);
-      assert.strictEqual(zero.totalResults, 5);
-      const unsupported = yield* scim
-        .listUsers(connection, { filter: 'displayName co "x"' })
-        .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
-      assert.strictEqual(unsupported._tag, "ScimBadRequest");
-      assert.strictEqual(unsupported.scimType, "invalidFilter");
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "list filters by userName and externalId, pages with startIndex/count, and rejects other filters",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        for (const n of [1, 2, 3, 4, 5]) {
+          yield* provision(connection, `u${n}@acme.example`, { externalId: `dir-${n}` });
+          // Listing is oldest-first by creation time: give each user its own millisecond.
+          yield* TestClock.adjust(Duration.millis(1));
+        }
+        const byName = yield* scim.listUsers(connection, {
+          filter: 'userName eq "u3@acme.example"',
+        });
+        assert.strictEqual(byName.totalResults, 1);
+        assert.strictEqual(byName.Resources[0]?.externalId, "dir-3");
+        const byExternal = yield* scim.listUsers(connection, { filter: 'externalId eq "dir-4"' });
+        assert.strictEqual(byExternal.Resources[0]?.userName, "u4@acme.example");
+        assert.strictEqual(
+          (yield* scim.listUsers(connection, { filter: 'userName eq "nobody"' })).totalResults,
+          0,
+        );
+        const page = yield* scim.listUsers(connection, { startIndex: 2, count: 2 });
+        assert.strictEqual(page.totalResults, 5);
+        assert.strictEqual(page.startIndex, 2);
+        assert.strictEqual(page.itemsPerPage, 2);
+        assert.deepStrictEqual(
+          page.Resources.map((resource) => resource.userName),
+          ["u2@acme.example", "u3@acme.example"],
+        );
+        const zero = yield* scim.listUsers(connection, { count: 0 });
+        assert.strictEqual(zero.Resources.length, 0);
+        assert.strictEqual(zero.totalResults, 5);
+        const unsupported = yield* scim
+          .listUsers(connection, { filter: 'displayName co "x"' })
+          .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
+        assert.strictEqual(unsupported._tag, "ScimBadRequest");
+        assert.strictEqual(unsupported.scimType, "invalidFilter");
+      }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("an organization at its membership limit refuses the POST and leaves no user behind", () =>
-    Effect.gen(function* () {
-      const { connection } = yield* seedConnection();
-      const users = yield* Users.Users;
-      const scim = yield* Scim.Scim;
-      // The owner already fills the organization's single seat.
-      const refused = yield* provision(connection, "extra@acme.example").pipe(Effect.flip);
-      assert.strictEqual(refused._tag, "ScimForbidden");
-      assert.isTrue(Option.isNone(yield* users.findByEmail("extra@acme.example")));
-      assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
-    }).pipe(Effect.provide(ScimLive({}, { membershipLimit: 1 }))),
+  it.effect(
+    "an organization at its membership limit refuses the POST and leaves no user behind",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const users = yield* Users.Users;
+        const scim = yield* Scim.Scim;
+        // The owner already fills the organization's single seat.
+        const refused = yield* provision(connection, "extra@acme.example").pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "ScimForbidden");
+        assert.isTrue(Option.isNone(yield* users.findByEmail("extra@acme.example")));
+        assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
+      }).pipe(Effect.provide(ScimLive({}, { membershipLimit: 1 }))),
   );
 
   it.effect("provisioning is audited as an event naming the connection and organization", () =>
@@ -238,27 +257,31 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
 });
 
 describe("SCIM Users: userName is immutable, other attributes update (BEH-EA-248)", () => {
-  it.effect("re-sending the same userName is fine; changing it is 400 mutability, on PUT and PATCH", () =>
-    Effect.gen(function* () {
-      const { connection } = yield* seedConnection();
-      const scim = yield* Scim.Scim;
-      const created = yield* provision(connection, "ada@acme.example");
-      const same = yield* scim.replaceUser(connection, created.id, { userName: "ADA@acme.example" });
-      assert.strictEqual(same.userName, "ada@acme.example");
-      const renamed = yield* scim
-        .replaceUser(connection, created.id, { userName: "mallory@acme.example" })
-        .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
-      assert.strictEqual(renamed._tag, "ScimBadRequest");
-      assert.strictEqual(renamed.scimType, "mutability");
-      const patched = yield* patch(connection, created.id, [
-        { op: "replace", path: "userName", value: "mallory@acme.example" },
-      ]).pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
-      assert.strictEqual(patched._tag, "ScimBadRequest");
-      assert.strictEqual(patched.scimType, "mutability");
-      const users = yield* Users.Users;
-      const user = yield* users.findById(Users.UserId(created.id));
-      assert.deepStrictEqual(Users.emailOf(user), Option.some("ada@acme.example"));
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "re-sending the same userName is fine; changing it is 400 mutability, on PUT and PATCH",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        const created = yield* provision(connection, "ada@acme.example");
+        const same = yield* scim.replaceUser(connection, created.id, {
+          userName: "ADA@acme.example",
+        });
+        assert.strictEqual(same.userName, "ada@acme.example");
+        const renamed = yield* scim
+          .replaceUser(connection, created.id, { userName: "mallory@acme.example" })
+          .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
+        assert.strictEqual(renamed._tag, "ScimBadRequest");
+        assert.strictEqual(renamed.scimType, "mutability");
+        const patched = yield* patch(connection, created.id, [
+          { op: "replace", path: "userName", value: "mallory@acme.example" },
+        ]).pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
+        assert.strictEqual(patched._tag, "ScimBadRequest");
+        assert.strictEqual(patched.scimType, "mutability");
+        const users = yield* Users.Users;
+        const user = yield* users.findById(Users.UserId(created.id));
+        assert.deepStrictEqual(Users.emailOf(user), Option.some("ada@acme.example"));
+      }).pipe(Effect.provide(ScimLive())),
   );
 
   it.effect("PUT replaces name, externalId and active; an absent externalId clears it", () =>
@@ -274,35 +297,40 @@ describe("SCIM Users: userName is immutable, other attributes update (BEH-EA-248
       });
       assert.strictEqual(replaced.displayName, "Countess Ada");
       assert.strictEqual(replaced.externalId, "dir-2");
-      const cleared = yield* scim.replaceUser(connection, created.id, { userName: "ada@acme.example" });
+      const cleared = yield* scim.replaceUser(connection, created.id, {
+        userName: "ada@acme.example",
+      });
       assert.isUndefined(cleared.externalId);
     }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("PATCH accepts Okta's path-less object, Entra's capitalized ops and string booleans, and ignores attributes it does not manage", () =>
-    Effect.gen(function* () {
-      const { connection } = yield* seedConnection();
-      const created = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });
-      const oktaStyle = yield* patch(connection, created.id, [
-        { op: "replace", value: { displayName: "Ada L.", title: "Analyst" } },
-      ]);
-      assert.strictEqual(oktaStyle.displayName, "Ada L.");
-      const entraStyle = yield* patch(connection, created.id, [
-        { op: "Replace", path: "name.givenName", value: "Augusta" },
-        { op: "Add", path: "phoneNumbers[type eq \"work\"].value", value: "+15550100" },
-        { op: "Replace", path: "active", value: "False" },
-      ]);
-      assert.strictEqual(entraStyle.displayName, "Augusta L.");
-      assert.isFalse(entraStyle.active);
-      const cleared = yield* patch(connection, created.id, [{ op: "remove", path: "externalId" }]);
-      assert.isUndefined(cleared.externalId);
-      const malformed = yield* patch(connection, created.id, [{ op: "frobnicate", path: "active" }]).pipe(
-        Effect.catchTag("StoreUnavailable", Effect.die),
-        Effect.flip,
-      );
-      assert.strictEqual(malformed._tag, "ScimBadRequest");
-      assert.strictEqual(malformed.scimType, "invalidSyntax");
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "PATCH accepts Okta's path-less object, Entra's capitalized ops and string booleans, and ignores attributes it does not manage",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const created = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });
+        const oktaStyle = yield* patch(connection, created.id, [
+          { op: "replace", value: { displayName: "Ada L.", title: "Analyst" } },
+        ]);
+        assert.strictEqual(oktaStyle.displayName, "Ada L.");
+        const entraStyle = yield* patch(connection, created.id, [
+          { op: "Replace", path: "name.givenName", value: "Augusta" },
+          { op: "Add", path: 'phoneNumbers[type eq "work"].value', value: "+15550100" },
+          { op: "Replace", path: "active", value: "False" },
+        ]);
+        assert.strictEqual(entraStyle.displayName, "Augusta L.");
+        assert.isFalse(entraStyle.active);
+        const cleared = yield* patch(connection, created.id, [
+          { op: "remove", path: "externalId" },
+        ]);
+        assert.isUndefined(cleared.externalId);
+        const malformed = yield* patch(connection, created.id, [
+          { op: "frobnicate", path: "active" },
+        ]).pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
+        assert.strictEqual(malformed._tag, "ScimBadRequest");
+        assert.strictEqual(malformed.scimType, "invalidSyntax");
+      }).pipe(Effect.provide(ScimLive())),
   );
 });
 
@@ -323,12 +351,21 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
       ]);
       assert.isFalse(deactivated.active);
       // Already-issued sessions die immediately …
-      assert.strictEqual((yield* sessions.verify(first.token).pipe(Effect.flip))._tag, "Sessions/NotFound");
-      assert.strictEqual((yield* sessions.verify(second.token).pipe(Effect.flip))._tag, "Sessions/NotFound");
+      assert.strictEqual(
+        (yield* sessions.verify(first.token).pipe(Effect.flip))._tag,
+        "Sessions/NotFound",
+      );
+      assert.strictEqual(
+        (yield* sessions.verify(second.token).pipe(Effect.flip))._tag,
+        "Sessions/NotFound",
+      );
       // … and the one shared sign-in gate refuses new ones.
       const user = yield* users.findById(id);
       assert.strictEqual(user.status, "suspended");
-      assert.strictEqual((yield* Users.assertCanSignIn(user).pipe(Effect.flip))._tag, "UserSuspended");
+      assert.strictEqual(
+        (yield* Users.assertCanSignIn(user).pipe(Effect.flip))._tag,
+        "UserSuspended",
+      );
     }).pipe(Effect.provide(ScimLive())),
   );
 
@@ -342,7 +379,9 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
       const id = Users.UserId(created.id);
 
       yield* patch(a.connection, created.id, [{ op: "replace", path: "active", value: false }]);
-      const back = yield* patch(a.connection, created.id, [{ op: "replace", path: "active", value: true }]);
+      const back = yield* patch(a.connection, created.id, [
+        { op: "replace", path: "active", value: true },
+      ]);
       assert.isTrue(back.active);
       assert.strictEqual((yield* users.findById(id)).status, "active");
 
@@ -379,8 +418,14 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
       const created = yield* provision(connection);
       yield* patch(connection, created.id, [{ op: "replace", path: "active", value: false }]);
       yield* patch(connection, created.id, [{ op: "replace", path: "active", value: true }]);
-      assert.strictEqual((yield* auditLog.list({ eventTag: "auth.scim.userDeactivated" })).length, 1);
-      assert.strictEqual((yield* auditLog.list({ eventTag: "auth.scim.userReactivated" })).length, 1);
+      assert.strictEqual(
+        (yield* auditLog.list({ eventTag: "auth.scim.userDeactivated" })).length,
+        1,
+      );
+      assert.strictEqual(
+        (yield* auditLog.list({ eventTag: "auth.scim.userReactivated" })).length,
+        1,
+      );
     }).pipe(Effect.provide(ScimLive())),
   );
 
@@ -408,7 +453,10 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
       const session = yield* sessions.issue({ userId: id });
       yield* scim.deleteUser(connection, created.id);
       assert.strictEqual((yield* users.findById(id)).status, "suspended");
-      assert.strictEqual((yield* sessions.verify(session.token).pipe(Effect.flip))._tag, "Sessions/NotFound");
+      assert.strictEqual(
+        (yield* sessions.verify(session.token).pipe(Effect.flip))._tag,
+        "Sessions/NotFound",
+      );
       // Still the connection's, and still readable — as inactive.
       assert.isFalse((yield* scim.getUser(connection, created.id)).active);
     }).pipe(Effect.provide(ScimLive())),
@@ -426,8 +474,14 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
       const session = yield* sessions.issue({ userId: id });
       yield* scim.deleteUser(connection, created.id);
       assert.strictEqual((yield* users.findById(id).pipe(Effect.flip))._tag, "UserNotFound");
-      assert.strictEqual((yield* sessions.verify(session.token).pipe(Effect.flip))._tag, "Sessions/NotFound");
-      assert.strictEqual((yield* scim.getUser(connection, created.id).pipe(Effect.flip))._tag, "ScimNotFound");
+      assert.strictEqual(
+        (yield* sessions.verify(session.token).pipe(Effect.flip))._tag,
+        "Sessions/NotFound",
+      );
+      assert.strictEqual(
+        (yield* scim.getUser(connection, created.id).pipe(Effect.flip))._tag,
+        "ScimNotFound",
+      );
       assert.strictEqual((yield* auditLog.list({ eventTag: "auth.scim.userDeleted" })).length, 1);
       // The external id is free again: a re-provision creates a new user.
       const fresh = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });

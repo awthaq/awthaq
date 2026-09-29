@@ -37,7 +37,14 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Defects, Encryption, Hmac, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import {
+  ClientAddress,
+  Defects,
+  Encryption,
+  Hmac,
+  RateLimiter,
+  SqlTransaction,
+} from "@awthaq/ports";
 import { Session } from "@awthaq/server";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -471,9 +478,7 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
           ...(query.mode === "native"
             ? {
                 native:
-                  query.code_challenge === undefined
-                    ? {}
-                    : { codeChallenge: query.code_challenge },
+                  query.code_challenge === undefined ? {} : { codeChallenge: query.code_challenge },
               }
             : {}),
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
@@ -701,8 +706,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         parsedBase.username !== "" ||
         parsedBase.password !== ""
       ) {
-        return yield* Defects.invalidConfiguration("baseUrl", `awthaq/oauth: baseUrl "${config_.baseUrl}" must be the public scheme+host ` +
-              '(e.g. "https://app.example.com") with no path, query, fragment or credentials');
+        return yield* Defects.invalidConfiguration(
+          "baseUrl",
+          `awthaq/oauth: baseUrl "${config_.baseUrl}" must be the public scheme+host ` +
+            '(e.g. "https://app.example.com") with no path, query, fragment or credentials',
+        );
       }
       const baseOrigin = parsedBase.origin;
       // MNA-004: a native redirect entry is a private-use-scheme URL. An
@@ -942,16 +950,17 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.orDie);
         const cookieMatches =
           input.cookieState !== undefined &&
-          Hmac.constantTimeEqualBytes(
-            yield* digest(input.cookieState),
-            yield* digest(input.state),
-          );
+          Hmac.constantTimeEqualBytes(yield* digest(input.cookieState), yield* digest(input.state));
         if (Option.isNone(decoded)) return yield* CallbackFailure.callbackFailed("state-malformed");
         if (!cookieMatches) return yield* CallbackFailure.callbackFailed("state-cookie-mismatch");
         const { identifier, value } = decoded.value;
-        const consumed = yield* verification.consume(identifier, value).pipe(
-          Effect.catchTag("Verification/TokenConsumed", () => CallbackFailure.callbackFailed("flow-consumed")),
-        );
+        const consumed = yield* verification
+          .consume(identifier, value)
+          .pipe(
+            Effect.catchTag("Verification/TokenConsumed", () =>
+              CallbackFailure.callbackFailed("flow-consumed"),
+            ),
+          );
         const decodedFlow = decodeFlowPayload(consumed.payload);
         if (Option.isNone(decodedFlow) || decodedFlow.value.providerId !== providerId) {
           return yield* CallbackFailure.callbackFailed("flow-invalid");
@@ -1247,9 +1256,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                         tokens: toProviderTokenSet(tokens, exchangedAt),
                         ...issuerField(provider.issuer),
                       })
-                      .pipe(
-                        Effect.catchTag("AccountAlreadyLinked", Effect.die),
-                      );
+                      .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
                     return user;
                   }),
                 )
@@ -1385,7 +1392,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           }),
         );
 
-
       const exchange: OAuthShape["exchange"] = Effect.fnUntraced(function* (input) {
         const config = yield* configNow;
         yield* RateLimits.enforce({
@@ -1409,11 +1415,13 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           return yield* CallbackFailure.callbackFailed("exchange-malformed");
         }
         const { identifier, value } = decoded.value;
-        const consumed = yield* verification.consume(identifier, value).pipe(
-          Effect.catchTag("Verification/TokenConsumed", () =>
-            CallbackFailure.callbackFailed("exchange-consumed"),
-          ),
-        );
+        const consumed = yield* verification
+          .consume(identifier, value)
+          .pipe(
+            Effect.catchTag("Verification/TokenConsumed", () =>
+              CallbackFailure.callbackFailed("exchange-consumed"),
+            ),
+          );
         const record = decodeExchangePayload(consumed.payload);
         if (Option.isNone(record)) return yield* CallbackFailure.callbackFailed("exchange-invalid");
         // The code is already spent, so a wrong or missing verifier is one guess
@@ -1448,7 +1456,9 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           ...record.value.session,
           current: true,
           token,
-        }).pipe(Effect.catchTag("SchemaError", () => CallbackFailure.callbackFailed("exchange-invalid")));
+        }).pipe(
+          Effect.catchTag("SchemaError", () => CallbackFailure.callbackFailed("exchange-invalid")),
+        );
       });
 
       return OAuth.of({ authorize, callback, exchange });

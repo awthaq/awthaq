@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-016 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-13): Initial release <br> 1.1 (2026-09-13): `layerSql` implemented; `issue` revised from a separate delete-then-insert to one atomic `INSERT ... ON CONFLICT ... DO UPDATE` against a partial unique index, after a code-review finding that the original two-statement design let two concurrent `issue`s for the same `identifier` both leave a live row behind <br> 1.2 (2026-09-14): Noted this decision's SQLite-only scope is superseded — `@awthaq/sql` gained a real `@effect/sql-pg` driver and this decision's own claim primitive now runs against Postgres too, via the same repository contract-test suite (shipping-gaps map, tickets 03/15) <br> 1.3 (2026-09-29): `Sessions.layerSql`'s `supersedes` is no longer an unwrapped precedent — RRS-004/ESR-002 wrapped its tombstone and insert in one `sql.withTransaction`; the references below are updated |
+> | Change History | 1.0 (2026-09-13): Initial release <br> 1.1 (2026-09-13): `layerSql` implemented; `issue` revised from a separate delete-then-insert to one atomic `INSERT ... ON CONFLICT ... DO UPDATE` against a partial unique index, after a code-review finding that the original two-statement design let two concurrent `issue`s for the same `identifier` both leave a live row behind <br> 1.2 (2026-09-14): Noted this decision's SQLite-only scope is superseded — `@awthaq/sql` gained a real `@effect/sql-pg` driver and this decision's own claim primitive now runs against Postgres too, via the same repository contract-test suite (shipping-gaps map, tickets 03/15) <br> 1.3 (2026-09-29): `Sessions.layerSql`'s `supersedes` is no longer an unwrapped precedent — RRS-004/ESR-002 wrapped its tombstone and insert in one `sql.withTransaction`; the references below are updated <br> 1.4 (2026-09-29): Dated the Context's four facts to when the decision was taken; core migrations, Postgres and libSQL have shipped since (DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -18,7 +18,7 @@
 
 `@awthaq/core`'s `Verification` service has a real, tested `layerMemory` but no `layerSql`, unlike `Users`/`Accounts`/`Sessions` (each already has both). `Verification.ts`'s own header comment names the reason: BEH-EA-063's `reserve` — "first caller to claim this identifier wins," independent of `consume` — needs an exclusive-claim primitive the current `verification_tokens` repository doesn't expose, and that decision changes `issue`'s own behavior too, so it deserved its own pass rather than being folded into the persistence stratum's original build-out.
 
-Four concrete facts, confirmed against the current codebase, motivate the decision below:
+Four concrete facts, confirmed against the codebase as it stood when this decision was taken (core migrations, the Postgres and libSQL drivers and a real `Verification.layerSql` have all shipped since), motivate the decision below:
 
 1. **`issue`'s semantics already differ between backends.** `layerMemory`'s `issue` overwrites (`HashMap.set` keyed by `identifier` — at most one live token per identifier, ever). `@awthaq/sql`'s `VerificationRepository.findByIdentifier` already does `ORDER BY createdAt DESC LIMIT 1` against a table with no `UNIQUE` constraint on `identifier` at all — it was built anticipating multiple historical rows per identifier, latest wins, with nothing yet deciding whether that's the intended `layerSql` behavior or an artifact of not having addressed this yet.
 2. **`reserve` is not a token.** `layerMemory` models it as a wholly separate `Ref<HashMap<identifier, expiresAt>>`, disjoint from the token rows — BEH-EA-063 itself frames it as a distinct operation ("used to serialize an operation rather than to gate a token a caller presents"), not a variant of issuing or consuming a token.

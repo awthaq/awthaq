@@ -69,6 +69,28 @@ export class EmailNotVerified extends Schema.TaggedError<EmailNotVerified>()(
 ) {}
 
 /**
+ * BAM-009: the change-email confirmation mail could not be delivered. The requester is
+ * authenticated, so unlike the enumeration-uniform flows the failure is surfaced (the token stays
+ * unconsumed and expires; asking again mints a fresh one). `502`, like the organization
+ * plugin's `InvitationDeliveryFailed`.
+ */
+export class EmailDeliveryFailed extends Schema.TaggedError<EmailDeliveryFailed>()(
+  "EmailDeliveryFailed",
+  {},
+  { httpApiStatus: 502 },
+) {}
+
+/**
+ * BAM-009: the account has no email identity to replace (a phone-only or anonymous user): the
+ * change-email flow replaces an address, it does not introduce one.
+ */
+export class EmailChangeNotSupported extends Schema.TaggedError<EmailChangeNotSupported>()(
+  "EmailChangeNotSupported",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
+/**
  * ESS-006: config-independent ceiling on a submitted password. `minLength` and
  * the breach check live in `checkPolicy` because they read the runtime
  * `PasswordConfig`, which a static schema cannot; the upper bound needs no
@@ -112,6 +134,18 @@ export const VerifyEmailPayload = Schema.Struct({
   token: Schema.Redacted(Schema.String),
 });
 export type VerifyEmailPayload = typeof VerifyEmailPayload.Type;
+
+/** BAM-009: `POST /change-email` — the address the confirmation mail is sent to; nothing changes until its owner confirms. */
+export const ChangeEmailPayload = Schema.Struct({
+  newEmail: EmailContract.Email,
+});
+export type ChangeEmailPayload = typeof ChangeEmailPayload.Type;
+
+/** BAM-009: `POST /change-email/confirm` — the token from the mail sent to the new address. */
+export const ConfirmEmailChangePayload = Schema.Struct({
+  token: Schema.Redacted(Schema.String),
+});
+export type ConfirmEmailChangePayload = typeof ConfirmEmailChangePayload.Type;
 
 export const ChangePasswordPayload = Schema.Struct({
   currentPassword: PasswordInput,
@@ -250,6 +284,18 @@ export const PasswordGroup = HttpApiGroup.make("password")
       error: Api.RateLimited,
     }),
   )
+  .add(
+    // BAM-009: the confirming half of the mailed change-email flow. Public like `verifyEmail`
+    // (the link may be opened in another browser than the one that asked), and safe to be: the
+    // token exists only because a signed-in user, or an administrator, asked for it, and it was
+    // mailed to the new address alone. Replaces the address and marks it verified, in one
+    // transaction with the token's consumption (BEH-EA-058). `EmailAlreadyExists` (409) tells
+    // only the holder of the new mailbox that the address has since been taken.
+    HttpApiEndpoint.post("confirmEmailChange", "/change-email/confirm", {
+      payload: ConfirmEmailChangePayload,
+      error: [TokenConsumed, EmailAlreadyExists, Api.RateLimited],
+    }),
+  )
   // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every endpoint here
   // is an unsafe method, and most (signUp/signIn/requestReset/
   // confirmReset/verifyEmail/resendVerification) are otherwise-public —
@@ -280,6 +326,18 @@ export const PasswordAccountGroup = HttpApiGroup.make("password.account")
       success: SessionContract.SessionDto,
       // Ticket 14: rate-limited.
       error: [WrongPassword, WeakPassword, Api.RateLimited, Api.InvalidTokenDelivery],
+    }),
+  )
+  .add(
+    // BAM-009: the requesting half — mails a confirmation token to the *new* address (never the
+    // current one) and changes nothing yet. Answers 202 for an address that is free and one that
+    // is taken alike (no ownership oracle for an authenticated prober); a taken address is only
+    // discovered by the mailbox owner at confirmation. The requester is authenticated, so a mail
+    // delivery failure is surfaced (`EmailDeliveryFailed`), not swallowed.
+    HttpApiEndpoint.post("changeEmail", "/change-email", {
+      payload: ChangeEmailPayload,
+      success: HttpApiSchema.Empty(202),
+      error: [EmailChangeNotSupported, EmailDeliveryFailed, Api.RateLimited],
     }),
   )
   .add(

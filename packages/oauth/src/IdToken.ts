@@ -46,7 +46,7 @@ const JWKS_MIN_REFETCH_INTERVAL = Duration.seconds(30);
  * first use. Keyed by the URI as well as the id so a connection whose discovery changed can
  * never be served the old endpoint's keys.
  */
-export interface JwksCaches {
+interface JwksCaches {
   readonly forProvider: (
     provider: OAuthProvider.ResolvedProvider,
     jwksUri: string,
@@ -150,7 +150,7 @@ const claimProblem = (
 export interface VerifyInput {
   /** The retrying client (ERS-003): JWKS is an idempotent GET. */
   readonly httpClient: HttpClient.HttpClient;
-  readonly jwksCaches: JwksCaches;
+  readonly jwksCaches: Effect.Success<typeof makeJwksCaches>;
   readonly provider: OAuthProvider.ResolvedProvider;
   readonly idToken: string;
   readonly nonce: string;
@@ -219,7 +219,12 @@ export const verify = (
         CallbackFailure.callbackFailed("kid", error.reason),
       ),
     );
-    const verified = yield* Jwt.verifySignature(alg, jwk, decoded.signingInput, decoded.signature).pipe(
+    const verified = yield* Jwt.verifySignature(
+      alg,
+      jwk,
+      decoded.signingInput,
+      decoded.signature,
+    ).pipe(
       Effect.catchTag("JwtVerificationError", (error) =>
         CallbackFailure.callbackFailed("signature", error.reason),
       ),

@@ -3,7 +3,7 @@ ID: "AVS-008"
 Title: "ADR-EA-003's endpoint inventory already stale against shipped contract code"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/decisions/003-httpapi-as-contract.md:25"
 Auditor: "api-design-versioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **API Design & Versioning Specialist** (`api-design-versioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Revise ADR-EA-003 (revision 1.1) to enumerate the actual shipped groups/endpoint
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-surface-inventory-reconcile`. Evidence at HEAD ec065a7: `spec/decisions/003-httpapi-as-contract.md:25`. Fix: Revise ADR-EA-003 to 1.1 with the shipped core inventory (session incl. revokeAll; account: updateProfile, deleteUser; subject owned by @awthaq/qadi), flip status to implemented across all ADRs whose decision has shipped, and mechanize DoD gate 10 so contract inventory drift fails CI. (effort M). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ADR-EA-003 rev 1.1 has a machine-checked core groups inventory (session including revokeAll, account with updateProfile, deleteUser and exportData, subject owned by @awthaq/qadi) and its Auth.api sentence now describes Auth.make's composition; every ADR 001-015 whose decision is visible in code is flipped to 'Accepted - implemented' (files, index.yaml, footers). Gate 10 is mechanized as check 12 (spec/scripts/check-drift.mjs diffs the inventory against packages/api/src; removing revokeAll from the ADR fails it with the source and ADR lists) and the DoD per-change checklist has the standing rule. Deviation: the walker scans the source for HttpApiGroup/HttpApiEndpoint declarations instead of importing built libs, so spec:verify needs no build.

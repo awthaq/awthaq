@@ -3,7 +3,7 @@ ID: "MTS-011"
 Title: "Generated quality dashboard is committed while its inputs are gitignored"
 Level: low
 Category: "dx"
-Status: ready-for-human
+Status: resolved
 Package: "—"
 Source: ".gitignore:6"
 Auditor: "monorepo-tooling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Monorepo Tooling Specialist** (`monorepo-tooling-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Track .quality-metrics/*.json (they are the auditable 50-KPI evidence) and gitig
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `quality-metrics-regeneration`. Evidence at HEAD ec065a7: `.gitignore:6`. Fix: Pick one side of the generated/committed boundary. Recommended: stop tracking the rendered HTML, keep inputs local, and make the renderer refuse stale inputs. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option A per plan; user may revisit. type-quality-dashboard.html is untracked (git rm --cached) and gitignored; the renderer's freshness guard and the JSON contract (script header) landed with DESS-005; CONTRIBUTING.md has one paragraph on the local-only dashboard.

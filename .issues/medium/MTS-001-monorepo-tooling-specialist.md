@@ -3,7 +3,7 @@ ID: "MTS-001"
 Title: "32 of 85 project-reference edges are unreachable from src imports (template-copied reference lists)"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/tsconfig.src.json:25"
 Auditor: "monorepo-tooling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Monorepo Tooling Specialist** (`monorepo-tooling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Trim each tsconfig.src.json references to the packages its src actually imports 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `build-tooling-hygiene`. Evidence at HEAD ec065a7: `packages/core/tsconfig.src.json:25`. Fix: Trim every tsconfig.src.json references list to its transitive src-import closure and add a CI guard. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Landed together with MM-002: the guard (scripts/sync-workspace.mjs, in `pnpm check`) plus the pruned tsconfig.src.json paths/references. Deviation from the dossier: the rule is each package's *direct* src imports (a dependency's own imports resolve inside its own project), not the transitive closure; proven with a clean build, 0 errors.

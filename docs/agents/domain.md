@@ -34,4 +34,4 @@ If your output contradicts an existing ADR (`spec/decisions/*.md`), surface it e
 
 > _Contradicts ADR-EA-009 (authorization delegated to qadi) — but worth reopening because…_
 
-Every `spec/*.md` file also carries its own "this describes a planned system" pre-implementation banner and a Document Control table (`Status`, `Change History`) — respect current `Status` (`Effective` vs. superseded) when citing it.
+Every `spec/*.md` file carries a Document Control table (`Status`, `Change History`) — respect current `Status` (`Effective` vs. superseded) when citing it. The specification describes a project that is implemented but unpublished; a behavior's *Implementation* or *Deviation* note says where the code differs, and `spec/traceability.md` says which claims rest on a passing test.

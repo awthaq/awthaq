@@ -13,6 +13,7 @@ import {
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
+  EmailChange,
   Errors,
   HookPoint,
   Hooks,
@@ -99,6 +100,8 @@ export interface PasswordConfigShape {
   readonly links: {
     readonly verifyEmail?: (token: string) => string;
     readonly resetPassword?: (token: string) => string;
+    /** BAM-009: the confirmation link mailed to the *new* address of a change-email flow (a user's own request or an administrator's). */
+    readonly changeEmail?: (token: string) => string;
   };
   /**
    * FAMS-003: whether `signIn` refuses an account whose email is unverified
@@ -175,7 +178,8 @@ export interface PasswordShape {
     | PasswordApi.WeakPassword
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
-    | HookPoint.HookAborted | Errors.StoreUnavailable
+    | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /**
    * TMS-005: the `signUpEnumeration: "conceal"` flavour of `signUp` — the same
@@ -264,6 +268,39 @@ export interface PasswordShape {
     /** APS-003: resolved via `ClientAddress`, mirroring `signIn`/`signUp`/`requestReset`. */
     readonly ip?: string;
   }) => Effect.Effect<void, PasswordApi.TokenConsumed | Api.RateLimited | Errors.StoreUnavailable>;
+  /**
+   * BAM-009: starts an address change for the signed-in user: mails a `change-email`
+   * token (`EmailChange`, the purpose an administrator's `setUserEmail` shares) to
+   * `newEmail` and changes nothing yet. The requester is authenticated, so a mail
+   * failure is surfaced as `EmailDeliveryFailed`; the same address as the current one
+   * is a no-op; a taken address is not revealed here (see `confirmEmailChange`).
+   */
+  readonly requestEmailChange: (input: {
+    readonly userId: Users.UserId;
+    readonly newEmail: string;
+  }) => Effect.Effect<
+    void,
+    | PasswordApi.EmailChangeNotSupported
+    | PasswordApi.EmailDeliveryFailed
+    | Api.RateLimited
+    | Errors.StoreUnavailable
+  >;
+  /**
+   * BAM-009/BEH-EA-058: consumes a `change-email` token and, in the same transaction,
+   * replaces the account's address (`Users.changeEmail`) and marks it verified — the
+   * token's delivery to the new mailbox is the proof. Publishes `auth.user.emailChanged`
+   * after the commit and tells the *previous* address about it (dispatched, never awaited).
+   */
+  readonly confirmEmailChange: (input: {
+    readonly token: Redacted.Redacted<string>;
+    readonly ip?: string;
+  }) => Effect.Effect<
+    void,
+    | PasswordApi.TokenConsumed
+    | PasswordApi.EmailAlreadyExists
+    | Api.RateLimited
+    | Errors.StoreUnavailable
+  >;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 11: authenticated
    * change-password — distinct from the unauthenticated `requestReset`/
@@ -453,7 +490,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         }
         const issued = yield* password.signUp(signUpInput);
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
       }),
 
@@ -476,7 +516,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...requestUserAgent(request),
         });
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
       }),
 
@@ -529,6 +572,20 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
         });
       }),
+
+      confirmEmailChange: Effect.fnUntraced(function* ({
+        payload,
+        request,
+      }: {
+        payload: PasswordApi.ConfirmEmailChangePayload;
+        request: HttpServerRequest.HttpServerRequest;
+      }) {
+        const resolvedAddress = yield* clientAddress.resolve(request);
+        yield* password.confirmEmailChange({
+          ...payload,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+        });
+      }),
     });
   }),
 );
@@ -559,7 +616,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
         // reaching it is a wiring defect, mirroring `Session.ts`'s own
         // `currentUserPrincipal` guard.
         if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: change-password reached with a non-User principal: ${principal._tag}`);
+          return yield* Defects.invariantViolation(
+            "NonUserPrincipal",
+            `awthaq: change-password reached with a non-User principal: ${principal._tag}`,
+          );
         }
         const delivery = yield* SessionDelivery.mode(request);
         const resolvedAddress = yield* clientAddress.resolve(request);
@@ -572,8 +632,29 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
           ...requestUserAgent(request),
         });
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
+      }),
+
+      changeEmail: Effect.fnUntraced(function* ({
+        payload,
+      }: {
+        payload: PasswordApi.ChangeEmailPayload;
+      }) {
+        const principal = yield* Api.CurrentPrincipal;
+        if (principal._tag !== "User") {
+          return yield* Defects.invariantViolation(
+            "NonUserPrincipal",
+            `awthaq: change-email reached with a non-User principal: ${principal._tag}`,
+          );
+        }
+        yield* password.requestEmailChange({
+          userId: Users.UserId(principal.ref.id),
+          newEmail: payload.newEmail,
+        });
       }),
 
       reauthenticate: Effect.fnUntraced(function* ({
@@ -583,7 +664,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }) {
         const principal = yield* Api.CurrentPrincipal;
         if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`);
+          return yield* Defects.invariantViolation(
+            "NonUserPrincipal",
+            `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`,
+          );
         }
         yield* password.reauthenticate({
           userId: Users.UserId(principal.ref.id),
@@ -688,13 +772,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
        * password, the hash or the identifier.
        */
       const verifyPassword = (candidate: Redacted.Redacted<string>, hash: PasswordHasher.PhcHash) =>
-        hasher
-          .verify(candidate, hash)
-          .pipe(
-            Observability.authSpan(Observability.Span.passwordVerify, {
-              [Observability.Field.strategy]: "password",
-            }),
-          );
+        hasher.verify(candidate, hash).pipe(
+          Observability.authSpan(Observability.Span.passwordVerify, {
+            [Observability.Field.strategy]: "password",
+          }),
+        );
       /**
        * EOTS-001: every operation is one `awthaq.password.<operation>` span
        * (`awthaq.plugin`, `auth.strategy`); the handlers annotate `user.id` once the
@@ -908,7 +990,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   name: vetoedSignUp.name,
                 })
                 .pipe(
-                  Effect.catchTag("Users/EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                  Effect.catchTag(
+                    "Users/EmailAlreadyExists",
+                    () => new PasswordApi.EmailAlreadyExists(),
+                  ),
                   // FAMS-002: `create` is Email-identity here, so a phone conflict is unreachable.
                   Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
                 );
@@ -928,7 +1013,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
-        yield* afterSignUp.run({ userId: user.id, email: vetoedSignUp.email, strategy: "password" });
+        yield* afterSignUp.run({
+          userId: user.id,
+          email: vetoedSignUp.email,
+          strategy: "password",
+        });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
@@ -1231,9 +1320,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const userId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              const consumed = yield* verification.consume(identifier, value).pipe(
-                Effect.catchTag("Verification/TokenConsumed", () => new PasswordApi.TokenConsumed()),
-              );
+              const consumed = yield* verification
+                .consume(identifier, value)
+                .pipe(
+                  Effect.catchTag(
+                    "Verification/TokenConsumed",
+                    () => new PasswordApi.TokenConsumed(),
+                  ),
+                );
               // ARF-009: the user comes from the consumed row, never from the
               // token; a row with none is no reset token this plugin issued.
               if (Option.isNone(consumed.userId)) {
@@ -1319,9 +1413,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const verifiedUserId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              const consumed = yield* verification.consume(identifier, value).pipe(
-                Effect.catchTag("Verification/TokenConsumed", () => new PasswordApi.TokenConsumed()),
-              );
+              const consumed = yield* verification
+                .consume(identifier, value)
+                .pipe(
+                  Effect.catchTag(
+                    "Verification/TokenConsumed",
+                    () => new PasswordApi.TokenConsumed(),
+                  ),
+                );
               // ARF-009: the user comes from the consumed row, not the token.
               if (Option.isNone(consumed.userId)) {
                 return yield* Effect.fail(new PasswordApi.TokenConsumed());
@@ -1353,6 +1452,105 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // ARF-006: after the commit, like `resetCompleted`.
         yield* events.publish({ _tag: "auth.user.emailVerified", userId: verifiedUserId });
       });
+
+      const requestEmailChange: PasswordShape["requestEmailChange"] = Effect.fnUntraced(
+        function* (input) {
+          const config = yield* configNow;
+          // The requester's own budget, then the target inbox's (see the rules' comments).
+          yield* rateLimit(rules.changeEmail, input);
+          yield* rateLimit(rules.changeEmailTarget, { email: input.newEmail });
+          const user = yield* users.findById(input.userId).pipe(
+            Effect.catchTag("UserNotFound", () =>
+              // The caller's session was proven live by `Authentication` a moment ago.
+              Defects.invariantViolation(
+                "ChangeEmailUserMissing",
+                "awthaq: change-email's own authenticated user is missing",
+              ),
+            ),
+          );
+          const current = Users.emailOf(user);
+          if (Option.isNone(current)) {
+            return yield* Effect.fail(new PasswordApi.EmailChangeNotSupported());
+          }
+          // `Users` stores addresses lower-cased (BEH-EA-041): the same address in another case is no change.
+          if (current.value.toLowerCase() === input.newEmail.toLowerCase()) return;
+          yield* EmailChange.request(
+            { verification, crypto, mailer },
+            { userId: input.userId, newEmail: input.newEmail, link: config.links.changeEmail },
+          ).pipe(
+            Effect.catchTag("MailDeliveryFailed", () => new PasswordApi.EmailDeliveryFailed()),
+          );
+        },
+      );
+
+      const confirmEmailChange: PasswordShape["confirmEmailChange"] = Effect.fnUntraced(
+        function* (input) {
+          // Same order as `verifyEmail`: source first, then the well-formedness check, then the
+          // token's own budget (keyed on its public id, which names no user).
+          yield* rateLimit(rules.confirmEmailChangeByIp, input);
+          const decoded = VerificationLink.decode(Redacted.value(input.token), EmailChange.PURPOSE);
+          if (Option.isNone(decoded)) {
+            return yield* Effect.fail(new PasswordApi.TokenConsumed());
+          }
+          const { identifier, publicId, value } = decoded.value;
+          yield* rateLimit(rules.confirmEmailChange, { identifier: publicId });
+
+          // BEH-EA-058: the token's consumption, the address replacement and its verification
+          // commit together — a conflict on the new address rolls the consumption back too.
+          const changed = yield* sqlTransaction
+            .withTransaction(
+              Effect.gen(function* () {
+                const consumed = yield* verification
+                  .consume(identifier, value)
+                  .pipe(
+                    Effect.catchTag(
+                      "Verification/TokenConsumed",
+                      () => new PasswordApi.TokenConsumed(),
+                    ),
+                  );
+                const newEmail = EmailChange.newEmailOf(consumed.payload);
+                if (Option.isNone(consumed.userId) || Option.isNone(newEmail)) {
+                  return yield* Effect.fail(new PasswordApi.TokenConsumed());
+                }
+                const userId = consumed.userId.value;
+                // An account deleted (or turned phone-only) since the token was issued: a dead token.
+                const before = yield* users
+                  .findById(userId)
+                  .pipe(Effect.catchTag("UserNotFound", () => new PasswordApi.TokenConsumed()));
+                yield* users.changeEmail(userId, newEmail.value).pipe(
+                  Effect.catchTags({
+                    UserNotFound: () => new PasswordApi.TokenConsumed(),
+                    IdentityMismatch: () => new PasswordApi.TokenConsumed(),
+                    "Users/EmailAlreadyExists": () => new PasswordApi.EmailAlreadyExists(),
+                  }),
+                );
+                // Delivery to the new mailbox is the proof `verifyEmail` demands.
+                yield* users.verifyEmail(userId).pipe(
+                  Effect.catchTags({
+                    UserNotFound: () =>
+                      Defects.invariantViolation(
+                        "ChangeEmailUserMissing",
+                        "awthaq: change-email token's own user missing",
+                      ),
+                    IdentityMismatch: Effect.die,
+                  }),
+                );
+                return { userId, previous: Users.emailOf(before) };
+              }),
+            )
+            .pipe(Effect.catchTag("SqlError", Effect.die));
+          yield* events.publish({ _tag: "auth.user.emailChanged", userId: changed.userId });
+          // The previous address learns of the change (a takeover signal) — dispatched, never
+          // awaited, and carrying nothing but the template.
+          if (Option.isSome(changed.previous)) {
+            const to = changed.previous.value;
+            yield* mailDispatcher.dispatch(
+              { template: "email-changed", userId: changed.userId },
+              mailer.send({ to, template: "email-changed" }),
+            );
+          }
+        },
+      );
 
       const changePassword: PasswordShape["changePassword"] = Effect.fnUntraced(function* (input) {
         const config = yield* configNow;
@@ -1444,7 +1642,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             // `SessionNotFound` here would mean it was revoked in the
             // narrow window since, a race this endpoint has no
             // request-level recovery for.
-            Defects.invariantViolation("RowVanished", "awthaq: reauthenticate's own current session vanished"),
+            Defects.invariantViolation(
+              "RowVanished",
+              "awthaq: reauthenticate's own current session vanished",
+            ),
           ),
         );
       });
@@ -1457,6 +1658,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         resendVerification: traced("resendVerification", resendVerification),
         confirmReset: traced("confirmReset", confirmReset),
         verifyEmail: traced("verifyEmail", verifyEmail),
+        requestEmailChange: traced("requestEmailChange", requestEmailChange),
+        confirmEmailChange: traced("confirmEmailChange", confirmEmailChange),
         changePassword: traced("changePassword", changePassword),
         reauthenticate: traced("reauthenticate", reauthenticate),
       });

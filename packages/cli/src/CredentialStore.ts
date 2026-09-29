@@ -59,7 +59,9 @@ export class CredentialStore extends Context.Service<CredentialStore, Credential
 
 // ---- serialization -----------------------------------------------------------
 
-const StoredJson = Schema.fromJsonString(Schema.Struct({ baseUrl: Schema.String, token: Schema.String }));
+const StoredJson = Schema.fromJsonString(
+  Schema.Struct({ baseUrl: Schema.String, token: Schema.String }),
+);
 const decodeStored = Schema.decodeUnknownOption(StoredJson);
 
 const encode = (credential: Credential) =>
@@ -100,9 +102,7 @@ export const layerExec = Layer.effect(
             const handle = yield* spawner.spawn(
               ChildProcess.make(command, args, {
                 stdin:
-                  stdin === undefined
-                    ? "ignore"
-                    : Stream.make(new TextEncoder().encode(stdin)),
+                  stdin === undefined ? "ignore" : Stream.make(new TextEncoder().encode(stdin)),
                 stderr: "ignore",
               }),
             );
@@ -136,16 +136,22 @@ const fromBase64 = (text: string) => Buffer.from(text.trim(), "base64").toString
 /** macOS Keychain. The secret goes to `security -i` on stdin, base64 so no quoting can break the command. */
 const keychain = (exec: ExecShape): NativeBackend => ({
   name: "keychain",
-  get: exec.run("security", ["find-generic-password", "-a", ACCOUNT, "-s", SERVICE, "-w"]).pipe(
-    Effect.map((result) =>
-      result !== undefined && result.exitCode === 0 && result.stdout.trim() !== ""
-        ? Option.some(fromBase64(result.stdout))
-        : Option.none(),
+  get: exec
+    .run("security", ["find-generic-password", "-a", ACCOUNT, "-s", SERVICE, "-w"])
+    .pipe(
+      Effect.map((result) =>
+        result !== undefined && result.exitCode === 0 && result.stdout.trim() !== ""
+          ? Option.some(fromBase64(result.stdout))
+          : Option.none(),
+      ),
     ),
-  ),
   set: (secret) =>
     exec
-      .run("security", ["-i"], `add-generic-password -U -a ${ACCOUNT} -s ${SERVICE} -w ${toBase64(secret)}\n`)
+      .run(
+        "security",
+        ["-i"],
+        `add-generic-password -U -a ${ACCOUNT} -s ${SERVICE} -w ${toBase64(secret)}\n`,
+      )
       .pipe(Effect.map((result) => result !== undefined && result.exitCode === 0)),
   clear: exec
     .run("security", ["delete-generic-password", "-a", ACCOUNT, "-s", SERVICE])
@@ -155,13 +161,15 @@ const keychain = (exec: ExecShape): NativeBackend => ({
 /** Linux Secret Service (libsecret). `secret-tool store` reads the secret from stdin. */
 const secretService = (exec: ExecShape): NativeBackend => ({
   name: "secret-service",
-  get: exec.run("secret-tool", ["lookup", "service", SERVICE, "account", ACCOUNT]).pipe(
-    Effect.map((result) =>
-      result !== undefined && result.exitCode === 0 && result.stdout.trim() !== ""
-        ? Option.some(result.stdout.trim())
-        : Option.none(),
+  get: exec
+    .run("secret-tool", ["lookup", "service", SERVICE, "account", ACCOUNT])
+    .pipe(
+      Effect.map((result) =>
+        result !== undefined && result.exitCode === 0 && result.stdout.trim() !== ""
+          ? Option.some(result.stdout.trim())
+          : Option.none(),
+      ),
     ),
-  ),
   set: (secret) =>
     exec
       .run(
@@ -180,7 +188,10 @@ const nativeFor = (platform: string, exec: ExecShape): NativeBackend | undefined
 
 // ---- the file fallback -----------------------------------------------------------
 
-export const credentialsFile = (path: Path.Path, env: { readonly xdgConfigHome?: string; readonly home?: string }) => {
+export const credentialsFile = (
+  path: Path.Path,
+  env: { readonly xdgConfigHome?: string; readonly home?: string },
+) => {
   const base =
     env.xdgConfigHome !== undefined && env.xdgConfigHome !== ""
       ? env.xdgConfigHome
@@ -224,7 +235,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       Effect.mapError(
         () =>
           new ConfigUnavailable({
-            message: "could not write the credentials file: no OS credential store is reachable and the fallback failed",
+            message:
+              "could not write the credentials file: no OS credential store is reachable and the fallback failed",
           }),
       ),
     );
@@ -280,9 +292,7 @@ export const layerBase = Layer.effect(
       ...(Option.isSome(xdgConfigHome) ? { xdgConfigHome: xdgConfigHome.value } : {}),
       ...(Option.isSome(home) ? { home: home.value } : {}),
     });
-    return CredentialStore.of(
-      yield* make({ platform: process.platform, exec, fs, path, file }),
-    );
+    return CredentialStore.of(yield* make({ platform: process.platform, exec, fs, path, file }));
   }),
 );
 

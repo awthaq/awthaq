@@ -265,14 +265,16 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     }).pipe(Effect.provide(layerWith(contribution("apiKey", "keys", "ak_")))),
   );
 
-  it.effect("OptionalAuthentication: a claimed User credential resolves, a failed one is anonymous", () =>
-    Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, groups);
-      const ok = yield* client.optional.whoAmI({ headers: { authorization: "Bearer a.x.y" } });
-      assert.strictEqual(ok, "User:jwt");
-      const bad = yield* client.optional.whoAmI({ headers: { authorization: "Bearer a.x-bad" } });
-      assert.strictEqual(bad, "Anonymous:anonymous");
-    }).pipe(Effect.provide(layerWith(contribution("bearer", "jwt", "a.", undefined, true)))),
+  it.effect(
+    "OptionalAuthentication: a claimed User credential resolves, a failed one is anonymous",
+    () =>
+      Effect.gen(function* () {
+        const client = yield* HttpApiTest.groups(TestApi, groups);
+        const ok = yield* client.optional.whoAmI({ headers: { authorization: "Bearer a.x.y" } });
+        assert.strictEqual(ok, "User:jwt");
+        const bad = yield* client.optional.whoAmI({ headers: { authorization: "Bearer a.x-bad" } });
+        assert.strictEqual(bad, "Anonymous:anonymous");
+      }).pipe(Effect.provide(layerWith(contribution("bearer", "jwt", "a.", undefined, true)))),
   );
 
   it.effect("the post-auth hook is told the credential came in as apiKey", () => {
@@ -316,10 +318,9 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
         Layer.build(
-          Layer.mergeAll(
-            contribution("bearer", "x", "a."),
-            contribution("apiKey", "x", "b."),
-          ).pipe(Layer.provide(Authentication.CredentialResolversLive)),
+          Layer.mergeAll(contribution("bearer", "x", "a."), contribution("apiKey", "x", "b.")).pipe(
+            Layer.provide(Authentication.CredentialResolversLive),
+          ),
         ),
       );
       assert.isTrue(Exit.isSuccess(exit));

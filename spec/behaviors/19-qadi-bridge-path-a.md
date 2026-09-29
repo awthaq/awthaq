@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-19 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015 (qadi bridge path selection) (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015 (qadi bridge path selection) (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/qadi` (`AuthorizedSubject.ts`; tests `packages/qadi/test/AuthorizedSubject.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
 
 ## BEH-EA-145: `AuthorizedSubject` bridges `CurrentPrincipal` to `CurrentSubject`
 

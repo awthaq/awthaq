@@ -3,7 +3,7 @@ ID: "MM-005"
 Title: "definitions-of-done ground-truth claims drifted: 'no pnpm check, no check.yml' is now false"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/process/definitions-of-done.md:95"
 Auditor: "mattia-manzati"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **Mattia Manzati — Effect Developer Tooling** (`mattia-manzati`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Add a gate→script mapping column to the table marking each gate as wired (name
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-roadmap-status-reconcile`. Evidence at HEAD ec065a7: `spec/process/definitions-of-done.md:95`. Fix: Add a 'Wired as' column mapping each of the 14 gates to the exact `pnpm check` step (or 'not wired'), flip Active? cells to the truth, and delete the 'nothing exists' prose; add a spec:verify check that every gate marked Active names a script present in package.json. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/process/definitions-of-done.md rev 1.3: a 'Wired as' column maps each of the 14 gates to its pnpm check step or 'Not wired' (1, 2, 4, 9, 11, 12 Active; 3, 5, 6, 7, 8, 10 Active-partial with what is missing; 13, 14 Not wired), the 'nothing exists' prose is replaced, extra steps in the chain (knip, format:check, test:bdd) are named. New check 11 in check-drift.mjs: a gate marked Active must name a pnpm script that exists and runs inside pnpm check, or an existing file; it was red when the column was empty (and when gate 8 named a missing fixture) and is green now.

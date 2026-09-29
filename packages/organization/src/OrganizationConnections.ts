@@ -129,7 +129,8 @@ const toConfig = (
       : {}),
     clientId: record.clientId,
     ...(Option.isSome(clientSecret) ? { clientSecret: Config.succeed(clientSecret.value) } : {}),
-    scopes: record.scopes.length > 0 ? record.scopes : record.kind === "oidc" ? DEFAULT_OIDC_SCOPES : [],
+    scopes:
+      record.scopes.length > 0 ? record.scopes : record.kind === "oidc" ? DEFAULT_OIDC_SCOPES : [],
     mapProfile: standardProfile,
   });
 };
@@ -204,7 +205,9 @@ export const oauthConnections = Layer.effect(
           onSome: ({ organizationId }) =>
             Effect.scoped(map.contextEffect(organizationId)).pipe(
               Effect.map((context) =>
-                Option.fromNullishOr(Context.get(context, ConnectionSet).connections.get(providerId)),
+                Option.fromNullishOr(
+                  Context.get(context, ConnectionSet).connections.get(providerId),
+                ),
               ),
               Effect.orDie,
             ),
@@ -282,7 +285,9 @@ export interface OrganizationConnectionStoreShape {
     patch: ConnectionUpdateInput,
   ) => Effect.Effect<
     ConnectionView,
-    InvalidConnection | ConnectionRecords.ConnectionRecordNotFound | ConnectionRecords.ConnectionDomainTaken
+    | InvalidConnection
+    | ConnectionRecords.ConnectionRecordNotFound
+    | ConnectionRecords.ConnectionDomainTaken
   >;
   readonly remove: (
     organizationId: string,
@@ -489,7 +494,10 @@ export const layerStore = Layer.effect(
           name: patch.name ?? current.name,
           issuer: nullable(current.issuer, patch.issuer),
           discoveryUrl: nullable(current.discoveryUrl, patch.discoveryUrl),
-          authorizationEndpoint: nullable(current.authorizationEndpoint, patch.authorizationEndpoint),
+          authorizationEndpoint: nullable(
+            current.authorizationEndpoint,
+            patch.authorizationEndpoint,
+          ),
           tokenEndpoint: nullable(current.tokenEndpoint, patch.tokenEndpoint),
           jwksUri: nullable(current.jwksUri, patch.jwksUri),
           userinfoEndpoint: nullable(current.userinfoEndpoint, patch.userinfoEndpoint),
@@ -497,7 +505,9 @@ export const layerStore = Layer.effect(
           scopes: patch.scopes ?? current.scopes,
         });
         const emailDomains =
-          patch.emailDomains === undefined ? undefined : yield* normalizeDomains(patch.emailDomains);
+          patch.emailDomains === undefined
+            ? undefined
+            : yield* normalizeDomains(patch.emailDomains);
         const clientSecret =
           patch.clientSecret === undefined
             ? undefined
@@ -541,7 +551,12 @@ export const layerStore = Layer.effect(
         }
         const at = email?.lastIndexOf("@") ?? -1;
         if (email === undefined || at < 0) return Option.none<string>();
-        const found = yield* records.findByEmailDomain(email.slice(at + 1).trim().toLowerCase());
+        const found = yield* records.findByEmailDomain(
+          email
+            .slice(at + 1)
+            .trim()
+            .toLowerCase(),
+        );
         return Option.map(found, (row) => providerIdOf(row.organizationId, row.id));
       });
 
@@ -560,7 +575,9 @@ export const cleanupOnOrganizationDelete = Layer.unwrap(
     const records = yield* ConnectionRecords.ConnectionRecords;
     const map = yield* OrganizationConnections;
     return OrganizationHooks.AfterDeleteOrganization.tap(({ organizationId }) =>
-      records.removeAllForOrganization(organizationId).pipe(Effect.andThen(map.invalidate(organizationId))),
+      records
+        .removeAllForOrganization(organizationId)
+        .pipe(Effect.andThen(map.invalidate(organizationId))),
     );
   }),
 );

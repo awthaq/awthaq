@@ -144,8 +144,9 @@ const defaultOrganizationConfig: OrganizationConfigShape = {
  * DRS-007: the pure routing helper — an application maps an organization to its
  * shard or database with this, never by reading the record's storage shape.
  */
-export const homeRegionOf = (record: OrganizationRecords.OrganizationRecord): Option.Option<string> =>
-  record.homeRegion;
+export const homeRegionOf = (
+  record: OrganizationRecords.OrganizationRecord,
+): Option.Option<string> => record.homeRegion;
 
 export const OrganizationConfig: Context.Reference<OrganizationConfigShape> = Context.Reference(
   "awthaq/organization/Config",
@@ -161,7 +162,10 @@ export const config = (partial: Partial<OrganizationConfigShape>) => {
   return reserved.length > 0
     ? Layer.effect(
         OrganizationConfig,
-        Defects.invalidConfiguration("permissionStatements", `awthaq: Organization.config permissionStatements may not redefine the built-in role(s): ${reserved.join(", ")}`),
+        Defects.invalidConfiguration(
+          "permissionStatements",
+          `awthaq: Organization.config permissionStatements may not redefine the built-in role(s): ${reserved.join(", ")}`,
+        ),
       )
     : Layer.succeed(OrganizationConfig, { ...defaultOrganizationConfig, ...partial });
 };
@@ -329,7 +333,8 @@ export interface OrganizationShape {
     | OrganizationApi.TeamNotFound
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.UnknownOrgRole
-    | HookPoint.HookAborted | Errors.StoreUnavailable
+    | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** MTI-010: `token` is the emailed capability; the invitation id alone accepts nothing. */
   readonly acceptInvitation: (
@@ -376,12 +381,18 @@ export interface OrganizationShape {
   readonly getInvitation: (
     caller: Api.UserPrincipal,
     invitationId: string,
-  ) => Effect.Effect<InvitationRecords.InvitationRecord, OrganizationApi.InvitationNotFound | Errors.StoreUnavailable>;
+  ) => Effect.Effect<
+    InvitationRecords.InvitationRecord,
+    OrganizationApi.InvitationNotFound | Errors.StoreUnavailable
+  >;
   /** MTI-010: the landing-page lookup — resolves the emailed token, for the invitee only. */
   readonly getInvitationByToken: (
     caller: Api.UserPrincipal,
     token: string,
-  ) => Effect.Effect<InvitationRecords.InvitationRecord, OrganizationApi.InvitationNotFound | Errors.StoreUnavailable>;
+  ) => Effect.Effect<
+    InvitationRecords.InvitationRecord,
+    OrganizationApi.InvitationNotFound | Errors.StoreUnavailable
+  >;
   readonly listInvitationsForOrganization: (
     caller: Api.UserPrincipal,
     organizationId: string,
@@ -742,7 +753,10 @@ const toTeamMembershipDto = (
 const currentUserPrincipal = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: organization group reached with a non-User principal: ${principal._tag}`);
+    return yield* Defects.invariantViolation(
+      "NonUserPrincipal",
+      `awthaq: organization group reached with a non-User principal: ${principal._tag}`,
+    );
   }
   return principal;
 });
@@ -1731,8 +1745,9 @@ export const organizationExport = DataExport.contribute({
             name: team.name,
           })),
           invitationsSent: (yield* invitations.listByInviter(subject.userId)).map(invitationView),
-          invitationsReceived: (
-            subject.email === undefined ? [] : yield* invitations.listByEmail(subject.email)
+          invitationsReceived: (subject.email === undefined
+            ? []
+            : yield* invitations.listByEmail(subject.email)
           ).map(invitationView),
         };
       });
@@ -2208,7 +2223,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .update(organizationId, { ...input, name: vetoed.name, slug: vetoed.slug })
             .pipe(
               Effect.catchTag("OrganizationRecordNotFound", () =>
-                Defects.invariantViolation("RowVanished", "awthaq: organization vanished between check and write"),
+                Defects.invariantViolation(
+                  "RowVanished",
+                  "awthaq: organization vanished between check and write",
+                ),
               ),
               Effect.catchTag("OrganizationRecordSlugTaken", () =>
                 Effect.fail(new OrganizationApi.OrganizationSlugTaken()),
@@ -2249,7 +2267,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                   .delete(organizationId)
                   .pipe(
                     Effect.catchTag("OrganizationRecordNotFound", () =>
-                      Defects.invariantViolation("RowVanished", "awthaq: organization vanished between check and write"),
+                      Defects.invariantViolation(
+                        "RowVanished",
+                        "awthaq: organization vanished between check and write",
+                      ),
                     ),
                   );
               }),
@@ -2294,7 +2315,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 .remove(userId, organizationId)
                 .pipe(
                   Effect.catchTag("MembershipRecordNotFound", () =>
-                    Defects.invariantViolation("RowVanished", "awthaq: membership vanished between check and write"),
+                    Defects.invariantViolation(
+                      "RowVanished",
+                      "awthaq: membership vanished between check and write",
+                    ),
                   ),
                 );
               yield* activeContext.clearOrganizationForUser(userId, organizationId);
@@ -2399,7 +2423,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .updateRole(targetUserId, organizationId, vetoed.role)
             .pipe(
               Effect.catchTag("MembershipRecordNotFound", () =>
-                Defects.invariantViolation("RowVanished", "awthaq: membership vanished between check and write"),
+                Defects.invariantViolation(
+                  "RowVanished",
+                  "awthaq: membership vanished between check and write",
+                ),
               ),
             );
           yield* events.publish({
@@ -2813,7 +2840,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
               Effect.flatMap(
                 Option.match({
                   onNone: () =>
-                    Defects.invariantViolation("RowVanished", "awthaq: invitation's team vanished before acceptance"),
+                    Defects.invariantViolation(
+                      "RowVanished",
+                      "awthaq: invitation's team vanished before acceptance",
+                    ),
                   onSome: Effect.succeed,
                 }),
               ),
@@ -3112,7 +3142,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .update(organizationId, roleId, permission)
             .pipe(
               Effect.catchTag("OrgRoleRecordNotFound", () =>
-                Defects.invariantViolation("RowVanished", "awthaq: org role vanished between check and write"),
+                Defects.invariantViolation(
+                  "RowVanished",
+                  "awthaq: org role vanished between check and write",
+                ),
               ),
             );
           yield* events.publish({
@@ -3139,7 +3172,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .remove(organizationId, roleId)
             .pipe(
               Effect.catchTag("OrgRoleRecordNotFound", () =>
-                Defects.invariantViolation("RowVanished", "awthaq: org role vanished between check and write"),
+                Defects.invariantViolation(
+                  "RowVanished",
+                  "awthaq: org role vanished between check and write",
+                ),
               ),
             );
           yield* events.publish({
@@ -3314,7 +3350,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .updateTeam(organizationId, teamId, vetoed.name)
             .pipe(
               Effect.catchTag("TeamRecordNotFound", () =>
-                Defects.invariantViolation("RowVanished", "awthaq: team vanished between check and write"),
+                Defects.invariantViolation(
+                  "RowVanished",
+                  "awthaq: team vanished between check and write",
+                ),
               ),
             );
           yield* events.publish({ _tag: "auth.organization.teamUpdated", organizationId, teamId });
@@ -3352,7 +3391,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 yield* teams.removeTeam(organizationId, teamId).pipe(
                   Effect.catchTags({
                     TeamRecordNotFound: () =>
-                      Defects.invariantViolation("RowVanished", "awthaq: team vanished between check and write"),
+                      Defects.invariantViolation(
+                        "RowVanished",
+                        "awthaq: team vanished between check and write",
+                      ),
                     "TeamRecords/HasChildren": () =>
                       Effect.fail(new OrganizationApi.TeamHasChildren()),
                   }),

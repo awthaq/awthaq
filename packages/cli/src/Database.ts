@@ -93,9 +93,7 @@ export const layerFor = (
       filename: url.slice(SQLITE_PREFIX.length),
       // A retained source database is only ever read: open it that way (and without WAL sidecars).
       ...(options?.readonly === true ? { readonly: true, disableWAL: true } : {}),
-    }).pipe(
-      Layer.catchCause(() => unavailable(message)),
-    );
+    }).pipe(Layer.catchCause(() => unavailable(message)));
   }
   const { connectionUrl, searchPath } = splitSearchPath(url);
   return PgClient.layer({

@@ -4,24 +4,23 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-23 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-177's example replaced with `Providers`' real props (`initialSession`, `initialSubject`, `decisions`, `atoms`) and the two-atom design noted; banner given implementation pointers; requirement texts unchanged (RSC-008, CCR-EA-006) |
 ---
 
-> Implemented in `@awthaq/react` — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md). Some of its BDD scenarios are still `@skip @unwired`.
+> Implemented in `@awthaq/react` (`AuthClientAtom.ts`, `Subject.ts`, `Providers.tsx`; tests `packages/react/test`) — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md) §5. BEH-EA-177, 178 and 179 are the package's own; BEH-EA-180 through 184 are `@qadi/react` re-exports. Its BDD scenarios are `@skip @unwired`.
 
 ## BEH-EA-177: `RegistryProvider` seeds the session atom for SSR
 
 ```ts
-export const Providers = ({ initialSession, decisions, children }: ProvidersProps) => (
-  <RegistryProvider initialValues={[[sessionAtom, AsyncResult.success(initialSession)]]}>
-    <Authz decisions={decisions}>{children}</Authz>
-  </RegistryProvider>
-)
+// app/layout.tsx (a Server Component) passes the server's session and subject as plain props
+<Providers initialSession={session} initialSubject={subject} decisions={decisions} atoms={qadiAtoms}>
+  {children}
+</Providers>
 ```
 
 ```text
@@ -30,6 +29,8 @@ REQUIREMENT: `RegistryProvider` MUST be seeded with the server-resolved
              render MUST NOT show a loading state for a session the server
              already knew.
 ```
+
+**Implementation (RSC-005, EAR-001).** The shipped `Providers` is a `"use client"` component that seeds `sessionAtom` from `initialSession` and, separately, `subjectDtoAtom` from `initialSubject` (BEH-EA-179's second atom); both may be the class instance or its encoded plain object, which is what a Server Component can pass across the boundary, and a malformed seed seeds nothing and is reported through `onError`. It runs exactly one atom registry (`QadiProvider`'s). Decision hydration (`decisions`, BEH-EA-192) is a further prop, not a wrapper component.
 
 `usage-qadi.md` §12.1 and `usage-examples-v4.md` §12.2 both wire the identical seeding pattern. Without it, every page load would show a momentary "checking session" flash before the first client-side fetch resolves — seeding the atom directly with `AsyncResult.success(initialSession)` means the session the server rendered with is the session the client starts with, no round-trip required.
 

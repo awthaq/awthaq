@@ -4,23 +4,24 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-15 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; the pre-implementation text replaced with pointers to BEH-EA-209..224 and the tests (IDS-009, AOMS-011, CCR-EA-006) |
 ---
 
 ## What it is
 
-A plan for an `Admin` plugin whose entire purpose is impersonation: letting
+The `Admin` plugin (`@awthaq/admin`) exists for impersonation: letting
 an administrator act as another user for a bounded window, without the
 target's own credentials, while the resulting principal still carries who is
 really behind the wheel. `archive/PRD.md` §17's Phase-2 row states it
-plainly: "`Admin` (impersonation with hard expiry and `actingAs`)." Nothing
-described here exists yet — awthaq is pre-implementation, and this
-document is non-normative: it records intent, not a verified behavior.
+plainly: "`Admin` (impersonation with hard expiry and `actingAs`)." The
+plugin is implemented; this document is the non-normative adoption record,
+and [`behaviors/27-admin-impersonation.md`](../behaviors/27-admin-impersonation.md)
+(BEH-EA-209 through 224) is the normative specification that supersedes its sketch.
 
 ## Who asks for it
 
@@ -40,7 +41,7 @@ narrow, audited capability rather than a generic "log in as" backdoor.
 
 | Property | Value |
 |---|---|
-| Status | Planned-Phase2 |
+| Status | Shipped-Unpublished (`packages/admin`) |
 | Priority | P2 |
 | Enabler(s) | E4 — Hook-point step-up/divert wiring (impersonation is a session-issuance variant gated on admin privilege, the same shape of wiring Two-Factor's divert hook and Device Authorization draw on); `00-adoption-matrix.md` §6 records as an open question whether this plugin instead needs a dedicated enabler category of its own rather than reusing E4. |
 | Breaking? | Additive: no existing plugin, port, or slot is redefined. `Admin` contributes a new session-issuance path and a new `actingAs` field on the principal shape (`archive/PRD.md` §10 already keeps `principal` open to more than one case, as `07-api-keys.md`'s `ApiKeyPrincipal` notes for the same reason); it does not reopen the Planned-MVP session contract. |
@@ -116,29 +117,10 @@ annotation shown above.
 
 ## What is missing
 
-No behaviors file specifying impersonation session issuance, hard-expiry
-enforcement, or audit-event emission has been written yet — no `BEH-EA` ids
-are allocated to this plugin anywhere in `spec/behaviors/`. Concretely
-undecided: the exact admin-gate check (a role check via `Roles`, a
-dedicated `AdminPrincipal`, or something else — `usage-qadi.md` §11's
-`readOnlyWhileImpersonating` example implies policies see `actingAs` but does
-not specify how `impersonate` itself is gated), the `admin_impersonation`
-table shape, the reason field's validation (length, required-ness beyond
-"required" per `archive/PRD.md` §18), the exact audit-event schema beyond the
-one `auth.session.issued` annotation `usage-examples-v4.md` §19 shows, and
-whether `stopImpersonating` is caller-initiated only or also forced by an
-administrator ending someone else's impersonation session.
-
-`spec/invariants.md`'s **INV-EA-014** ("An impersonation session carries a
-hard expiry with no sliding refresh") is the invariant this model is
-expected to eventually back once real behaviors exist for this plugin; today
-that invariant's enforcement is planned against a test file
-(`packages/core/test/Impersonation.test.ts`) that does not exist, backed by
-no behavior file at all, which is exactly the gap this model exists to make
-visible rather than paper over.
+What the first draft of this model left undecided is decided and built: the admin gate, the `admin_impersonation` ledger (`ImpersonationRecords`), the required reason, hard expiry, dual identity (`actingAs`) and the audit events are specified by [BEH-EA-209 through 224](../behaviors/27-admin-impersonation.md) and implemented in `packages/admin`. Not built: an admin console UI (awthaq is headless by design). An administrator ending someone else's impersonation session (`forceStop`, BEH-EA-217) and user and session administration (BEH-EA-221 through 224) are built. [INV-EA-014](../invariants.md#inv-ea-014-an-impersonation-session-carries-a-hard-expiry-with-no-sliding-refresh) is backed by the tests below.
 
 ## Verification
 
-None yet — no test exists.
+`packages/admin/test/*` (`Admin.test.ts`, `AuthHttp.test.ts`, `ImpersonationRecords.test.ts`, `AdminUsers.test.ts`, `AdminTenants.test.ts`, `AdminConfig.test.ts`, `AdminTier.test.ts`), `packages/core/test/Sessions.test.ts` (BEH-EA-209/210, the `actingAs` session mechanism) and the wired `27-admin-impersonation.feature` scenarios (`features/`).
 
 _Related: [00 — Adoption Matrix](00-adoption-matrix.md), [invariants.md](../invariants.md#inv-ea-014-an-impersonation-session-carries-a-hard-expiry-with-no-sliding-refresh) (INV-EA-014)_

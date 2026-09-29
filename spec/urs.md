@@ -5,22 +5,22 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-URS |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | User Requirements Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §6 entries recording the previously-missing traceability.md crosswalk and the Organization/Admin cross-reference defect, both now tracked (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §6 entries recording the previously-missing traceability.md crosswalk and the Organization/Admin cross-reference defect, both now tracked (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "no implementation to verify against" banner: requirements are verified only where traceability.md traces them to passing tests (DTWS-001, CCR-EA-006) |
 
 ---
 
-> **This describes a planned system.** No requirement below has been verified against a running awthaq; there is no implementation to verify it against yet. Every `URS-EA-NNN` and `NFR-EA-NNN` row is a target requirement, stated before the system that must satisfy it exists.
+> **Status.** The requirements below were written before implementation and are still the intent the implementation is measured against. A requirement is *verified* only where [`traceability.md`](traceability.md) traces it to behaviors whose tests pass (the crosswalk in §5 and the `Verification` cells of each behavior); a requirement with no such trace is unverified, not satisfied. Every requirement stays a target until its trace says otherwise, and the packages listed in [`overview.md`](overview.md) are the implementation to verify it against.
 
 ## 1. Purpose
 
-This document states the user requirements for awthaq **before an implementation exists**. That is the inverse of how a requirements specification is normally produced: the ordinary process extracts requirements from an existing system's behavior, user feedback, and support history, then verifies them retroactively against what was built. Here there is no system to observe, so every requirement below is derived instead from the product requirements document (`archive/PRD.md`, in particular §3 Goals and §6 Target users) and from the design series it names — a synthesis of stated intent, not observed need.
+This document states the user requirements for awthaq. It was written **before an implementation existed** — the inverse of how a requirements specification is normally produced: the ordinary process extracts requirements from an existing system's behavior, user feedback, and support history, then verifies them retroactively against what was built. Here there was no system to observe, so every requirement below is derived instead from the product requirements document (`archive/PRD.md`, in particular §3 Goals and §6 Target users) and from the design series it names — a synthesis of stated intent, not observed need. It has since been reconciled with the implementation where the two diverged, each change recorded in the Change History.
 
-This ordering has a consequence recorded explicitly in §6 Known Gaps: a requirement written before implementation can state what its authors intended, but it cannot yet reflect what real usage will surface. Both are legitimate inputs to a requirements specification; only the first is available today.
+This ordering has a consequence recorded explicitly in §6 Known Gaps: a requirement written before implementation can state what its authors intended, but it cannot reflect what real usage will surface. Both are legitimate inputs to a requirements specification; only the first is available today, and real usage arrives only once the packages are published.
 
 ### 1.1 Scope
 
@@ -252,12 +252,12 @@ Rationale: `archive/PRD.md` §18, §19 (`runPluginContractTests`'s redaction che
 
 ## 6. Known gaps
 
-Writing requirements before an implementation exists is weaker than extracting them from one, in specific, nameable ways:
+Writing requirements before an implementation exists is weaker than extracting them from one, in specific, nameable ways. Most of these still hold, because the implementation is unpublished and unused by anyone but its authors:
 
 - **No real usage to observe.** These requirements cannot capture the sign-in edge case a support ticket would surface, the configuration combination a real deployment stumbles into, or the plugin interaction only visible once third-party authors start writing plugins. Requirements extraction from a shipped system routinely finds needs nobody stated up front; this document, by construction, contains none of those.
 - **Numbers are estimates, not measurements.** Where a requirement implies a threshold (a rate-limit window, a token TTL), the value here is the design's stated default, not a value tuned against production traffic or abuse data.
 - **The user groups are inferred, not interviewed.** §2's three audiences come from the PRD's stated target users, not from a survey or a body of support interactions with people who have actually tried to adopt the system.
-- **Compile-time guarantees are asserted, not demonstrated.** Every "is a compile error" claim in §3 describes an intended type-level property of a design (`archive/design/plugins-as-layers.md`); none has been checked against an actual TypeScript compiler run, because no such code exists yet.
-- **This document cannot be self-correcting yet.** A requirements specification derived from a live system gets revised when reality contradicts it. This one can only be revised when implementation begins and either confirms or contradicts what is written here — until then, gaps in it are invisible from the inside.
+- **Compile-time guarantees are demonstrated only where a type test exists.** Every "is a compile error" claim in §3 is checked against a real TypeScript run only where `packages/core/test/AuthPlugin.test.ts`, `HookPoint.types.test.ts` or a similar `@ts-expect-error` case covers it (compiled by `tsc -p tsconfig.test.json` inside `pnpm typecheck`, not by a dedicated type-testing tool); the rest remain design claims.
+- **This document is only partly self-correcting.** A requirements specification derived from a live system gets revised when reality contradicts it. This one has been revised where the implementation contradicted it (see the Change History and the behaviors' *Deviation* notes), but a requirement no test traces to can still be wrong without anyone noticing.
 - **`traceability.md` previously had no URS/NFR crosswalk.** Until this revision, `traceability.md` cross-referenced behaviors, invariants, decisions, and planned test files, but never the `URS-EA-NNN`/`NFR-EA-NNN` requirements stated in this document — the only requirement-to-behavior table lived in this document's own §5, nowhere else in the traceability record. That asymmetry is now fixed: `traceability.md` §2 carries the same crosswalk. The gap is recorded here because it was a real defect in the specification tree for however long this document existed without it, not because the fix retroactively erases that it existed.
 - **The `Organization` and `Admin` plugins were referenced before being formally specified.** An earlier audit found `spec/models/09-sso.md` (MOD-EA-009) listing `Organization` as a hard dependency, and `spec/behaviors/18-roles-subject-resolver.md`'s BEH-EA-142 asserting impersonation state is "set once, at `admin.impersonate`, per file 06's admin plugin" — but no `Organization` or `Admin` plugin had a model, a behavior, or even a non-normative adoption record anywhere in this repository; file 06 is Users and Accounts, not an admin plugin. Both false/dangling references are corrected as of this revision, and both plugins now have a non-normative adoption record: [MOD-EA-014](models/14-organization.md) (Organization) and [MOD-EA-015](models/15-admin-impersonation.md) (Admin/Impersonation). Neither has a behaviors file yet — no `BEH-EA` ids are allocated to either — so this remains a real gap, now at least a tracked one instead of a silently-assumed one.
