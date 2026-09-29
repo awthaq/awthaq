@@ -97,9 +97,8 @@ Feature: Testing Harness
   @BEH-EA-196
   Rule: qadiTestLayer and subjectWith for authorization unit tests
 
-    # @skip: blocked by PV-261: @qadi/testing is not a dependency of features/, and BEH-EA-196 names
-    # subjectWith/qadiTestLayer, which the installed @qadi/* do not export under those names
-    # (TestAuth.ts header); authoring guidance, no runtime behavior. Covered by
+    # @skip: authoring guidance, no runtime behavior to observe (PV-261: BEH-EA-196 now names the real
+    # helpers, makeSubject/fromRoles from @qadi/core, not the illustrative subjectWith). Covered by
     # packages/qadi/test/AuthorizedSubject.test.ts
     @skip
     @REQ-EA-553
@@ -108,8 +107,8 @@ Feature: Testing Harness
       When the test constructs the calling subject
       Then it builds that subject with "subjectWith"
 
-    # @skip: blocked by PV-261: @qadi/testing is not a dependency of features/; qadiTestLayer cannot
-    # be provided from this World. Covered by packages/qadi/test/AuthorizedSubject.test.ts
+    # @skip: authoring guidance (PV-261: there is no qadiTestLayer or @qadi/testing; the guidance names
+    # currentSubjectLayer and EvaluationServicesNone). Covered by packages/qadi/test/AuthorizedSubject.test.ts
     @skip
     @REQ-EA-554
     Scenario: A policy-level unit test provides qadi's services via qadiTestLayer
@@ -117,8 +116,8 @@ Feature: Testing Harness
       When qadi's services are provided to the test
       Then they are provided via "qadiTestLayer" from "@qadi/testing"
 
-    # @skip: blocked by PV-261: a statement about how a policy unit test is composed (no runtime
-    # behavior to observe); the policy-level tests live in packages/qadi/test/
+    # @skip: a statement about how a policy unit test is composed (no runtime behavior to observe; PV-261);
+    # the policy-level tests live in packages/qadi/test/
     @skip
     @REQ-EA-555
     Scenario: A policy-level unit test does not stand up the full HTTP pipeline
@@ -136,9 +135,9 @@ Feature: Testing Harness
       When the test establishes its calling identity
       Then it uses "TestAuth.signInAs" rather than calling a handler function directly with a fabricated principal
 
-    # @skip: blocked by PV-261: RequirePermission comes from @qadi/http, which is not a dependency
-    # of features/; the real AuthorizedSubject pipeline is exercised by
-    # 19-qadi-bridge-path-a.feature and packages/qadi/test/AuthorizedSubject.test.ts
+    # @skip: composition guidance (PV-261; @qadi/http is a features dependency now, but no harness World
+    # composes RequirePermission). The real pipeline is exercised by 19-qadi-bridge-path-a.feature,
+    # 20-qadi-bridge-path-b.feature and packages/qadi/test/AuthorizedSubject.test.ts
     @skip
     @REQ-EA-557
     Scenario: An HTTP-level authorization test runs against the whole AuthzLive/QadiLive pipeline
@@ -146,8 +145,8 @@ Feature: Testing Harness
       When the test is composed
       Then it merges "AuthzLive" and "QadiLive" alongside "TestAuth.layer" rather than substituting a stub for either
 
-    # @skip: blocked by PV-261: needs @qadi/http's RequirePermission (not a features/ dependency);
-    # Forbidden-on-Deny is covered by packages/qadi/test/AuthorizedSubject.test.ts
+    # @skip: needs a harness World composing @qadi/http's RequirePermission with TestAuth.signInAs (PV-261);
+    # Forbidden-on-Deny is covered by 20-qadi-bridge-path-b.feature and packages/qadi/test/AuthorizedSubject.test.ts
     @skip
     @REQ-EA-558
     Scenario: A signed-in caller lacking the required role is blocked by the real RequirePermission middleware

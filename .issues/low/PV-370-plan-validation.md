@@ -3,7 +3,7 @@ ID: "PV-370"
 Title: "BEH-EA-244 promises an explicit per-connection opt-in for IdP-initiated login; @awthaq/saml refuses every unsolicited response and has no such setting"
 Level: low
 Category: "correctness"
-Status: open
+Status: resolved
 Package: "saml"
 Source: "packages/saml/src/Saml.ts:26"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `LOW` · `correctness` · `saml` · found while wiring `29-saml-sp.feature` (P20a)
 
-Status: **open**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Either implement the opt-in (a connection flag, an unsolicited-response path tha
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** Took the issue's smaller option (matches the plugin README and Saml.ts header): IdP-initiated login is not offered. spec/behaviors/29-saml-sp.md BEH-EA-244 now says no connection setting admits an unsolicited response (an opt-in would first need a replay-protected assertion id and a RelayState allow-list). REQ-EA-904 rewritten to that and wired (a fully configured connection still refuses a response with no InResponseTo; new Given in SamlSteps.ts; traceability retitled). No source change. Gates: features 29-saml-sp (52 passed), spec:verify:strict.
