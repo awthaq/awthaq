@@ -17,7 +17,7 @@ the place to update alongside the code.
 
 ## Getting started
 
-Requirements: Node.js 22.13+ (pnpm 11.20 requires it; the published packages still support 22.12), [pnpm](https://pnpm.io) 11.20+.
+Requirements: Node.js 22.18+ for development (pnpm 11.20 needs 22.13 and the oxlint plugin in `tools/oxc` is TypeScript, which Node runs unflagged from 22.18; the published packages still support 22.12), [pnpm](https://pnpm.io) 11.20+.
 
 ```sh
 pnpm install
