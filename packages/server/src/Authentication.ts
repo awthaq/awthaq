@@ -11,8 +11,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import type { unhandled } from "effect/Types";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
@@ -282,6 +284,9 @@ export const resolvePrincipal = (
     Effect.flatMap(({ session }) => resolver.resolve(session)),
   );
 
+/** JR-007: the `realm` of every `WWW-Authenticate` challenge this middleware emits. */
+const CHALLENGE_REALM = "awthaq";
+
 /**
  * BEH-EA-065 through 067/070: fails `Unauthenticated` only once every
  * declared scheme has. `cookie` and `bearer` each resolve through the shared
@@ -339,7 +344,32 @@ export const AuthenticationLive: Layer.Layer<
       never
     >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
     const bearer: typeof handle = (httpEffect, { credential }) =>
-      authenticate("bearer", httpEffect, credential);
+      authenticate("bearer", httpEffect, credential).pipe(
+        // JR-007: `bearer` is the last declared scheme, so an `Unauthenticated`
+        // here is the middleware's final failure — answer it with an RFC
+        // 7235/6750 challenge alongside the unchanged typed JSON body.
+        // `invalid_token` only when a bearer credential was actually
+        // presented; otherwise the bare realm challenge (RFC 6750 §3.1: an
+        // absent credential carries no error code). A handler's own errors
+        // reach here wrapped, never as `Unauthenticated`, so they get none.
+        Effect.tapError((error) =>
+          Predicate.isTagged(error, "Unauthenticated")
+            ? HttpEffect.appendPreResponseHandler((_request, response) =>
+                Effect.succeed(
+                  response.status === 401
+                    ? HttpServerResponse.setHeader(
+                        response,
+                        "www-authenticate",
+                        Redacted.value(credential) === ""
+                          ? `Bearer realm="${CHALLENGE_REALM}"`
+                          : `Bearer realm="${CHALLENGE_REALM}", error="invalid_token"`,
+                      )
+                    : response,
+                ),
+              )
+            : Effect.void,
+        ),
+      );
     return { cookie: handle, bearer };
   }),
 );
@@ -383,22 +413,45 @@ export const OptionalAuthenticationLive: Layer.Layer<
           ),
         ),
       );
+    // EHA-006/NHS-010: `Api.OptionalAuthentication` declares no error type, so
+    // no handler may fail with `Unauthenticated` — the `cookie` handler (first
+    // in the declaration's chain) resolves the cookie, then the bearer
+    // credential itself, then defaults to `anonymousPrincipal`. The anonymous
+    // fallback no longer depends on which scheme happens to be declared last.
+    // (Effect looks Live handlers up by key and iterates the declaration's
+    // `security` record, so `bearer` below is never reached in practice; it
+    // stays because every declared scheme needs a handler.)
+    const anonymous = (
+      httpEffect: Effect.Effect<
+        HttpServerResponse.HttpServerResponse,
+        unhandled,
+        Api.CurrentPrincipal
+      >,
+    ) => Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal);
     const cookie: HttpApiMiddleware.HttpApiMiddlewareSecurity<
       { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },
       Api.CurrentPrincipal,
-      typeof Api.Unauthenticated,
+      never,
       never
-    >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
+    >["cookie"] = (httpEffect, { credential }) =>
+      authenticate("cookie", httpEffect, credential).pipe(
+        Effect.catchTag("Unauthenticated", () =>
+          HttpApiBuilder.securityDecode(Api.BearerToken).pipe(
+            Effect.flatMap((bearerCredential) =>
+              authenticate("bearer", httpEffect, bearerCredential),
+            ),
+            // The anonymous fallback is a *recovery* from resolution failure,
+            // never a success `authenticate` itself produced —
+            // `PostAuthResponseHook` is only ever consulted on the genuine
+            // success path, so an anonymous/no-credential caller never gets
+            // a decorated (e.g. `@awthaq/jwt`-minted) response.
+            Effect.catchTag("Unauthenticated", () => anonymous(httpEffect)),
+          ),
+        ),
+      );
     const bearer: typeof cookie = (httpEffect, { credential }) =>
       authenticate("bearer", httpEffect, credential).pipe(
-        // The anonymous fallback below is a *recovery* from resolution
-        // failure, never a success `authenticate` itself produced —
-        // `PostAuthResponseHook` is only ever consulted above, on the
-        // genuine success path, so an anonymous/no-credential caller never
-        // gets a decorated (e.g. `@awthaq/jwt`-minted) response.
-        Effect.catchTag("Unauthenticated", () =>
-          Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal),
-        ),
+        Effect.catchTag("Unauthenticated", () => anonymous(httpEffect)),
       );
     return { cookie, bearer };
   }),

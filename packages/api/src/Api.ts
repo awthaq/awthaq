@@ -121,7 +121,10 @@ export const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: "c
 
 /**
  * BEH-EA-028/065/072: cookie is tried before bearer because it is declared
- * first — the record's own key order is the entire strategy chain.
+ * first — the *declaration's* `security` key order is the entire strategy
+ * chain (NHS-010: Effect looks the Live handlers up by key, so the order of
+ * the record `@awthaq/server` returns is irrelevant; only this declaration's
+ * matters).
  */
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
@@ -132,22 +135,19 @@ export class Authentication extends HttpApiMiddleware.Service<
 }) {}
 
 /**
- * BEH-EA-029/068: declares the same `Unauthenticated` error `Authentication`
- * does — not because it can actually reach a caller (its own `@awthaq/server`
- * implementation always resolves `CurrentPrincipal`, defaulting to
- * `anonymousPrincipal`, never letting a failure escape the middleware) but
- * because the underlying per-scheme handler shape requires every entry in
- * one `security` record to share one declared error type, and cookie's
- * handler must still be able to fail *internally* to fall through to bearer
- * (BEH-EA-065/072's declaration-order chain), which only bearer's handler
- * then catches.
+ * BEH-EA-029/068: declares no error type (EHA-006) — it cannot fail with
+ * `Unauthenticated`: `@awthaq/server`'s implementation resolves the cookie,
+ * then the bearer credential, then defaults to `anonymousPrincipal` itself,
+ * inside the first scheme's handler, so no failure ever escapes. Declaring
+ * one would make the generated OpenAPI document advertise a 401 this
+ * middleware can never produce. The two schemes stay declared so OpenAPI
+ * still documents both credential inputs.
  */
 export class OptionalAuthentication extends HttpApiMiddleware.Service<
   OptionalAuthentication,
   { provides: CurrentPrincipal }
 >()("OptionalAuthentication", {
   security: { cookie: SessionCookie, bearer: BearerToken },
-  error: Unauthenticated,
 }) {}
 
 /** BEH-EA-030/076/079: a plain (non-security) middleware — CSRF is a request-property check, not a credential scheme. */

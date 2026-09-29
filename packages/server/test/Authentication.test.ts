@@ -25,6 +25,7 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
+import * as OpenApi from "effect/unstable/httpapi/OpenApi";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -553,5 +554,97 @@ describe("Authentication per-request cache (TS-003/NHS-006)", () => {
       assert.strictEqual(failure._tag, "Unauthenticated");
       assert.strictEqual(yield* Ref.get(verifies), 2);
     }),
+  );
+});
+
+// EHA-006/NHS-010: the contract and the wire.
+describe("Authentication contract (EHA-006, NHS-010)", () => {
+  it("NHS-010: both middlewares declare their security keys in order cookie, bearer", () => {
+    assert.deepStrictEqual(Object.keys(Api.Authentication.security), ["cookie", "bearer"]);
+    assert.deepStrictEqual(Object.keys(Api.OptionalAuthentication.security), ["cookie", "bearer"]);
+  });
+
+  it("EHA-006: the OpenAPI document lists a 401 for Authentication endpoints but none for OptionalAuthentication", () => {
+    const spec = OpenApi.fromApi(TestApi);
+    const required = spec.paths["/who-am-i"]?.get?.responses ?? {};
+    const optional = spec.paths["/who-am-i-optional"]?.get?.responses ?? {};
+    assert.property(required, "401");
+    assert.notProperty(optional, "401");
+  });
+
+  it.effect(
+    "EHA-006: OptionalAuthentication tries the cookie, then the bearer, then anonymous, in that order",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        // A garbage cookie does not stop a valid bearer.
+        const viaBearer = yield* client.optional.whoAmI({
+          headers: {
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=garbage`,
+            authorization: `Bearer ${Redacted.value(token)}`,
+          },
+        });
+        assert.strictEqual(viaBearer, userId);
+        // Both invalid: anonymous, never a failure.
+        const anonymous = yield* client.optional.whoAmI({
+          headers: {
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=garbage`,
+            authorization: "Bearer garbage",
+          },
+        });
+        assert.strictEqual(anonymous, "Anonymous");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+describe("Authentication challenges (JR-007)", () => {
+  const challengeOf = (path: string, headers: Record<string, string>) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const response = yield* serve(path, headers);
+        return { status: response.status, challenge: response.headers["www-authenticate"] };
+      }),
+    ).pipe(Effect.provide(RotationLayer));
+
+  it.effect("no credential: 401 with the realm challenge", () =>
+    Effect.gen(function* () {
+      const result = yield* challengeOf("/ok", {});
+      assert.strictEqual(result.status, 401);
+      assert.strictEqual(result.challenge, 'Bearer realm="awthaq"');
+    }),
+  );
+
+  it.effect("an invalid bearer: 401 with error=invalid_token", () =>
+    Effect.gen(function* () {
+      const result = yield* challengeOf("/ok", { authorization: "Bearer not-a-real-token" });
+      assert.strictEqual(result.status, 401);
+      assert.strictEqual(result.challenge, 'Bearer realm="awthaq", error="invalid_token"');
+    }),
+  );
+
+  it.effect("an invalid cookie only: 401 with the realm challenge", () =>
+    Effect.gen(function* () {
+      const result = yield* challengeOf("/ok", {
+        cookie: `${Sessions.SESSION_COOKIE_NAME}=garbage`,
+      });
+      assert.strictEqual(result.status, 401);
+      assert.strictEqual(result.challenge, 'Bearer realm="awthaq"');
+    }),
+  );
+
+  it.effect("a handler's own typed error carries no challenge", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* serve("/boom", {
+          authorization: `Bearer ${Redacted.value(token)}`,
+        });
+        assert.strictEqual(response.status, 404);
+        assert.isUndefined(response.headers["www-authenticate"]);
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
   );
 });

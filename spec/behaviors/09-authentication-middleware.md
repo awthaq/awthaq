@@ -69,6 +69,8 @@ REQUIREMENT: A group under `Authentication` (not `OptionalAuthentication`)
 
 `archive/design/usage-examples-v4.md` §4.1 documents this as the group-level default: "401 Unauthenticated when no valid cookie or bearer token." Because this is middleware, not a check a handler author writes, an endpoint mounted under `Authentication` cannot forget to enforce it — the requirement is a property of the group's declared middleware, checked before `CurrentPrincipal` is even provided.
 
+**The failure carries an RFC 6750/7235 challenge (JR-007).** The `401` response also carries `WWW-Authenticate`: `Bearer realm="awthaq"` when no bearer credential was presented (an absent credential carries no error code, RFC 6750 §3.1), and `Bearer realm="awthaq", error="invalid_token"` when one was and did not resolve, with the typed JSON body unchanged. A `401` a *handler* itself raises (for example a wrong password on a re-authentication endpoint) is not this middleware's failure and carries no challenge. `insufficient_scope` is reserved for when scope enforcement exists.
+
 ## BEH-EA-068: `OptionalAuthentication` resolves to `CurrentPrincipal = AnonymousPrincipal` rather than failing
 
 ```ts
@@ -84,6 +86,8 @@ REQUIREMENT: A group under `OptionalAuthentication` MUST still provide
 ```
 
 This restates BEH-EA-029 from the middleware's own point of view: the difference between `Authentication` and `OptionalAuthentication` is entirely in what happens when no scheme succeeds — a typed failure in one case, a typed anonymous value in the other — while the resolution logic for a credential that *is* present is identical between them.
+
+**It declares no error type (EHA-006).** `OptionalAuthentication` cannot fail with `Unauthenticated` — its implementation resolves the cookie, then the bearer credential, then defaults to `AnonymousPrincipal` itself — so it declares no `error`, and the generated OpenAPI document lists no `401` for endpoints under it (endpoints under `Authentication` still do). Its fallback does not depend on which scheme is declared last.
 
 ## BEH-EA-069: `PrincipalResolver` maps a verified session to a `Principal` value
 
@@ -149,6 +153,8 @@ REQUIREMENT: There MUST be no configuration, priority number, or runtime
 ```
 
 This entry closes the loop opened by BEH-EA-028 and BEH-EA-065: `archive/PRD.md` §10 states "the record *is* the strategy chain" as a design commitment, not merely a today's-default — there is deliberately no second, independent ordering knob to keep in sync with the declaration, which is exactly the kind of implicit, easy-to-desynchronize convention `research/09-plugin-architecture.md` Q27 documents Babel's plugin/preset ordering rules as a cautionary example of.
+
+Only the *declaration's* key order matters (NHS-010): Effect iterates the declaration's `security` record and looks the Live handlers up by key, so the key order of the record an implementation returns is irrelevant, and no Live-side code depends on a scheme's position. A test pins `Object.keys(Authentication.security)` and `Object.keys(OptionalAuthentication.security)` to `["cookie", "bearer"]`.
 
 _Previous: [BEH-EA-064](08-verification-tokens.md#beh-ea-064-purpose-scoped-flows-respond-uniformly-regardless-of-whether-their-target-exists)_
 _Next: [BEH-EA-073](10-csrf.md#beh-ea-073-sec-fetch-site-is-the-primary-csrf-signal)_
