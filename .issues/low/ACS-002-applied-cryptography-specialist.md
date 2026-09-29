@@ -3,7 +3,7 @@ ID: "ACS-002"
 Title: "Verification token digest compared with !== instead of constant-time equality"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Verification.ts:196"
 Auditor: "applied-cryptography-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `core` · reported by **Applied Cryptography Specialist** (`applied-cryptography-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Route the digest comparison through the same constantTimeEqual helper Sessions u
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `verification-hardening`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:202`. Fix: Extract one shared constant-time comparator into @awthaq/ports and use it in Verification.layerMemory; document the SQL WHERE-equality exception. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/ports/src/ConstantTime.ts (equalBytes/equalHex, exported from the ports index); Verification.layerMemory.consume and PasswordHasher use it, hasher's private copies removed. tryConsume documents the SQL WHERE-equality exception. Sessions.ts's private comparator left for now (another program is editing it). Tests: packages/ports/test/ConstantTime.test.ts, existing Verification suites.

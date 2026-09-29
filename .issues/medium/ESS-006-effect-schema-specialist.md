@@ -3,7 +3,7 @@ ID: "ESS-006"
 Title: "Identity-bearing DTO fields are unrefined Schema.String"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/PasswordApi.ts:71"
 Auditor: "effect-schema-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `password` · reported by **Effect Schema Specialist** (`effect-schema-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Introduce a shared Email schema (Schema.String with a makeFilter format check, d
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-api-contract-hygiene`. Evidence at HEAD ec065a7: `packages/password/src/PasswordApi.ts:71`. Fix: A shared `Email` schema at the contract boundary (+ a password length ceiling); runtime-config policy stays in checkPolicy. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/api/src/Email.ts (EmailContract.Email: one @, no whitespace, local<=64, dotted domain, <=254, non-normalizing) used for all password email payloads; password fields capped at 1024 (MAX_PASSWORD_LENGTH). Tests: packages/api/test/Email.test.ts, AuthHttp.test.ts (junk email and oversized password answer 400).

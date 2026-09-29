@@ -3,7 +3,7 @@ ID: "EHA-007"
 Title: "Plugin contract convention drift: per-endpoint middleware inside a shared group"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/PasswordApi.ts:216"
 Auditor: "effect-http-api-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `password` · reported by **Effect HTTP API Specialist** (`effect-http-api-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Split changePassword into a password.credentials (or password.change) dotted sub
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-api-contract-hygiene`. Evidence at HEAD ec065a7: `packages/password/src/PasswordApi.ts:249`. Fix: Split authenticated password endpoints into a `password.account` sub-group. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** changePassword/reauthenticate moved into a password.account group with group-level Authentication + CsrfProtection (paths unchanged); PasswordAccountHandlers merged into the plugin layer; rate-limit rules for the pair register under group password.account. Test: AuthHttp.test.ts group walk.

@@ -3,7 +3,7 @@ ID: "EEM-002"
 Title: "Mailer port types delivery as Effect<void> — an expected operational failure forced into the defect channel"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/Mailer.ts:38"
 Auditor: "effect-error-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `ports` · reported by **Effect Typed Error Management Specialist** (`effect-error-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — evidence quote matches `packages/ports/src/Mailer.ts:38` exactly; `layerNoop` (line 50-62) does route failure through `Effect.die`, confirming the port offers no typed failure path today. Widening the signature to `Effect.Effect<void, MailDeliveryFailed>` with per-caller handling (fork-and-forget vs. catch-and-202) is a concrete, mechanical change. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mailer-typed-delivery-errors`. Evidence at HEAD ec065a7: `packages/ports/src/Mailer.ts:37`. Fix: Give Mailer.send a typed MailDeliveryFailed error and make every caller choose a policy. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** Mailer.send now fails with a typed MailDeliveryFailed { template, reason, retryable, cause? } (packages/ports/src/Mailer.ts; no recipient/data, so no PII or tokens); layerNoop still dies but no longer interpolates the recipient. Organization invite surfaces it as InvitationDeliveryFailed (502, invitation stays pending, resend retries); password's background mails go through MailDispatch (ERS-002). README quickstart mailer and spec/overview.md updated. Tests (red first, verified against the old Mailer.ts): packages/ports/test/Mailer.test.ts (typed failure, no-PII defect), packages/organization/test/Organization.test.ts (delivery failure then resend). Gates: typecheck (only the pre-existing packages/react TS2883 errors), full test + test:bdd + spec:verify:strict green (argon2/scrypt timing tests flake under host load, pass isolated).

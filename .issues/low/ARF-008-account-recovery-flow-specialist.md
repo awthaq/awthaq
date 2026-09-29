@@ -3,7 +3,7 @@ ID: "ARF-008"
 Title: "Reset works for unverified accounts (good) but completing a reset neither confers nor requires verification, leaving the account still locked"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:548"
 Auditor: "account-recovery-flow-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `password` · reported by **Account Recovery Flow Specialist** (`account-recovery-flow-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Either treat a successfully consumed reset token as proof of mailbox control (fl
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-recovery-correctness`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:841`. Fix: Treat a consumed reset token as email verification. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** confirmReset calls users.verifyEmail(userId) inside the transaction after updating the credential (a consumed reset token proves mailbox control). Test (red first): 'an unverified user who completes confirmReset can then signIn' in PasswordRecovery.test.ts. BEH-EA-117 states it.

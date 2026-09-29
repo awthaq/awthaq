@@ -3,7 +3,7 @@ ID: "TMS-005"
 Title: "signUp responds EmailAlreadyExists — account enumeration inconsistent with the plugin's own anti-enumeration posture"
 Level: medium
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:482"
 Auditor: "threat-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `password` · reported by **Threat Modeling Specialist** (`threat-modeling-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Decide the posture explicitly: either return the same success-shaped response fo
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-policy-posture`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:745`. Fix: Implement the chosen posture; at minimum record the exception in spec. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option C per plan; user may revisit. PasswordConfig.signUpEnumeration reveal|conceal (default reveal). Conceal: signUpConcealed answers 202/no session for fresh and existing address alike (hash computed in both branches), fresh gets verify-email, existing owner gets account-exists; contract success is [SessionDto, Empty(202)]. ADR-EA-026 (spec/decisions/026-signup-enumeration-posture.md; numbered 026 to avoid the numbers other plans reserve) + BEH-EA-086 note. Tests: AuthHttp.test.ts (conceal indistinguishable, weak password still 422).

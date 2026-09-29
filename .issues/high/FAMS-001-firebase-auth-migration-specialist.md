@@ -3,7 +3,7 @@ ID: "FAMS-001"
 Title: "No Firebase scrypt-variant password verification path; lazy rehash is impossible"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:44"
 Auditor: "firebase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `ports` · reported by **Firebase Auth Migration Specialist** (`firebase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/ports/src/PasswordHasher.ts:37-43` documents dual-format/migration verification as an explicit non-goal, `layerScrypt` (lines ~160-208) uses `hash-wasm`'s plain scrypt with no signer-key/salt-separator parameter slot, and the rehash hook is confirmed real and correct (`Password.ts:552` gates on `config.rehashOnLogin && hasher.needsRehash(...)`, and `needsRehash` at `PasswordHasher.ts:148-156` returns `true` for any unparseable hash). Building Firebase-format support is a genuine new-capability/product decision (whether to invest in Firebase migration parity at all, and how to shape the config surface), not a bug fix. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `legacy-password-migration`. Already fixed by commit 60947ff. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:42`. Fix: Ship @awthaq/migrate-firebase with a firebase-scrypt LegacyPasswordVerifier (decision 21). (effort L). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** New package @awthaq/migrate-firebase (scaffolded: tsconfig paths/references, pnpm-lock) with FirebaseScryptVerifier: $firebase-scrypt$ self-describing credential string, clamps (mem_cost<=17, rounds<=16), scrypt via hash-wasm + WebCrypto AES-256-CTR over the signer key, constant-time compare, encodeHash helper, layer, README recipe. Verified against the published firebase/scrypt test vector (reproduced independently with node:crypto before coding). Tests: packages/migrate-firebase/test/FirebaseScryptVerifier.test.ts incl. end-to-end with layerArgon2id (legacy verifies, needsRehash true).

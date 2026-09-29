@@ -3,7 +3,7 @@ ID: "AVS-004"
 Title: "Password plugin squats root-level URL paths inside its namespaced group"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/PasswordApi.ts:179"
 Auditor: "api-design-versioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `password` · reported by **API Design & Versioning Specialist** (`api-design-versioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Keep the routes if the product reasoning holds, but make the exception a first-c
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-api-contract-hygiene`. Evidence at HEAD ec065a7: `packages/password/src/PasswordApi.ts:204`. Fix: Make route ownership a composition-time check instead of a registry of exceptions. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Auth.make composeApi refuses a duplicate (method, path) across all contributed endpoints with RouteConflict (E_ROUTE_CONFLICT naming both plugins). Test: packages/core/test/RouteConflict.test.ts. spec BEH-EA-032 note lists password's root-level routes as informative.

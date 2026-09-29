@@ -3,7 +3,7 @@ ID: "CSD-003"
 Title: "Sessions never capture IP/userAgent at issuance — forensics and device-aware detection have no data"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:559"
 Auditor: "credential-stuffing-defense-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `password` · reported by **Credential Stuffing Defense Specialist** (`credential-stuffing-defense-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Thread HttpServerRequest.remoteAddress and the user-agent header into sessions.i
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-issuance-context`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:866`. Fix: Thread {ip, userAgent} from every session-minting handler into sessions.issue. (effort M). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ClientAddress.userAgentOf (bounded to 512) and sessionRequest helpers; password signUp/signIn/changePassword, oauth callback and passkey authenticateVerify pass { ip, userAgent } to sessions.issue (passkey resolves ClientAddress optionally so existing compositions keep compiling). Tests: PasswordSessionContext.test.ts, AuthHttp.test.ts (SessionDto.userAgent), OAuth.test.ts, Passkey.test.ts. Left open: APS-007 (amr/emailVerified on principal) which touches P01's Sessions/Api/Authentication.

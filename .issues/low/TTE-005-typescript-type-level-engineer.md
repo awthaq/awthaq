@@ -3,7 +3,7 @@ ID: "TTE-005"
 Title: "PHC password hashes are unbranded strings — branding stops at entity IDs"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:80"
 Auditor: "typescript-type-level-engineer"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `ports` · reported by **TypeScript Type-Level Engineer** (`typescript-type-level-engineer`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Introduce `export type PhcHash = string & Brand.Brand<"PhcHash">` in ports, retu
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `phc-hash-branding`. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:82`. Fix: Introduce a PhcHash brand and thread it through the hasher port and credential storage. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** PasswordHasher.PhcHash brand (Brand.nominal) threaded through the port: hash returns it, verify/needsRehash/LegacyPasswordVerifier take it; Accounts stores/returns Redacted<PhcHash> and mints at the repository read boundary; migrate-auth0 and migrate-firebase mint at import. Type test with @ts-expect-error in ports PasswordHasher.test.ts; existing tests mint explicitly. No 'as' introduced.

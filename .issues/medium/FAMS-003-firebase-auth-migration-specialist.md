@@ -3,7 +3,7 @@ ID: "FAMS-003"
 Title: "Hard emailVerified sign-in gate diverges from Firebase semantics and locks out migrated users"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:548"
 Auditor: "firebase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `password` · reported by **Firebase Auth Migration Specialist** (`firebase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ During import, call Users.verifyEmail for every Firebase user with email_verifie
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-policy-posture`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:841`. Fix: Make the verified-email sign-in gate configurable (default unchanged) and document the migration step. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** PasswordConfig.requireVerifiedEmail (default true; the gate is still applied only after credentials verify). Docs in BEH-EA-114 text and migrate-auth0/-firebase/-better-auth READMEs. Tests: PasswordPolicy.test.ts.

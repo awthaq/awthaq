@@ -3,7 +3,7 @@ ID: "SAM-001"
 Title: "No bcrypt verification: migrated GoTrue password users are uniformly InvalidCredentials"
 Level: high
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:42"
 Auditor: "supabase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `api` · `ports` · reported by **Supabase Auth Migration Specialist** (`supabase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — PasswordHasher.ts:42-44's non-goal comment matches verbatim, only argon2id/scrypt layers exist (`hash-wasm` import), and Password.ts's `signIn` calls `hasher.verify` which fails on non-native hash formats, yielding `InvalidCredentials`. `rehashOnLogin` defaults `true` and `needsRehash` exists, so the recommended `BcryptHasher.layer` addition is a clean, well-scoped fix. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `legacy-password-migration`. Already fixed by commit 60947ff. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:42`. Fix: Document and pin the Supabase/GoTrue bcrypt path on top of the existing verifier. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** Test 'a GoTrue-style $2a$10$ hash verifies through layerArgon2id + BcryptVerifier.layer and needsRehash is true' added; migrate-auth0 README has a Supabase/GoTrue section (export mapping, importUser, emailVerified) and the root README lists the migration packages.

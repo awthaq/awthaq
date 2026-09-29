@@ -57,3 +57,5 @@ Wrap hash/verify in a bounded Effect semaphore sized to cores (e.g. 2-4) to cap 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `password-hasher-offload`. Duplicate of `ERS-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:159`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ERS-001-effect-runtime-scheduler-specialist` — closed by its fix (see that issue's Resolved comment).

@@ -57,3 +57,5 @@ Reuse the shared constantTimeEqual helper (see TSS-003) for the memory layer's c
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `verification-hardening`. Duplicate of `ACS-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:202`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ACS-002-applied-cryptography-specialist` — closed by its fix (see that issue's Resolved comment).

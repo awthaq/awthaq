@@ -3,7 +3,7 @@ ID: "BAM-004"
 Title: "Password digest import requires manual re-serialization; dual-format verify is a declared non-goal"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:44"
 Auditor: "better-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `ports` · reported by **better-auth Migration Specialist** (`better-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Publish a migration recipe (and ideally a tested helper) that maps better-auth s
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `legacy-password-migration`. Already fixed by commit 60947ff. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:42`. Fix: Add a better-auth scrypt LegacyPasswordVerifier to @awthaq/migrate-better-auth. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New BetterAuthScryptVerifier in @awthaq/migrate-better-auth (salt:key, NFKC, N=16384 r=16 p=1 dkLen=64, hex salt string as salt, constant-time compare), layer, README section. Format confirmed against better-auth's crypto/password.ts and its backward-compat test; fixture produced independently with node:crypto. Tests: BetterAuthScryptVerifier.test.ts incl. end-to-end rehash flag.

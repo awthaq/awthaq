@@ -3,7 +3,7 @@ ID: "CSD-006"
 Title: "Stale comment claims no client-IP mechanism exists, documenting away the missing IP dimension"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:146"
 Auditor: "credential-stuffing-defense-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `password` · reported by **Credential Stuffing Defense Specialist** (`credential-stuffing-defense-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Correct the comment to cite OAuth's remoteAddress pattern as the in-repo precede
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-rate-limit-hardening`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:210`. Fix: Rewrite the RATE_LIMITS header comment. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Rewrote the rate-limit header comment (now packages/password/src/PasswordRateLimits.ts): describes the two-dimension scheme (identity budgets + per-source budgets via the ClientAddress port, unknown IPs sharing one bucket). No comment claims IP extraction is missing.

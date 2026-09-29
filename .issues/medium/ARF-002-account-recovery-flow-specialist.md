@@ -3,7 +3,7 @@ ID: "ARF-002"
 Title: "WeakPassword is checked after the reset token is consumed — a policy mistake burns the single-use token"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:635"
 Auditor: "account-recovery-flow-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `password` · reported by **Account Recovery Flow Specialist** (`account-recovery-flow-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Run checkPolicy before verification.consume (it touches no account state), or pe
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `password-recovery-correctness`. Already fixed by commit 34caae8. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:986`. Fix: Evaluate the password policy before opening the transaction / consuming the token. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** confirmReset now evaluates checkPolicy (incl. the HIBP call) before the transaction and before consuming the token, so a weak/breach-rejected password never burns it under any Verification store and no network I/O runs in the open DB transaction. Tests (red first): packages/password/test/PasswordRecovery.test.ts (weak password then the same token succeeds; reject-mode outage keeps the token). BEH-EA-117 updated.

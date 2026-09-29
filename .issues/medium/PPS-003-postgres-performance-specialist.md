@@ -3,7 +3,7 @@ ID: "PPS-003"
 Title: "findByIdentifier cannot use the partial unique index and verification_tokens history grows unboundedly"
 Level: medium
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:535"
 Auditor: "postgres-performance-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `sql` · reported by **Postgres Performance Specialist** (`postgres-performance-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Add a plain (non-partial) btree index on (identifier, "createdAt" DESC) so findB
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `verification-store-hygiene`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:640`. Fix: Scope `findByIdentifier` to the live row so the existing partial unique index serves it with at most one row and no sort. History growth is handled by CSG-003's retention sweep (ticket 30), not a new index. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** VerificationRepository.findByIdentifier is scoped to the live row (AND consumedAt IS NULL, no ORDER BY/LIMIT) so the partial unique index serves it. Tests: findByIdentifier returns None after consume; EXPLAIN QUERY PLAN uses verification_tokens_live_identifier with no temp b-tree (packages/sql/test/Repositories.test.ts); postgres assertion added to the skipped pg suite.

@@ -3,7 +3,7 @@ ID: "ERAS-004"
 Title: "WASM argon2id is edge-compatible but default cost exceeds Workers free-tier CPU budgets"
 Level: low
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:24"
 Auditor: "edge-runtime-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `performance` · `ports` · reported by **Edge Runtime Auth Specialist** (`edge-runtime-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Document explicitly: password hash/verify belongs on the origin/long-running run
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-hasher-offload`. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:24`. Fix: Document where password hashing should run. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Documented in the PasswordHasher.ts header, README 'Password hashing' section and BEH-EA-115: hashing belongs on the origin runtime, default cost vs Workers CPU budgets, no cheaper edge profile.

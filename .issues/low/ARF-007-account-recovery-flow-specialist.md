@@ -3,7 +3,7 @@ ID: "ARF-007"
 Title: "confirmReset slices the token identifier without validating its prefix, turning a valid verify-email token into a 500"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:640"
 Auditor: "account-recovery-flow-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `password` · reported by **Account Recovery Flow Specialist** (`account-recovery-flow-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ After decode, verify identifier.startsWith(RESET_PREFIX) (and VERIFY_PREFIX in v
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-recovery-correctness`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:968`. Fix: Validate the purpose prefix right after decode in confirmReset and verifyEmail. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Purpose is validated before rate limiting/consume: first inline in confirmReset/verifyEmail, then structurally via VerificationLink.decode(raw, purpose) (MLO-009). A verify-email token at confirmReset (and a reset token at verifyEmail) answers TokenConsumed and stays usable for its own endpoint. Tests (red first): PasswordRecovery.test.ts.

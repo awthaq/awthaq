@@ -3,7 +3,7 @@ ID: "MLO-008"
 Title: "Spec's uniform-response requirement stops at status/body and does not cover the timing channel the code itself names"
 Level: info
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/08-verification-tokens.md:121"
 Auditor: "magic-link-email-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `docs` · `—` · reported by **Magic Link / Email OTP Specialist** (`magic-link-email-otp-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Extend BEH-EA-064 (or add a note) to require latency uniformity for verification
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `verification-timing-uniformity`. Evidence at HEAD ec065a7: `spec/behaviors/08-verification-tokens.md:120`. Fix: Extend BEH-EA-064 so latency uniformity is normative (mail dispatch asynchronous to the response; equal work in both branches), matching what bd1625c implemented. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-064 extended: latency uniformity is normative (token issue + send for the exists branch run in the background so both branches do the same work before responding). BEH-EA-113 describes the owned dispatch.

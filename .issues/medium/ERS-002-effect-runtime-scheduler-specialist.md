@@ -3,7 +3,7 @@ ID: "ERS-002"
 Title: "Detached verification-mail fiber is unsupervised, unretried, and droppable on shutdown"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:501"
 Auditor: "effect-runtime-scheduler-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `password` · reported by **Effect Runtime & Scheduler Specialist** (`effect-runtime-scheduler-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Keep the dispatch off the response path but make it owned and observable: publis
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mail-delivery-reliability`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:775`. Fix: A layer-owned mail dispatcher: forks into a scoped FiberSet (still non-blocking), retries with jittered backoff, bounds concurrency, publishes `auth.mail.failed`, and drains on shutdown; Mailer.send gains a typed failure. (effort M). Full dossier: `.plan/slices/07-password-mfa.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/core/src/MailDispatch.ts: MailDispatcher built per plugin scope (FiberSet, jittered exponential retry for retryable MailDeliveryFailed, Semaphore-bounded concurrency, drain-with-timeout finalizer), auth.mail.failed event (template, optional userId; AuditLog actorOf) and MailDispatchConfig. The three forkDetach sites in Password.ts are replaced (no forkDetach remains in packages/password). Tests: packages/core/test/MailDispatch.test.ts (retry then success, permanent failure event, no retry when non-retryable, concurrency bound, drain timeout, dispatch returns before send), PasswordMail.test.ts. Deviation: dispatcher is created by each plugin's make (MailDispatch.make) rather than a composition-wide service, to avoid a new required service in every composition; MailDispatch.layer exists for sharing. Spec: BEH-EA-113/064/101 text.
