@@ -25,8 +25,10 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import * as OAuth from "./OAuth.ts";
 import * as OAuthProvider from "./OAuthProvider.ts";
+import * as ProviderResponses from "./ProviderResponses.ts";
 
 /** No account, no stored tokens for it, or a stored access token expired with no refresh token to recover it. */
 export class OAuthTokenUnavailable extends Data.TaggedError("OAuthTokenUnavailable")<{
@@ -87,24 +89,12 @@ const refresh = (
     if (Option.isSome(provider.clientSecret)) {
       form["client_secret"] = Redacted.value(provider.clientSecret.value);
     }
-    const response = yield* httpClient.post(provider.tokenEndpoint, {
-      body: HttpBody.urlParams(form),
-    });
-    const body = (yield* response.json) as {
-      readonly access_token?: string;
-      readonly refresh_token?: string;
-      readonly expires_in?: number;
-      readonly scope?: string;
-      readonly token_type?: string;
-    };
-    if (typeof body.access_token !== "string") {
-      return yield* Effect.fail(
-        new OAuthRefreshFailed({
-          accountId,
-          message: `awthaq: token refresh for account ${accountId} returned no access_token`,
-        }),
-      );
-    }
+    // ESS-003: the same schema the code exchange uses — a body without a
+    // string `access_token` fails the decode and normalizes to
+    // `OAuthRefreshFailed` below.
+    const body = yield* httpClient
+      .post(provider.tokenEndpoint, { body: HttpBody.urlParams(form) })
+      .pipe(Effect.flatMap(HttpIncomingMessage.schemaBodyJson(ProviderResponses.TokenResponseSchema)));
     const now = yield* DateTime.now;
     const accessToken = Redacted.make(body.access_token);
     // RFC 6749 §6: a provider MAY omit `refresh_token` to mean "keep using
@@ -129,9 +119,8 @@ const refresh = (
     return accessToken;
   }).pipe(
     // Mirrors `OAuth.ts`'s own `exchangeCode`: every failure this block can
-    // produce — the explicit `OAuthRefreshFailed` above, or an unexpected
-    // network/JSON error `httpClient.post`/`response.json` themselves
-    // raise — normalizes to the one typed failure this function promises.
+    // produce — a network error, or a body that doesn't decode as a token
+    // response — normalizes to the one typed failure this function promises.
     Effect.catch(
       () =>
         new OAuthRefreshFailed({
@@ -158,7 +147,8 @@ export const layer: Layer.Layer<
     const resolved = yield* Effect.all(
       config_.providers.map((provider) => OAuthProvider.resolve(httpClient, provider)),
     );
-    const registry = new Map(resolved.map((provider) => [provider.id, provider] as const));
+    const registry = new Map<string, OAuthProvider.ResolvedProvider>();
+    for (const provider of resolved) registry.set(provider.id, provider);
 
     const withAccessToken: OAuthTokenAccessShape["withAccessToken"] = (accountId, use) =>
       Effect.gen(function* () {

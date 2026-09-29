@@ -1318,6 +1318,60 @@ describe("OAuth", () => {
       },
     );
 
+    // ESS-003 pins: a malformed provider body is a typed failure, never a defect.
+    const malformedTokenBody = (body: unknown) =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        const failure = yield* oauth
+          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta()],
+            httpRoutes: {
+              ".well-known/openid-configuration": oktaDiscovery,
+              "/jwks": { keys: [jwk] },
+              "/token": body,
+            },
+          }),
+        ),
+      );
+
+    it.effect("ESS-003: a token response whose id_token is a number fails typed", () =>
+      malformedTokenBody({ access_token: "at-1", id_token: 12345 }),
+    );
+
+    it.effect("ESS-003: a token response that is a JSON array fails typed", () =>
+      malformedTokenBody([{ access_token: "at-1" }]),
+    );
+
+    it.effect("ESS-003: a userinfo body that is a JSON array fails typed, not as a defect", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        const failure = yield* oauth
+          .callback("acme", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: { "/token": { access_token: "at-1" }, "/userinfo": [{ id: "x" }] },
+          }),
+        ),
+      ),
+    );
+
     it.effect("an id_token with the wrong issuer claim is rejected", () =>
       Effect.gen(function* () {
         const oauth = yield* OAuth.OAuth;
@@ -1416,6 +1470,32 @@ describe("OAuth", () => {
                 token_type: "Bearer",
               },
               "/userinfo": { id: "new-sub", email: "new-provider-tokens@example.com" },
+            },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("ESS-003: a token response with expires_in as a numeric string persists the right expiry", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        yield* oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
+
+        const accounts = yield* Accounts.Accounts;
+        const account = Option.getOrThrow(yield* accounts.findByProviderSubject("acme", "str-sub"));
+        const tokens = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+        assert.isTrue(Option.isSome(tokens.accessTokenExpiresAt));
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-str", expires_in: "3600" },
+              "/userinfo": { id: "str-sub", email: "str-expiry@example.com" },
             },
           }),
         ),

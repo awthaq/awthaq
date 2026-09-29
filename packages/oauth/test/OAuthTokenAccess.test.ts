@@ -248,4 +248,58 @@ describe("OAuthTokenAccess", () => {
         assert.strictEqual(Redacted.value(Option.getOrThrow(stored.refreshToken)), "rt-old");
       }).pipe(Effect.provide(buildLayer({ "/token": {} }))),
   );
+
+  it.effect("ESS-003: a refresh response with a non-string access_token fails OAuthRefreshFailed", () =>
+    Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const now = yield* DateTime.now;
+      const account = yield* accounts.link({
+        userId,
+        providerId: "acme",
+        subject: "sub-refresh-number",
+        tokens: {
+          accessToken: Redacted.make("at-old"),
+          refreshToken: Option.some(Redacted.make("rt-old")),
+          accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
+          refreshTokenExpiresAt: Option.none(),
+          scope: Option.none(),
+          tokenType: Option.none(),
+        },
+      });
+      const tokenAccess = yield* OAuthTokenAccess.OAuthTokenAccess;
+      const failure = yield* tokenAccess
+        .withAccessToken(account.id, () => Effect.void)
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "OAuthRefreshFailed");
+    }).pipe(Effect.provide(buildLayer({ "/token": { access_token: 12345 } }))),
+  );
+
+  it.effect("ESS-003: a refresh response whose expires_in is a numeric string still sets the expiry", () =>
+    Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const now = yield* DateTime.now;
+      const account = yield* accounts.link({
+        userId,
+        providerId: "acme",
+        subject: "sub-refresh-string-expiry",
+        tokens: {
+          accessToken: Redacted.make("at-old"),
+          refreshToken: Option.some(Redacted.make("rt-old")),
+          accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
+          refreshTokenExpiresAt: Option.none(),
+          scope: Option.none(),
+          tokenType: Option.none(),
+        },
+      });
+      const tokenAccess = yield* OAuthTokenAccess.OAuthTokenAccess;
+      yield* tokenAccess.withAccessToken(account.id, () => Effect.void);
+      const stored = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+      assert.isTrue(Option.isSome(stored.accessTokenExpiresAt));
+      assert.isTrue(
+        DateTime.isGreaterThan(Option.getOrThrow(stored.accessTokenExpiresAt), now),
+      );
+    }).pipe(
+      Effect.provide(buildLayer({ "/token": { access_token: "at-new", expires_in: "3600" } })),
+    ),
+  );
 });

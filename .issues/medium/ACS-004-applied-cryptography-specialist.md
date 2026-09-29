@@ -3,7 +3,7 @@ ID: "ACS-004"
 Title: "JWKS response cast unvalidated before becoming key material"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:248"
 Auditor: "applied-cryptography-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `oauth` · reported by **Applied Cryptography Specialist** (`applied-cryptography-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Decode the JWKS through an Effect Schema (keys array; each entry requiring strin
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `oauth-provider-response-decoding`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:323`. Fix: Tighten key selection. Decode RSA JWKs structurally and stop admitting kty-less entries. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Jwt.ts: RsaJwkSchema; findKey decodes each JWKS entry with it and drops kty-less/n-less/e-less entries, use!=sig and alg!=RS256; verifyRs256 imports only kty/n/e. Jwt.test.ts 'Jwt.findKey (ACS-004)' tests were red for kty-less, use=enc, alg=RS512, missing-n. Gates as ESS-003.

@@ -53,6 +53,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Jwt from "./Jwt.ts";
 import * as OAuthApi from "./OAuthApi.ts";
 import * as OAuthProvider from "./OAuthProvider.ts";
+import * as ProviderResponses from "./ProviderResponses.ts";
 
 export interface OAuthConfigShape {
   readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
@@ -128,23 +129,20 @@ const decodeState = (
  * link?, providerId }`. Shipping-gap map (.scratch/shipping-gaps), ticket
  * 19: `codeVerifier`/`nonce` are `Encryption`-produced ciphertext
  * envelopes at rest (this is what `VerificationToken.payload` actually
- * persists), not the raw PKCE material — still typed `string` either
- * way, so `isFlowPayload`'s own shape check below doesn't need to change.
+ * persists), not the raw PKCE material — still typed `string` either way.
+ *
+ * OIT-006: schema-decoded when read back (it travels through
+ * attacker-reachable request state), never a cast-based guard.
  */
-interface FlowPayload {
-  readonly providerId: string;
-  readonly codeVerifier: string;
-  readonly nonce: string | undefined;
-  readonly callbackURL: string;
-  readonly link: { readonly userId: string } | undefined;
-}
-
-const isFlowPayload = (value: unknown): value is FlowPayload =>
-  typeof value === "object" &&
-  value !== null &&
-  typeof (value as Record<string, unknown>)["providerId"] === "string" &&
-  typeof (value as Record<string, unknown>)["codeVerifier"] === "string" &&
-  typeof (value as Record<string, unknown>)["callbackURL"] === "string";
+const FlowPayloadSchema = Schema.Struct({
+  providerId: Schema.String,
+  codeVerifier: Schema.String,
+  nonce: Schema.optional(Schema.String),
+  callbackURL: Schema.String,
+  link: Schema.optional(Schema.Struct({ userId: Schema.String })),
+});
+type FlowPayload = typeof FlowPayloadSchema.Type;
+const decodeFlowPayload = Schema.decodeUnknownOption(FlowPayloadSchema);
 
 const generatePkce = (
   crypto: Crypto.Crypto,
@@ -245,25 +243,16 @@ const exchangeCode = (
     if (Option.isSome(provider.clientSecret)) {
       form["client_secret"] = Redacted.value(provider.clientSecret.value);
     }
-    const response = yield* httpClient.post(provider.tokenEndpoint, {
-      body: HttpBody.urlParams(form),
-    });
-    const body = (yield* response.json) as {
-      readonly access_token?: string;
-      readonly id_token?: string;
-      readonly refresh_token?: string;
-      readonly expires_in?: number;
-      readonly scope?: string;
-      readonly token_type?: string;
-    };
-    if (typeof body.access_token !== "string") {
-      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
-    }
+    // ESS-003: decoded at the boundary — a body without a string
+    // `access_token` (or with a mistyped member) fails the schema, typed.
+    const body = yield* httpClient
+      .post(provider.tokenEndpoint, { body: HttpBody.urlParams(form) })
+      .pipe(Effect.flatMap(HttpIncomingMessage.schemaBodyJson(ProviderResponses.TokenResponseSchema)));
     return {
       accessToken: body.access_token,
       idToken: body.id_token,
       refreshToken: body.refresh_token,
-      expiresIn: typeof body.expires_in === "number" ? body.expires_in : undefined,
+      expiresIn: body.expires_in,
       scope: body.scope,
       tokenType: body.token_type,
     };
@@ -295,8 +284,6 @@ interface JwksCacheEntry {
   readonly jwks: Jwt.Jwks;
   readonly fetchedAt: number;
 }
-
-const UserinfoSchema = Schema.Record(Schema.String, Schema.Unknown);
 
 /**
  * OIT-001 (OIDC Core 5.3.2): identity-bearing claims come from the *signed*
@@ -550,7 +537,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
        * `HttpServerRequest.remoteAddress`) shares one bucket, never
        * unthrottled.
        */
-      const CALLBACK_RATE_LIMIT = { limit: 20, window: Duration.minutes(1) } as const;
+      const CALLBACK_RATE_LIMIT = { limit: 20, window: Duration.minutes(1) };
       // The explicit return-type annotation below is a narrow, necessary
       // exception, not a style choice: passing `OAuth` (this class) into
       // anything typed `AuthPlugin.Any` (which itself requires a `layer`
@@ -573,7 +560,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const resolved = yield* Effect.all(
         config_.providers.map((provider) => OAuthProvider.resolve(httpClient, provider)),
       );
-      const registry = new Map(resolved.map((provider) => [provider.id, provider] as const));
+      const registry = new Map<string, OAuthProvider.ResolvedProvider>();
+      for (const provider of resolved) registry.set(provider.id, provider);
 
       const trustedProviders =
         config_.linking === "explicit" ? [] : config_.linking.trustedProviders;
@@ -662,10 +650,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           Effect.catchTag("TokenConsumed", () => new OAuthApi.OAuthCallbackFailed()),
           Effect.catchTag("PlatformError", Effect.die),
         );
-        if (!isFlowPayload(consumed.payload) || consumed.payload.providerId !== providerId) {
+        const decodedFlow = decodeFlowPayload(consumed.payload);
+        if (Option.isNone(decodedFlow) || decodedFlow.value.providerId !== providerId) {
           return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
         }
-        const flow = consumed.payload;
+        const flow = decodedFlow.value;
 
         // Ticket 19: `flow.codeVerifier`/`flow.nonce` are ciphertext at
         // rest (encrypted in `authorize`, above, under this same
@@ -733,8 +722,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 headers: { authorization: `Bearer ${tokens.accessToken}` },
               })
               .pipe(
-                Effect.flatMap((response) => response.json),
-                Effect.flatMap(Schema.decodeUnknownEffect(UserinfoSchema)),
+                Effect.flatMap(HttpIncomingMessage.schemaBodyJson(ProviderResponses.UserinfoSchema)),
                 Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
               )
           : undefined;
