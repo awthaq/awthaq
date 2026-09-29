@@ -77,31 +77,32 @@ const csrfHeaders = (cookie?: string): Record<string, string> => ({
   "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
 });
 
-const makeAppLayer = (sessionsLayer: typeof Sessions.layerMemory) => Layer.mergeAll(
-  AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(Session.SessionHandlers),
-    Layer.provide(Account.AccountHandlers),
-  ),
-  AuthHttp.docs(AuthCore.AuthCoreApi),
-).pipe(
-  Layer.provideMerge(Authentication.AuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provide(CsrfProtectionLive),
-  // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
-  // `SqlTransaction` — a no-op wrapper for this in-memory composition.
-  Layer.provide(SqlTransaction.layerNoop),
-  Layer.provideMerge(sessionsLayer),
-  Layer.provideMerge(Users.layerMemory),
-  Layer.provideMerge(Accounts.layerMemory),
-  Layer.provideMerge(Verification.layerMemory),
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
-);
+const makeAppLayer = (sessionsLayer: typeof Sessions.layerMemory) =>
+  Layer.mergeAll(
+    AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
+      Layer.provide(Session.SessionHandlers),
+      Layer.provide(Account.AccountHandlers),
+    ),
+    AuthHttp.docs(AuthCore.AuthCoreApi),
+  ).pipe(
+    Layer.provideMerge(Authentication.AuthenticationLive),
+    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provide(CsrfProtectionLive),
+    // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
+    // `SqlTransaction` — a no-op wrapper for this in-memory composition.
+    Layer.provide(SqlTransaction.layerNoop),
+    Layer.provideMerge(sessionsLayer),
+    Layer.provideMerge(Users.layerMemory),
+    Layer.provideMerge(Accounts.layerMemory),
+    Layer.provideMerge(Verification.layerMemory),
+    // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(Hooks.HooksLive),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
 
 const AppLayer = makeAppLayer(Sessions.layerMemory);
 
@@ -319,7 +320,11 @@ describe("AuthHttp + Session (real HTTP)", () => {
 // cookies of the response actually written.
 const sendHandled = (
   path: string,
-  options: { readonly method: string; readonly token: Redacted.Redacted<string>; readonly body?: unknown },
+  options: {
+    readonly method: string;
+    readonly token: Redacted.Redacted<string>;
+    readonly body?: unknown;
+  },
 ) =>
   Effect.gen(function* () {
     const router = yield* HttpRouter.HttpRouter;
@@ -475,24 +480,26 @@ describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)",
 });
 
 describe("server handler invariants (GC-003/GC-008)", () => {
-  it.effect("a non-User principal reaching a required-auth group dies with HandlerInvariantViolation", () =>
-    Effect.gen(function* () {
-      const exit = yield* currentUser.pipe(
-        Effect.provideService(
-          Api.CurrentPrincipal,
-          new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }) }),
-        ),
-        Effect.exit,
-      );
-      assert.isTrue(Exit.isFailure(exit));
-      if (!Exit.isFailure(exit)) return;
-      assert.isTrue(Cause.hasDies(exit.cause));
-      const defect = Cause.squash(exit.cause);
-      assert.instanceOf(defect, HandlerInvariantViolation);
-      if (defect instanceof HandlerInvariantViolation) {
-        assert.strictEqual(defect.invariant, "NonUserPrincipal");
-      }
-    }),
+  it.effect(
+    "a non-User principal reaching a required-auth group dies with HandlerInvariantViolation",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* currentUser.pipe(
+          Effect.provideService(
+            Api.CurrentPrincipal,
+            new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }) }),
+          ),
+          Effect.exit,
+        );
+        assert.isTrue(Exit.isFailure(exit));
+        if (!Exit.isFailure(exit)) return;
+        assert.isTrue(Cause.hasDies(exit.cause));
+        const defect = Cause.squash(exit.cause);
+        assert.instanceOf(defect, HandlerInvariantViolation);
+        if (defect instanceof HandlerInvariantViolation) {
+          assert.strictEqual(defect.invariant, "NonUserPrincipal");
+        }
+      }),
   );
 });
 
@@ -503,14 +510,16 @@ describe("AuthHttp + Session: point queries never go through list (TIR-003/GC-00
         const sessions = yield* Sessions.Sessions;
         const router = yield* HttpRouter.HttpRouter;
         const { token, session } = yield* sessions.issue({ userId });
-        const response = yield* router.asHttpEffect().pipe(
-          Effect.provideService(
-            HttpServerRequest.HttpServerRequest,
-            HttpServerRequest.fromWeb(
-              new Request("http://localhost/session", { headers: cookieHeader(token) }),
+        const response = yield* router
+          .asHttpEffect()
+          .pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(
+                new Request("http://localhost/session", { headers: cookieHeader(token) }),
+              ),
             ),
-          ),
-        );
+          );
         assert.strictEqual(response.status, 200);
         const body = (yield* jsonBody(response)) as { id: string; current: boolean };
         assert.strictEqual(body.id, session.id);

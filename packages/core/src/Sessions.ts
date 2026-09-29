@@ -148,7 +148,9 @@ export const unionAmr = (
   additions: ReadonlyArray<AuthMethod>,
 ): ReadonlyArray<AuthMethod> => [
   ...existing,
-  ...additions.filter((method, index) => !existing.includes(method) && additions.indexOf(method) === index),
+  ...additions.filter(
+    (method, index) => !existing.includes(method) && additions.indexOf(method) === index,
+  ),
 ];
 
 /** Decodes the stored JSON text, dropping anything that is not a known method. */
@@ -973,31 +975,30 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
       const isLive: SessionsShape["isLive"] = (userId, id) =>
         findOwned(userId, id).pipe(Effect.map(Option.isSome));
 
-      const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (
-        id,
-        amr,
-      ) {
-        const now = yield* DateTime.now;
-        const updated = yield* Ref.modify(
-          state,
-          (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
-            const current = HashMap.get(s, id);
-            if (Option.isNone(current)) return [Option.none(), s] as const;
-            const refreshed: SessionRow = {
-              ...current.value,
-              authenticatedAt: now,
-              amr: unionAmr(current.value.amr, amr ?? []),
-            };
-            return [Option.some(refreshed), HashMap.set(s, id, refreshed)] as const;
-          },
-        );
-        if (Option.isNone(updated)) {
-          return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+      const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(
+        function* (id, amr) {
+          const now = yield* DateTime.now;
+          const updated = yield* Ref.modify(
+            state,
+            (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
+              const current = HashMap.get(s, id);
+              if (Option.isNone(current)) return [Option.none(), s] as const;
+              const refreshed: SessionRow = {
+                ...current.value,
+                authenticatedAt: now,
+                amr: unionAmr(current.value.amr, amr ?? []),
+              };
+              return [Option.some(refreshed), HashMap.set(s, id, refreshed)] as const;
+            },
           );
-        }
-        return toView(updated.value);
-      });
+          if (Option.isNone(updated)) {
+            return yield* Effect.fail(
+              new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+            );
+          }
+          return toView(updated.value);
+        },
+      );
 
       return {
         issue,

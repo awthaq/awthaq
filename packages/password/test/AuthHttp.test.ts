@@ -237,55 +237,64 @@ describe("AuthHttp + Password (real HTTP)", () => {
     }),
   );
 
-  it.effect("CSD-003: sign-up records the request's User-Agent on the session (capped at 512)", () =>
-    Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
-      const signUp = (email: string, userAgent: string) =>
-        Effect.promise(() =>
-          handler(
-            new Request("http://localhost/password/sign-up", {
-              method: "POST",
-              headers: {
-                "content-type": "application/json",
-                "user-agent": userAgent,
-                cookie: withCsrfCookie(),
-                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-              },
-              body: JSON.stringify({ email, password: strongPassword }),
-            }),
-          ),
-        );
-      const plain = yield* signUp("ua-plain@example.com", "TestBrowser/1.0");
-      assert.strictEqual(plain.status, 200);
-      const plainBody = (yield* Effect.promise(() => plain.json())) as { userAgent: string | null };
-      assert.strictEqual(plainBody.userAgent, "TestBrowser/1.0");
+  it.effect(
+    "CSD-003: sign-up records the request's User-Agent on the session (capped at 512)",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const signUp = (email: string, userAgent: string) =>
+          Effect.promise(() =>
+            handler(
+              new Request("http://localhost/password/sign-up", {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  "user-agent": userAgent,
+                  cookie: withCsrfCookie(),
+                  [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+                },
+                body: JSON.stringify({ email, password: strongPassword }),
+              }),
+            ),
+          );
+        const plain = yield* signUp("ua-plain@example.com", "TestBrowser/1.0");
+        assert.strictEqual(plain.status, 200);
+        const plainBody = (yield* Effect.promise(() => plain.json())) as {
+          userAgent: string | null;
+        };
+        assert.strictEqual(plainBody.userAgent, "TestBrowser/1.0");
 
-      const long = yield* signUp("ua-long@example.com", "x".repeat(2000));
-      const longBody = (yield* Effect.promise(() => long.json())) as { userAgent: string | null };
-      assert.strictEqual(longBody.userAgent?.length, 512);
-    }),
+        const long = yield* signUp("ua-long@example.com", "x".repeat(2000));
+        const longBody = (yield* Effect.promise(() => long.json())) as { userAgent: string | null };
+        assert.strictEqual(longBody.userAgent?.length, 512);
+      }),
   );
 
-  it.effect("IC-007/BO-005: the session Set-Cookie carries the default attributes and a 30-day Max-Age", () =>
-    Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
-      const response = yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "cookie-attrs@example.com", password: strongPassword }),
-      );
-      assert.strictEqual(response.status, 200);
-      const setCookie = response.headers.get("set-cookie") ?? "";
-      assert.match(setCookie, /^__Host-session=/);
-      // Real clock here (a web handler, no TestClock): a hair under 30 days.
-      const maxAge = Number(/;\s*Max-Age=(\d+)/i.exec(setCookie)?.[1]);
-      assert.isAtMost(maxAge, 2_592_000);
-      assert.isAtLeast(maxAge, 2_591_990);
-      assert.match(setCookie, /;\s*Path=\/(;|$)/i);
-      assert.match(setCookie, /;\s*Secure/i);
-      assert.match(setCookie, /;\s*HttpOnly/i);
-      assert.match(setCookie, /;\s*SameSite=Strict/i);
-      assert.notMatch(setCookie, /;\s*Domain=/i);
-      assert.notMatch(setCookie, /;\s*Partitioned/i);
-    }),
+  it.effect(
+    "IC-007/BO-005: the session Set-Cookie carries the default attributes and a 30-day Max-Age",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const response = yield* Effect.promise(() =>
+          post(handler, "/password/sign-up", {
+            email: "cookie-attrs@example.com",
+            password: strongPassword,
+          }),
+        );
+        assert.strictEqual(response.status, 200);
+        const setCookie = response.headers.get("set-cookie") ?? "";
+        assert.match(setCookie, /^__Host-session=/);
+        // Real clock here (a web handler, no TestClock): a hair under 30 days.
+        const maxAge = Number(/;\s*Max-Age=(\d+)/i.exec(setCookie)?.[1]);
+        assert.isAtMost(maxAge, 2_592_000);
+        assert.isAtLeast(maxAge, 2_591_990);
+        assert.match(setCookie, /;\s*Path=\/(;|$)/i);
+        assert.match(setCookie, /;\s*Secure/i);
+        assert.match(setCookie, /;\s*HttpOnly/i);
+        assert.match(setCookie, /;\s*SameSite=Strict/i);
+        assert.notMatch(setCookie, /;\s*Domain=/i);
+        assert.notMatch(setCookie, /;\s*Partitioned/i);
+      }),
   );
 
   it.effect("BEH-EA-113/422: a too-short password answers WeakPassword", () =>

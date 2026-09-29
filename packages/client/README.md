@@ -13,13 +13,14 @@ See [`spec/overview.md`](../../spec/overview.md) for the full package map this f
 The session token rotates on the server's throttled touch (there is no grace window), so a bearer client must capture the rotated token from every response:
 
 ```ts
-const store = yield* AuthClient.BearerTokenStore; // AuthClient.BearerTokenStoreMemory, or your own (Keychain/Keystore)
-yield* store.set(Redacted.make(tokenFromSignIn));
-const client = yield* AuthClient.make(api, {
-  baseUrl,
-  transformClient: AuthClient.bearerTransformClient(store),
+const program = Effect.gen(function* () {
+  const store = yield* AuthClient.BearerTokenStore; // AuthClient.BearerTokenStoreMemory, or your own (Keychain/Keystore)
+  yield* store.set(Redacted.make(tokenFromSignIn));
+  return yield* AuthClient.make(api, {
+    baseUrl,
+    transformClient: AuthClient.bearerTransformClient(store),
+  });
 });
 ```
 
 `bearerTransformClient` attaches `Authorization: Bearer <token>` and stores the `set-auth-token` header (`Api.ROTATED_TOKEN_HEADER`) whenever a response carries it. On the typed `Unauthenticated` error, re-authenticate and `store.set` a fresh token. Keep `set-auth-token` intact through proxies, expose it via CORS if cross-origin, and never log it.
-

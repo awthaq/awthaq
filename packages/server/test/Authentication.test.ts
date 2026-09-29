@@ -416,25 +416,27 @@ const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
   );
 
 describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
-  it.effect("BO-005: a rotated cookie's Max-Age is recomputed from the remaining absolute lifetime", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        yield* TestClock.adjust(Duration.hours(2));
-        const response = yield* serve("/ok", {
-          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
-        });
-        const cookie = Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME);
-        assert.isTrue(Option.isSome(cookie));
-        if (Option.isNone(cookie)) return;
-        assert.deepStrictEqual(
-          cookie.value.options?.maxAge,
-          Duration.subtract(Duration.days(30), Duration.hours(2)),
-        );
-        assert.strictEqual(cookie.value.options?.sameSite, "strict");
-      }),
-    ).pipe(Effect.provide(RotationLayer)),
+  it.effect(
+    "BO-005: a rotated cookie's Max-Age is recomputed from the remaining absolute lifetime",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(2));
+          const response = yield* serve("/ok", {
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+          });
+          const cookie = Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME);
+          assert.isTrue(Option.isSome(cookie));
+          if (Option.isNone(cookie)) return;
+          assert.deepStrictEqual(
+            cookie.value.options?.maxAge,
+            Duration.subtract(Duration.days(30), Duration.hours(2)),
+          );
+          assert.strictEqual(cookie.value.options?.sameSite, "strict");
+        }),
+      ).pipe(Effect.provide(RotationLayer)),
   );
 
   it.effect("AGA-004: HostEmbedded rotates __Host-session with SameSite=None; Partitioned", () =>
@@ -453,7 +455,9 @@ describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
         assert.isTrue(cookie.value.options?.partitioned);
         assert.isTrue(cookie.value.options?.secure);
       }),
-    ).pipe(Effect.provide(rotationLayerWith(SessionCookie.config({ mode: SessionCookie.HostEmbedded })))),
+    ).pipe(
+      Effect.provide(rotationLayerWith(SessionCookie.config({ mode: SessionCookie.HostEmbedded }))),
+    ),
   );
 
   it.effect("IC-007: SecureDomain reads and rotates __Secure-session with the Domain", () =>
@@ -470,7 +474,9 @@ describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
         });
         assert.strictEqual(wrongName.status, 401);
         yield* TestClock.adjust(Duration.hours(2));
-        const rotated = yield* serve("/ok", { cookie: `__Secure-session=${Redacted.value(token)}` });
+        const rotated = yield* serve("/ok", {
+          cookie: `__Secure-session=${Redacted.value(token)}`,
+        });
         const cookie = Cookies.get(rotated.cookies, "__Secure-session");
         assert.isTrue(Option.isSome(cookie));
         if (Option.isNone(cookie)) return;
@@ -753,17 +759,19 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
     Layer.provide(NodeCrypto.layer),
   );
 
-  it.effect("the default resolver copies amr from the session and leaves emailVerified absent", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver;
-      const { session } = yield* sessions.issue({ userId, amr: ["pwd", "otp"] });
-      const principal = yield* resolver.resolve(session);
-      assert.strictEqual(principal._tag, "User");
-      if (principal._tag !== "User") return;
-      assert.deepStrictEqual(principal.amr, ["pwd", "otp"]);
-      assert.isUndefined(principal.emailVerified);
-    }).pipe(Effect.provide(factsLayer)),
+  it.effect(
+    "the default resolver copies amr from the session and leaves emailVerified absent",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const resolver = yield* Authentication.PrincipalResolver;
+        const { session } = yield* sessions.issue({ userId, amr: ["pwd", "otp"] });
+        const principal = yield* resolver.resolve(session);
+        assert.strictEqual(principal._tag, "User");
+        if (principal._tag !== "User") return;
+        assert.deepStrictEqual(principal.amr, ["pwd", "otp"]);
+        assert.isUndefined(principal.emailVerified);
+      }).pipe(Effect.provide(factsLayer)),
   );
 
   it.effect("layerWithUserFacts sets emailVerified=false for a fresh, unverified user", () =>
@@ -782,17 +790,21 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
     ),
   );
 
-  it.effect("layerWithUserFacts resolves a session whose user vanished as unverified, never a defect", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver;
-      const { session } = yield* sessions.issue({ userId: Users.UserId("99999999-9999-9999-9999-999999999999") });
-      const principal = yield* resolver.resolve(session);
-      assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
-    }).pipe(
-      Effect.provide(
-        Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+  it.effect(
+    "layerWithUserFacts resolves a session whose user vanished as unverified, never a defect",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const resolver = yield* Authentication.PrincipalResolver;
+        const { session } = yield* sessions.issue({
+          userId: Users.UserId("99999999-9999-9999-9999-999999999999"),
+        });
+        const principal = yield* resolver.resolve(session);
+        assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
+      }).pipe(
+        Effect.provide(
+          Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+        ),
       ),
-    ),
   );
 });

@@ -21,7 +21,7 @@ import { expireSessionCookie } from "./internal/SessionCookie.ts";
  */
 export type AccountPrincipal = Api.UserPrincipal;
 
-const toDto =(user: Users.UserRecord): AccountContract.AccountDto =>
+const toDto = (user: Users.UserRecord): AccountContract.AccountDto =>
   new AccountContract.AccountDto({
     id: user.id,
     email: user.email,
@@ -49,18 +49,16 @@ export const AccountHandlers = HttpApiBuilder.group(
         // The token was validated at authentication time; the user it
         // names must still exist — a `UserNotFound` here is a defect, not
         // a request-level condition the caller can act on.
-        const updated = yield* users
-          .updateProfile(userId, payload)
-          .pipe(
-            Effect.catchTag("UserNotFound", () =>
-              Effect.die(
-                new HandlerInvariantViolation({
-                  invariant: "AuthenticatedUserMissing",
-                  message: `awthaq: authenticated user missing: ${userId}`,
-                }),
-              ),
+        const updated = yield* users.updateProfile(userId, payload).pipe(
+          Effect.catchTag("UserNotFound", () =>
+            Effect.die(
+              new HandlerInvariantViolation({
+                invariant: "AuthenticatedUserMissing",
+                message: `awthaq: authenticated user missing: ${userId}`,
+              }),
             ),
-          );
+          ),
+        );
         return toDto(updated);
       }),
 
@@ -108,18 +106,16 @@ export const AccountHandlers = HttpApiBuilder.group(
               // was already being rewritten for CSG-001/DRS-002.
               yield* sessions.revokeAll(userId, "userDeleted");
               yield* verification.deleteAllByUser(userId);
-              yield* users
-                .delete(userId)
-                .pipe(
-                  Effect.catchTag("UserNotFound", () =>
-                    Effect.die(
-                      new HandlerInvariantViolation({
-                        invariant: "AuthenticatedUserMissing",
-                        message: `awthaq: authenticated user missing: ${userId}`,
-                      }),
-                    ),
+              yield* users.delete(userId).pipe(
+                Effect.catchTag("UserNotFound", () =>
+                  Effect.die(
+                    new HandlerInvariantViolation({
+                      invariant: "AuthenticatedUserMissing",
+                      message: `awthaq: authenticated user missing: ${userId}`,
+                    }),
                   ),
-                );
+                ),
+              );
             }),
           )
           // A `SqlError` rolling back the transaction is a defect here,

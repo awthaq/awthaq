@@ -40,9 +40,7 @@ export const make = (options: {
         if (legacyValue === undefined) return request;
         const existing = request.headers.cookie ?? "";
         const rewritten =
-          existing.length > 0
-            ? `${existing}; ${name}=${legacyValue}`
-            : `${name}=${legacyValue}`;
+          existing.length > 0 ? `${existing}; ${name}=${legacyValue}` : `${name}=${legacyValue}`;
         return request.modify({ headers: Headers.set(request.headers, "cookie", rewritten) });
       });
     }),

@@ -619,8 +619,11 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         `,
       });
 
-      const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, authenticatedAt, amr) =>
-        reauthenticateQuery({ id, authenticatedAt, amr: amr ?? null });
+      const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (
+        id,
+        authenticatedAt,
+        amr,
+      ) => reauthenticateQuery({ id, authenticatedAt, amr: amr ?? null });
 
       return {
         insert: repo.insert,

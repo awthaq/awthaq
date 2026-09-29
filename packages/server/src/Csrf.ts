@@ -145,7 +145,9 @@ export const CsrfProtectionLive: Layer.Layer<
           const fresh = yield* mint(crypto, config.secret).pipe(Effect.orDie);
           // AGA-004: an embedded (`SameSite=None; Partitioned`) session cookie
           // needs its double-submit companion to travel in the same context.
-          const cookieMode = SessionCookie.csrfCookieOptions(yield* SessionCookie.SessionCookieConfig);
+          const cookieMode = SessionCookie.csrfCookieOptions(
+            yield* SessionCookie.SessionCookieConfig,
+          );
           yield* HttpApiBuilder.securitySetCookie(Api.CsrfCookie, fresh, {
             httpOnly: false,
             path: "/",

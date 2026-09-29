@@ -1011,15 +1011,15 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               verified.userVerified ? ["hwk", "user"] : ["hwk"],
             )
             .pipe(
-            Effect.catchTag("SessionNotFound", () =>
-              // `passkey.reauthenticate`'s own `Authentication` middleware
-              // already proved this exact session live moments ago — see
-              // `Password.ts`'s own identical `reauthenticate` comment.
-              Effect.die(
-                new Error(`awthaq: reauthenticate's own current session vanished: ${sessionId}`),
+              Effect.catchTag("SessionNotFound", () =>
+                // `passkey.reauthenticate`'s own `Authentication` middleware
+                // already proved this exact session live moments ago — see
+                // `Password.ts`'s own identical `reauthenticate` comment.
+                Effect.die(
+                  new Error(`awthaq: reauthenticate's own current session vanished: ${sessionId}`),
+                ),
               ),
-            ),
-          );
+            );
         },
       );
 

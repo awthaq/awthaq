@@ -290,7 +290,10 @@ describe("Password", () => {
     Effect.gen(function* () {
       const password = yield* Password.Password;
       const mailer = yield* Mailer.Mailer;
-      const signedUp = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+      const signedUp = yield* signUpAndVerify(password, mailer, {
+        email,
+        password: strongPassword,
+      });
       assert.deepStrictEqual(signedUp.session.amr, ["pwd"]);
       const signedIn = yield* password.signIn({ email, password: strongPassword });
       assert.deepStrictEqual(signedIn.session.amr, ["pwd"]);
@@ -305,42 +308,44 @@ describe("Password", () => {
   );
 
   // CSD-003: request context recorded on every session-minting path.
-  it.effect("CSD-003: signUp, signIn and changePassword record ip and userAgent on the session", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
-      const sessions = yield* Sessions.Sessions;
-      const context = { ip: "203.0.113.7", userAgent: "Agent/1.0" };
+  it.effect(
+    "CSD-003: signUp, signIn and changePassword record ip and userAgent on the session",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const sessions = yield* Sessions.Sessions;
+        const context = { ip: "203.0.113.7", userAgent: "Agent/1.0" };
 
-      const signedUp = yield* signUpAndVerify(password, mailer, {
-        email,
-        password: strongPassword,
-        ...context,
-      });
-      assert.deepStrictEqual(signedUp.session.ipAddress, Option.some(context.ip));
-      assert.deepStrictEqual(signedUp.session.userAgent, Option.some(context.userAgent));
+        const signedUp = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+          ...context,
+        });
+        assert.deepStrictEqual(signedUp.session.ipAddress, Option.some(context.ip));
+        assert.deepStrictEqual(signedUp.session.userAgent, Option.some(context.userAgent));
 
-      const signedIn = yield* password.signIn({
-        email,
-        password: strongPassword,
-        ip: "198.51.100.9",
-        userAgent: "Agent/2.0",
-      });
-      const verified = yield* sessions.verify(signedIn.token);
-      assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.9"));
-      assert.deepStrictEqual(verified.session.userAgent, Option.some("Agent/2.0"));
+        const signedIn = yield* password.signIn({
+          email,
+          password: strongPassword,
+          ip: "198.51.100.9",
+          userAgent: "Agent/2.0",
+        });
+        const verified = yield* sessions.verify(signedIn.token);
+        assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.9"));
+        assert.deepStrictEqual(verified.session.userAgent, Option.some("Agent/2.0"));
 
-      const changed = yield* password.changePassword({
-        userId: signedUp.session.userId,
-        currentSessionId: signedIn.session.id,
-        currentPassword: strongPassword,
-        newPassword: Redacted.make("a different strong passphrase"),
-        ip: "192.0.2.1",
-        userAgent: "Agent/3.0",
-      });
-      assert.deepStrictEqual(changed.session.ipAddress, Option.some("192.0.2.1"));
-      assert.deepStrictEqual(changed.session.userAgent, Option.some("Agent/3.0"));
-    }).pipe(Effect.provide(TestLayer)),
+        const changed = yield* password.changePassword({
+          userId: signedUp.session.userId,
+          currentSessionId: signedIn.session.id,
+          currentPassword: strongPassword,
+          newPassword: Redacted.make("a different strong passphrase"),
+          ip: "192.0.2.1",
+          userAgent: "Agent/3.0",
+        });
+        assert.deepStrictEqual(changed.session.ipAddress, Option.some("192.0.2.1"));
+        assert.deepStrictEqual(changed.session.userAgent, Option.some("Agent/3.0"));
+      }).pipe(Effect.provide(TestLayer)),
   );
 
   it.effect(

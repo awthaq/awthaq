@@ -766,19 +766,21 @@ describe("Sessions repository: liveness, paging, index, owned delete", () => {
     }).pipe(Effect.provide(RepositoriesLive)),
   );
 
-  it.effect("ESR-010: listByUser caps the page at MAX_PAGE_SIZE", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Repositories.SessionsRepository;
-      const user = yield* makeUser("clamp-huge@example.com");
-      const now = yield* DateTime.now;
-      const future = DateTime.addDuration(now, Duration.days(1));
-      for (let i = 0; i < Repositories.MAX_PAGE_SIZE + 5; i++) {
-        yield* insertSession(user.id, { absoluteExpiresAt: future, idleExpiresAt: future });
-      }
-      const page = yield* sessions.listByUser(user.id, now, undefined, 100_000);
-      assert.strictEqual(page.items.length, Repositories.MAX_PAGE_SIZE);
-      assert.isTrue(Option.isSome(page.nextCursor));
-    }).pipe(Effect.provide(RepositoriesLive)),
+  it.effect(
+    "ESR-010: listByUser caps the page at MAX_PAGE_SIZE",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        const user = yield* makeUser("clamp-huge@example.com");
+        const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
+        for (let i = 0; i < Repositories.MAX_PAGE_SIZE + 5; i++) {
+          yield* insertSession(user.id, { absoluteExpiresAt: future, idleExpiresAt: future });
+        }
+        const page = yield* sessions.listByUser(user.id, now, undefined, 100_000);
+        assert.strictEqual(page.items.length, Repositories.MAX_PAGE_SIZE);
+        assert.isTrue(Option.isSome(page.nextCursor));
+      }).pipe(Effect.provide(RepositoriesLive)),
     30_000,
   );
 
