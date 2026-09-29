@@ -113,6 +113,18 @@ export class InvitationLimitReached extends Schema.TaggedError<InvitationLimitRe
   { httpApiStatus: 403 },
 ) {}
 
+/**
+ * EEM-002: the invitation is persisted (and stays pending) but its mail
+ * could not be delivered. The inviter is authenticated, so unlike an
+ * enumeration-uniform flow the failure is surfaced — the client retries by
+ * re-inviting with `resend: true`.
+ */
+export class InvitationDeliveryFailed extends Schema.TaggedError<InvitationDeliveryFailed>()(
+  "InvitationDeliveryFailed",
+  { invitationId: Schema.String },
+  { httpApiStatus: 502 },
+) {}
+
 export class EmailVerificationRequired extends Schema.TaggedError<EmailVerificationRequired>()(
   "EmailVerificationRequired",
   {},
@@ -534,6 +546,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationNotFound,
         OrganizationPermissionDenied,
         InvitationLimitReached,
+        InvitationDeliveryFailed,
         MembershipLimitReached,
         TeamsDisabled,
         TeamNotFound,

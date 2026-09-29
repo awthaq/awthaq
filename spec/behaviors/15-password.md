@@ -98,7 +98,16 @@ yield* client.password.confirmReset({ payload: { token, password: newPassword } 
 REQUIREMENT: `password.requestReset` MUST respond identically for a known and
              an unknown email; `password.confirmReset` MUST consume the reset
              token and revoke every other session for the account in the same
-             transaction that sets the new password.
+             transaction that sets the new password. `confirmReset` MUST
+             evaluate the password policy before consuming the token (a weak
+             password never burns it, and no breach-check network call runs
+             inside the transaction), MUST refuse a token of another purpose
+             or for an account with no password credential as `TokenConsumed`
+             (never a defect), and MUST mark the account's email verified —
+             the mailed token proves the same mailbox control `verifyEmail`
+             does. `requestReset` for an existing account with no password
+             credential MUST mail `reset-password-unavailable` (no token)
+             instead of a reset link.
 ```
 
 `usage-examples-v4.md` §6.1 states both halves: the request endpoint answers `202` unconditionally, so an attacker cannot use it to test which emails are registered, and confirmation both consumes the token and revokes other sessions "in the same transaction that sets the new password" — so a session an attacker obtained before the legitimate reset does not survive it. This is the reset-token half of the purpose-scoped, single-use Verification design that file 08 specifies for tokens generally.

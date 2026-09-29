@@ -972,6 +972,18 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           const user = userOpt.value;
           yield* Effect.forkDetach(
             Effect.gen(function* () {
+              // ARF-004: an OAuth-/passkey-only account has no password to
+              // reset — a token would only lead to a dead link. Looked up
+              // here, inside the fork, so both branches still cost the same
+              // on the response path (BEH-EA-064).
+              const account = yield* accounts.findByProviderSubject(
+                Accounts.PASSWORD_PROVIDER_ID,
+                user.id,
+              );
+              if (Option.isNone(account)) {
+                yield* mailer.send({ to: user.email, template: "reset-password-unavailable" });
+                return;
+              }
               const identifier = `${RESET_PREFIX}${user.id}`;
               const { value } = yield* verification.issue({
                 identifier,
@@ -1028,6 +1040,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
         const { identifier, value } = decoded.value;
+        // ARF-007: a verify-email token (or any other purpose's) is not a
+        // reset token — refuse it before it is rate-limited, consumed or
+        // sliced into a garbage user id.
+        if (!identifier.startsWith(RESET_PREFIX)) {
+          return yield* Effect.fail(new PasswordApi.TokenConsumed());
+        }
         // Keyed on the token's own decoded identifier (e.g.
         // `reset-password:<userId>`) rather than email — already available
         // for free at this point, and ties the limit to the specific
@@ -1036,6 +1054,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* rateLimit(`password:reset-confirm:${identifier}`, RATE_LIMITS.confirmReset);
         const userId = Users.UserId(identifier.slice(RESET_PREFIX.length));
 
+        // ARF-002: the policy (including the breach check's network call)
+        // is decided before the token is touched, so a weak password never
+        // burns the single-use token under any `Verification` store — and
+        // no network I/O happens while the transaction below is open.
+        const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
+        if (hints.length > 0) {
+          return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
+        }
+
         // ARF-001: BEH-EA-058/117 require consuming the token, setting the
         // new password, and revoking every other session to commit as one
         // unit — three independent commits previously left a crash-window
@@ -1043,11 +1070,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // the new password live while an attacker's pre-reset sessions
         // survived. Mirrors `OAuth.ts`'s own `sqlTransaction.withTransaction`
         // usage: only the transaction's own `SqlError` dies below —
-        // `TokenConsumed`/`WeakPassword` are real, expected outcomes and
-        // must still reach the caller as themselves (and, as a consequence
-        // of the wrap, a `WeakPassword` failure now rolls the token
-        // consumption back too, rather than burning a single-use token on
-        // a rejected password).
+        // `TokenConsumed` is a real, expected outcome and must still reach
+        // the caller as itself.
         yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
@@ -1056,24 +1080,16 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 Effect.catchTag("PlatformError", Effect.die),
               );
 
-              const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
-              if (hints.length > 0) {
-                return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
-              }
-
               const account = yield* accounts
                 .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
                 .pipe(
                   Effect.flatMap(
                     Option.match({
-                      // The token was only ever issued right after `signUp`
-                      // created this exact row (BEH-EA-113/117) — its
-                      // absence here is a defect, not a request-level
-                      // condition the caller can act on.
-                      onNone: () =>
-                        Effect.die(
-                          new Error(`awthaq: password credential missing for user ${userId}`),
-                        ),
+                      // ARF-004: `requestReset` no longer mints a token for a
+                      // credential-less account, but one issued before that
+                      // fix (or a credential unlinked since) can still land
+                      // here — a dead token, not a defect.
+                      onNone: () => Effect.fail(new PasswordApi.TokenConsumed()),
                       onSome: Effect.succeed,
                     }),
                   ),
@@ -1082,6 +1098,17 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               yield* accounts
                 .updateCredentialHash(account.id, Redacted.make(hash))
                 .pipe(Effect.orDie);
+
+              // ARF-008: consuming a token mailed to the address proves the
+              // same mailbox control `verifyEmail` demands — otherwise a
+              // user who resets is still refused at `signIn`. Idempotent.
+              yield* users
+                .verifyEmail(userId)
+                .pipe(
+                  Effect.catchTag("UserNotFound", () =>
+                    Effect.die(new Error(`awthaq: reset token's own user missing: ${userId}`)),
+                  ),
+                );
 
               // BEH-EA-117: every session, no exceptions — the caller
               // isn't authenticated at all here, so there is no "current"
@@ -1117,6 +1144,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
         const { identifier, value } = decoded.value;
+        // ARF-007: mirror of `confirmReset`'s purpose check.
+        if (!identifier.startsWith(VERIFY_PREFIX)) {
+          return yield* Effect.fail(new PasswordApi.TokenConsumed());
+        }
         // Keyed on the token's own decoded identifier, mirroring
         // `confirmReset`'s identical posture — already available for
         // free at this point, ties the limit to the specific account the

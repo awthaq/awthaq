@@ -12,6 +12,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
@@ -48,7 +49,10 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const buildLayer = (configOverrides: Partial<Organization.OrganizationConfigShape> = {}) =>
+const buildLayer = (
+  configOverrides: Partial<Organization.OrganizationConfigShape> = {},
+  mailerLayer: Layer.Layer<Mailer.Mailer> = Mailer.layerMemory,
+) =>
   Organization.Organization.layer.pipe(
     Layer.provide(Organization.config(configOverrides)),
     Layer.provide(AuthenticationLive),
@@ -60,7 +64,7 @@ const buildLayer = (configOverrides: Partial<Organization.OrganizationConfigShap
     Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(Mailer.layerMemory),
+    Layer.provideMerge(mailerLayer),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
 
@@ -465,6 +469,63 @@ describe("Organization", () => {
       assert.strictEqual(sent[0]?.to, "invitee@example.com");
       assert.strictEqual(sent[0]?.template, "organization-invite");
     }).pipe(Effect.provide(buildLayer())),
+  );
+
+  // EEM-002: the inviter is authenticated, so a mail outage is surfaced —
+  // with the invitation kept pending so a resend can succeed later.
+  it.effect("invite fails with InvitationDeliveryFailed when mail fails; resend succeeds once mail recovers", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+
+      const failure = yield* organization
+        .invite(owner, org.id, { email: "invitee@example.com", role: ["member"] })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "InvitationDeliveryFailed");
+
+      const pending = yield* organization.listInvitationsForOrganization(owner, org.id);
+      assert.strictEqual(pending.length, 1);
+      assert.strictEqual(pending[0]?.status, "pending");
+      assert.strictEqual(pending[0]?.id, failure._tag === "InvitationDeliveryFailed" ? failure.invitationId : "");
+
+      const resent = yield* organization.invite(owner, org.id, {
+        email: "invitee@example.com",
+        role: ["member"],
+        resend: true,
+      });
+      assert.strictEqual(resent.id, pending[0]?.id);
+      assert.strictEqual(resent.status, "pending");
+    }).pipe(
+      Effect.provide(
+        buildLayer(
+          {},
+          Layer.effect(
+            Mailer.Mailer,
+            Effect.gen(function* () {
+              const attempts = yield* Ref.make(0);
+              return Mailer.Mailer.of({
+                send: (message) =>
+                  Ref.getAndUpdate(attempts, (n) => n + 1).pipe(
+                    Effect.flatMap((n) =>
+                      n === 0
+                        ? Effect.fail(
+                            new Mailer.MailDeliveryFailed({
+                              template: message.template,
+                              reason: "provider down",
+                              retryable: true,
+                            }),
+                          )
+                        : Effect.void,
+                    ),
+                  ),
+                sent: Effect.succeed([]),
+              });
+            }),
+          ),
+        ),
+      ),
+    ),
   );
 
   it.effect("full invite -> accept round trip creates a real membership", () =>

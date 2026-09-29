@@ -132,7 +132,12 @@ const RateLimiterLive = RateLimiter.layer.pipe(
 const consoleMailer = Layer.succeed(
   Mailer.Mailer,
   Mailer.Mailer.of({
-    send: (message) => Effect.sync(() => console.log(`[mail] to=${message.to} subject=${message.subject}`)),
+    // A real adapter maps a provider error to `Mailer.MailDeliveryFailed`
+    // (`Effect.mapError`/`Effect.tryPromise` -> `new Mailer.MailDeliveryFailed({
+    // template: message.template, reason, retryable })`) instead of dying, and
+    // never logs `to` or `data` (they carry the recipient and the reset token).
+    send: (message) => Effect.sync(() => console.log(`[mail] template=${message.template}`)),
+    sent: Effect.succeed([]),
   }),
 );
 

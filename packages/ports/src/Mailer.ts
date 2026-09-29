@@ -24,18 +24,51 @@
 // which one it was.
 
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
+/**
+ * EOTS-010: a message carries the recipient and, in `data`, credentials
+ * (reset/verify tokens, links). Implementations MUST NOT log, trace or put
+ * `to` or `data` into an error or defect message — the only fields safe to
+ * report are `template` and the provider's own reason string. Secret values
+ * in `data` (tokens) are `Redacted`; an adapter unwraps them with
+ * `Redacted.value` only at the moment it renders the template.
+ */
 export interface MailMessage {
   readonly to: string;
   readonly template: string;
   readonly data?: Record<string, unknown>;
 }
 
+/**
+ * EEM-002: an expected operational failure — the provider is down, rate
+ * limiting, rejected the message — reported in the error channel rather than
+ * forced into a defect. Deliberately carries no recipient and no `data`
+ * (EOTS-010: no PII, no tokens): `template` and `reason` are what a log line
+ * or `auth.mail.failed` event may show. `retryable` lets the dispatcher tell
+ * a transient outage (retry with backoff) from a permanent rejection (give up
+ * at once). `cause` is the provider's own error for the adapter's logs; it is
+ * never rendered by awthaq.
+ */
+export class MailDeliveryFailed extends Data.TaggedError("MailDeliveryFailed")<{
+  readonly template: string;
+  readonly reason: string;
+  readonly retryable: boolean;
+  readonly cause?: unknown;
+}> {}
+
 export interface MailerShape {
-  readonly send: (message: MailMessage) => Effect.Effect<void>;
+  /**
+   * Every caller chooses a policy for `MailDeliveryFailed`: a caller with an
+   * enumeration-uniform response (password reset/verification) dispatches it
+   * in the background and logs the loss; a caller whose requester is
+   * authenticated (an organization invitation) surfaces it. `layerNoop`
+   * still dies — an unconfigured `Mailer` is a wiring defect, not an outage.
+   */
+  readonly send: (message: MailMessage) => Effect.Effect<void, MailDeliveryFailed>;
   readonly sent: Effect.Effect<ReadonlyArray<MailMessage>>;
 }
 
@@ -53,7 +86,8 @@ export const layerNoop: Layer.Layer<Mailer> = Layer.succeed(
     send: (message) =>
       Effect.die(
         new Error(
-          `awthaq: no Mailer configured — dropped a "${message.template}" message to ${message.to}. ` +
+          // EOTS-010: the template only — never the recipient.
+          `awthaq: no Mailer configured — dropped a "${message.template}" message. ` +
             "Provide a real Mailer layer (or Mailer.layerMemory for tests).",
         ),
       ),

@@ -240,6 +240,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.InvitationLimitReached
+    | OrganizationApi.InvitationDeliveryFailed
     | OrganizationApi.MembershipLimitReached
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.TeamNotFound
@@ -1845,12 +1846,22 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             Effect.map((now) => DateTime.addDuration(now, orgConfig.invitationExpiresIn)),
           );
 
+          // EEM-002: the inviter is authenticated, so a delivery failure is
+          // surfaced (the invitation stays pending; re-inviting with
+          // `resend: true` retries) rather than swallowed.
           const sendInvite = (record: InvitationRecords.InvitationRecord) =>
-            mailer.send({
-              to: record.email,
-              template: "organization-invite",
-              data: { token: record.id, organizationId, role: record.role },
-            });
+            mailer
+              .send({
+                to: record.email,
+                template: "organization-invite",
+                data: { token: record.id, organizationId, role: record.role },
+              })
+              .pipe(
+                Effect.catchTag(
+                  "MailDeliveryFailed",
+                  () => new OrganizationApi.InvitationDeliveryFailed({ invitationId: record.id }),
+                ),
+              );
 
           if (Option.isNone(alreadyMember) && Option.isSome(existing)) {
             if (orgConfig.cancelPendingInvitationsOnReInvite) {
@@ -1877,7 +1888,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             role: vetoed.role,
             expiresAt,
           });
-          yield* sendInvite(record);
+          // The record exists from here on, so its creation is published
+          // before the mail attempt: a delivery failure leaves a pending
+          // invitation, not a phantom one.
           yield* events.publish({
             _tag: "auth.organization.invitationCreated",
             invitationId: record.id,
@@ -1890,6 +1903,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             role: vetoed.role,
             invitationId: record.id,
           });
+          yield* sendInvite(record);
           return record;
         },
       );
