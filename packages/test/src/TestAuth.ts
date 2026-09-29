@@ -379,22 +379,67 @@ export interface TestFramework {
 const applyMigrations = (migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"]) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const readSchema = sql<{
+      readonly type: string;
+      readonly name: string;
+      readonly tbl_name: string;
+      readonly sql: string;
+    }>`
+      SELECT type, name, tbl_name, sql FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%' AND name NOT IN ('effect_sql_migrations', ${Migrations.pluginMigrationsTable})
+      ORDER BY name`;
     yield* Migrator.make({})({
       loader: CoreMigrations.coreMigrations,
       table: "effect_sql_migrations",
     });
+    // PV-252/INV-EA-016: what core alone created, before any plugin migration runs.
+    const coreSchema = yield* readSchema;
     yield* Migrations.run(migrations);
     const reapplied = yield* Migrations.run(migrations);
-    const schema = yield* sql<{
-      readonly type: string;
-      readonly name: string;
-      readonly sql: string;
-    }>`
-      SELECT type, name, sql FROM sqlite_master
-      WHERE name NOT LIKE 'sqlite_%' AND name NOT IN ('effect_sql_migrations', ${Migrations.pluginMigrationsTable})
-      ORDER BY name`;
-    return { schema, reapplied: reapplied.length };
+    const schema = yield* readSchema;
+    return { schema, coreSchema, reapplied: reapplied.length };
   }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
+
+/**
+ * PV-252/INV-EA-016: what the plugins' migrations did to the schema core created. A core table
+ * (or index) whose SQL changed was altered; anything new must hang off a table named under one
+ * of the composition's plugin ids, so an index on a core table, or a table outside every plugin's
+ * prefix, is refused too.
+ */
+const ownershipViolations = (
+  coreSchema: ReadonlyArray<{
+    readonly type: string;
+    readonly name: string;
+    readonly tbl_name: string;
+    readonly sql: string;
+  }>,
+  schema: ReadonlyArray<{
+    readonly type: string;
+    readonly name: string;
+    readonly tbl_name: string;
+    readonly sql: string;
+  }>,
+  pluginIds: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const core = new Map(coreSchema.map((row) => [`${row.type}:${row.name}`, row]));
+  const violations: Array<string> = [];
+  for (const [key, before] of core) {
+    const after = schema.find((row) => `${row.type}:${row.name}` === key);
+    if (after === undefined) violations.push(`core ${before.type} "${before.name}" was dropped`);
+    else if (after.sql !== before.sql) {
+      violations.push(`core ${before.type} "${before.name}" was altered`);
+    }
+  }
+  for (const row of schema) {
+    if (core.has(`${row.type}:${row.name}`)) continue;
+    if (!pluginIds.some((id) => TABLE_PREFIX_PATTERN(id).test(row.tbl_name))) {
+      violations.push(
+        `${row.type} "${row.name}" is on "${row.tbl_name}", which is outside every plugin's own table prefix`,
+      );
+    }
+  }
+  return violations;
+};
 
 const TABLE_PREFIX_PATTERN = (id: string): RegExp => new RegExp(`^${id}_`);
 
@@ -497,6 +542,38 @@ export const runPluginContractTests = <O, R = never>(
           );
         }
       });
+
+      // PV-252/INV-EA-016: a plugin migration may create its own tables and nothing else. A shared
+      // (core-owned) table is extended only through a declared extension point, never by an ALTER.
+      framework.it(
+        `${label}: migrations leave every core-owned table untouched (INV-EA-016)`,
+        async () => {
+          const [first, ...rest] = [...host, plugin];
+          if (first === undefined) {
+            framework.fail("runPluginContractTests: host plus plugin under test was empty");
+            return;
+          }
+          const outcome = await Effect.runPromise(
+            Effect.exit(applyMigrations(Auth.make([first, ...rest]).migrations)),
+          );
+          if (Exit.isFailure(outcome)) {
+            framework.fail(
+              `plugin "${plugin.id}"'s migrations failed to apply: ${Cause.pretty(outcome.cause)}`,
+            );
+            return;
+          }
+          const violations = ownershipViolations(
+            outcome.value.coreSchema,
+            outcome.value.schema,
+            [...host, plugin].map((installed) => installed.id),
+          );
+          if (violations.length > 0) {
+            framework.fail(
+              `plugin "${plugin.id}"'s migrations break INV-EA-016 (shared tables are core's): ${violations.join("; ")}`,
+            );
+          }
+        },
+      );
 
       const redaction = config.redaction;
       if (redaction !== undefined) {

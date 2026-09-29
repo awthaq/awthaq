@@ -185,8 +185,7 @@ Feature: The Persistence Stratum
       Then every table a plugin created is named "<plugin>_<table>" under its own id
       And the tables core created are unchanged
 
-    # @skip: INV-EA-016 has no enforcement today (spec/invariants.md: 'Planned: packages/sql/test/MigrationOwnership.test.ts', no such test) — Auth.make never validates what a migration's `up` alters; blocked by PV-252
-    @skip
+    # PV-252: enforced by `TestAuth.runPluginContractTests` (a plugin runs it against its own migrations).
     @REQ-EA-106
     Scenario: A plugin's migration that directly alters a core-owned shared table is rejected
       Given a plugin migration that attempts to ALTER TABLE "users" directly
@@ -194,7 +193,8 @@ Feature: The Persistence Stratum
       Then the migration is rejected
       And the shared table "users" is not altered
 
-    # @skip: INV-EA-016 has no enforcement today (spec/invariants.md: 'Planned: packages/sql/test/MigrationOwnership.test.ts', no such test) — Auth.make never validates what a migration's `up` alters; blocked by PV-252 (there is also no SessionClaims registry in the shipped code)
+    # @skip: the SessionClaims registry this scenario names does not exist; the shipped extension point for `users` is a
+    # plugin-declared user field (`AuthPlugin.userFields`, SAM-004), whose column the linker adds (PV-252)
     @skip
     @REQ-EA-107
     Scenario: A plugin extends a shared table only through a declared extension point
@@ -203,7 +203,8 @@ Feature: The Persistence Stratum
       Then the shared table's own schema is not modified by the plugin's migration
       And the extension is visible only through the declared extension point
 
-    # @skip: INV-EA-016 has no enforcement today (spec/invariants.md: 'Planned: packages/sql/test/MigrationOwnership.test.ts', no such test) — Auth.make never validates what a migration's `up` alters; blocked by PV-252
+    # @skip: needs the declared user-field kinds (`UserFields.ColumnKind`: string, number, boolean) asserted as the
+    # scalar limit; the migration-DDL half is REQ-EA-106 (PV-252)
     @skip
     @REQ-EA-108
     Scenario: A shared-table extension is limited to a primitive, nullable or defaulted scalar

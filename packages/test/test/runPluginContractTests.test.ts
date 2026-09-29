@@ -214,6 +214,74 @@ describe("runPluginContractTests — migrations are actually applied twice (SSMS
   });
 });
 
+// ---- PV-252 / INV-EA-016: a plugin migration may not alter a shared (core-owned) table ----
+
+describe("runPluginContractTests — migration ownership (PV-252, INV-EA-016)", () => {
+  const sqlExec = (statement: string) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.unsafe(statement);
+    });
+
+  const run = async (
+    migration: { readonly name: string; readonly up: ReturnType<typeof sqlExec> },
+    id = "own",
+  ) => {
+    const sink = new Recorder();
+    TestAuth.runPluginContractTests(
+      recordingFramework(sink),
+      () => composable(id, { id, migrations: [migration] }),
+      { options: [{}] },
+    );
+    await sink.settled();
+    return sink;
+  };
+
+  it("a migration that ALTERs a core table is rejected, naming the table", async () => {
+    const sink = await run({
+      name: "alter_users",
+      up: sqlExec("ALTER TABLE users ADD COLUMN own_flag TEXT"),
+    });
+    assert.isTrue(
+      sink.failed.some((message) => message.includes("INV-EA-016") && message.includes('"users"')),
+      sink.failed.join("\n"),
+    );
+  });
+
+  it("a migration that indexes a core table is rejected too", async () => {
+    const sink = await run({
+      name: "index_users",
+      up: sqlExec("CREATE INDEX own_users_name ON users (name)"),
+    });
+    assert.isTrue(
+      sink.failed.some((message) => message.includes("INV-EA-016") && message.includes("users")),
+      sink.failed.join("\n"),
+    );
+  });
+
+  it("a table created outside the plugin's own prefix is rejected", async () => {
+    const sink = await run({
+      name: "create_stray",
+      up: sqlExec("CREATE TABLE stray_table (id TEXT PRIMARY KEY)"),
+    });
+    assert.isTrue(
+      sink.failed.some(
+        (message) => message.includes("INV-EA-016") && message.includes("stray_table"),
+      ),
+      sink.failed.join("\n"),
+    );
+  });
+
+  it("a table under the plugin's own prefix passes the ownership check", async () => {
+    const sink = await run({
+      name: "create_own",
+      up: sqlExec("CREATE TABLE own_note (id TEXT PRIMARY KEY)"),
+    });
+    assert.deepStrictEqual(sink.failed, []);
+    assert.isTrue(sink.passed.some((name) => name.includes("INV-EA-016")));
+  });
+});
+
 // ---- BEH-EA-199: the redaction half ---------------------------------------------
 
 const NoBreachHttpClient = Layer.succeed(

@@ -368,7 +368,8 @@ if [[ -f "$SPEC_DIR/traceability.md" ]]; then
   done < <(grep -oE 'Planned: `[^`]+`' "$SPEC_DIR/traceability.md" | sed -E 's/^Planned: `//; s/`$//')
 
   if [[ $checked -eq 0 ]]; then
-    report SKIP "traceability Planned: paths" "no Planned: cells found to check"
+    # Nothing planned is the healthy end state (PV-252 closed the last planned file), not a skipped check.
+    report PASS "traceability Planned: paths" "no Planned: cells: nothing is planned but unwritten"
   elif [[ -n "$premature" ]]; then
     report FAIL "traceability Planned: paths" "already exist, update the banner:${premature}"
   else

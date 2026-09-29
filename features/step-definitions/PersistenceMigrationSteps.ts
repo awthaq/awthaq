@@ -15,12 +15,14 @@ import { Organization } from "@awthaq/organization";
 import { Passkey } from "@awthaq/passkey";
 import { Roles } from "@awthaq/roles";
 import { Scim } from "@awthaq/scim";
+import { TestAuth } from "@awthaq/test";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { assertTypeGate, cell, isObject, put, take, type World } from "./FoundationsWorld.ts";
@@ -494,5 +496,79 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
 
   Then("the tables core created are unchanged", function* () {
     assert.equal((yield* take(strings)).at(-1), "true");
+  });
+
+  // ---- PV-252/REQ-EA-106: `runPluginContractTests` refuses a migration that alters a core table ----
+
+  Given(
+    "a plugin migration that attempts to ALTER TABLE {string} directly",
+    function* (table: string) {
+      yield* put(strings, [table]);
+    },
+  );
+
+  When("the plugin's migrations are validated", function* () {
+    const [table] = yield* take(strings);
+    assert.ok(table !== undefined);
+    const failed: Array<string> = [];
+    const pending: Array<Promise<void>> = [];
+    TestAuth.runPluginContractTests(
+      {
+        describe: (_name, body) => body(),
+        it: (name, body) => {
+          pending.push(
+            Promise.resolve()
+              .then(body)
+              .catch((error: unknown) => {
+                failed.push(`${name} :: ${error instanceof Error ? error.message : String(error)}`);
+              }),
+          );
+        },
+        fail: (message) => {
+          throw new Error(message);
+        },
+      },
+      () => ({
+        id: "own",
+        apiVersion: 1,
+        contract: { identifier: "auth", groups: { own: HttpApiGroup.make("own") } },
+        tables: [],
+        dependsOn: [],
+        layer: Layer.empty,
+        migrations: [
+          {
+            name: "alter_shared_table",
+            up: Effect.flatMap(SqlClient.SqlClient, (sql) =>
+              sql.unsafe(`ALTER TABLE ${table} ADD COLUMN own_flag TEXT`),
+            ),
+          },
+        ],
+      }),
+      { options: [{}] },
+    );
+    yield* Effect.promise(() => Promise.all(pending));
+    yield* put(strings, [table, ...failed]);
+  });
+
+  Then("the migration is rejected", function* () {
+    const [table, ...failures] = yield* take(strings);
+    assert.ok(
+      failures.some((message) => message.includes("INV-EA-016")),
+      `the ownership check failed for ${table}: ${failures.join(" | ")}`,
+    );
+    yield* put(strings, [table ?? "", ...failures]);
+  });
+
+  Then("the shared table {string} is not altered", function* (table: string) {
+    // The check runs the migration on its own throwaway database, so the composition's database is
+    // never touched; the failure names the table it caught being altered.
+    const [, ...failures] = yield* take(strings);
+    assert.ok(failures.some((message) => message.includes(`"${table}"`)));
+    const untouched = yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+      return yield* sql<{ readonly name: string }>`SELECT name FROM pragma_table_info(${table})`;
+    }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
+    assert.ok(!untouched.some((column) => column.name === "own_flag"));
   });
 });
