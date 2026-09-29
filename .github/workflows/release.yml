@@ -1,17 +1,14 @@
-# Shipping-gap map (.scratch/shipping-gaps), ticket 28: wired per
-# spec/process/definitions-of-done.md's gate 12 (npm trusted publishing via
-# OIDC, no long-lived tokens, Sigstore provenance) — not yet exercised. Every
-# `@awthaq/*` package is still `"private": true`, so `changeset publish` has
-# nothing publishable; the workflow becomes live once a package is made public
-# and npm has a trusted publisher configured for this repository and this
-# workflow file (npmjs.com -> package -> Settings -> Trusted publishers), which is
-# manual, out-of-band setup no agent can do. Until then it only opens/updates the
-# "Version Packages" pull request. See canary.yml for the first-publish rehearsal.
+# Wired per spec/process/definitions-of-done.md's gate 12 (npm trusted publishing via
+# OIDC, no long-lived tokens, Sigstore provenance). MANUAL ONLY while the project is in
+# development: nothing is published from a push. Run it from the Actions tab when a release
+# is intended; it then opens/updates the "Version Packages" pull request, and merging that
+# PR publishes every non-private package (today only `@awthaq/ports`, whose npm trusted
+# publisher must name THIS workflow file, not canary.yml). See canary.yml for the
+# first-publish rehearsal, which is switched off by AWTHAQ_CANARY_ENABLED=false.
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,6 +27,8 @@ jobs:
 
   release:
     needs: check
+    # A manual run from any other ref would version and publish that ref.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
