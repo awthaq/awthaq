@@ -57,3 +57,5 @@ When implementing M7, model the challenge as its own branded type (`TwoFactorCha
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `mfa-two-factor`. Duplicate of `THS-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/two-factor/src/index.ts:8`. Full dossier: `.plan/slices/07-password-mfa.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `THS-001-totp-hotp-mfa-specialist` — closed by its fix (see that issue's Resolved comment).

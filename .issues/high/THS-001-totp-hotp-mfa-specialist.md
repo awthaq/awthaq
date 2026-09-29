@@ -3,7 +3,7 @@ ID: "THS-001"
 Title: "Entire two-factor/TOTP domain is an unimplemented placeholder"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "two-factor"
 Source: "packages/two-factor/src/index.ts:10"
 Auditor: "totp-hotp-mfa-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `two-factor` · reported by **TOTP/HOTP MFA Specialist** (`totp-hotp-mfa-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [MFA/two-factor subsystem build-out](../../.scratch/resolve-ready-for-human-findings/issues/05-mfa-two-factor-subsystem.md) — a pure RFC 4226/6238 TOTP algorithm module (`packages/two-factor/src/Totp.ts`) property-tested against RFC 4226 Appendix D, plus the full plugin shell (enable/confirm/verify/verifyRecovery) tapping ticket 3's `Hooks.BeforeSessionIssue`. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mfa-two-factor`. Evidence at HEAD ec065a7: `packages/two-factor/src/index.ts:8`. Fix: Build the TwoFactor plugin (ticket 05 §1) in 12 implementable steps: pure TOTP module, encrypted secret + hashed recovery-code stores, branded single-use challenge over Verification, enable/confirm/verify/verifyRecovery/disable/regenerate, contract, opt-in hook-tap layers enforced by the type system, events, erasure, spec + BDD. (effort XL). Full dossier: `.plan/slices/07-password-mfa.md`.
+
+**Resolved (2026-09-29):** Built @awthaq/two-factor: pure Totp (RFC 4226/6238 vectors), Encryption-port envelope secret (AAD two_factor_secret:<userId>, lazy re-encrypt), PasswordHasher-hashed recovery codes (single CAS spend), branded ConsumedChallenge -> FactorProof -> VerifiedChallenge, enable/confirm/verify/verifyRecovery/disable/regenerate/status over HTTP, fail-closed gates (TwoFactor.sessionGate / credentialResetGate; TwoFactorGateInstalled and TwoFactorResetGuard markers make omission a compile error, noCredentialReset is the explicit opt-out), memory+SQL stores and migrations, erasure and export contributions. Tests: packages/two-factor/test (TwoFactor, Totp, RecoveryCodes, Store, types and HTTP suites, incl. TwoFactor.types, AuthHttp end to end divert/verify/recovery/reset). Spec: BEH-EA-233..239, ADR-EA-020. Gates: typecheck, lint (no new errors), check:error-tags, spec:verify:strict, check:readmes. Deferred: a Gherkin feature (see BCR-010).

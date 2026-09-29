@@ -3,7 +3,7 @@ ID: "BAM-007"
 Title: "two-factor, magic-link, and api-key plugins are empty placeholders — no migration target for MFA users"
 Level: high
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "two-factor"
 Source: "packages/two-factor/src/index.ts:10"
 Auditor: "better-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `api` · `two-factor` · reported by **better-auth Migration Specialist** (`better-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [MFA/two-factor subsystem build-out](../../.scratch/resolve-ready-for-human-findings/issues/05-mfa-two-factor-subsystem.md) — `two-factor` and `magic-link` both ship now per the design above; `api-key` is explicitly out of scope for this ticket and deferred to ticket 10 (`machine-service-identity-m2m`). Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passwordless-magic-link-email-otp`. Evidence at HEAD ec065a7: `packages/two-factor/src/index.ts:8`. Fix: Ship `@awthaq/magic-link`'s MagicLink plugin on the Verification substrate, POST-only consumption, fragment-carried token, consulting BeforeSessionIssue (ARF-005 Fix A). (effort L). Full dossier: `.plan/slices/07-password-mfa.md`.
+
+**Resolved (2026-09-29):** Shipped @awthaq/magic-link MagicLink on Verification: POST /magic-link/request (always 202) and POST /magic-link/verify only; no GET route; token in the URL fragment (<baseUrl>/magic-link#token=), random public id, address in the row payload, no table; consults BeforeSignIn/BeforeSessionIssue and diverts to TwoFactorRequired; amr [email]. Tests: packages/magic-link/test/MagicLink.test.ts, AuthHttp.test.ts (26 tests incl. contract). BEH-EA-240..243. Package README documents the interstitial page.

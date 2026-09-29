@@ -3,7 +3,7 @@ ID: "AAPS-006"
 Title: "SessionViewExtension slot from ADR-EA-012 never declared; no channel for session trust attributes"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/SubjectResolver.ts:5"
 Auditor: "abac-attribute-policy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `qadi` · reported by **ABAC Attribute-Based Policy Specialist** (`abac-attribute-policy-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Declare the SessionViewExtension slot now (even with a pass-through default) so 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `session-assurance-channel`. Evidence at HEAD ec065a7: `packages/qadi/src/SubjectResolver.ts:88`. Fix: Declare the ADR-EA-012 SessionViewExtension slot and carry session-trust facts (authenticatedAt, amr, derived aal) onto the principal and into AuthSubject.attributes through one mapping point. (effort L). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Session-trust facts now travel on one path: UserPrincipal.authenticatedAt and amr, derived assurance (packages/core/src/Assurance.ts: aal1/aal2/aal3, restricted sms) and SubjectResolver.principalAttributes into AuthSubject.attributes (used by @awthaq/roles). Decision (2026-09-29): the ADR-EA-012 SessionViewExtension slot is deferred (Plan note) - nothing in this program needs a session-view field the principal mapping does not already carry; revisit if a client needs assurance on the session DTO. BEH-EA-231. Tests: Assurance.test.ts, qadi/roles tests.

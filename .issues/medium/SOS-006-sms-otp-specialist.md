@@ -3,7 +3,7 @@ ID: "SOS-006"
 Title: "SIM-swap / NIST restricted-authenticator policy exists only in research; zero ADRs, decision explicitly undecided in spec"
 Level: medium
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/06-two-factor-totp.md:106"
 Auditor: "sms-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `—` · reported by **SMS OTP Specialist** (`sms-otp-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Promote research/07-passwords-2fa.md's recommendation 7 into a spec/decisions AD
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mfa-two-factor-hardening`. Evidence at HEAD ec065a7: `spec/models/06-two-factor-totp.md:106`. Fix: Codify decision ticket 05 §3 as ADR-EA-021: SMS OTP is a separate, explicitly restricted plugin over the EmailOtp channel substrate, never an account's sole factor, emitting a `factor.sms.used` audit event, with a SIM-swap risk-indicator hook as a documented extension point. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ADR-EA-021 (spec/decisions/021-sms-otp-restricted-plugin.md): SMS OTP is a separate, explicitly restricted plugin over the EmailOtp substrate, method recorded as sms (Sessions.AuthMethod gained sms, Assurance.isRestrictedFactor), never an account's sole factor; SIM-swap indicator hook as a documented extension. spec:verify:strict passes.
