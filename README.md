@@ -2,7 +2,7 @@
 
 *Effect Native Auth* — an authentication runtime for TypeScript, built natively on Effect v4, with authorization delegated to the sibling library [qadi](../qadi). The name comes from Arabic أوثق (*awthaq*, "most trustworthy/reliable") — the original working name, `effect-auth`, was already taken on npm by an abandoned package (see `research/01-effect-ecosystem.md`).
 
-**Status:** actively implemented, pre-`1.0`/pre-publish. `spec/` is still the canonical specification — user requirements, architectural decisions, functional behaviors, invariants, and a traceability matrix tying them together — but it is no longer just a plan: every plugin below has a real, tested implementation under `packages/`. See [`spec/roadmap.md`](spec/roadmap.md) for the milestone plan and [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md) for the most recent gap-closure pass against it.
+**Status:** actively implemented, pre-`1.0`/pre-publish. `spec/` is still the canonical specification — user requirements, architectural decisions, functional behaviors, invariants, and a traceability matrix tying them together — but it is no longer just a plan: every plugin in [Plugins](#plugins) has a real, tested implementation under `packages/`, except `two-factor` and `magic-link`, which are placeholder packages with no exports yet. SAML (service provider only), an OIDC provider and device authorization are specified in `spec/`, not built. See [`spec/roadmap.md`](spec/roadmap.md) for the milestone plan and what has shipped against it, and [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md) for the most recent gap-closure pass.
 
 No package is published to npm yet (`packages/*/package.json` are all still `"private": true` — see [Publishing status](#publishing-status)). This quickstart runs the library from a clone of this repository.
 
@@ -24,6 +24,8 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 | Path | What it is |
 |---|---|
 | [`packages/`](packages) | The implementation, one package per `@awthaq/*` name. Foundations: `@awthaq/core` (domain services), `@awthaq/api` and `@awthaq/server` (the HTTP contract stratum), `@awthaq/sql` (persistence), `@awthaq/ports` (adapters — password hashing, mail, encryption, rate limiting, WebAuthn, key management), `@awthaq/qadi` (authorization over qadi) and `@awthaq/test` (the memory backend and test harness). Plugins: `@awthaq/password`, `@awthaq/oauth`, `@awthaq/organization`, `@awthaq/roles`, `@awthaq/admin`, `@awthaq/passkey`, `@awthaq/jwt`, `@awthaq/api-key`, `@awthaq/scim`, plus `@awthaq/magic-link` and `@awthaq/two-factor` (placeholders not yet built out). Clients: `@awthaq/client`, `@awthaq/react`, `@awthaq/next`. Tooling: `@awthaq/cli` and the migration importers `@awthaq/migrate-auth0`, `@awthaq/migrate-better-auth`, `@awthaq/migrate-firebase`. Each package's own README says what it ships. `pnpm workspace:check` fails when this list falls behind `packages/`. |
+| [`examples/`](examples) | Runnable compositions: [`memory-server`](examples/memory-server/README.md) (Password + Organization + Roles over the memory backend, no database) and [`plugin-template`](examples/plugin-template) (the plugin [`docs/plugin-authoring.md`](docs/plugin-authoring.md) walks through). |
+| [`docs/`](docs) | Guides: [plugin authoring](docs/plugin-authoring.md) and [migrations](docs/migrations). |
 | [`features/`](features) | The Gherkin/BDD acceptance suite (`spec/behaviors/` scenarios, executed for real against each plugin's HTTP surface). |
 | [`spec/`](spec/README.md) | The canonical specification. Read this first for *why* something is built the way it is. |
 | [`research/`](research/README.md) | The evidence base: 100 design questions answered by domain research, plus a five-part literature review on plugin-system science. Cited from `spec/decisions/` and `spec/behaviors/` as supporting evidence — not itself normative. |
@@ -32,46 +34,72 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 
 ## Quickstart
 
-This is a single, complete, copy-pasteable server — no separate example app. It composes:
+> **No database handy?** [`examples/memory-server`](examples/memory-server/README.md) runs Password, Organization and Roles over the memory backend with no `DATABASE_URL`, no migration and no keys (`pnpm install`, then `node --experimental-strip-types index.ts` inside it; it listens on `:3001`). Its walkthrough completes a sign-in the same way this one does, with the development mailer.
+
+This is a single, complete, copy-pasteable server — no separate example app. The code block below is compiled by `pnpm typecheck` (`packages/sql/test/fixtures/readme-quickstart.ts`, kept identical to it by `packages/sql/test/ReadmeQuickstart.test.ts`), so it cannot drift from the API. It composes:
 
 - the **Password** plugin (sign-up, sign-in) via `Auth.make`,
 - the core **Session**/**Account** HTTP surface (list/revoke sessions, update profile, delete account), which `Auth.make(...).api` always carries beside the plugins' groups (its handlers are `AuthHttp.coreHandlers` — see the note at the bottom of this section),
-- a real, migrated **Postgres** backend via `@effect/sql-pg`,
+- a real, migrated **Postgres** backend via `@effect/sql-pg`, its URL read through Effect's `Config` (`DATABASE_URL`),
+- the cross-cutting services the core flows need (hook points, account erasure and export, the audit log, CSRF protection, a client-address resolver, one SQL transaction domain),
 - and a real listening HTTP server via `@effect/platform-node`.
 
 Save this as `server.ts` inside a clone of this repository (it imports workspace packages by name, so it needs to run where those resolve — see [Publishing status](#publishing-status)):
 
 ```ts
 import { createServer } from "node:http";
-import { Auth, AuthEvents, RateLimits, Sessions, Users, Accounts, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  Auth,
+  AuthEvents,
+  DataExport,
+  Erasure,
+  Hooks,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
-import { Encryption, KeyProvider, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import {
+  ClientAddress,
+  Encryption,
+  KeyProvider,
+  Mailer,
+  PasswordHasher,
+  RateLimiter,
+  SqlTransaction,
+} from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { Authentication, AuthHttp, BodyLimit } from "@awthaq/server";
-import { NodeCrypto, NodeHttpServer, NodeRuntime } from "@effect/platform-node";
-import { PgClient } from "@effect/sql-pg";
+import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as PgClient from "@effect/sql-pg/PgClient";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { Migrator } from "effect/unstable/sql";
+import * as Migrator from "effect/unstable/sql/Migrator";
 
 // 1. Compose the Password plugin. `Auth.make` validates the plugin tuple at
 //    the type level (no duplicate ids, no missing `dependsOn`) and folds
 //    every plugin's own HttpApi contract and Layer into one `api`/`layer`
-//    pair — here that's just Password, but the same call takes
-//    `[Password, OAuth, Organization, Admin, Passkey, Jwt]` unchanged.
+//    pair — here that's just Password, but the same call takes more
+//    (`[Password, OAuth, Passkey, Organization, Roles, Admin, Jwt, ...]`) once
+//    you provide the ports and migrations each one adds (see "Plugins").
 const auth = Auth.make([Password.Password]);
 
 // 2. A real Postgres connection and a real, forward-only migration run —
 //    the same `Migrator` and migration set `packages/sql`'s own contract
 //    tests run against SQLite and Postgres alike.
-const SqlLive = PgClient.layer({ url: Redacted.make(process.env.DATABASE_URL!) });
+const SqlLive = PgClient.layerConfig({ url: Config.Redacted("DATABASE_URL") });
 const Migrated = Layer.effectDiscard(
   Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provide(SqlLive));
@@ -92,17 +120,19 @@ const RepositoriesLive = Layer.mergeAll(
   Repositories.SessionsRepositoryLive,
   Repositories.VerificationRepositoryLive,
   Repositories.VerificationReservationsRepositoryLive,
+  Repositories.AuditLogRepositoryLive,
 ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 
 // 4. The domain services, backed by those repositories instead of memory.
+//    `AuthEvents` publishes every event into the durable `AuditLog` table.
 const CoreLive = Layer.mergeAll(
   Users.layerSql,
   Accounts.layerSql,
   Sessions.layerSql,
   Verification.layerSql,
 ).pipe(
+  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerSql))),
   Layer.provideMerge(RepositoriesLive),
-  Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -126,35 +156,55 @@ const RateLimiterLive = RateLimiter.layer.pipe(
 );
 
 //    Swap the remaining ports for your own: a real mailer
-//    (SMTP/SES/Resend/...) in place of this console stand-in, and — if you
-//    want to tune the password policy — `Password.config(...)`. Breach
-//    screening (HIBP, k-anonymity) is on by default and fails open;
-//    `Password.config({ breachCheck: false })` turns it off.
-const consoleMailer = Layer.succeed(
-  Mailer.Mailer,
-  Mailer.Mailer.of({
-    // A real adapter maps a provider error to `Mailer.MailDeliveryFailed`
-    // (`Effect.mapError`/`Effect.tryPromise` -> `new Mailer.MailDeliveryFailed({
-    // template: message.template, reason, retryable })`) instead of dying, and
-    // never logs `to` or `data` (they carry the recipient and the reset token).
-    send: (message) => Effect.sync(() => console.log(`[mail] template=${message.template}`)),
-    sent: Effect.succeed([]),
-  }),
+//    (SMTP/SES/Resend/...) in place of `Mailer.layerConsole` — which logs every
+//    message with its token so a local run needs no inbox, and must never reach
+//    production — and, if you want to tune the password policy,
+//    `Password.config(...)`. Breach screening (HIBP, k-anonymity) is on by
+//    default and fails open; `Password.config({ breachCheck: false })` turns it off.
+//    A real adapter maps a provider error to `Mailer.MailDeliveryFailed` and never
+//    logs `to` or `data`: they carry the recipient and the verification or reset token.
+const consoleMailer = Mailer.layerConsole;
+
+// 6. Cross-cutting services every core flow needs: the hook points (and the
+//    erasure/export registries plugins contribute to), account erasure and
+//    export over them, one SQL transaction domain, the client-address
+//    resolver (`layerDirect` reads the socket peer; behind a proxy use
+//    `layerTrustedProxy`), and CSRF protection keyed by `AWTHAQ_CSRF_SECRET`
+//    (at least 32 bytes; see "Configuration").
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(Csrf.layerConfig),
+  Layer.provide(NodeCrypto.layer),
+);
+const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect, SqlTransaction.layerSql),
+  ),
 );
 
-// 6. Mount the composed api onto the router — `AuthHttp.routes` registers
+// 7. Mount the composed api onto the router — `AuthHttp.routes` registers
 //    with whatever `HttpRouter` is ambient (no gateway/adapter layer).
 //    `auth.api` is one document: the plugins' groups plus core's own
 //    Session/Account groups, whose handlers are `AuthHttp.coreHandlers`.
-const AppLayer = Layer.mergeAll(
-  AuthHttp.routes(auth.api, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(AuthHttp.coreHandlers),
-    Layer.provide(auth.layer),
+//    The OpenAPI document and the Scalar UI are unauthenticated, so they are
+//    off unless `AWTHAQ_EXPOSE_DOCS=true` (`awthaq openapi` exports the
+//    document offline).
+const ExposeDocs = Config.Boolean("AWTHAQ_EXPOSE_DOCS").pipe(Config.withDefault(false));
+const RoutesLive = Layer.unwrap(
+  Effect.map(ExposeDocs, (expose) =>
+    AuthHttp.routes(auth.api, expose ? { openapiPath: "/openapi.json" } : {}).pipe(
+      Layer.provide(AuthHttp.coreHandlers),
+      Layer.provide(auth.layer),
+    ),
   ),
-  AuthHttp.docs(auth.api),
-).pipe(
+);
+const DocsLive = Layer.unwrap(
+  Effect.map(ExposeDocs, (expose) => (expose ? AuthHttp.docs(auth.api) : Layer.empty)),
+);
+const AppLayer = Layer.mergeAll(RoutesLive, DocsLive).pipe(
   Layer.provideMerge(AuthenticationLive),
+  Layer.provideMerge(ServicesLive),
   Layer.provideMerge(CoreLive),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(
     Layer.mergeAll(PasswordHasher.layerArgon2id, consoleMailer, RateLimiterLive).pipe(
       Layer.provideMerge(NodeCrypto.layer),
@@ -170,7 +220,7 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(HttpRouter.layer),
 );
 
-// 7. `HttpRouter.serve` is the same real serving path `AuthHttp.ts`'s own
+// 8. `HttpRouter.serve` is the same real serving path `AuthHttp.ts`'s own
 //    header comment documents alongside `HttpRouter.toWebHandler` (used
 //    instead in tests, and in any Fetch-native runtime — Bun, Deno,
 //    Cloudflare Workers — since it returns a portable `(Request) =>
@@ -193,41 +243,57 @@ Run migrations and start it:
 export DATABASE_URL="postgres://user:pass@localhost:5432/awthaq"
 export AWTHAQ_ENCRYPTION_KEYS="[{\"kid\":\"k1\",\"key\":\"$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")\"}]"
 export AWTHAQ_ENCRYPTION_KEY_ID="k1"
+export AWTHAQ_CSRF_SECRET="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")"
 node --experimental-strip-types server.ts
 ```
 
 ## Running it
 
+Every unsafe request (`POST`, `PATCH`, `DELETE`) is CSRF-protected: it must echo the `__Host-csrf` cookie in an `x-csrf-token` header (a request carrying an `Authorization` header is exempt). Any response from a protected group sets that cookie, so fetch one first. The development mailer in the quickstart (`Mailer.layerConsole`) logs each message, including the verification token (`token=verify-email:...`), to the server's stdout; `sign-in` refuses (`403 EmailNotVerified`) until that token is posted to `/verify-email`.
+
 ```sh
-curl -i -X POST http://localhost:3000/password/sign-up \
-  -H 'content-type: application/json' \
-  -d '{"email":"ada@example.com","password":"correct horse battery staple"}'
+BASE=http://localhost:3000
+PASSWORD='kettle-orbit-lantern-92-plover'   # sign-up screens against known breaches, so avoid famous passphrases
+CSRF=$(curl -si $BASE/session | tr -d '\r' | grep -i '^set-cookie: __Host-csrf' | sed -E 's/^[^=]*=([^;]+);.*/\1/')
+
+curl -i -X POST $BASE/password/sign-up \
+  -H 'content-type: application/json' -H "x-csrf-token: $CSRF" -H "cookie: __Host-csrf=$CSRF" \
+  -d "{\"email\":\"ada@example.com\",\"password\":\"$PASSWORD\"}"
 # HTTP/1.1 200 OK
-# set-cookie: __Host-session=...; Path=/; Secure; HttpOnly; SameSite=Lax
-# {"id":"...","createdAt":"...","lastActiveAt":"...","expiresAt":"...","userAgent":null,"current":true}
+# set-cookie: __Host-session=...; Max-Age=2591999; Path=/; HttpOnly; Secure; SameSite=Strict
+# {"id":"...","createdAt":"...","lastActiveAt":"...","expiresAt":"...","userAgent":"curl/...","amr":["pwd"],"current":true}
 
-curl -i -X POST http://localhost:3000/password/sign-in \
-  -H 'content-type: application/json' \
-  -d '{"email":"ada@example.com","password":"correct horse battery staple"}'
+# the server log now shows an 'awthaq mail' line with template=verify-email and the token
+curl -i -X POST $BASE/verify-email \
+  -H 'content-type: application/json' -H "x-csrf-token: $CSRF" -H "cookie: __Host-csrf=$CSRF" \
+  -d '{"token":"<token from the server log>"}'
+# HTTP/1.1 204 No Content
 
-curl -i -X PATCH http://localhost:3000/user \
-  -H 'content-type: application/json' \
-  -H 'cookie: __Host-session=<token from set-cookie above>' \
+curl -i -X POST $BASE/password/sign-in \
+  -H 'content-type: application/json' -H "x-csrf-token: $CSRF" -H "cookie: __Host-csrf=$CSRF" \
+  -d "{\"email\":\"ada@example.com\",\"password\":\"$PASSWORD\"}"
+# HTTP/1.1 200 OK, with a fresh __Host-session cookie
+
+curl -i -X PATCH $BASE/user \
+  -H 'content-type: application/json' -H "x-csrf-token: $CSRF" \
+  -H "cookie: __Host-csrf=$CSRF; __Host-session=<token from set-cookie above>" \
   -d '{"name":"Ada Lovelace"}'
-# {"id":"...","email":"ada@example.com","emailVerified":false,"name":"Ada Lovelace"}
+# {"id":"...","identity":{"_tag":"Email","email":"ada@example.com","emailVerified":true},"name":"Ada Lovelace","image":null}
 
-curl -i -X DELETE http://localhost:3000/user \
-  -H 'cookie: __Host-session=<token>'
+curl -i -X DELETE $BASE/user \
+  -H "x-csrf-token: $CSRF" -H "cookie: __Host-csrf=$CSRF; __Host-session=<token>"
 # HTTP/1.1 204 No Content
 ```
 
-This exact composition — `Auth.make([Password])` over a real, migrated SQL backend, serving sign-up, sign-in, profile update, and account deletion through a real listening HTTP server — was run as a smoke test while writing this document (against an in-memory SQLite `SqlClient` locally, since `packages/sql`'s domain layers are dialect-agnostic and no local Postgres was available in that environment; CI's `postgres:16` service, per `.github/workflows/check.yml`, is the first real signal against Postgres itself specifically — the same caveat `packages/sql/test/Repositories.postgres.test.ts` documents for its own Postgres suite). Swapping `SqliteClient.layer({...})` for `PgClient.layer({ url })` is the only change between the two — `Users.layerSql`/`Accounts.layerSql`/`Sessions.layerSql`/`Verification.layerSql` never see which dialect is underneath.
+The session cookie is `SameSite=Strict` (BEH-EA-055), so a browser does not send it on a cross-site top-level navigation. The provider's redirect back to the OAuth callback is exactly such a navigation, so the OAuth plugin correlates it with its own ten-minute `SameSite=Lax` `__Host-oauth-state` cookie (`packages/oauth/src/OAuth.ts`; an opaque correlation value, the flow state itself lives server-side) rather than with the session cookie.
+
+This exact composition was run end to end against an in-memory SQLite `SqlClient` while writing this section (sign-up, verify, sign-in, profile update, export and delete all answered as shown; with `AWTHAQ_EXPOSE_DOCS` unset, `/openapi.json` and `/docs` answered `404`). `packages/sql`'s domain layers are dialect-agnostic, so swapping `PgClient.layerConfig({ url })` for `SqliteClient.layer({ filename })` is the only change between the two; CI's `postgres:16` service (`.github/workflows/check.yml`) is the signal against Postgres itself, the same caveat `packages/sql/test/Repositories.postgres.test.ts` documents. Nothing here has been run against a real Postgres by hand.
 
 ## Swapping in Postgres for real
 
 `packages/sql` ships one migration set (`CoreMigrations.coreMigrations`, in `@awthaq/sql`) that branches per dialect internally (`sql.onDialectOrElse`), so the same `Migrator.make({})({ loader: CoreMigrations.coreMigrations })` call in the quickstart above brings a fresh Postgres database to schema-equality with what `packages/sql/src/Models.ts` declares — no separate Postgres-specific schema file to maintain. See [`.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md`](.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md) for how this was proven (a dedicated contract-test suite runs against SQLite, then Postgres, with the same test bodies).
 
-Plugin-specific tables (`Organization`, `Admin`, `Passkey`, `Jwt` each own their own schema in their own package) are not part of `CoreMigrations` — see each plugin's own package for its migrations.
+Plugin-specific tables (`Organization`, `Admin`, `Passkey`, `Jwt`, `ApiKey`, `Scim` each own their own schema in their own package) are not part of `CoreMigrations` — see each plugin's own package for its migrations.
 
 ## Configuration
 
@@ -236,10 +302,14 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 | Port | Real layer used above | Other options |
 |---|---|---|
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt`; `PasswordHasherWorkerPool.layerArgon2id`/`layerScrypt` run the KDF in worker threads (Node), see [Password hashing](#password-hashing) |
-| `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
+| `Mailer` | `Mailer.layerConsole`, a development mailer that logs the verification token (never in production: the token is a credential) | bring your own (`Mailer.Mailer.of({ send, sent })`, any provider); `Mailer.layerMemory` records mail for tests |
 | `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `RateLimiter.layerMemory` (the bounded, single-process store in one line — the default when you have one instance), or `layer` over your own `RateLimiterStore`; `layerPermissive` disables limiting and logs a warning when a rule runs against it (tests only) |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
 | `Csrf.CsrfConfig` | `Csrf.layerConfig` (`AWTHAQ_CSRF_SECRET`, at least 32 bytes; optional `AWTHAQ_CSRF_ALLOWED_ORIGINS`, comma-separated) | `Layer.succeed(Csrf.CsrfConfig, { secret, allowedOrigins })` with a secret loaded from your own secret store |
+
+### OpenAPI and the docs UI
+
+`AuthHttp.docs` serves a Scalar UI and `AuthHttp.routes(api, { openapiPath })` serves the OpenAPI document (BEH-EA-084); both are unauthenticated. The quickstart therefore mounts them only when `AWTHAQ_EXPOSE_DOCS=true`. A production composition should omit `AuthHttp.docs` or put it behind its own authentication, and can export the document offline with `awthaq openapi` (BEH-EA-205).
 
 ### Password hashing
 
@@ -335,13 +405,28 @@ Expiry is a read-time rejection, so expired rows stay until something deletes th
 |---|---|---|
 | Password | `@awthaq/password` | Sign-up, sign-in, password reset, email verification, change-password, optional breach checking |
 | OAuth | `@awthaq/oauth` | Third-party provider sign-in and account linking |
-| Organization | `@awthaq/organization` | Multi-tenant organizations, membership, roles |
-| Admin | `@awthaq/admin` | Impersonation, session force-stop, admin session listing |
-| SCIM | `@awthaq/scim` | Inbound SCIM 2.0 provisioning: directory sync of users and groups, deactivation ends sessions |
 | Passkey | `@awthaq/passkey` | WebAuthn registration and authentication |
-| Jwt | `@awthaq/jwt` | JWT issuance/verification for stateless callers |
+| Jwt | `@awthaq/jwt` | JWT issuance/verification for stateless callers, JWKS with key rotation, a lite verifier for downstream services |
+| ApiKey | `@awthaq/api-key` | Long-lived API keys and `client_credentials` service tokens |
+| Organization | `@awthaq/organization` | Multi-tenant organizations, membership, invitations, teams, roles |
+| Roles | `@awthaq/roles` | Role assignment flattened through qadi's role DAG into the `AuthSubject`'s roles and permissions (overrides qadi's `SubjectResolver` slot); memory and SQL persistence |
+| Admin | `@awthaq/admin` | Impersonation, session force-stop, user and tenant administration |
+| SCIM | `@awthaq/scim` | Inbound SCIM 2.0 provisioning: directory sync of users and groups, deactivation ends sessions |
 
-Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id. `two-factor`, `magic-link`, `api-key`, `cli`, and `next` remain stub packages — see [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md)'s "Out of scope" section for why they're deliberately not part of this pass.
+Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id. `two-factor` and `magic-link` are placeholder packages with no exports; see [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md)'s "Out of scope" section for why they are not part of that pass.
+
+### Around the plugins
+
+These are not `AuthPlugin`s; they sit beside the composition.
+
+| Package | What it is |
+|---|---|
+| `@awthaq/qadi` | The bridge to [qadi](../qadi): the `AuthorizedSubject` middleware (Path A), the `SubjectExtractor` layer (Path B), attribute and relationship resolvers, obligation handlers. awthaq itself makes no authorization decision. |
+| `@awthaq/client` | `HttpApiClient` bindings for the awthaq contract: CSRF client middleware, error-code derivation, a session store, a Promise facade, a passkey ceremony helper. |
+| `@awthaq/react` | Reactive `AtomHttpApi` clients and `Providers` (session, subject and qadi gates in one atom registry). |
+| `@awthaq/next` | Next.js adapter: database-verified `getSession`, the optimistic `proxy.ts` cookie check `hasSessionCookie`, and `withNextCookies` to bridge `Set-Cookie` from server actions. |
+| `@awthaq/test` | `TestAuth` (the whole pipeline over memory) and `runPluginContractTests`. |
+| `@awthaq/cli` | The `awthaq` command: `doctor`, `config list`, `plugin list --graph`, `routes`, `migration status|apply`, `openapi`, `seed admin`, `import`, `login`. |
 
 ### Migrating users from another provider
 
@@ -361,6 +446,7 @@ No `@awthaq/*` package is published to npm — every `package.json` in `packages
 
 - [`spec/README.md`](spec/README.md) — the canonical specification: requirements, decisions, behaviors, invariants, traceability.
 - [`spec/roadmap.md`](spec/roadmap.md) — the milestone plan and what each milestone's done-criteria are.
+- [`docs/plugin-authoring.md`](docs/plugin-authoring.md) — writing a plugin, with a tested template in [`examples/plugin-template`](examples/plugin-template).
 - [`research/README.md`](research/README.md) — the evidence base behind `spec/`'s decisions.
 - [`CHANGELOG.md`](CHANGELOG.md) — per-package release notes.
 

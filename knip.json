@@ -3,7 +3,7 @@
   "ignore": [".scratch/**"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.mjs"],
+      "entry": ["scripts/*.mjs", "spec/scripts/*.mjs"],
       "ignoreDependencies": ["@arethetypeswrong/cli"]
     },
     "packages/ports": {

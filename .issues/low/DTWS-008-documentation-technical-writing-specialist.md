@@ -3,7 +3,7 @@ ID: "DTWS-008"
 Title: "spec/overview.md's ports-stratum surface was never reconciled with the shipped @awthaq/ports exports"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/overview.md:47"
 Auditor: "documentation-technical-writing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **Documentation & Technical Writing Specialist** (`documentation-technical-writing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ When revising the overview banner (DTWS-001), also reconcile the strata table wi
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-surface-inventory-reconcile`. Evidence at HEAD ec065a7: `spec/overview.md:47`. Fix: Reconcile overview.md's Ports row (line 47) and Ports stratum surface table (lines 90-96) with the nine shipped modules and their real layer constructors; fix 'Context.Tag' → 'Context.Service'/'Context.Reference'; reuse AVS-008's surface script to keep it honest. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/overview.md rev 1.2: the Ports row and Ports stratum table list all 15 modules of packages/ports/src/index.ts with their real layers and kinds (Context.Service / Context.Reference), inside a surface:ports block that check 13 diffs against the source exports (renaming one line makes it fail); the package roster, contract-stratum names (SessionDto, no SessionView struct), hook points and qadi bridge tables are reconciled; the 'Planned public API surface' heading and disclaimer are gone.

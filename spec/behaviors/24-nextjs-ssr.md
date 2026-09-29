@@ -4,20 +4,20 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-24 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Examples updated to the shipped signatures (`getSession(headers, runtime)`, `withNextCookies(response, jar)`) and the banner given implementation pointers; requirement texts unchanged (NAM-010, BO-008, IC-006, CCR-EA-006) |
 ---
 
-> Implemented in `@awthaq/next` — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md). Some of its BDD scenarios are still `@skip @unwired`.
+> Implemented in `@awthaq/next` (`GetSession.ts`, `HasSessionCookie.ts`, `WithNextCookies.ts`, `ServerActionClient.ts`, `edge.ts`, `Seed.ts`; tests `packages/next/test`) — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md) §5. The examples below use the shipped signatures: `getSession(headers, runtime)` and `withNextCookies(response, jar)`. Its BDD scenarios are `@skip @unwired`.
 
 ## BEH-EA-185: `getSession` verifies the cookie against the database
 
 ```ts
-const session = await getSession({ headers: await headers() })   // SessionView | undefined, database-verified
+const session = await getSession(await headers(), runtime)   // Session | undefined, database-verified
 if (!session) redirect("/sign-in")
 ```
 
@@ -100,7 +100,10 @@ _Previous: [BEH-EA-187](24-nextjs-ssr.md#beh-ea-187-decide-against-attributes-pr
 ```ts
 "use server"
 export async function changeName(form: FormData) {
-  return runtime.runPromise(withNextCookies(Users.use((u) => u.rename(String(form.get("name"))))))
+  // `handler` is the application's composed web handler (`HttpRouter.toWebHandler`)
+  const response = await handler(new Request(url, { method: "PATCH", headers: await forwardedHeaders(), body: form }))
+  withNextCookies(response, await cookies())   // copies every Set-Cookie header into Next's cookie jar
+  return response.json()
 }
 ```
 
@@ -112,7 +115,7 @@ REQUIREMENT: A server action that triggers a `Set-Cookie` (a new session
              which a server action never sees.
 ```
 
-`usage-examples-v4.md` §13 shows exactly this shape. React Server Components and the framework layer around server actions don't expose a raw HTTP response for an ordinary Effect program to write `Set-Cookie` onto directly — `withNextCookies` exists specifically to carry that header across the boundary into `next/headers`' cookie API, which is the only thing on the Next.js side actually allowed to write cookies from within a server action.
+The archive cookbook (`usage-examples-v4.md` §13) sketched this as `withNextCookies(Users.use(...))`, wrapping a domain Effect; that shape cannot work, because only `HttpApiBuilder.securitySetCookie` produces a `Set-Cookie` header and a domain call has no response to read one from, so `withNextCookies` takes the *response* of an HTTP dispatch and the jar. React Server Components and the framework layer around server actions don't expose a raw HTTP response for an ordinary Effect program to write `Set-Cookie` onto directly — `withNextCookies` exists specifically to carry that header across the boundary into `next/headers`' cookie API, which is the only thing on the Next.js side actually allowed to write cookies from within a server action.
 
 **Implementation (BO-002).** The shipped surface is `serverActionClient`/`makeServerActionClient` (`@awthaq/next`): an `HttpApiClient` over the application's own composed `api` whose in-process transport dispatches to the application's web handler, forwards the action's `Cookie`/`User-Agent`/`X-Forwarded-For`, echoes the CSRF cookie as `x-csrf-token` (with the bootstrap retry of BEH-EA-170 for a cold action), and passes every response through `withNextCookies` into the action's jar. `withNextCookies` itself stays exported for callers who dispatch on their own.
 
@@ -123,7 +126,7 @@ _Previous: [BEH-EA-188](24-nextjs-ssr.md#beh-ea-188-proxyts-is-an-optimistic-red
 ```ts
 "use server"
 export async function deleteProject(id: ProjectId) {
-  const session = await getSession({ headers: await headers() })
+  const session = await getSession(await headers(), runtime)
   return runtime.runPromise(Effect.gen(function*() {
     const subject = yield* SubjectResolver.use((s) => s.resolve(session!.principal))
     /* … */

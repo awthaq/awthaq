@@ -3,7 +3,7 @@ ID: "AAPS-007"
 Title: "Spec's BEH-EA-161 illustration resolves u.plan; UserRecord has no plan field"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/21-qadi-resolvers-obligations.md:27"
 Auditor: "abac-attribute-policy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **ABAC Attribute-Based Policy Specialist** (`abac-attribute-policy-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Update BEH-EA-161's illustration to the shipped attribute set (or add plan to Us
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-behavior-code-reconcile`. Evidence at HEAD ec065a7: `spec/behaviors/21-qadi-resolvers-obligations.md:26`. Fix: Spec follows code for the attribute set (no billing plugin exists; don't invent `plan`); code follows spec for the failure contract — UserAttributes must map a user-table defect to AttributeResolveError. Also refresh the stale 'unhandled resolver conflict' paragraph now that attributeResolverRegistry ships. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/behaviors/21-qadi-resolvers-obligations.md rev 1.2: the BEH-EA-161 example is rewritten to the shipped shape (no plan attribute; findById, UserNotFound to undefined, a store outage or defect to AttributeResolveError), the 'no plan' prose and the deleted-user note follow, and the same-attribute-resolver paragraph is rewritten around attributeResolverRegistry and DuplicateAttributeResolver (the relationship half is still marked unhandled: no relationship registry exists). The code half of the dossier (a Users outage becomes AttributeResolveError) had already landed as TS-002 with packages/qadi/test/Resolvers.test.ts.

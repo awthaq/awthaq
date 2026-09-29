@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-010 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — enforced at the type level by `Auth.make` (JH-008) |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented (enforced at the type level by `Auth.make`, JH-008) |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Corrected the bcrypt example to the shipped verify-only `LegacyPasswordVerifiers` mechanism (SAM-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Corrected the bcrypt example to the shipped verify-only `LegacyPasswordVerifiers` mechanism (SAM-002) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -33,5 +33,3 @@ A plugin **requires** ports — they appear only in its Layer's `RIn`, never in 
 **Negative**: Every application must explicitly provide every port a plugin (transitively) requires before `Layer.launch` will accept the composed Layer — there is no "one plugin came with a reasonable default hasher built in" convenience; ports left unprovided remain visible in `auth.layer`'s `RIn` (as PRD §9.2's table notes: "a port has no implementation" fails at `Layer.launch`), which is caught early but does add boilerplate to every application's setup relative to a model where a sensible default plugin could have supplied it.
 
 **Trade-off accepted**: awthaq trades the convenience of a plugin shipping its own working port default for the guarantee that port selection is always an explicit, visible, application-level decision — accepting that every new application must wire up `PasswordHasher`, `Mailer`, and any other required port itself, rather than inheriting an implicit choice from whichever plugin happened to bundle one.
-
-Not yet implemented — see spec/roadmap.md for milestone.

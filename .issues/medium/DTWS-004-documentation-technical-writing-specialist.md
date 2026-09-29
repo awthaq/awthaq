@@ -3,7 +3,7 @@ ID: "DTWS-004"
 Title: "Implemented @awthaq/roles plugin is absent from the root README's repo map, plugin table, and composition comment"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "README.md:26"
 Auditor: "documentation-technical-writing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **Documentation & Technical Writing Specialist** (`documentation-technical-writing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Add a Roles row to the Plugins table ('roles via a role DAG into qadi's AuthSubj
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `README.md:26`. Fix: Bring the README's package inventory in line with packages/: add Roles to the repo map, plugin table and composition comment, and list the other unlisted packages (client, react, qadi, migrate-auth0, migrate-better-auth). (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README.md: the repo map names every packages/ directory (25; a loop over ls packages finds none missing), the plugin table gains Roles, ApiKey, Passkey and Jwt detail, a new 'Around the plugins' table covers qadi, client, react, next, test and cli, and the migration packages stay in their own section. The Roles row follows Roles.ts (memory and SQL layers), not the dossier's outdated memory-only caveat.

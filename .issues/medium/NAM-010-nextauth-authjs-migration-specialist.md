@@ -3,7 +3,7 @@ ID: "NAM-010"
 Title: "Spec banner and BEH-EA-189 example contradict shipped code — migrators following the spec write non-compiling calls"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/24-nextjs-ssr.md:15"
 Auditor: "nextauth-authjs-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **NextAuth.js/Auth.js Migration Specialist** (`nextauth-authjs-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Regenerate the spec banners from package contents (implemented behaviors lose th
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-behavior-code-reconcile`. Evidence at HEAD ec065a7: `spec/behaviors/24-nextjs-ssr.md:15`. Fix: Code is ground truth here (implementation decisions recorded in .scratch/next-package/spec.md §'withNextCookies shape and scope'): rewrite 24-nextjs-ssr.md's status banner and the BEH-EA-185/189/190 code examples to the shipped signatures; keep the REQUIREMENT texts (the code satisfies them). (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/behaviors/24-nextjs-ssr.md rev 1.1: banner given implementation pointers (packages/next files and tests); the BEH-EA-185 and BEH-EA-190 examples use getSession(headers, runtime); the BEH-EA-189 example is the Response-to-jar shape (withNextCookies(response, jar)) with the explanation that only HttpApiBuilder.securitySetCookie produces Set-Cookie; requirement texts unchanged. The pre-implementation header comment was dropped from every .feature file (the 4-line header is identical across the suite). BO-008 and IC-006 close as duplicates. Gates: pnpm run typecheck clean, pnpm run spec:verify:strict 28/28, pnpm run check:readmes green.

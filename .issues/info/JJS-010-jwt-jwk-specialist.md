@@ -3,7 +3,7 @@ ID: "JJS-010"
 Title: "API-key plugin and Bearer plugin absent; spec model 08 stale relative to the shipped Jwt implementation"
 Level: info
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "api-key"
 Source: "packages/api-key/src/index.ts:8"
 Auditor: "jwt-jwk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `docs` · `api-key` · reported by **JWT/JWK Specialist** (`jwt-jwk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Update spec/models/08-jwt-bearer.md's Status/What-is-missing to distinguish the 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-model-drift`. Evidence at HEAD ec065a7: `spec/models/08-jwt-bearer.md:80`. Fix: Correct spec/models/08-jwt-bearer.md so it distinguishes the shipped Jwt plugin from the still-missing Bearer strategy. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Already fixed before this pass: spec/models/08-jwt-bearer.md (rev 1.1, 2026-09-29) distinguishes the shipped Jwt plugin from the Bearer seam (a built-in Authentication scheme fed by CredentialResolvers, not a separate plugin) and no longer claims no Jwt plugin exists. Verified against packages/jwt at HEAD; only the adoption-matrix row (JWT and Bearer to Shipped-Unpublished) changed here.

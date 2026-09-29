@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-06 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §13 and, by comparison, `better-auth/01-core-domain/01-entities-and-invariants.md` — not code that has shipped.
+> Implemented in `@awthaq/core` (`Users.ts`, `Accounts.ts`, `DataExport.ts`; tests `packages/core/test/Users.test.ts`, `Accounts.test.ts`, `AccountExport.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §13 and, by comparison, `better-auth/01-core-domain/01-entities-and-invariants.md`.
 
 ## BEH-EA-041: A User is identified by a case-insensitively unique email
 

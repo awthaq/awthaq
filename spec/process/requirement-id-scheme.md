@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-PROC-01 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Process Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Broadened MOD-EA-NNN's description from authentication-method-only to authentication-method-or-core-plugin, to cover Organization and Admin (CCR-EA-002) <br> 1.2 (2026-09-12): `REQ-EA-NNN` is no longer reserved-only — a Gherkin suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602` (CCR-EA-003) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Broadened MOD-EA-NNN's description from authentication-method-only to authentication-method-or-core-plugin, to cover Organization and Admin (CCR-EA-002) <br> 1.2 (2026-09-12): `REQ-EA-NNN` is no longer reserved-only — a Gherkin suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602` (CCR-EA-003) <br> 1.3 (2026-09-29): Dropped the hard-coded `REQ-EA` allocation range (it drifted from 602 to 685) and the claim that no `REQ` scenario runs: the suite is wired for some feature files, and the manifest and id uniqueness are checked by `spec/scripts/verify-traceability.sh` (BDD-003, DTWS-006, CCR-EA-006) |
 ---
 
 ## 1. Package Infix
@@ -31,27 +31,33 @@ gets its own infix rather than reusing `EA` or `QD`.
 | `BEH-EA-NNN` | Functional behavior requirement | `behaviors/NN-*.md` headings | 001– |
 | `URS-EA-NNN` | User requirement | `urs.md` | 001– |
 | `NFR-EA-NNN` | Non-functional requirement | `urs.md` | 001– |
-| `INV-EA-NNN` | Invariant (type-level or runtime-planned) | `invariants.md` | 001– |
+| `INV-EA-NNN` | Invariant (type-level or runtime) | `invariants.md` | 001– |
 | `ADR-EA-NNN` | Architecture decision | `decisions/NNN-*.md` | 001– |
-| `REQ-EA-NNN` | BDD-testable acceptance requirement | `features/features/**/*.feature` (`Scenario:`/`Scenario Outline:` tags) | 001–602 (allocated) |
+| `REQ-EA-NNN` | BDD-testable acceptance requirement | `features/features/**/*.feature` (`Scenario:`/`Scenario Outline:` tags) | 001– (allocated by `features/scripts/allocate-req-ea.py`) |
 | `MOD-EA-NNN` | Authentication-method or core-plugin adoption record (non-normative) | `models/NN-*.md` | 001– |
 | `CCR-EA-NNN` | Change Control Record | Document Control headers, Change History cells | 001– |
 | `EFAUTH-*` | Document ID | Document Control headers | — |
 
-`REQ-EA-NNN` was originally reserved rather than assigned: this repository
+`REQ-EA-NNN` was originally reserved rather than assigned: the repository
 was pre-implementation, and there was no `features/**/*.feature` suite (or
-equivalent) for the identifier to tag yet. A Gherkin acceptance suite now
-exists at `features/features/*.feature` (see
+equivalent) for the identifier to tag yet. The Gherkin acceptance suite at
+`features/features/*.feature` (see
 [`spec/traceability.md` §6](../traceability.md#6-acceptance-scenarios-req-ea)
-and [`features/README.md`](../../features/README.md)), and `REQ-EA-001`
-through `REQ-EA-602` are allocated from it — one id per scenario, assigned in
-one deterministic, idempotent pass by
+and [`features/README.md`](../../features/README.md)) now allocates them, one id
+per scenario, assigned in one deterministic, idempotent pass by
 [`features/scripts/allocate-req-ea.py`](../../features/scripts/allocate-req-ea.py)
-so that new scenarios added later receive new numbers rather than disturbing
-existing ones. This allocation is independent of the testing harness itself:
-[BEH-EA-193 through BEH-EA-200](../behaviors/25-testing-harness.md) (`TestAuth`,
-the plugin contract-test harness) remains unimplemented, so no `REQ-EA`
-scenario runs yet — the suite is Gherkin-shaped, not yet Cucumber-executed.
+so that new scenarios added later receive the next free number rather than
+disturbing existing ones. An id is claimed by exactly one scenario: the
+allocator refuses a duplicate, and `spec/scripts/verify-traceability.sh` fails
+on a duplicate or on a manifest that no longer matches what the allocator would
+generate (`allocate-req-ea.py --check`), which is what stops parallel branches
+that each took "the next number" from merging into a collision. Hand-assigning a
+number is the one way to break that, so do not. The suite runs
+(`pnpm test:bdd`) for the feature files that are wired to step definitions; the
+rest are tagged `@skip @unwired` (see `spec/traceability.md` §6), and the
+[testing harness](../behaviors/25-testing-harness.md)
+([BEH-EA-193 through BEH-EA-200](../behaviors/25-testing-harness.md)) is
+implemented in `@awthaq/test`.
 
 `MOD-EA-NNN` mirrors qadi's `MOD-QD-NNN`: it is the one series that asserts no
 verified behavior. It records which authentication methods and flows, and which core plugins,

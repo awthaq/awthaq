@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) |
 
 ---
 
-> **This describes a planned system.** Every term below names a concept in a design that has not been implemented. Definitions are drawn from `archive/PRD.md` §7 and `archive/design/plugins-as-layers.md`; none describes the behavior of running code.
+> **Status.** The terms below describe the shipped design unless an entry says it is planned or specified only (SAML, the OIDC provider, device authorization, magic link, email OTP and two-factor are the unbuilt ones). Definitions are drawn from `archive/PRD.md` §7 and `archive/design/plugins-as-layers.md` and have been checked against `packages/`; where an entry and the code differ, the code and the behavior it cites govern.
 
 ## Core concepts
 
@@ -56,7 +56,7 @@ The domain service that composes awthaq's CSRF defenses into one strategy chain,
 
 ### TestAuth
 
-The planned testing harness's entry point: `TestAuth.layer` runs the whole plugin pipeline — the same `Auth.make` composition an application uses — over an in-memory backend, so a plugin author's tests exercise the real contract and Layer graph rather than a stand-in. See: [BEH-EA-193](behaviors/25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory).
+The testing harness's entry point (`@awthaq/test`): `TestAuth.layer` runs the whole plugin pipeline — the same `Auth.make` composition an application uses — over an in-memory backend, so a plugin author's tests exercise the real contract and Layer graph rather than a stand-in. See: [BEH-EA-193](behaviors/25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory).
 
 ### Redacted
 

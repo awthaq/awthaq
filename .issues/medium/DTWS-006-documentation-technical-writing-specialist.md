@@ -3,7 +3,7 @@ ID: "DTWS-006"
 Title: "spec/README.md claims the BDD suite has 'no test runner, no step-definition layer' — features/ has both"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/README.md:126"
 Auditor: "documentation-technical-writing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **Documentation & Technical Writing Specialist** (`documentation-technical-writing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Update the section to name vitest + features/step-definitions/ as the current ru
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-bdd-traceability-refresh`. Evidence at HEAD ec065a7: `spec/README.md:126`. Fix: Rewrite every 'no runner / no step layer' claim to describe the real suite: vitest + @effect-cucumber/vitest, features/step-definitions/, 6 wired / 22 `@skip @unwired` feature files, run by `pnpm test:bdd` inside `pnpm check`. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Every 'no runner / no step layer' claim now describes the real suite: spec/README.md, spec/traceability.md section 6, definitions-of-done.md, requirement-id-scheme.md and features/README.md name pnpm test:bdd, @effect-cucumber/vitest, features/step-definitions/, the wired feature files (sessions, password, oauth, passkey, admin-impersonation, plus _smoke) and the rest as @skip @unwired; no counts are hard-coded so they cannot drift. BEH-EA-193..200 are described as implemented in @awthaq/test (194-196 are patterns over Effect's and qadi's helpers). Gates: pnpm run typecheck clean, pnpm run spec:verify:strict 28/28, pnpm run check:readmes green.

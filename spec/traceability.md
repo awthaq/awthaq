@@ -5,31 +5,31 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-RTM |
-> | Revision | 1.4 |
-> | Effective Date | 2026-09-13 |
+> | Revision | 1.5 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Verification Record |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §2 URS/NFR → behavior crosswalk; renumbered subsequent sections; fixed several stale decision-file links and mismatched anchors; updated banners to note the new verify-traceability.sh script (CCR-EA-002) <br> 1.2 (2026-09-12): Populated §6 — a Gherkin acceptance suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602`; added the file-level `REQ-EA` crosswalk table and a pointer to the full per-scenario manifest at `features/traceability.md` (CCR-EA-003) <br> 1.3 (2026-09-13): Added §1 row for [27 Admin and Impersonation](behaviors/27-admin-impersonation.md), BEH-EA-209 through 220 (CCR-EA-004) <br> 1.4 (2026-09-20): Fixed AH-001 (aslak-hellesoy) — `09-admin-and-impersonation/27-admin-impersonation.feature` was missing from `features/scripts/allocate-req-ea.py`'s ORDER list and had been hand-tagged with 25 REQ-EA ids (382–406) already allocated to 18-roles-subject-resolver.feature/19-qadi-bridge-path-a.feature; added to ORDER, re-run, now allocates REQ-EA-603 through 627 instead, updating §6's crosswalk table and the total below (CCR-EA-005) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §2 URS/NFR → behavior crosswalk; renumbered subsequent sections; fixed several stale decision-file links and mismatched anchors; updated banners to note the new verify-traceability.sh script (CCR-EA-002) <br> 1.2 (2026-09-12): Populated §6 — a Gherkin acceptance suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602`; added the file-level `REQ-EA` crosswalk table and a pointer to the full per-scenario manifest at `features/traceability.md` (CCR-EA-003) <br> 1.3 (2026-09-13): Added §1 row for [27 Admin and Impersonation](behaviors/27-admin-impersonation.md), BEH-EA-209 through 220 (CCR-EA-004) <br> 1.4 (2026-09-20): Fixed AH-001 (aslak-hellesoy) — `09-admin-and-impersonation/27-admin-impersonation.feature` was missing from `features/scripts/allocate-req-ea.py`'s ORDER list and had been hand-tagged with 25 REQ-EA ids (382–406) already allocated to 18-roles-subject-resolver.feature/19-qadi-bridge-path-a.feature; added to ORDER, re-run, now allocates REQ-EA-603 through 627 instead, updating §6's crosswalk table and the total below (CCR-EA-005) <br> 1.5 (2026-09-29): Replaced the pre-implementation banner and every "Planned"/"no runner" claim with the shipped state; corrected §1's behavior ranges for files 28-30 and BEH-EA-254; traced NFR-EA-007 to BEH-EA-209..220; INV-EA-014 and INV-EA-007/008 Enforcement cells name real tests; §6 lists the re-allocated REQ-EA ids (REQ-EA-681..685 replace five collisions); §7 states what coverage is and is not measured (TMS-009, DTWS-006, DTWS-001, BDD-003, CCR-EA-006) |
 
 ---
 
-> **Banner.** This matrix is pre-implementation. Every "Planned:" cell names an intended path, not a file that exists — no package has been published, no test has been written, no source module referenced below exists on disk. [`spec/scripts/verify-traceability.sh`](scripts/verify-traceability.sh) mechanically checks this document's structural consistency (every id traced, every link and anchor resolved, no orphaned decision or invariant) but does **not** check that any claim in it is true of running code — no CI gate invokes it yet, and no coverage or acceptance-scenario claim below is machine-verified. Its value today is the structural completeness of the cross-reference graph between behaviors, invariants, decisions and planned test files, kept accurate by hand (and now spot-checked by script) as the sibling `spec/behaviors/`, `spec/decisions/`, `spec/models/` and `spec/invariants.md` files are written.
+> **Banner.** Every module and test path below exists on disk unless a cell says "Planned:" or "no test exists"; those two cases are the honest gaps. [`spec/scripts/verify-traceability.sh`](scripts/verify-traceability.sh) mechanically checks this document's structural consistency (every id traced, every link and anchor resolved, no orphaned decision or invariant), that a cited test path exists (and that a "no test exists yet" cell does not name a file that does), and that the acceptance manifest is current; `pnpm check` runs it with `--strict`. It does **not** check that a test asserts what its row says it asserts: the coverage column is kept accurate by hand. The runtime evidence is the test suites themselves (`pnpm test`, and `pnpm test:bdd` for the wired acceptance scenarios).
 
 ---
 
-## 1. Behavior → planned source module
+## 1. Behavior → source module
 
-One row per `spec/behaviors/NN-*.md` file. The planned module column names a plausible package and file path consistent with the package map in `archive/PRD.md` §8.1; none of these files exist yet.
+One row per `spec/behaviors/NN-*.md` file, naming the module that implements it (the package map is `archive/PRD.md` §8.1 and [`overview.md`](overview.md)). A module marked "(planned)" does not exist yet.
 
-| Behavior file | BEH-EA range | Planned source module |
+| Behavior file | BEH-EA range | Source module |
 |---|---|---|
 | [01 Plugin Contract](behaviors/01-plugin-contract.md) | 001-008 | `@awthaq/core/src/AuthPlugin.ts` |
 | [02 Plugin Composition and Validate\<P\>](behaviors/02-plugin-composition-validate.md) | 009-016 | `@awthaq/core/src/Auth.ts` |
 | [03 Ports, Slots, Hook Points, and Registries](behaviors/03-ports-slots-hooks-registries.md) | 017-024 | `@awthaq/core/src/Slots.ts` |
 | [04 The Contract Stratum](behaviors/04-contract-stratum.md) | 025-032 | `@awthaq/api/src/Api.ts` |
 | [05 The Persistence Stratum](behaviors/05-persistence-stratum.md) | 033-040 | `@awthaq/sql/src/Models.ts` |
-| [06 Users and Accounts](behaviors/06-domain-users-accounts.md) | 041-048 | `@awthaq/core/src/Users.ts` |
+| [06 Users and Accounts](behaviors/06-domain-users-accounts.md) | 041-048, 254 | `@awthaq/core/src/Users.ts` (BEH-EA-254: `DataExport.ts`) |
 | [07 Sessions](behaviors/07-sessions.md) | 049-056 | `@awthaq/core/src/Sessions.ts` |
 | [08 Verification Tokens](behaviors/08-verification-tokens.md) | 057-064 | `@awthaq/core/src/Verification.ts` |
 | [09 Authentication Middleware](behaviors/09-authentication-middleware.md) | 065-072 | `@awthaq/server/src/Authentication.ts` |
@@ -40,7 +40,7 @@ One row per `spec/behaviors/NN-*.md` file. The planned module column names a pla
 | [14 Rate Limiting](behaviors/14-rate-limiting.md) | 105-112 | `@awthaq/core/src/RateLimits.ts` |
 | [15 Password Authentication](behaviors/15-password.md) | 113-120 | `@awthaq/password/src/Password.ts` |
 | [16 OAuth and OIDC](behaviors/16-oauth.md) | 121-128 | `@awthaq/oauth/src/OAuth.ts` |
-| [17 Passkey and WebAuthn](behaviors/17-passkey.md) | 129-136 | `@awthaq/passkey/src/Passkey.ts` |
+| [17 Passkey and WebAuthn](behaviors/17-passkey.md) | 129-136, 255-257 | `@awthaq/passkey/src/Passkey.ts` |
 | [18 Roles and the Subject Resolver](behaviors/18-roles-subject-resolver.md) | 137-144 | `@awthaq/roles/src/Roles.ts` |
 | [19 Qadi Bridge — Path A (Decide in Handler)](behaviors/19-qadi-bridge-path-a.md) | 145-152 | `@awthaq/qadi/src/AuthorizedSubject.ts` |
 | [20 Qadi Bridge — Path B (Declared Permissions)](behaviors/20-qadi-bridge-path-b.md) | 153-160 | `@awthaq/qadi/src/SubjectExtractor.ts` |
@@ -51,9 +51,9 @@ One row per `spec/behaviors/NN-*.md` file. The planned module column names a pla
 | [25 Testing Harness](behaviors/25-testing-harness.md) | 193-200 | `@awthaq/test/src/TestAuth.ts` |
 | [26 CLI](behaviors/26-cli.md) | 201-208, 225-229 | `@awthaq/cli/src/Cli.ts` (and one module per command) |
 | [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) | 209-224 | `@awthaq/admin/src/Admin.ts` (BEH-EA-209/210/211 also extend `@awthaq/core/src/Sessions.ts` and `@awthaq/server/src/Authentication.ts`) |
-| [28 Multi-Tenancy](behaviors/28-tenancy.md) | 225-232 | `@awthaq/ports/src/Tenant.ts`, `@awthaq/sql/src/TenantScope.ts`, `@awthaq/organization/src/Organization.ts` (`tenantMiddleware`) |
-| [29 SAML Service Provider](behaviors/29-saml-sp.md) | 233-240 | `@awthaq/saml/src/Saml.ts` (planned), `@awthaq/ports/src/SamlSigner.ts` (planned port) |
-| [30 SCIM Provisioning](behaviors/30-scim.md) | 241-248 | `@awthaq/scim/src/Scim.ts` |
+| [28 Tenancy](behaviors/28-tenancy.md) | 230-237 | `@awthaq/ports/src/Tenant.ts`, `@awthaq/sql/src/TenantScope.ts`, `@awthaq/organization/src/Organization.ts` (`tenantMiddleware`) |
+| [29 SAML Service Provider](behaviors/29-saml-sp.md) | 238-245 | `@awthaq/saml/src/Saml.ts` (planned), `@awthaq/ports/src/SamlSigner.ts` (planned port) |
+| [30 SCIM Provisioning](behaviors/30-scim.md) | 246-253 | `@awthaq/scim/src/Scim.ts` |
 
 ---
 
@@ -64,10 +64,9 @@ crosswalk mirrors `urs.md` §5's own requirement-to-behavior table, placed
 here as well so that this matrix — not only `urs.md` itself — is a complete
 picture of the cross-reference graph between behaviors, invariants,
 decisions, and requirements. Every requirement below traces to at least one
-behavior; none is genuinely untraced as of this revision, so no row below
-reads "Not yet traced — see Known Gaps." `urs.md` §6 (Known Gaps) records
-that this crosswalk did not previously exist in this document as a defect
-this revision fixes — see that section's new entry.
+behavior; none is untraced, so no row below reads "Not yet traced — see
+Known Gaps." A trace says which behavior states the requirement's intent,
+not that a passing test proves it: the tests are in §3 and §5.
 
 | Requirement | Behavior(s) |
 |---|---|
@@ -97,7 +96,7 @@ this revision fixes — see that section's new entry.
 | [NFR-EA-004](urs.md#nfr-ea-004--passwords-are-hashed-with-argon2id-by-default-and-rehashed-opportunistically) | [BEH-EA-113](behaviors/15-password.md#beh-ea-113-sign-up-issues-a-pending-user-and-a-verification-mail) |
 | [NFR-EA-005](urs.md#nfr-ea-005--verification-tokens-are-hashed-at-rest-and-consumed-atomically) | [BEH-EA-057](behaviors/08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose) |
 | [NFR-EA-006](urs.md#nfr-ea-006--oauth-flows-use-pkce-and-server-held-state-with-explicit-linking) | [BEH-EA-121](behaviors/16-oauth.md#beh-ea-121-pkce-s256-is-structural-not-optional) |
-| [NFR-EA-007](urs.md#nfr-ea-007--impersonation-is-off-by-default-gated-and-fully-audited) | [BEH-EA-041](behaviors/06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email), [BEH-EA-097](behaviors/13-events.md#beh-ea-097-authevents-is-a-bounded-pubsub) — note: `NFR-EA-007` is stated as a requirement on the not-yet-specified `Admin` plugin (see [MOD-EA-015](models/15-admin-impersonation.md)); the two behaviors cited cover users and events generically, not impersonation itself, since no `Admin`-plugin behavior file exists yet. |
+| [NFR-EA-007](urs.md#nfr-ea-007--impersonation-is-off-by-default-gated-and-fully-audited) | [BEH-EA-209](behaviors/27-admin-impersonation.md#beh-ea-209-actingas-becomes-a-real-generic-field-on-session-issuance), [BEH-EA-210](behaviors/27-admin-impersonation.md#beh-ea-210-a-session-carrying-actingas-never-idle-refreshes), and the rest of [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 224); [BEH-EA-097](behaviors/13-events.md#beh-ea-097-authevents-is-a-bounded-pubsub) for the audit events. |
 | [NFR-EA-008](urs.md#nfr-ea-008--secrets-and-credentials-never-reach-logs-spans-or-published-events) | [BEH-EA-097](behaviors/13-events.md#beh-ea-097-authevents-is-a-bounded-pubsub), [BEH-EA-193](behaviors/25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory) |
 
 ---
@@ -114,16 +113,16 @@ One row per entry in `spec/invariants.md`. Type-level invariants (INV-EA-001 thr
 | [INV-EA-004](invariants.md#inv-ea-004-two-plugins-overriding-the-same-exclusive-slot-is-a-compile-time-error-at-authmake) | TypeScript compiler (`Validate<P>`, `SlotConflict<P>`) | TypeScript compiler — no test file |
 | [INV-EA-005](invariants.md#inv-ea-005-a-hook-tap-on-an-undefined-hook-point-keeps-the-application-from-compiling) | TypeScript compiler (`Layer` `RIn` at `Layer.launch`): a tap's `Layer` requires its point (ELC-001) | `packages/core/test/HookPoint.types.test.ts` (`@ts-expect-error`, checked by `tsc -p tsconfig.test.json`) |
 | [INV-EA-006](invariants.md#inv-ea-006-a-plugins-contract-group-named-outside-its-own-namespace-fails-the-plugins-own-type-definition) | TypeScript compiler (template-literal constraint on `contract`) | TypeScript compiler — no test file |
-| [INV-EA-007](invariants.md#inv-ea-007-a-session-secret-is-never-stored-in-plaintext-only-its-sha-256-hash) | `Sessions` domain service (`layerMemory`; SQL Layer not yet built) | `packages/core/test/Sessions.test.ts` |
-| [INV-EA-008](invariants.md#inv-ea-008-a-sessions-absolute-expiry-never-extends-past-its-original-value-under-sliding-idle-refresh) | `Sessions` domain service (`layerMemory`; SQL Layer not yet built) | `packages/core/test/Sessions.test.ts` |
+| [INV-EA-007](invariants.md#inv-ea-007-a-session-secret-is-never-stored-in-plaintext-only-its-sha-256-hash) | `Sessions` domain service (`layerMemory` and `layerSql`; `hashSecret`/`constantTimeEqual` over `SecretHash`) | `packages/core/test/Sessions.test.ts` (BEH-EA-049/050, 050/056) |
+| [INV-EA-008](invariants.md#inv-ea-008-a-sessions-absolute-expiry-never-extends-past-its-original-value-under-sliding-idle-refresh) | `Sessions` domain service (`layerMemory` and `layerSql`) | `packages/core/test/Sessions.test.ts` (BEH-EA-051/INV-EA-008) |
 | [INV-EA-009](invariants.md#inv-ea-009-a-verification-token-is-consumable-exactly-once-inside-the-same-transaction-as-the-state-change-it-authorizes) | `Verification` domain service — race-safe `Ref.modify` consume (`layerMemory`) or one atomic `UPDATE ... RETURNING` via `VerificationRepository.tryConsume` (`layerSql`); wrapping `consume` together with the caller's own state change in one SQL transaction is the calling plugin's job, per `spec/decisions/016-verification-sql-claiming.md` (ADR-EA-016) — `VerificationShape` itself carries no transaction parameter | `packages/core/test/Verification.test.ts` |
 | [INV-EA-010](invariants.md#inv-ea-010-verification-token-replay-is-observable--every-consumption-attempt-after-the-first-publishes-an-event) | `Verification` domain service — uniform `TokenConsumed`, with every failed consumption publishing `auth.token.replay` to `AuthEvents` (both `layerMemory` and `layerSql`) | `packages/core/test/Verification.test.ts` |
 | [INV-EA-011](invariants.md#inv-ea-011-csrf-protection-is-required-by-the-generated-clients-type-not-merely-documented) | `Api.CsrfProtection`'s `requiredForClient: true`; `@awthaq/client`'s `CsrfClientLive` (`HttpApiMiddleware.layerClient`) | `packages/client/test/Csrf.test.ts` |
 | [INV-EA-012](invariants.md#inv-ea-012-a-qadi-resolvers-failure-never-becomes-an-authorization-denial) | `@awthaq/qadi`'s `UserAttributes` (`AttributeResolver`); `undefined` reserved for "no opinion," never a swallowed failure | `packages/qadi/test/Resolvers.test.ts` |
 | [INV-EA-013](invariants.md#inv-ea-013-an-endpoint-under-qadis-declared-permission-path-with-neither-a-permission-nor-a-public-endpoint-annotation-is-refused-never-silently-allowed) | `@qadi/http`'s own `RequirePermission`/`RequiredPermission`/`PublicEndpoint` — awthaq installs `SubjectExtractorLive` underneath it (`packages/qadi/src/SubjectExtractor.ts`) but does not reimplement or retest this refusal itself | Verified by `@qadi/core`/`@qadi/http`'s own test suite (sibling `qadi` repository), not duplicated here |
-| [INV-EA-014](invariants.md#inv-ea-014-an-impersonation-session-carries-a-hard-expiry-with-no-sliding-refresh) | `Admin` plugin, impersonation session issuance (planned) | Planned: `packages/core/test/Impersonation.test.ts` |
+| [INV-EA-014](invariants.md#inv-ea-014-an-impersonation-session-carries-a-hard-expiry-with-no-sliding-refresh) | `Sessions.issue` with `actingAs` (`idleExpiresAt = absoluteExpiresAt`, `verify` never advances it) and the `Admin` plugin's impersonation session issuance | `packages/core/test/Sessions.test.ts` (BEH-EA-209/210), `packages/admin/test/Admin.test.ts`, `packages/admin/test/AuthHttp.test.ts`, `packages/admin/test/ImpersonationRecords.test.ts` |
 | [INV-EA-015](invariants.md#inv-ea-015-the-provider-subject-issuer-tuple-is-unique-per-account-and-the-oauth-state--pkce-verifier-is-single-use) | `OAuth` plugin; `Accounts`' `(providerId, subject, issuer)` uniqueness (a real `UNIQUE` index over all three columns, `layerSql`; an equivalent composite key, `layerMemory`); `Verification`'s single-use `consume` for `state`/PKCE-verifier flow state | `packages/core/test/Accounts.test.ts`, `packages/oauth/test/OAuth.test.ts` |
-| [INV-EA-016](invariants.md#inv-ea-016-a-plugin-cannot-alter-a-shared-table-outside-its-declared-extension-points) | Persistence stratum, migration ownership (planned) | Planned: `packages/sql/test/MigrationOwnership.test.ts` |
+| [INV-EA-016](invariants.md#inv-ea-016-a-plugin-cannot-alter-a-shared-table-outside-its-declared-extension-points) | Persistence stratum, migration ownership: the table-prefix half in `runPluginContractTests`, `Auth.make`'s undeclared-table-dependency refusal; no test that a migration's DDL stays inside its own tables | `packages/test/test/runPluginContractTests.test.ts`, `packages/core/test/AuthPlugin.test.ts`. Planned: `packages/sql/test/MigrationOwnership.test.ts` (not yet written) |
 | [INV-EA-017](invariants.md#inv-ea-017-the-core-identity-tables-share-one-transaction-domain-and-any-partitioning-scheme-co-locates-a-user-with-its-accounts) | Design constraint (no runtime check): `users`/`accounts`/`sessions`/`verification_tokens` share one `SqlTransaction` domain; relied on by OAuth JIT sign-up and `Password.confirmReset` | `packages/oauth/test/OAuth.test.ts`, `packages/password/test/Password.test.ts` |
 | [INV-EA-018](invariants.md#inv-ea-018-identifiers-are-never-capabilities--no-state-transition-acts-on-a-principal-or-session-id-without-a-credentials-proof) | `Sessions.verify` (secret proven before any row-state branch); `Sessions.findOwned`/`revokeOwned` (ownership-bound); uniform enumeration-safe errors | `packages/core/test/Sessions.test.ts` |
 
@@ -165,7 +164,7 @@ One row per `spec/decisions/ADR-EA-NNN` file (`archive/PRD.md` §22).
 | [ADR-EA-033](decisions/033-hook-registries-per-composition.md) | Hook Registries Belong to the Composition, and a Tap Requires Its Point | `packages/core/test/HookPoint.test.ts`, `packages/core/test/HookPoint.types.test.ts`, `packages/core/test/AuthHookManifest.test.ts` ([BEH-EA-089 through 096](behaviors/12-hooks.md)) |
 | [ADR-EA-034](decisions/034-versioning-and-deprecation-policy.md) | Before 1.0 Breaking Changes Are Allowed, Each With a Changeset That Carries a Migration Note | `.github/workflows/check.yml` (the `changeset` job), `CONTRIBUTING.md` |
 | [ADR-EA-035](decisions/035-user-field-extension-point.md) | A Plugin Adds Typed Scalar Fields to `users` Through One Declared Extension Point | `packages/core/test/UserFields.test.ts`, `packages/test/test/UserFields.test.ts`, `packages/server/test/AuthHttp.test.ts` ([BEH-EA-040](behaviors/05-persistence-stratum.md#beh-ea-040-a-plugin-migration-may-only-alter-tables-under-its-own-prefix-shared-tables-are-altered-only-through-a-declared-extension-point), [BEH-EA-048](behaviors/06-domain-users-accounts.md#beh-ea-048-a-plugin-contributed-field-on-user-or-account-defaults-to-client-writable-unless-the-plugin-declares-otherwise)) |
-| [ADR-EA-029](decisions/029-event-pii-posture.md) | Events Carry Identifiers, Not Personal Data, and the Audit Trail Is Pseudonymized on Erasure | `packages/core/test/AuditLog.test.ts`, `packages/core/test/AccountErasure.test.ts`, `packages/test/test/Observability.test.ts` ([BEH-EA-095](behaviors/12-hooks.md), [BEH-EA-199](behaviors/25-testing-harness.md)) |
+| [ADR-EA-029](decisions/029-event-pii-posture.md) | Events Carry Identifiers, Not Personal Data, and the Audit Trail Is Pseudonymized on Erasure | `packages/core/test/AuditLog.test.ts`, `packages/core/test/AccountErasure.test.ts`, `packages/core/test/Observability.test.ts` ([BEH-EA-095](behaviors/12-hooks.md), [BEH-EA-199](behaviors/25-testing-harness.md)) |
 | [ADR-EA-030](decisions/030-event-delivery-outbox-relay.md) | Events Cross Process Boundaries by Tailing the Audit Log, Not by Widening the Bus | `packages/core/test/EventRelay.test.ts`, `packages/core/test/SecuritySignals.test.ts` ([BEH-EA-100](behaviors/13-events.md)) |
 | [ADR-EA-031](decisions/031-erasure-registry-and-retention.md) | Erasure Is a Core Domain Service over an Aggregating Registry, and Retention Is a Separate, Opt-In Sweep | `packages/core/test/AccountErasure.test.ts`, `packages/core/test/Retention.test.ts`, `packages/core/test/AccountExport.test.ts`, `packages/organization/test/OrganizationExport.test.ts`, `packages/organization/test/OrganizationErasure.test.ts`, `packages/passkey/test/PasskeyErasure.test.ts`, `packages/roles/test/Roles.test.ts`, `packages/qadi/test/UserClaims.test.ts` ([BEH-EA-095](behaviors/12-hooks.md)) |
 
@@ -250,29 +249,41 @@ One row per `spec/decisions/ADR-EA-NNN` file (`archive/PRD.md` §22).
 | `packages/migrate-better-auth/test/BetterAuthSource.test.ts` | BEH-EA-207 (BAM-001): the better-auth adapter against a real better-auth 1.7.6 export (`fixtures/better-auth-export.sqlite`) — keyset-paginated read, table counts, a password user's verbatim scrypt hash, a social user's tokens and issuer, unmapped columns reported (`user.plan`, `user.image`, timestamps), refusal of an unverifiable hash, and the imported credential verifying with the real password. |
 | `packages/migrate-firebase/test/ImportFirebaseUser.test.ts` | BEH-EA-207 (FAMS-010): a Firebase `auth:export` user mapped onto the import shape — the published firebase/scrypt vector verifies and is flagged for rehash, a google `providerUserInfo` becomes an account with subject and the caller's issuer, an email-less or disabled record is unmappable, a password hash with no hash config is unmappable. |
 
-Every other planned test file below is listed for structural completeness only. Every row is **Planned — no test exists yet.**
+### Packages specified by a model document or a decision record rather than a behavior file
+
+These plugins have no (or only a partial) `BEH-EA` range, so their tests are traced to the document that specifies them instead of to a behavior id. Each row is a directory; the files in it are the evidence.
+
+| Package tests | Specified by | Coverage |
+|---|---|---|
+| `packages/jwt/test/*` | [MOD-EA-008](models/08-jwt-bearer.md), [ADR-EA-017](decisions/017-jwt-signing-key-rotation.md) | Codec and token classes, the key ring (memory and SQL) with rotation, remote signing, revocation, the lite verifier and its cache, introspection, `Bearer` re-entry through `CredentialResolvers`, the HTTP surface. |
+| `packages/api-key/test/*` | [MOD-EA-007](models/07-api-keys.md), [ADR-EA-022](decisions/022-api-key-rotation-and-transport.md) | Key lifecycle and rotation, `client_credentials` clients and service tokens, both authentication tiers over the real HTTP surface. |
+| `packages/organization/test/*` | [MOD-EA-014](models/14-organization.md), [BEH-EA-230 through 237](behaviors/28-tenancy.md) | Organizations, memberships, invitations, roles and teams, the permission engine, tenant resolution and scoping, `OrganizationQadi` (INV-EA-012's relationship half), hooks, erasure and export, SQL persistence. |
+| `packages/admin/test/*` | [BEH-EA-209 through 224](behaviors/27-admin-impersonation.md) | Impersonation (issuance, expiry, dual identity, `forceStop`, audit trail), user and session administration, tenant administration, the admin tier. |
+| `packages/scim/test/*` | [BEH-EA-246 through 253](behaviors/30-scim.md), [ADR-EA-023](decisions/023-enterprise-federation-packages.md) | SCIM Users and Groups over HTTP in the RFC 7644 error schema, connection records, deactivation ending sessions. |
+| `packages/migrate-auth0/test/*`, `packages/migrate-firebase/test/*` | [BEH-EA-207](behaviors/26-cli.md#beh-ea-207-import-migrates-users-from-a-named-source-framework) | bcrypt and Firebase-scrypt verification and the mapping of an exported user onto the import shape. |
+
+One test file is still planned: no test asserts that a plugin's migration DDL stays inside its own tables (INV-EA-016's second half). It is listed so the gap stays visible.
 
 | Planned test file | Intended coverage |
 |---|---|
-| `packages/core/test/Impersonation.test.ts` | Impersonation session issuance, hard expiry, dual identity, audit events. Planned — no test exists yet. |
 | `packages/sql/test/MigrationOwnership.test.ts` | Plugin migrations confined to their own table prefix; shared tables altered only through declared extension points. Planned — no test exists yet. |
 
 ---
 
 ## 6. Acceptance scenarios (REQ-EA)
 
-A Gherkin acceptance suite now exists at [`features/features/`](../features/features/) (see [`features/README.md`](../features/README.md) for its structure and [`features/STYLE.md`](../features/STYLE.md) for its authoring conventions), and `REQ-EA-001` through `REQ-EA-646` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario, in one contiguous pass across the suite in the file order below. Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
+A Gherkin acceptance suite exists at [`features/features/`](../features/features/) (see [`features/README.md`](../features/README.md) for its structure and [`features/STYLE.md`](../features/STYLE.md) for its authoring conventions), and its scenarios are allocated `REQ-EA-001` onward — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario by `features/scripts/allocate-req-ea.py`, in file order, with new scenarios taking the next free number (so a file's range in the table below can list a later id or two beside its main block). Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
 
-**This allocation does not mean the suite runs.** awthaq is still pre-implementation: there is no `package.json`, no Cucumber configuration, and no step-definition layer, so no `.feature` file here currently passes or fails anything — see [`behaviors/25-testing-harness.md`](behaviors/25-testing-harness.md) (`BEH-EA-193`–`200`) for the still-not-yet-built testing harness that will eventually execute them. What exists today is the Gherkin restatement of the behavior catalog, not a running test suite.
+**A scenario is runtime evidence only if it is wired.** `pnpm test:bdd` (`features/vitest.config.ts`, `@effect-cucumber/vitest`, step definitions in `features/step-definitions/`) runs inside `pnpm check`. The session, password, OAuth, passkey and admin-impersonation feature files (plus `_smoke`) are wired against the real plugins; every other feature file is registered but tagged `@skip @unwired`, so its scenarios restate a requirement without running it. `features/traceability.md` is regenerated by `features/scripts/allocate-req-ea.py`, and `verify-traceability.sh` fails when it is stale or when a `REQ-EA` id is claimed by two scenarios; see [`behaviors/25-testing-harness.md`](behaviors/25-testing-harness.md) for the `@awthaq/test` harness (`BEH-EA-193`–`200`) plugin suites use.
 
-The table below is a file-level summary, at the same granularity as §1's behavior→module table; the full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 646 rows) lives in [`features/traceability.md`](../features/traceability.md) and is regenerated mechanically by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py) whenever the suite grows.
+The table below is a file-level summary, at the same granularity as §1's behavior→module table; the full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, one row per scenario) lives in [`features/traceability.md`](../features/traceability.md) and is regenerated mechanically by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py) whenever the suite grows.
 
 | Feature file | `BEH-EA` range | `REQ-EA` range |
 |---|---|---|
 | [00-foundations/01-plugin-contract.feature](../features/features/00-foundations/01-plugin-contract.feature) | 001–008 | 001–017 |
-| [00-foundations/02-plugin-composition-validate.feature](../features/features/00-foundations/02-plugin-composition-validate.feature) | 009–016 | 018–035 |
+| [00-foundations/02-plugin-composition-validate.feature](../features/features/00-foundations/02-plugin-composition-validate.feature) | 009–016 | 018–035, 682–683 |
 | [00-foundations/03-ports-slots-hooks-registries.feature](../features/features/00-foundations/03-ports-slots-hooks-registries.feature) | 017–024 | 036–058 |
-| [01-contract-and-persistence/04-contract-stratum.feature](../features/features/01-contract-and-persistence/04-contract-stratum.feature) | 025–032 | 059–083 |
+| [01-contract-and-persistence/04-contract-stratum.feature](../features/features/01-contract-and-persistence/04-contract-stratum.feature) | 025–032 | 059–083, 681 |
 | [01-contract-and-persistence/05-persistence-stratum.feature](../features/features/01-contract-and-persistence/05-persistence-stratum.feature) | 033–040 | 084–108 |
 | [02-domain/06-users-accounts.feature](../features/features/02-domain/06-users-accounts.feature) | 041–048 | 109–135 |
 | [02-domain/07-sessions.feature](../features/features/02-domain/07-sessions.feature) | 049–056 | 136–159 |
@@ -284,7 +295,7 @@ The table below is a file-level summary, at the same granularity as §1's behavi
 | [04-cross-cutting/13-events.feature](../features/features/04-cross-cutting/13-events.feature) | 097–104 | 259–277 |
 | [04-cross-cutting/14-rate-limiting.feature](../features/features/04-cross-cutting/14-rate-limiting.feature) | 105–112 | 278–303 |
 | [05-authentication-methods/15-password.feature](../features/features/05-authentication-methods/15-password.feature) | 113–120 | 304–327 |
-| [05-authentication-methods/16-oauth.feature](../features/features/05-authentication-methods/16-oauth.feature) | 121–128 | 328–354, 633 |
+| [05-authentication-methods/16-oauth.feature](../features/features/05-authentication-methods/16-oauth.feature) | 121–128 | 328–354, 633, 684–685 |
 | [05-authentication-methods/17-passkey.feature](../features/features/05-authentication-methods/17-passkey.feature) | 129–136 | 355–381 |
 | [06-roles-and-authorization-bridge/18-roles-subject-resolver.feature](../features/features/06-roles-and-authorization-bridge/18-roles-subject-resolver.feature) | 137–144 | 382–404 |
 | [06-roles-and-authorization-bridge/19-qadi-bridge-path-a.feature](../features/features/06-roles-and-authorization-bridge/19-qadi-bridge-path-a.feature) | 145–152 | 405–427 |
@@ -304,8 +315,8 @@ Authorization-decision content is deliberately out of scope for this suite: scen
 
 ## 7. Coverage
 
-Coverage percentages are not applicable pre-implementation. There is no package to instrument, no test runner configured, and no source to measure against. This section will report per-package line and branch coverage once packages exist and a coverage tool is wired into the build; until then, any coverage figure attributed to awthaq is not meaningful and should not be cited.
+`pnpm coverage` runs the whole vitest suite under `@vitest/coverage-v8` over `packages/*/src` and fails below the thresholds in `vitest.config.ts` (workspace-wide floors, stricter ones for `core`, `password`, `jwt` and `server`), so it is a gate (definitions-of-done gate 6). There is no coverage figure for the acceptance scenarios: only the wired feature files execute, and the unwired ones contribute nothing.
 
 ---
 
-This document verifies exactly one thing today: that the cross-reference graph between behavior files, invariants, decisions and planned test paths is structurally complete and internally consistent. [`spec/scripts/verify-traceability.sh`](scripts/verify-traceability.sh) — modeled on qadi's own script of the same name — checks that structural claim mechanically (every id traced, every link and anchor real, no orphaned decision or invariant, no duplicate or gapped `BEH-EA` id) and can be run by hand today. It does **not** verify that any behavior is implemented, that any invariant holds at runtime, that any planned test file exists or passes, that any source module named in §1 or §5 has been written, or that any coverage or acceptance-scenario claim is true — because none of those things exist yet, and no CI job invokes the script automatically. Its authority beyond that structural check is exactly the authority of a document maintained by hand: it is only as accurate as its last edit.
+This document verifies exactly one thing: that the cross-reference graph between behavior files, invariants, decisions, requirements and the test paths that cite them is structurally complete and internally consistent, and that no cited path has rotted. [`spec/scripts/verify-traceability.sh`](scripts/verify-traceability.sh) is the mechanical check; whether a cited test really proves its row is a human judgment the script cannot make.
