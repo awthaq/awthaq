@@ -39,7 +39,10 @@ A plugin that needs a mailer, a crypto source, a rate limiter or a transaction b
 
 - `HookPoint.veto` taps can amend the input or abort with `new HookPoint.HookAbort({ code })`; `observe` taps run afterwards and a failing observer can never fail the operation (BEH-EA-089 to 093).
 - Translate a veto abort where the point is run, into the typed `HookAborted` naming the point (BEH-EA-090). The template's `veto` helper is five lines; copy it.
-- The tap registry is a module-level singleton that **freezes at the first run of a point** (BEH-EA-024). Install every tap once, at composition time, for the whole process. A tap layer built after its point has already run fails with `HookPointFrozen`. In tests, that means one shared layer per test file, as `Template.test.ts` does.
+- The tap registry lives in the point's own built layer, so it is **per composition** (ELC-001), and it **freezes at the first run of a point** in that composition (BEH-EA-024). A tap layer built after its point has already run fails with `HookPointFrozen`; two compositions built from one module never share taps.
+- A tap's layer **requires its point**: `Point.tap(...)` is a `Layer<never, never, Point>`, so tapping a point nobody provides fails to compile (BEH-EA-094). Provide the point to the tap in the same layer graph: `Tap.pipe(Layer.provideMerge(NotesHooksLive))`.
+- A plugin can declare its taps statically with `AuthPlugin.layer(Self, { taps: [Point.declareTap(handler, { order })] })`. They run in dependency order, then `order`, then plugin id (BEH-EA-091), `Auth.make(...).manifest.hooks` prints that order without building anything (BEH-EA-096), and the point requirements join the plugin layer's `RIn`.
+- Tap outputs are checked against the point's schema (a veto tap's amended value, a divert tap's diverted value); observe taps run sequentially in resolved order, so keep them cheap.
 - Provide each point's own `.layer` once; `NotesHooksLive` merges them.
 
 ## Contributing a credential type
@@ -55,6 +58,13 @@ Authentication.contribute("apiKey", {                       // or "bearer" for a
 ```
 
 The first contribution whose `claims` matches resolves the credential (and a claimed credential that fails is `Unauthenticated`; later contributions are not tried), so make `claims` narrow: a key prefix, or a JOSE `typ` read with `JwtCodec.peekTyp`. Build the resolving `Layer` inside the plugin's own layer (it needs the registry, so the composition provides `Authentication.CredentialResolversLive` below it). Resolve to the principal kind that fits (`ApiKeyPrincipal`, `ServicePrincipal`, or a `User` for a stateless session), carrying its own `scopes`; qadi's default subject resolver maps them to permissions. Declare `Api.MachineAuthentication` on groups meant for such callers: `Api.Authentication` is the user tier and only admits a `User`. `@awthaq/api-key` is the worked example.
+## Personal data: erasure and export
+
+A plugin that stores anything about a person must take part in account erasure and in the data-subject export; both are aggregating registries in core that the plugin's own layer contributes to, so leaving the registry out of a composition does not compile (ADR-EA-033, BEH-EA-095, BEH-EA-230).
+
+- `Erasure.contribute({ id, make })`: `make` resolves your record stores once and returns `(subject) => Effect<void>` that deletes the subject's rows. It runs inside `AccountErasure.eraseAccount`'s one transaction; a failure rolls the whole erasure back, so let it die rather than swallow it, and keep it idempotent. There is no database cascade (the schema has no foreign keys), so every table keyed by a user id needs one.
+- `DataExport.contribute({ id, make })`: `make` returns `(subject) => Effect<Json>`, the personal data you hold, keyed by your plugin id in the export document. Never include a secret (a hash, a token, key material) or a third party's data; a contribution that fails fails the whole export.
+- Install both with `AuthPlugin.layer(Self, { contributes: Layer.mergeAll(erasure, export) })`. Test each against the registry (`packages/organization/test/OrganizationErasure.test.ts`, `OrganizationExport.test.ts`).
 
 ## Migrations
 

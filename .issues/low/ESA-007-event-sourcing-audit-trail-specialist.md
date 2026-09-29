@@ -3,7 +3,7 @@ ID: "ESA-007"
 Title: "Events are plain TypeScript interfaces: no version field, no runtime codec, no evolution path toward durability"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:213"
 Auditor: "event-sourcing-audit-trail-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `core` · reported by **Event Sourcing & Audit Trail Specialist** (`event-sourcing-audit-trail-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Promote the event payload definitions to Schema.Struct declarations with an expl
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `auth-event-schema`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:279`. Fix: Define every AuthEvent as an Effect Schema (TaggedStruct) with a `version` literal, derive the TS types from the schemas, and decode AuditLog payloads through the union codec. (effort L). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Every AuthEvent is now an Effect Schema (Schema.TaggedStruct) in the new leaf module packages/core/src/AuthEventSchemas.ts with types derived from it (AuthEventSchema union codec, EventOf/Published helpers, EVENT_VERSION + upcastPayload, payloadOf). AuditLogRecord.payload is the decoded AuthEvent; AuditLog stores {..encoded event, version, meta} and decodes via the codec; a row that no longer decodes surfaces as the typed AuditLogDecodeError; a pre-versioning payload (no version/meta) still decodes. Deviation: the version literal lives on the stored envelope (payload.version), not in every publisher's call, as the dossier allowed. Tests: packages/core/test/AuditLog.test.ts (round-trips one sample per tag on both layers via an exhaustive mapped-type sample table; malformed row; legacy row). spec BEH-EA-101 updated. Gates: typecheck, vitest, bdd, spec:verify:strict, circular, oxlint.

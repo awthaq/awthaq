@@ -19,8 +19,8 @@
 // produce; see `test/AuthHttp.test.ts` for both exercised end to end.
 
 import { Api } from "@awthaq/api";
-import type { Accounts, Sessions, Users, Verification } from "@awthaq/core";
-import type { SqlTransaction } from "@awthaq/ports";
+import type { Accounts, AuthEvents, DataExport, Erasure, Sessions, Users, Verification } from "@awthaq/core";
+import type { RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Headers from "effect/unstable/http/Headers";
@@ -46,7 +46,12 @@ export type CoreHandlerServices =
   | Sessions.Sessions
   | Users.Users
   | Verification.Verification
-  | SqlTransaction.SqlTransaction;
+  | SqlTransaction.SqlTransaction
+  // CSG-001/CSG-005: the account group's erasure cascade and data export, and its own audit/limit.
+  | Erasure.AccountErasure
+  | DataExport.AccountExport
+  | AuthEvents.AuthEvents
+  | RateLimiter.RateLimiter;
 
 /**
  * MW-002 (wayfinder ticket 26): the handlers for the `session` and `account`
@@ -55,6 +60,20 @@ export type CoreHandlerServices =
  * out fails at layer build (missing group service), not as a silent 404.
  */
 export const coreHandlers = Layer.mergeAll(Session.SessionHandlers, Account.AccountHandlers);
+
+/**
+ * MW-001/EOTS-006 (wayfinder ticket 27 §1): Effect's own HTTP request tracer
+ * (a W3C-`traceparent`-aware server span per request) and request logger
+ * (structured `http.method`/`http.url`/`http.status` per request), re-exported
+ * rather than re-implemented: the decision leaves logging and metrics backends
+ * to the host. Wrap the served app once, at the composition point:
+ * `AuthHttp.tracer(AuthHttp.requestLogger(app))`. An app already running its
+ * own tracer/logger over the whole router must not add these (it would trace
+ * and log every request twice). Pair with `layerRedactedHeaders` so no
+ * credential header is logged.
+ */
+export const tracer: typeof HttpMiddleware.tracer = HttpMiddleware.tracer;
+export const requestLogger: typeof HttpMiddleware.logger = HttpMiddleware.logger;
 
 /**
  * BEH-EA-084: serves generated OpenAPI/Scalar documentation from the same

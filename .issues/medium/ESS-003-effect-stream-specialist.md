@@ -56,3 +56,5 @@ Make on() race-free: subscribe synchronously during Layer build before forking t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `auth-events-subscription`. Duplicate of `ALF-007` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:405`. Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ALF-007-audit-logging-forensics-specialist` — closed by its fix (see that issue's Resolved comment).

@@ -1,7 +1,16 @@
 // FAMS-004: the opt-in per-user custom-claims store (Firebase `setCustomUserClaims`, routed
 // through qadi). Both layers run the same contract; then a real policy reads a migrated
 // claim through the resolver.
-import { AuditLog, AuthEvents, Auth, Hooks, Migrations, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  DataExport,
+  Erasure,
+  AuthEvents,
+  Auth,
+  Hooks,
+  Migrations,
+  Users,
+} from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import {
   AttributeResolver,
@@ -24,7 +33,12 @@ import * as Resolvers from "../src/Resolvers.ts";
 import * as UserClaims from "../src/UserClaims.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
 
-const CoreLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+const CoreLive = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layerMemory),
+  // CSG-001: the plugin contributes its erasure to the composition's registry.
+  Layer.provideMerge(Erasure.registryLayer),
+  Layer.provideMerge(DataExport.registryLayer),
+);
 
 const withResolver = <E, R>(store: Layer.Layer<UserClaims.UserClaims, E, R>) =>
   UserClaims.UserClaimsAttributes.pipe(Layer.provideMerge(store));
@@ -46,7 +60,15 @@ const admin = Users.UserId("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 
 const contract = (
   name: string,
-  layer: Layer.Layer<UserClaims.UserClaims | AttributeResolver | AuditLog.AuditLog, unknown, never>,
+  layer: Layer.Layer<
+    | UserClaims.UserClaims
+    | AttributeResolver
+    | AuditLog.AuditLog
+    | Erasure.ErasureRegistry
+    | DataExport.DataExportRegistry,
+    unknown,
+    never
+  >,
 ) =>
   describe(name, () => {
     it.effect("a user with no claims reads as an empty record", () =>
@@ -101,6 +123,41 @@ const contract = (
           assert.isTrue(payloads.every((p) => !p.includes("pro")));
           assert.isTrue(payloads.some((p) => p.includes("seats")));
         }).pipe(Effect.provide(layer)),
+    );
+
+    // CSG-001: the plugin's layer registers its erasure contribution.
+    it.effect("registers a `claims` erasure that removes the user's claims document", () =>
+      Effect.gen(function* () {
+        const claims = yield* UserClaims.UserClaims;
+        const registry = yield* Erasure.ErasureRegistry;
+        yield* claims.set(alice, { plan: "pro" });
+        yield* claims.set(admin, { plan: "free" });
+        const contributions = yield* registry.contributions;
+        assert.deepStrictEqual(
+          contributions.map((c) => c.id),
+          ["claims"],
+        );
+        for (const c of contributions)
+          yield* c.erase({ userId: alice, email: "alice@example.com" });
+        assert.deepStrictEqual(yield* claims.get(alice), {});
+        assert.deepStrictEqual(yield* claims.get(admin), { plan: "free" });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // CSG-005: the plugin's section of the data-subject export.
+    it.effect("registers a `claims` export with the user's claims document", () =>
+      Effect.gen(function* () {
+        const claims = yield* UserClaims.UserClaims;
+        const registry = yield* DataExport.DataExportRegistry;
+        yield* claims.set(alice, { plan: "pro" });
+        yield* claims.set(admin, { plan: "free" });
+        const contribution = (yield* registry.contributions).find((c) => c.id === "claims");
+        assert.isDefined(contribution);
+        assert.deepStrictEqual(
+          yield* contribution!.collect({ userId: alice, email: "alice@example.com" }),
+          { claims: { plan: "pro" } },
+        );
+      }).pipe(Effect.provide(layer)),
     );
 
     it.effect("the resolver answers `claims` for a user: subject, and nothing else", () =>
@@ -184,7 +241,6 @@ describe("UserClaims composition", () => {
         }).pipe(
           Effect.provide(
             UserClaims.UserClaims.layer.pipe(
-              Layer.provideMerge(Hooks.AfterUserAttributesChanged.layer),
               Layer.provideMerge(
                 Hooks.AfterUserAttributesChanged.tap((input) =>
                   Effect.sync(() => {
@@ -192,6 +248,7 @@ describe("UserClaims composition", () => {
                   }),
                 ),
               ),
+              Layer.provideMerge(Hooks.AfterUserAttributesChanged.layer),
               Layer.provideMerge(CoreLive),
             ),
           ),

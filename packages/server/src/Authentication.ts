@@ -4,7 +4,7 @@
 // Implements the `Authentication`/`OptionalAuthentication` declarations from
 // `@awthaq/api`'s `Api.ts` against `@awthaq/core`'s `Sessions`.
 
-import { SessionCookie, Sessions, Users } from "@awthaq/core";
+import { Observability, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -281,8 +281,11 @@ const serve = (
   scheme: Scheme | "apiKey",
   httpEffect: Effect.Effect<HttpServerResponse.HttpServerResponse, unhandled, Api.CurrentPrincipal>,
   principal: Api.Principal,
+  session?: Sessions.SessionView,
 ) =>
   Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
+    // MAPS-007: every log the handler writes names the principal (and session, when one exists).
+    Effect.annotateLogs(principalFields(principal, session)),
     Effect.flatMap((response) =>
       Effect.flatMap(PostAuthResponseHook, (hook) =>
         hook.decorate(principal, response, { scheme }),
@@ -463,6 +466,24 @@ export const resolveSession = (
     // answers 503; only `SessionNotFound`/`SessionExpired` (a genuinely absent
     // or expired session) map to `Unauthenticated`.
     const verified = sessions.verify(Redacted.make(raw)).pipe(
+      // EOTS-003: observed before the mapping, so the log names the real reason.
+      Effect.tapError((error) =>
+        Effect.annotateCurrentSpan({
+          [Observability.Field.outcome]: "failure",
+          [Observability.Field.reason]: error._tag,
+        }).pipe(
+          Effect.andThen(
+            Effect.logDebug("awthaq: session verification failed").pipe(
+              Effect.annotateLogs({
+                [Observability.Field.event]: "session.verify.failed",
+                [Observability.Field.outcome]: "failure",
+                [Observability.Field.reason]: error._tag,
+                "auth.scheme": scheme,
+              }),
+            ),
+          ),
+        ),
+      ),
       Effect.catchTags({
         "Sessions/NotFound": () => Effect.fail(new Api.Unauthenticated()),
         SessionExpired: () => Effect.fail(new Api.Unauthenticated()),
@@ -483,7 +504,38 @@ export const resolveSession = (
       Deferred.into(deferred),
     );
     return yield* Deferred.await(deferred);
-  });
+  }).pipe(
+    // MAPS-007: the shared choke point of Path A (the middleware) and Path B
+    // (`SubjectExtractor`), so every authenticated request's trace has this span.
+    Effect.withSpan(Observability.Span.principalResolve, {
+      attributes: { "auth.scheme": scheme },
+    }),
+  );
+
+/**
+ * MAPS-007: names the principal and session on the current span and on every log
+ * the handler writes — ids only (`auth.principal.ref`, `auth.session.id`), never a
+ * name, email or credential — so a trace or a log line identifies who and which
+ * session without a join.
+ */
+const principalFields = (principal: Api.Principal, session?: Sessions.SessionView) => ({
+  [Observability.Field.principalType]: principal.ref.type,
+  [Observability.Field.principalRef]: principal.ref.id,
+  ...(session === undefined ? {} : { [Observability.Field.sessionId]: session.id }),
+});
+
+const resolveAndAnnotate = (
+  resolver: PrincipalResolverShape,
+  session: Sessions.SessionView,
+) =>
+  resolver.resolve(session).pipe(
+    Effect.tap((principal) =>
+      Effect.annotateCurrentSpan({
+        ...principalFields(principal, session),
+        [Observability.Field.outcome]: "success",
+      }),
+    ),
+  );
 
 /**
  * Exported (not module-private) so `@awthaq/qadi`'s `SubjectExtractor.ts`
@@ -506,7 +558,7 @@ export const resolvePrincipal = (
 ) => {
   const viaSession = (sessionScheme: Scheme) =>
     resolveSession(sessions, credential, sessionScheme).pipe(
-      Effect.flatMap(({ session }) => resolver.resolve(session)),
+      Effect.flatMap(({ session }) => resolveAndAnnotate(resolver, session)),
     );
   if (scheme === "cookie" || scheme === "impersonation") return viaSession(scheme);
   return resolveClaimed(scheme, credential).pipe(
@@ -579,9 +631,9 @@ const makeSessionTierHandlers = (machine: boolean) =>
         // handler (PIL-005), so it also covers responses this success path
         // never sees. See `serve` for the per-request `PostAuthResponseHook`.
         Effect.flatMap(({ session }) =>
-          resolver
-            .resolve(session)
-            .pipe(Effect.flatMap((principal) => serve(scheme, httpEffect, principal))),
+          resolveAndAnnotate(resolver, session).pipe(
+            Effect.flatMap((principal) => serve(scheme, httpEffect, principal, session)),
+          ),
         ),
       );
     // MAPS-001/OCM-002: a credential a registered resolver claims resolves to its
@@ -736,9 +788,9 @@ export const OptionalAuthenticationLive: Layer.Layer<
       resolveSession(sessions, credential, scheme).pipe(
         Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
         Effect.flatMap(({ session }) =>
-          resolver
-            .resolve(session)
-            .pipe(Effect.flatMap((principal) => serve(scheme, httpEffect, principal))),
+          resolveAndAnnotate(resolver, session).pipe(
+            Effect.flatMap((principal) => serve(scheme, httpEffect, principal, session)),
+          ),
         ),
       );
     // See the identical helper on `AuthenticationLive` above: this is the user

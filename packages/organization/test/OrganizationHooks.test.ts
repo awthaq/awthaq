@@ -7,15 +7,10 @@
 // (see `Organization.ts`'s own header comment — this is the first real
 // plugin consumer of `HookPoint`, mirrored identically everywhere).
 //
-// Every hook point class is a shared, module-level singleton whose
-// registry freezes at its own first `run()` (BEH-EA-024) — including an
-// implicit run with zero taps, which is exactly what an earlier, untapped
-// `create`/`createTeam` call in this same file would do to a later test
-// wanting to tap that same point. Each `it.effect` case below is therefore
-// the *only* place in this file that ever calls the operation whose hooks
-// it taps, and taps every point that operation touches (both its `before`
-// and `after`) up front, in the same `Effect.provide`, so nothing runs
-// untapped before the tap is installed.
+// Each hook point's registry is per composition (ELC-001): every case
+// builds its own layer, so a tap installed in one never leaks into, or
+// freezes, another. A tap's `Layer` requires its point, which
+// `OrganizationHooksLive` provides last in `buildLayer`'s pipe.
 import { Api } from "@awthaq/api";
 import { AuditLog, Hooks, AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
@@ -56,7 +51,9 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const buildLayer = (extraHooks: Layer.Layer<never>) =>
+const buildLayer = (
+  extraHooks: Layer.Layer<never, never, Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>>,
+) =>
   Organization.Organization.layer.pipe(
     Layer.provide(
       Organization.config({

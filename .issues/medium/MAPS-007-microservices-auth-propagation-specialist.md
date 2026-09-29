@@ -3,7 +3,7 @@ ID: "MAPS-007"
 Title: "No tracing correlation of auth context anywhere in the pipeline"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "test"
 Source: "packages/test/src/TestAuth.ts:31"
 Auditor: "microservices-auth-propagation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `test` · reported by **Microservices Auth Propagation Specialist** (`microservices-auth-propagation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Add span attributes (principal.type, principal.id, session.id) at the single cho
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `observability-substrate`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:205`. Fix: Annotate the principal/session on the current span at the shared resolution choke point, and rely on HttpMiddleware.tracer (MW-001) for W3C traceparent propagation. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Authentication.resolveSession (the shared choke point of Path A's middleware and Path B's SubjectExtractor) runs under awthaq.principal.resolve (auth.scheme attribute); the resolved principal type/ref and session id are annotated on the current span (auth.principal.type/ref, auth.session.id, auth.outcome=success) and on every log the handler writes (annotateLogs), ids only. W3C traceparent propagation is HttpMiddleware.tracer's (the re-export). Test: packages/server/test/Authentication.test.ts (span with principal/session attributes, no credential in any attribute).

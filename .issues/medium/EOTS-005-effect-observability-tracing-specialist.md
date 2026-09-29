@@ -3,7 +3,7 @@ ID: "EOTS-005"
 Title: "The only two log sites serialize raw Cause payloads with no redaction pass"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:293"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Log a sanitized summary (tag, error `_tag`/message) and attach the full cause on
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `observability-substrate`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:405`. Fix: Log a sanitized summary at error level and the full cause only at debug level, via one shared helper. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New Observability.logObserverFailure: error level carries only errorTag + truncated message (never the error's data fields); the full Cause is logged only at debug. Used by AuthEvents.on/onBatch (auth.event.observer.error, counted in awthaq_event_observer_error_total{tag}), the subscription supervisor and HookPoint.observe. Tests: AuthEvents.test.ts (error record has SinkError but not the token; debug record has the cause; metric counted).

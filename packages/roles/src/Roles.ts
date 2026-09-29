@@ -29,7 +29,7 @@
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
 import { Defects, Users } from "@awthaq/core";
-import { AuthEvents, AuthPlugin, ConfigDescriptor, Migrations, Slots } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, ConfigDescriptor, DataExport, Erasure, Migrations, Slots } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -399,6 +399,37 @@ const subjectResolverMake = Effect.gen(function* () {
   };
 });
 
+/**
+ * CSG-001, wayfinder ticket 30: this plugin's part of `AccountErasure.eraseAccount`.
+ * Revokes every role the erased user holds through the plugin's own `revoke` (so each
+ * removal is still audited as `auth.roles.revoked`; the audit rows are pseudonymized
+ * at the end of the erasure). Part of `Roles.layer`/`layerSql`, which therefore
+ * require `Erasure.ErasureRegistry`.
+ */
+export const rolesExport = DataExport.contribute({
+  id: "roles",
+  make: Effect.gen(function* () {
+    const roles = yield* Roles;
+    return (subject: DataExport.DataExportSubject) =>
+      roles.listRoleNames(subject.userId).pipe(Effect.map((names) => ({ roles: [...names] })));
+  }),
+});
+
+export const rolesErasure = Erasure.contribute({
+  id: "roles",
+  make: Effect.gen(function* () {
+    const roles = yield* Roles;
+    return (subject: Erasure.ErasureSubject) =>
+      roles
+        .listRoleNames(subject.userId)
+        .pipe(
+          Effect.flatMap((names) =>
+            Effect.forEach(names, (name) => roles.revoke(subject.userId, name), { discard: true }),
+          ),
+        );
+  }),
+});
+
 export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   apiVersion: 1,
   // BEH-EA-018/roadmap M3: no HTTP contract of its own — this plugin's whole
@@ -455,12 +486,16 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
     Roles,
     QadiSubjectResolver.SubjectResolver,
     subjectResolverMake,
-  ).pipe(Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMake })));
+  ).pipe(
+    Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMake, contributes: Layer.mergeAll(rolesErasure, rolesExport) })),
+  );
 
   /** BAM-006: the same composition as `layer`, over `rolesMakeSql` instead of the in-memory `rolesMake`. */
   static readonly layerSql = Slots.override(
     Roles,
     QadiSubjectResolver.SubjectResolver,
     subjectResolverMake,
-  ).pipe(Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMakeSql })));
+  ).pipe(
+    Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMakeSql, contributes: Layer.mergeAll(rolesErasure, rolesExport) })),
+  );
 }

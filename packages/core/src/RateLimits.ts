@@ -37,21 +37,22 @@
 // composition itself.
 //
 // BEH-EA-111's "dependency order, then declared `order`, then rule id"
-// resolved-order rule has the same gap `HookPoint.ts`'s own header comment
-// documents for tap ordering, for the identical reason (a plugin's
-// topological position isn't known at the point its own `layer` calls
-// `rule`) — this module orders by declared `order` then registration
-// sequence instead. A real `awthaq plugin list --graph` CLI command
+// resolved-order rule is implemented for hook taps (`HookPoint.compareTaps`,
+// JH-003, which reads each owner's `dependsOn`); rules are not yet ordered
+// that way — this module orders by declared `order` then registration
+// sequence. A real `awthaq plugin list --graph` CLI command
 // (BEH-EA-111's own example) is `@awthaq/cli`'s job, not built yet;
 // `registered` is this module's own introspection primitive for it to call.
 
 import { RateLimiter } from "@awthaq/ports";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as AuthEvents from "./AuthEvents.ts";
 import type * as AuthPlugin from "./AuthPlugin.ts";
@@ -106,6 +107,28 @@ export const layer: Layer.Layer<RateLimitsRegistry> = Layer.effect(
   Effect.gen(function* () {
     const entries = yield* Ref.make<ReadonlyArray<RegisteredRule>>([]);
     const frozen = yield* Ref.make<ReadonlyArray<RegisteredRule> | undefined>(undefined);
+    const warned = yield* Ref.make(false);
+
+    // RBS-007: rules registered under a limiter that cannot enforce them are inert — the
+    // composition looks protected and is not. Warned once per registry, from inside the
+    // registering plugin's own build (whose context carries the composed `RateLimiter`),
+    // and never under `NODE_ENV=test`, where the permissive limiter is the intended default.
+    const warnIfPermissive = Effect.gen(function* () {
+      const limiter = yield* Effect.serviceOption(RateLimiter.RateLimiter);
+      if (Option.isNone(limiter) || limiter.value.permissive !== true) return;
+      if (yield* Ref.getAndSet(warned, true)) return;
+      const environment = yield* Config.String("NODE_ENV").pipe(
+        Config.withDefault(""),
+        Effect.orElseSucceed(() => ""),
+      );
+      if (environment === "test") return;
+      yield* Effect.logWarning("auth.ratelimit.permissive").pipe(
+        Effect.annotateLogs({
+          detail:
+            "rate-limit rules are registered but the composed RateLimiter is permissive (tests only): no request is throttled. Provide RateLimiter.layerMemory (one process) or RateLimiter.layer over a shared RateLimiterStore.",
+        }),
+      );
+    });
 
     const register: RateLimitsRegistryShape["register"] = (owner, input) =>
       Effect.gen(function* () {
@@ -130,6 +153,7 @@ export const layer: Layer.Layer<RateLimitsRegistry> = Layer.effect(
           ...current,
           { ...input, plugin: owner.id, sequence: current.length },
         ]);
+        yield* warnIfPermissive;
       });
 
     const registered: RateLimitsRegistryShape["registered"] = Effect.gen(function* () {

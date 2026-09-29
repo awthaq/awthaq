@@ -2029,6 +2029,22 @@ describe("Organization", () => {
         }).pipe(Effect.provide(buildLayer())),
     );
 
+    // ESA-005/ADR-EA-031: events carry identifiers, never the invitee's address.
+    it.effect("an invitation is announced without the invitee's email", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const auditLog = yield* AuditLog.AuditLog;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        yield* organization.invite(owner, org.id, { email: "private@example.com", role: ["member"] });
+
+        const recorded = yield* auditLog.list({ eventTag: "auth.organization.invitationCreated" });
+        assert.strictEqual(recorded.length, 1);
+        assert.isFalse(JSON.stringify(recorded).includes("private@example.com"));
+        assert.isFalse("email" in payloadOf(recorded[0]));
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
     it.effect("a non-member's denied delete is recorded with reason notMember", () =>
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;

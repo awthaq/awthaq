@@ -83,6 +83,13 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `026-*.md` | ADR-EA-026 | Sign-Up Reveals an Existing Address by Default, With an Opt-In Conceal Mode |
 | `024-*.md` | ADR-EA-024 | Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token |
 | `025-*.md` | ADR-EA-025 | Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority |
+| `027-*.md` | ADR-EA-027 | The CLI Is Built on effect/unstable/cli, With Typed Exit Codes and a Credential Store Port |
+| `028-*.md` | ADR-EA-028 | Infrastructure Failures Are One Typed StoreUnavailable, Not Defects |
+| `029-*.md` | ADR-EA-029 | Observability Reuses Effect's HTTP Middleware, Adds Business-Logic Spans and a Fixed Field Vocabulary, and Ships Metric Definitions Without a Backend |
+| `030-*.md` | ADR-EA-030 | Hook Registries Belong to the Composition, and a Tap Requires Its Point |
+| `031-*.md` | ADR-EA-031 | Events Carry Identifiers, Not Personal Data, and the Audit Trail Is Pseudonymized on Erasure |
+| `032-*.md` | ADR-EA-032 | Events Cross Process Boundaries by Tailing the Audit Log, Not by Widening the Bus |
+| `033-*.md` | ADR-EA-033 | Erasure Is a Core Domain Service over an Aggregating Registry, and Retention Is a Separate, Opt-In Sweep |
 
 ### `spec/behaviors/` — twenty-six files, eight behaviors per file
 

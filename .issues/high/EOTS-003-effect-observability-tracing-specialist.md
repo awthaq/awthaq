@@ -3,7 +3,7 @@ ID: "EOTS-003"
 Title: "Failed authentication attempts are completely unobservable"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:173"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `server` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — evidence quote matches `packages/server/src/Authentication.ts:172-175` (cited as :173) exactly; `Password.ts:539` fails `InvalidCredentials` with no event/log while the success path at :560-564 publishes `auth.user.signedIn`, and `grep -n "_tag:" packages/core/src/AuthEvents.ts` shows no sign-in-failure or session-verify-failure tag exists in the `AuthEvent` union. Adding a typed failure event + debug log is a mechanical, well-scoped fix. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `authn-failure-observability`. Already fixed by commit f5eb570. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:184`. Fix: The password half is fixed (f5eb570). Make session-verify failures observable in resolveSession without leaking credentials or session ids. (effort S). Full dossier: `.plan/slices/06-server-api.md`.
+
+**Resolved (2026-09-29):** resolveSession logs one structured debug line 'awthaq: session verification failed' for every rejected non-empty credential (auth.event=session.verify.failed, auth.outcome=failure, auth.reason=<SessionNotFound|SessionExpired>, auth.scheme) and marks the current span auth.outcome=failure; never the credential or the (attacker-supplied) session id. An empty credential logs nothing. The metric is awthaq_session_verify_failed_total{reason} counted inside Sessions.verify (so every caller counts). No per-request AuthEvent (too noisy; reuse is already auth.session.reuse). Tests: Authentication.test.ts (log has reason and scheme but neither the secret nor the id; no-credential logs nothing) and Observability.test.ts (metric).

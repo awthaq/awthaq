@@ -192,7 +192,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // Ticket 12: rate-limited. Upstream-hardening ticket 04: hard-blocks
       // an unverified account. Wayfinder ticket 03 (BCR-004/THS-002):
       // `Hooks.TwoFactorRequired` when a `Hooks.BeforeSessionIssue` tap
-      // (a future `TwoFactor` plugin) diverts.
+      // (a future `TwoFactor` plugin) diverts. NAM-002: `HookPoint.HookAborted`
+      // from a `Hooks.BeforeSignIn` veto tap.
       // SCP-001: `Users.UserSuspended` when `Users.assertCanSignIn` refuses.
       // MNA-001: `Api.InvalidTokenDelivery` for an unrecognised `X-Awthaq-Token-Delivery` value.
       error: [
@@ -200,6 +201,7 @@ export const PasswordGroup = HttpApiGroup.make("password")
         EmailNotVerified,
         Users.UserSuspended,
         Api.RateLimited,
+        HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
         Api.InvalidTokenDelivery,
       ],

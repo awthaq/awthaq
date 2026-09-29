@@ -3,7 +3,7 @@ ID: "ESA-002"
 Title: "No event carries a timestamp or sequence number — post-hoc ordering and point-in-time reconstruction are impossible"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:55"
 Auditor: "event-sourcing-audit-trail-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `core` · reported by **Event Sourcing & Audit Trail Specialist** (`event-sourcing-audit-trail-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/core/src/AuthEvents.ts:55-57` (`AdminImpersonationStartedEvent`) and every other of the 25 interfaces in the file (lines 23-208) carry only a `_tag` plus domain identifiers; none has an `occurredAt`/`eventId`/sequence field, confirmed by reading the full `AuthEvent` union (lines 213-238). The fix (stamp `occurredAt`/a uuidv7 `eventId` in the shared publish path at `AuthEvents.ts:263-264`) is a bounded, mechanical envelope addition. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `auth-event-envelope`. Already fixed by commit 6bd3f1d. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:122`. Fix: Stamp one envelope (eventId uuidv7 + occurredAt) in `publish`, use it for both the AuditLog row and the bus, and deliver it to subscribers. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`.
+
+**Resolved (2026-09-29):** publish stamps one envelope (eventId uuidv7-shaped and monotonic within a process via an in-layer Ref counter over Clock/Random, so AuthEvents gains no Crypto requirement; occurredAt; correlationId/ip/userAgent from AuthRequestContext; traceId/spanId of the current span) shared by the AuditLog row (row id = eventId) and the bus event; stream/on deliver Published. AuditLog.list breaks occurredAt ties by id desc (memory and SQL). Tests: AuthEvents.test.ts (delivered eventId/occurredAt equal the row; ids sort in publish order across 25 same-ms publishes), AuditLog.test.ts (same-ms newest-first).

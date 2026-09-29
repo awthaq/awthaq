@@ -3,7 +3,7 @@ ID: "EOTS-002"
 Title: "BEH-EA-199 'no Redacted reaches span or event' has no mechanical enforcement; contract test implements only half"
 Level: high
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "test"
 Source: "packages/test/src/TestAuth.ts:29"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `compliance` · `test` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — evidence quote matches `packages/test/src/TestAuth.ts:29-31` verbatim, including the module's own admission that the check is "not mechanically verifiable today (no tracer/logger interceptor exists)". `runPluginContractTests` indeed implements only the contract-hash half. Building the described test `Tracer`/`Logger` interceptor is a well-scoped, if substantial, mechanical task. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `observability-substrate`. Evidence at HEAD ec065a7: `packages/test/src/TestAuth.ts:29`. Fix: Build a redaction-asserting Tracer + Logger in @awthaq/test, install it in TestAuth.layer, and run it inside runPluginContractTests (ticket 27 §5). (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`.
+
+**Resolved (2026-09-29):** packages/test/src/RedactionGuard.ts: a recording Tracer (wraps Effect's default), a merged Logger and an AuthEvents inspector (layerEvents), all installed by TestAuth.layer; a leak is any Redacted instance in an inspected span attribute/event, log message/annotation/cause or event payload, or a string containing a canary registered with guard.watch(label, secret); leaks name the channel, path and the canary LABEL, never the secret; canaries under 6 chars are rejected. runPluginContractTests gained the opt-in redaction { app, exercise } option (opt-in because the harness cannot build a plugin whose layer needs services it was not given) and its TestFramework.it may now be async. @awthaq/password passes with a canary password; fixtures that log a Redacted, unwrap a canary into a span attribute or publish one in an event fail with named leaks. The 'not mechanically verifiable today' text is gone from TestAuth.ts and BEH-EA-199 (spec/behaviors/25-testing-harness.md); traceability updated. TestAuth.layer now also exposes the composed plugins' own services (so a test can yield* Password.Password). BDD REQ-EA-566 stays unwired (BDD-002).

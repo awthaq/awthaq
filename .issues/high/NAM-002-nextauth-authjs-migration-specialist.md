@@ -3,7 +3,7 @@ ID: "NAM-002"
 Title: "Auth.js signIn-callback logic has no wired landing spot: hook points are mechanism-only"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts:51"
 Auditor: "nextauth-authjs-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `core` · reported by **NextAuth.js/Auth.js Migration Specialist** (`nextauth-authjs-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — evidence quote matches HookPoint.ts:50-56 near-verbatim (comment states hook points are "not yet wiring any concrete hook point into Users.ts/Sessions.ts's real signUp/signIn flows"). Repo-wide grep for HookPoint usage in packages/*/src shows only RateLimits.ts, core/index.ts, organization/src/OrganizationHooks.ts, and test/src — none define/fire BeforeSignIn/BeforeSignUp/AfterSignIn; those identifiers appear only in HookPoint.ts comments and core/test/HookPoint.test.ts. Password.ts's signIn and the OAuth callback run no hook. Fix (wiring hook points into existing flows per already-named tickets BEH-EA-089..096) is a well-scoped mechanical change. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `core-hook-point-coverage`. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:50`. Fix: Complete the core hook-point set the spec lists: add a `BeforeSignIn` veto consulted by every sign-in-completing flow, consult `BeforeSignUp` on OAuth (and any other) first-login user creation, add `AfterSignUp`, and document the Auth.js mapping. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`.
+
+**Resolved (2026-09-29):** Hooks.ts declares BeforeSignIn (veto), AfterSignUp (observe) alongside the existing four (all six spec/overview.md:107 points), both in HooksLive; BeforeSignUp's input gains strategy. BeforeSignIn is consulted by Password.signIn, OAuth.callback and Passkey.authenticateVerify after the credential is proven and before BeforeSessionIssue; OAuth first-login creation now consults BeforeSignUp (strategy = provider id, amended email/name used for the create) and fires AfterSignUp; Password.signUp/signUpConcealed fire AfterSignUp after commit. HookAborted added to the three plugins' shape + HttpApi error unions (client declaration-emit alias PasskeyHookAborted). New shared helper HookPoint.aborted(Point). Tests: packages/password/test/PasswordHooksBeforeSignIn.test.ts, packages/oauth/test/OAuthHooksVeto.test.ts, packages/passkey/test/PasskeyHooksBeforeSignIn.test.ts. Docs: docs/migrations/authjs.md section 4 maps signIn/jwt/session callbacks; TestAuth header note updated; spec BEH-EA-090 as-shipped paragraph. BDD 12-hooks.feature stays unwired (BDD-002). Gates: typecheck, vitest, bdd, spec:verify:strict, oxlint.

@@ -3,7 +3,7 @@ ID: "SCP-006"
 Title: "Closed AuthEvent union has zero deactivation/deletion events, blocking offboarding propagation and audit"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:212"
 Auditor: "scim-provisioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `core` · reported by **SCIM Provisioning Specialist** (`scim-provisioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Extend the union with user.deactivated and user.deleted events (published by the
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `auth-event-taxonomy`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:279`. Fix: Add `auth.user.deleted` now (published after the deletion transaction commits); add `auth.user.deactivated`/`reactivated` together with ticket 09's deactivation state. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** auth.user.deleted { userId, deletedBy } added (no email) and published by Account.deleteUser after the deletion transaction commits (a rolled-back deletion publishes nothing). Test: packages/server/test/AuthHttp.test.ts DELETE /user asserts exactly one audit row. auth.user.deactivated/reactivated stay with ticket 09's deactivation state (P14); the publish moves into the core erasure service with CSG-001 (P11).

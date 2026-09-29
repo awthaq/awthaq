@@ -57,3 +57,7 @@ Carry identifiers, not raw contact fields, in payloads (subscribers join email v
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `auth-event-pii-posture`. Duplicate of `ESA-005` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:192`. Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ESA-005-event-sourcing-audit-trail-specialist` — closed by its fix (see that issue's Resolved comment).
+
+**Resolved (2026-09-29):** Duplicate of ESA-005 (event PII posture, D1): identifiers-only payloads + pseudonymize-on-erasure adopted, ADR-EA-029. See ESA-005.

@@ -3,7 +3,7 @@ ID: "ALF-006"
 Title: "Event payloads carry no timestamp, correlation id, or source context"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:35"
 Auditor: "audit-logging-forensics-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Audit Logging & Forensics Specialist** (`audit-logging-forensics-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ Introduce a shared event envelope (at: DateTime.Utc, correlationId) stamped at p
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `auth-event-envelope`. Evidence at HEAD ec065a7: `packages/core/src/AuditLog.ts:45`. Fix: Introduce a request-scoped `AuthRequestContext` reference populated by the server layer and read by `publish`, and link subscriber handling to the originating span. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New core AuthRequestContext Reference (correlationId/ip/userAgent, all None by default); new @awthaq/server RequestContext.layer global HttpRouter middleware sets it per request (x-request-id if a sane token, else a W3C traceparent trace id, else a fresh uuidv7; ip via the ClientAddress port or the socket peer) and annotates logs; AuthEvents.publish reads it and captures the current span's trace/span ids; AuditLog persists correlationId in its column and ip/userAgent/trace ids in payload.meta; on()/onBatch handlers run under a root awthaq.event.handle span LINKED to the publishing span with correlationId annotated on logs (closes EOTS-009). Tests: AuthEvents.test.ts (context stamping, span ids), packages/server/test/RequestContext.test.ts (real Node server: x-request-id lands in both audit rows). The memory-server example composition gains RequestContext.layer with the EOTS-006 wiring.

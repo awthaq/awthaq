@@ -238,6 +238,7 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt`; `PasswordHasherWorkerPool.layerArgon2id`/`layerScrypt` run the KDF in worker threads (Node), see [Password hashing](#password-hashing) |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
 | `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `RateLimiter.layerMemory` (the bounded, single-process store in one line — the default when you have one instance), or `layer` over your own `RateLimiterStore`; `layerPermissive` disables limiting and logs a warning when a rule runs against it (tests only) |
+| `Crypto` | `NodeCrypto.layer` (Node) | `WebCrypto.layer` from `@awthaq/ports`: backed by `globalThis.crypto`, no `node:crypto`, for Workers/Edge runtimes (password hashing still belongs on the origin) |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
 | `Csrf.CsrfConfig` | `Csrf.layerConfig` (`AWTHAQ_CSRF_SECRET`, at least 32 bytes; optional `AWTHAQ_CSRF_ALLOWED_ORIGINS`, comma-separated) | `Layer.succeed(Csrf.CsrfConfig, { secret, allowedOrigins })` with a secret loaded from your own secret store |
 
@@ -298,6 +299,36 @@ const AppLayer = Layer.mergeAll(
 ```
 
 CORS never relaxes CSRF: cross-site mutations still need the double-submit cookie and `x-csrf-token` header, which the SPA must send with `credentials: "include"`.
+
+### Observability
+
+awthaq reuses Effect's HTTP middleware and adds spans, a field vocabulary and metric definitions below it; the sinks (a log format, an OTLP/Prometheus exporter) are yours (`spec/decisions/029-observability-substrate.md`).
+
+- **Requests.** `HttpRouter.serve` already writes one structured log line per request. If you serve through `toWebHandler`, or want a span per request, wrap the app once: `AuthHttp.tracer(AuthHttp.requestLogger(app))` (a host that already runs its own tracer/logger over the whole router must not add these). Merge `AuthHttp.layerRedactedHeaders` so the rotated-token header is never logged, and `RequestContext.layer` (a global router middleware, like `BodyLimit.layer`) so every audit row a request causes carries its correlation id (`x-request-id`, else the W3C trace id), client address and user agent.
+- **Spans** are named `awthaq.<domain>.<operation>` (`awthaq.session.verify`, `awthaq.password.signIn`, `awthaq.hook.dispatch`, `awthaq.event.publish`, ...) and carry ids only: a user id, a valid session's id, the strategy. Never an email, password or token.
+- **Metrics** are plain `Metric` values exported from `@awthaq/core`'s `Observability` (`sessionsIssued`, `sessionVerifyFailures`, `loginFailures`, `eventsDropped`, ...); wire them to your exporter.
+- **Logs**: `Logger.layer([Logger.consoleJson])` in production, `Logger.consolePretty()` in development (see `examples/memory-server`). A failing subscriber or hook tap is logged as `auth.event.observer.error` / `auth.hook.observer.error` with a sanitized summary; the raw cause only at debug level.
+- **Testing**: `TestAuth.layer` installs a `RedactionGuard` (in `@awthaq/test`) that records every span, log line and event; `runPluginContractTests`' `redaction` option runs a plugin's flows with canary secrets and fails if one reaches any of them.
+
+### Erasing an account (GDPR Art. 17)
+
+`DELETE /user` calls core's `Erasure.AccountErasure.eraseAccount(userId)`, which an admin console or a job can call directly. It runs the `BeforeUserDelete` veto first (a legal hold), then, in **one transaction**, every plugin's registered erasure (`Organization`, `Passkey`, `Roles` and `UserClaims` ship one), the core rows (accounts, sessions, verification tokens, the user) and the pseudonymization of every audit row that names the user, and only after the commit publishes `auth.user.deleted`. A plugin that stores personal data contributes with `AuthPlugin.layer(Self, { contributes: Erasure.contribute({ id, make }) })`; the layer requires `Erasure.ErasureRegistry` (part of `Hooks.HooksLive`), so leaving it out does not compile. Set `Erasure.config({ auditLog: "retain" })` to keep audit rows verbatim under a legal-obligation basis. The schema has no foreign keys by design, so no database cascade does this for you; the admin impersonation ledger is retained on purpose (`spec/decisions/033-erasure-registry-and-retention.md`).
+
+### Delivering events to other services
+
+`AuthEvents` is an in-process, bounded, at-most-once bus: right for a subscriber in the same process (`AuthEvents.on([...tags], handler)` in your composition; the subscription is registered before the layer is up, so nothing published after it is lost), wrong for another service, since a burst can be dropped and nothing crosses a process boundary. For those, use the outbox: every event is already a durable `AuditLog` row, and `EventRelay.layer({ name: "billing" })` tails that table from a persisted position into an `EventTransport` you provide (Redis, Kafka, SQS, an HTTP call: `{ deliver: (events) => Effect }`). It advances only after `deliver` succeeds, so delivery is at-least-once (deduplicate on `eventId`), retried with backoff, and resumes after a restart; provide `EventRelay.layerCursorSql` for a durable position (core migration 22) or `layerCursorMemory` for tests. An event is relayed once it is `settleDelay` old (default 2 s) so a row committed late by another process is not skipped; give each consumer its own `name`. A signed-webhooks plugin on top of this seam is not built yet (`spec/decisions/032-event-delivery-outbox-relay.md`).
+
+### Detecting attacks
+
+The library publishes its breach signals (`auth.session.reuse`, `auth.passkey.counterAnomaly`, `auth.token.replay`, `auth.user.signInFailed`, `auth.admin.impersonationDenied`); compose `SecuritySignals.layer` to act on them. It raises an incident (a `warning` log, `awthaq_security_incident_total{rule}`, and the `IncidentSink` you provide, e.g. a table or a pager) when a rule's threshold is reached inside its window; the defaults are one session reuse or passkey counter anomaly, 5 token replays per identifier, 10 failed sign-ins per address or 5 per identifier in ten minutes, and 3 denied impersonations per admin. Replace them with `SecuritySignals.config({ rules })`. It is opt-in and detection only: it never blocks a request (rate limits and hooks do that).
+
+### Exporting an account (GDPR Art. 15/20)
+
+`GET /user/export` (authenticated, rate limited to five an hour per account) downloads one JSON document, `account-export.json`: the user, linked accounts (provider and subject, never a hash or token), live sessions, the person's own audit activity, and one section per plugin that stores personal data under its plugin id (`Organization`, `Passkey`, `Roles` and `UserClaims` ship one). It contains no secret and nothing about anyone else, a plugin that cannot read its store fails the whole export rather than omit it, and each export is audited as `auth.user.dataExported`. A plugin contributes with `DataExport.contribute` beside its `Erasure.contribute`; `DataExport.AccountExport.exportAccount(userId)` is the same assembly for an admin console or a support script. A composition running `Account.AccountHandlers` provides `DataExport.layer` next to `Erasure.layer`, and a `RateLimiter` (`TestAuth.layer` already does).
+
+### Retention
+
+Expiry is a read-time rejection, so expired rows stay until something deletes them. `Retention.sweep` (`@awthaq/core`) does, in bounded batches, in both the memory and SQL layers: sessions more than `sessionGrace` (default 7 days) past their expiry, verification tokens and reservations more than `verificationForensicWindow` (default 90 days) past theirs, and audit rows only if you configure a window (`Retention.config({ auditLog: { default: Option.some(Duration.days(365)), rules: [{ tags: ["auth.user.signInFailed"], keepFor: Duration.days(90) }] } })`; the default keeps the trail for ever). Nothing runs it unless you do: call `sweep` from your own job, or provide `Retention.layerScheduled` (sweeps at start-up, then every `sweepInterval`, default 1 day). The defaults are a policy to confirm for your jurisdiction. The impersonation ledger is never purged (`spec/decisions/033-erasure-registry-and-retention.md`).
 
 ## Plugins
 

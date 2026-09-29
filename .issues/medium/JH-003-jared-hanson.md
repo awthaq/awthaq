@@ -3,7 +3,7 @@ ID: "JH-003"
 Title: "Tap ordering implements 2 of 3 spec keys via a module-global counter"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts:44"
 Auditor: "jared-hanson"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `core` · reported by **Jared Hanson — Creator of Passport.js** (`jared-hanson`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Take an owner (PluginOwner-style `{ id }`) parameter on tap(), the way Slots.ove
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hook-registry-per-composition`. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:180`. Fix: Capture tap ownership and sort by the spec'd three keys (dependency order, declared order, plugin id) at freeze time, using the composition's topological order that Auth.make already computes. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Tap ordering is the spec's three keys: TapOptions.owner (structural TapOwner {id, dependsOn}), HookPoint.compareTaps (dependency level, declared order, plugin id; app taps last), applied at freeze time; a pure function of owners/orders independent of registration order. Tests in packages/core/test/HookPoint.test.ts (dependency order beats registration order; order then id tie-break; compareTaps). Decision (dependency order key): dependency depth over the owners' dependsOn graph rather than Auth.make's Kahn index, so declared order and plugin id remain meaningful between independent plugins.

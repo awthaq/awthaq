@@ -73,6 +73,8 @@ export interface InvitationRecordsShape {
     organizationId: string,
   ) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
   readonly listByEmail: (email: string) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
+  /** CSG-005: every invitation the user sent, any status — the data-subject export's "invitations sent". */
+  readonly listByInviter: (inviterId: Users.UserId) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
   readonly countPendingByInviter: (inviterId: Users.UserId) => Effect.Effect<number>;
   readonly updateStatus: (
     id: string,
@@ -80,6 +82,12 @@ export interface InvitationRecordsShape {
   ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound>;
   /** Deletes every invitation row for an organization — used by `Organization.delete`'s cascade. */
   readonly removeAllForOrganization: (organizationId: string) => Effect.Effect<void>;
+  /**
+   * CSG-001: deletes every invitation that names an erased user — one they sent
+   * (`inviterId`) or one addressed to their email (compared case-insensitively;
+   * the row holds the invitee's address in plaintext). Idempotent.
+   */
+  readonly removeAllForUser: (userId: Users.UserId, email?: string) => Effect.Effect<void>;
 }
 
 export class InvitationRecords extends Context.Service<InvitationRecords, InvitationRecordsShape>()(
@@ -176,6 +184,11 @@ export const layerMemory = Layer.effect(
         ),
       );
 
+    const listByInviter: InvitationRecordsShape["listByInviter"] = (inviterId) =>
+      Ref.get(state).pipe(
+        Effect.map((s) => Array.from(HashMap.values(s)).filter((row) => row.inviterId === inviterId)),
+      );
+
     const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>
       Ref.get(state).pipe(
         Effect.map(
@@ -208,6 +221,18 @@ export const layerMemory = Layer.effect(
         ),
       );
 
+    const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (userId, email) =>
+      Ref.update(state, (s) =>
+        Array.from(HashMap.entries(s)).reduce(
+          (acc, [key, row]) =>
+            row.inviterId === userId ||
+            (email !== undefined && row.email.toLowerCase() === email.toLowerCase())
+              ? HashMap.remove(acc, key)
+              : acc,
+          s,
+        ),
+      );
+
     return {
       create,
       findById,
@@ -216,9 +241,11 @@ export const layerMemory = Layer.effect(
       findPendingByEmailAndOrg,
       listByOrganization,
       listByEmail,
+      listByInviter,
       countPendingByInviter,
       updateStatus,
       removeAllForOrganization,
+      removeAllForUser,
     };
   }),
 );
@@ -329,6 +356,13 @@ export const layerSql = Layer.effect(
       execute: (email) => sql`SELECT * FROM organization_invitation WHERE email = ${email}`,
     });
 
+    const listByInviterQuery = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: InvitationRow,
+      execute: (inviterId) =>
+        sql`SELECT * FROM organization_invitation WHERE "inviterId" = ${inviterId}`,
+    });
+
     // MTI-005: a COUNT(*), never a full-row materialization.
     const countPendingByInviterQuery = SqlSchema.findOne({
       Request: Schema.String,
@@ -400,6 +434,12 @@ export const layerSql = Layer.effect(
         Effect.orDie,
       );
 
+    const listByInviter: InvitationRecordsShape["listByInviter"] = (inviterId) =>
+      listByInviterQuery(inviterId).pipe(
+        Effect.map((rows) => rows.map(toRecord)),
+        Effect.orDie,
+      );
+
     const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>
       countPendingByInviterQuery(inviterId).pipe(
         Effect.map((row) => row.count),
@@ -422,6 +462,13 @@ export const layerSql = Layer.effect(
         Effect.asVoid,
       );
 
+    const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (userId, email) =>
+      // FAMS-002: a phone/anonymous user has no address for invitations to name.
+      (email === undefined
+        ? sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId}`
+        : sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId} OR lower("email") = lower(${email})`
+      ).pipe(Effect.orDie, Effect.asVoid);
+
     return {
       create,
       findById,
@@ -430,9 +477,11 @@ export const layerSql = Layer.effect(
       findPendingByEmailAndOrg,
       listByOrganization,
       listByEmail,
+      listByInviter,
       countPendingByInviter,
       updateStatus,
       removeAllForOrganization,
+      removeAllForUser,
     };
   }),
 );

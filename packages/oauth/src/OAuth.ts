@@ -27,7 +27,9 @@ import {
   AuthEvents,
   AuthPlugin,
   Errors,
+  HookPoint,
   Hooks,
+  Observability,
   RateLimits,
   SessionCookie,
   Sessions,
@@ -633,7 +635,9 @@ export interface OAuthShape {
     | OAuthApi.AccountExists
     | Users.UserSuspended
     | Api.RateLimited
-    | Hooks.TwoFactorRequired | Errors.StoreUnavailable
+    | HookPoint.HookAborted
+    | Hooks.TwoFactorRequired
+    | Errors.StoreUnavailable
   >;
   /**
    * MNA-003: redeems the exchange code a native callback put in its deep link.
@@ -734,6 +738,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // session).
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
+      // NAM-002: the sign-in veto every sign-in-completing flow consults, and
+      // the sign-up veto/observer for the first-login user creation below.
+      const beforeSignIn = yield* Hooks.BeforeSignIn;
+      const beforeSignUp = yield* Hooks.BeforeSignUp;
+      const afterSignUp = yield* Hooks.AfterSignUp;
 
       /**
        * Ticket 13: 20 callback attempts per minute per source IP — loose
@@ -894,7 +903,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         return { location, state };
       });
 
-      const callback: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
+      const callbackFlow: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
         // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
         yield* RateLimits.enforce({
           key: `oauth:callback:${input.ip ?? "unknown"}`,
@@ -1151,6 +1160,16 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               // every other `.pipe(Effect.orDie)` in this codebase already
               // treats an unexpected persistence failure.
               const name = profile.name ?? profile.email ?? profile.subject;
+              // NAM-002/SCP-008: creation via OAuth is still a sign-up, so the
+              // same `BeforeSignUp` veto guards it (its `strategy` is the
+              // provider id), before anything is written.
+              const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
+                beforeSignUp.run({
+                  email: profile.email ?? `${providerId}:${profile.subject}`,
+                  name,
+                  strategy: providerId,
+                }),
+              );
               const created = yield* sqlTransaction
                 .withTransaction(
                   Effect.gen(function* () {
@@ -1163,8 +1182,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                         identity:
                           profile.email === undefined
                             ? { _tag: "Anonymous" }
-                            : { _tag: "Email", email: profile.email },
-                        name,
+                            : { _tag: "Email", email: vetoedSignUp.email },
+                        name: vetoedSignUp.name,
                         // NAM-009: an http(s) avatar only — see `OAuthProfile.image`.
                         ...(profile.image !== undefined && isImageUrl(profile.image)
                           ? { image: profile.image }
@@ -1231,6 +1250,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 // and must still reach the caller as itself.
                 .pipe(Effect.catchTag("SqlError", Effect.die));
               yield* events.publish({ _tag: "auth.user.created", userId: created.id });
+              yield* afterSignUp.run({
+                userId: created.id,
+                ...Users.emailField(created),
+                strategy: providerId,
+              });
               return created.id;
             }),
         });
@@ -1243,9 +1267,16 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
         // SCP-001/BAM-005: THE shared sign-in gate — the provider proved the
         // identity; a suspended user still gets no session.
-        yield* users
-          .findById(targetUserId)
-          .pipe(Effect.orDie, Effect.flatMap(Users.assertCanSignIn));
+        const signedInUser = yield* users.findById(targetUserId).pipe(Effect.orDie);
+        yield* Users.assertCanSignIn(signedInUser);
+        // NAM-002: the sign-in veto, before the MFA divert point below.
+        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
+          beforeSignIn.run({
+            userId: targetUserId,
+            ...Users.emailField(signedInUser),
+            strategy: providerId,
+          }),
+        );
 
         // BCR-004/THS-002: same canonical MFA attachment point
         // `@awthaq/password`'s own `signIn` consults, right before this
@@ -1379,6 +1410,32 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           token,
         }).pipe(Effect.catchTag("SchemaError", () => CallbackFailure.callbackFailed("exchange-invalid")));
       });
+
+
+      /**
+       * CSD-004: a rejected callback (bad state, cookie mismatch, replayed flow,
+       * failed token exchange or ID-token check) is the OAuth strategy's failure
+       * signal — `auth.user.signInFailed`, so a detector sees every strategy. The
+       * provider's own "user said no" redirect and an availability failure are not.
+       */
+      const callback: OAuthShape["callback"] = (providerId, input) =>
+        callbackFlow(providerId, input).pipe(
+          Effect.tapError((error) =>
+            error._tag === "OAuthCallbackFailed"
+              ? events.publish({
+                  _tag: "auth.user.signInFailed",
+                  strategy: providerId,
+                  reason: "callbackRejected",
+                  ...(input.ip === undefined ? {} : { clientIp: input.ip }),
+                })
+              : Effect.void,
+          ),
+          // EOTS-001: `awthaq.oauth.callback`, with the provider id (a configured, bounded label).
+          Observability.authSpan("awthaq.oauth.callback", {
+            "awthaq.plugin": "oauth",
+            [Observability.Field.strategy]: providerId,
+          }),
+        );
 
       return OAuth.of({ authorize, callback, exchange });
     }),

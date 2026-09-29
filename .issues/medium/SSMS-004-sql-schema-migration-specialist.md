@@ -3,7 +3,7 @@ ID: "SSMS-004"
 Title: "REQ-EA-563's 'migrations apply deterministically' check never applies a migration"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "test"
 Source: "packages/test/src/TestAuth.ts:285"
 Auditor: "sql-schema-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `test` · reported by **SQL Schema Migration Specialist** (`sql-schema-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Add an effectful contract variant that runs the built migrations twice against i
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `test-harness-completeness`. Evidence at HEAD ec065a7: `packages/test/src/TestAuth.ts:310`. Fix: Run the built migrations twice against two fresh in-memory SQLite databases and compare resulting schemas; keep the cheap declaration check under an honest name. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** runPluginContractTests now applies each build's migrations to two fresh in-memory SQLite databases (core migrations first, then the plugin ledger via Migrations.run), compares the resulting schemas (sqlite_master minus the two ledgers), and re-applies to assert the migrator skips what is already applied; the cheap declaration check is kept under an honest name ('migration declarations are deterministic across builds', names only). A nondeterministic up (table name differs per application) and a failing up are caught. @effect/sql-sqlite-node moved to dependencies of @awthaq/test. Tests in packages/test/test/runPluginContractTests.test.ts.

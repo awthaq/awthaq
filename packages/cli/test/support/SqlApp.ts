@@ -3,7 +3,7 @@
 // client (SQLite), exactly what an application's `awthaq.config.ts` exports as `app`. It is a
 // Layer over a `SqlClient` the *test* owns, so state survives across the separate builds each CLI
 // invocation performs (a fresh runtime per command), the way a database does.
-import { Accounts, AuditLog, AuthEvents, Hooks, Migrations, Slots, Users } from "@awthaq/core";
+import { Accounts, AuditLog, AuthEvents, DataExport, Erasure, Hooks, Migrations, Slots, Users } from "@awthaq/core";
 import { Encryption, KeyProvider, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
 import { BetterAuthScryptVerifier } from "@awthaq/migrate-better-auth";
@@ -80,6 +80,9 @@ export const sqlApp = (sql: SqlClient.SqlClient) =>
     Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)),
     // The slot registry `Auth.make` would otherwise provide: `Roles` reads and overrides slots.
     Layer.provide(Slots.layer),
+    // CSG-001/CSG-005: `Roles` contributes its erasure and export sections to the composition's registries.
+    Layer.provide(Erasure.registryLayer),
+    Layer.provide(DataExport.registryLayer),
   );
 
 /** The same without Roles: there is no administrative role concept to grant. */

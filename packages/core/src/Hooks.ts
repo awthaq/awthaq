@@ -29,12 +29,46 @@
 
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as DataExportRegistry from "./DataExportRegistry.ts";
+import * as ErasureRegistry from "./ErasureRegistry.ts";
 import * as HookPoint from "./HookPoint.ts";
 
 // BEH-EA-090: veto — a plugin may reject a sign-up outright (e.g. an
-// Auth0-Rule-style email-domain allow-list or subscription gate).
-const SignUpInput = Schema.Struct({ email: Schema.String, name: Schema.String });
+// Auth0-Rule-style email-domain allow-list or subscription gate). Consulted on
+// *every* user-creating path (NAM-002/SCP-008: password sign-up and the OAuth
+// first-login creation), so `strategy` says which one — `"password"`, or the
+// OAuth provider id — and one tap can tell them apart.
+const SignUpInput = Schema.Struct({
+  email: Schema.String,
+  name: Schema.String,
+  strategy: Schema.String,
+});
 export class BeforeSignUp extends HookPoint.veto<BeforeSignUp>()("auth.user.signUp", SignUpInput) {}
+
+// NAM-002: observe — fired once a new user's creation has committed, whichever
+// strategy created it (the after-the-fact twin of `BeforeSignUp`; welcome mail,
+// provisioning fan-out, CRM sync).
+// FAMS-002: `email` is absent for a phone/anonymous user.
+const SignedUp = Schema.Struct({
+  userId: Schema.String,
+  email: Schema.optionalKey(Schema.String),
+  strategy: Schema.String,
+});
+export class AfterSignUp extends HookPoint.observe<AfterSignUp>()("auth.user.signedUp", SignedUp) {}
+
+// NAM-002: veto — consulted by every sign-in-completing flow (password,
+// oauth, passkey) once the credential has been proven and before
+// `BeforeSessionIssue`. This is where an Auth.js `signIn` callback returning
+// `false` lands (a domain allow-list, a banned user): a tap fails with
+// `HookAbort({ code })`, surfaced to the client as `HookAborted` (403). The
+// amended value is ignored: a sign-in cannot change who is signing in.
+// FAMS-002: `email` is absent for a phone/anonymous user.
+const SignInInput = Schema.Struct({
+  userId: Schema.String,
+  email: Schema.optionalKey(Schema.String),
+  strategy: Schema.String,
+});
+export class BeforeSignIn extends HookPoint.veto<BeforeSignIn>()("auth.user.signIn", SignInInput) {}
 
 // BEH-EA-092: observe — fired once a session-backed sign-in completes,
 // regardless of which strategy (password/oauth/passkey) produced it.
@@ -106,15 +140,22 @@ export class AfterUserAttributesChanged extends HookPoint.observe<AfterUserAttri
  * Every point's own default (no-tap) layer, merged into one — an
  * application composing any of `Users`/`Password`/`OAuth`/`Passkey`
  * needs this once, the same way `OrganizationHooksLive` already covers
- * `@awthaq/organization`'s own points. A composition that also wants to
- * `.tap(...)` one merges that tap's own layer in alongside this (taps and
- * a point's own `.layer` are independent effects over the same shared,
- * module-scoped registry — see `HookPoint.ts`'s own header comment).
+ * `@awthaq/organization`'s own points. A tap's Layer requires its point
+ * (ELC-001), so a composition that `.tap(...)`s one provides this *to* the
+ * tap (`Tap.pipe(Layer.provideMerge(HooksLive))`): the registry lives in the
+ * point's built layer, per composition — see `HookPoint.ts`'s header.
  */
 export const HooksLive = Layer.mergeAll(
   BeforeSignUp.layer,
+  AfterSignUp.layer,
+  BeforeSignIn.layer,
   AfterSignIn.layer,
   BeforeSessionIssue.layer,
   BeforeUserDelete.layer,
   AfterUserAttributesChanged.layer,
+  // CSG-001: the erasure registry rides here too — every composition already
+  // provides `HooksLive`, and each plugin holding personal data contributes its
+  // erasure to it (`Erasure.contribute`), so erasure is not something a host opts into.
+  ErasureRegistry.registryLayer,
+  DataExportRegistry.registryLayer,
 );

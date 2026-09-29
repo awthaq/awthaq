@@ -32,6 +32,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
@@ -526,6 +527,119 @@ describe("Password", () => {
         if (event?._tag === "auth.user.signInFailed") {
           assert.strictEqual(event.reason, "emailNotVerified");
         }
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "EOTS-001: every operation is an awthaq.password.<operation> span (plugin, strategy, user.id on success) and no attribute holds the email or password",
+    () => {
+      const spans: Array<Tracer.Span> = [];
+      const base = Tracer.Tracer.defaultValue();
+      const TracerLive = Layer.succeed(
+        Tracer.Tracer,
+        Tracer.make({
+          span: (options) => {
+            const span = base.span(options);
+            spans.push(span);
+            return span;
+          },
+        }),
+      );
+      return Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const issued = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        yield* password.signIn({ email, password: strongPassword });
+        yield* password
+          .signIn({ email, password: Redacted.make("totally wrong password") })
+          .pipe(Effect.flip);
+
+        const named = (name: string) => spans.filter((span) => span.name === name);
+        assert.isAbove(named("awthaq.password.signUp").length, 0);
+        assert.isAbove(named("awthaq.password.verifyEmail").length, 0);
+        // Two sign-ins, and each does one real hash check under its own span.
+        assert.strictEqual(named("awthaq.password.signIn").length, 2);
+        assert.strictEqual(named("awthaq.password.verify").length, 2);
+        const [successful] = named("awthaq.password.signIn");
+        assert.strictEqual(successful?.attributes.get("awthaq.plugin"), "password");
+        assert.strictEqual(successful?.attributes.get("auth.strategy"), "password");
+        assert.strictEqual(successful?.attributes.get("user.id"), issued.session.userId);
+        // The failed attempt never learns the user id.
+        assert.isFalse(named("awthaq.password.signIn")[1]?.attributes.has("user.id") ?? true);
+
+        const values = spans.flatMap((span) =>
+          [...span.attributes.values()].map((value) => String(value)),
+        );
+        assert.isFalse(values.some((value) => value.includes(email)));
+        assert.isFalse(values.some((value) => value.includes("correct horse battery staple")));
+        assert.isFalse(values.some((value) => value.includes("totally wrong password")));
+      }).pipe(Effect.provide(TestLayer.pipe(Layer.provideMerge(TracerLive))));
+    },
+  );
+
+  it.effect(
+    "CSD-004: the failure event carries the source ip and a keyed identifierDigest — stable per identifier (existing account or not), distinct across identifiers, never the identifier itself",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* password.signUp({ email, password: strongPassword });
+        const wrong = Redacted.make("totally wrong password");
+        const attempt = (who: string) =>
+          password.signIn({ email: who, password: wrong, ip: "203.0.113.7" }).pipe(Effect.flip);
+        yield* attempt(email); // an existing account
+        yield* attempt(email.toUpperCase()); // the same identifier, differently cased
+        yield* attempt("nobody@example.com"); // no such account
+        yield* attempt("nobody@example.com");
+
+        const rows = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        const failures = rows.flatMap((row) =>
+          row.payload._tag === "auth.user.signInFailed" ? [row.payload] : [],
+        );
+        assert.strictEqual(failures.length, 4);
+        for (const failure of failures) {
+          assert.strictEqual(failure.clientIp, "203.0.113.7");
+          assert.isString(failure.identifierDigest);
+          assert.notProperty(failure, "userId");
+          assert.notProperty(failure, "email");
+        }
+        const digests = new Set(failures.map((failure) => failure.identifierDigest));
+        // {email, EMAIL} share one digest (normalized), {nobody} is another: two distinct values.
+        assert.strictEqual(digests.size, 2);
+        assert.isFalse(JSON.stringify(failures).includes("nobody"));
+        assert.isFalse(JSON.stringify(failures).includes(email));
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "ARF-006: requestReset publishes auth.password.resetRequested for a real account only; verifyEmail publishes auth.user.emailVerified",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const auditLog = yield* AuditLog.AuditLog;
+        const issued = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+
+        const verified = yield* auditLog.list({ eventTag: "auth.user.emailVerified" });
+        assert.strictEqual(verified.length, 1);
+        assert.strictEqual(verified[0]?.actorUserId._tag, "Some");
+
+        yield* password.requestReset({ email: "nobody@example.com" });
+        yield* letForkedFibersRun;
+        assert.strictEqual(
+          (yield* auditLog.list({ eventTag: "auth.password.resetRequested" })).length,
+          0,
+        );
+
+        yield* password.requestReset({ email });
+        yield* letForkedFibersRun;
+        const requested = yield* auditLog.list({ eventTag: "auth.password.resetRequested" });
+        assert.strictEqual(requested.length, 1);
+        const [row] = requested;
+        assert.strictEqual(
+          row?.payload._tag === "auth.password.resetRequested" ? row.payload.userId : "",
+          issued.session.userId,
+        );
       }).pipe(Effect.provide(TestLayer)),
   );
 

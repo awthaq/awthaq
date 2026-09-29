@@ -8,7 +8,7 @@
 // `layerMemory`'s own "assigning an already-held role name is a no-op"
 // contract — the one property `Roles.test.ts`'s in-memory suite cannot
 // itself prove.
-import { AuditLog, AuthEvents, Migrations, Slots, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, DataExport, Erasure, Migrations, Slots, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,6 +40,9 @@ const owner = role({
 const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Slots.layer),
+  // CSG-001: the plugin contributes its erasure to the composition's registry.
+  Layer.provideMerge(Erasure.registryLayer),
+  Layer.provideMerge(DataExport.registryLayer),
 );
 
 const TestLayer = Roles.Roles.layerSql.pipe(
@@ -175,6 +178,48 @@ describe("Roles.Roles.layerSql", () => {
       assert.strictEqual(revoked.length, 1);
       assert.deepStrictEqual(assigned[0]?.actorUserId, Option.some(actor));
       assert.deepStrictEqual(revoked[0]?.actorUserId, Option.some(actor));
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSG-001: the plugin's own erasure contribution is registered by its layer.
+  it.effect("registers a `roles` erasure that revokes every role the user holds", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const registry = yield* Erasure.ErasureRegistry;
+      const erased = Users.UserId("dddddddd-dddd-dddd-dddd-dddddddddddd");
+      const kept = Users.UserId("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
+      yield* roles.assign(erased, "owner");
+      yield* roles.assign(erased, "editor");
+      yield* roles.assign(kept, "editor");
+
+      const contributions = yield* registry.contributions;
+      assert.deepStrictEqual(
+        contributions.map((c) => c.id),
+        ["roles"],
+      );
+      for (const c of contributions) yield* c.erase({ userId: erased, email: "erase@example.com" });
+
+      assert.deepStrictEqual(yield* roles.listRoleNames(erased), []);
+      assert.deepStrictEqual(yield* roles.listRoleNames(kept), ["editor"]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSG-005: the plugin's section of the data-subject export.
+  it.effect("registers a `roles` export listing the user's role names", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const registry = yield* DataExport.DataExportRegistry;
+      const mine = Users.UserId("f1f1f1f1-f1f1-f1f1-f1f1-f1f1f1f1f1f1");
+      const other = Users.UserId("f2f2f2f2-f2f2-f2f2-f2f2-f2f2f2f2f2f2");
+      yield* roles.assign(mine, "owner");
+      yield* roles.assign(other, "editor");
+      const contributions = yield* registry.contributions;
+      const roleSection = contributions.find((c) => c.id === "roles");
+      assert.isDefined(roleSection);
+      assert.deepStrictEqual(
+        yield* roleSection!.collect({ userId: mine, email: "m@example.com" }),
+        { roles: ["owner"] },
+      );
     }).pipe(Effect.provide(TestLayer)),
   );
 });

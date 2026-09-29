@@ -28,9 +28,13 @@ import {
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
+  DataExport,
+  Erasure,
   Errors,
+  HookPoint,
   Hooks,
   Migrations,
+  Observability,
   RateLimits,
   Sessions,
   Users,
@@ -543,6 +547,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCounterAnomaly
     | Users.UserSuspended
+    | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
     | Errors.StoreUnavailable
   >;
@@ -886,6 +891,54 @@ const passkeyMigrations: Migrations.Migrations = [
   },
 ];
 
+/**
+ * CSG-001/DRS-002 (.issues/high), wayfinder ticket 30: this plugin's part of
+ * `AccountErasure.eraseAccount`, part of `Passkey.layer` itself (it requires
+ * `Erasure.ErasureRegistry`, so a composition without one does not compile). It
+ * removes the user's `passkey_credential` rows and — since BPAS-003 — their
+ * stable WebAuthn user handle, inside `eraseAccount`'s transaction.
+ */
+/**
+ * CSG-005: this plugin's section of the data-subject export — each credential's metadata
+ * (a name, when it was registered and last used, device class, transports, authenticator
+ * model). Never the public key, the WebAuthn user handle or the signature counter: they are
+ * key material or a cloning signal, not something a person needs back (Art. 20), and the
+ * export must hold no secret.
+ */
+export const passkeyExport = DataExport.contribute({
+  id: "passkey",
+  make: Effect.gen(function* () {
+    const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+    return (subject: DataExport.DataExportSubject) =>
+      credentials.listByUser(subject.userId).pipe(
+        Effect.map((rows) => ({
+          credentials: rows.map((row) => ({
+            id: row.id,
+            name: row.name,
+            deviceType: row.deviceType,
+            backedUp: row.backedUp,
+            transports: [...row.transports],
+            aaguid: row.aaguid,
+            createdAt: DateTime.formatIso(row.createdAt),
+            lastUsedAt: DateTime.formatIso(row.lastUsedAt),
+          })),
+        })),
+      );
+  }),
+});
+
+export const passkeyErasure = Erasure.contribute({
+  id: "passkey",
+  make: Effect.gen(function* () {
+    const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+    const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
+    return (subject: Erasure.ErasureSubject) =>
+      credentials
+        .deleteAllByUser(subject.userId)
+        .pipe(Effect.andThen(handles.deleteByUser(subject.userId)));
+  }),
+});
+
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
   apiVersion: 1,
   contract: PasskeyApi.PasskeyApi,
@@ -920,6 +973,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
     handlers: PasskeyHandlers,
+    contributes: Layer.mergeAll(passkeyErasure, passkeyExport),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
@@ -937,6 +991,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       // future `TwoFactor` plugin taps.
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
+      const beforeSignIn = yield* Hooks.BeforeSignIn;
 
       // ---- layer-build validation and operator warnings --------------------
 
@@ -1347,7 +1402,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           }
         });
 
-      const authenticateVerify: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
+      const authenticateCeremony: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
         function* (input, context) {
           // Per-source budget first: cheap to enforce, bounds signature work
           // and challenge probing from one address.
@@ -1449,13 +1504,22 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // session for a dead `userId` with no existence check of its
           // own: same uniform `InvalidCredentials` collapse BEH-EA-136
           // already applies to every other failure in this ceremony.
-          const user = yield* users
+          const signedInUser = yield* users
             .findById(stored.userId)
             .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
 
           // SCP-001/BAM-005: THE shared sign-in gate, after the credential is
           // proven and before any session exists.
-          yield* Users.assertCanSignIn(user);
+          yield* Users.assertCanSignIn(signedInUser);
+
+          // NAM-002: the sign-in veto, before the MFA divert point below.
+          yield* HookPoint.aborted(Hooks.BeforeSignIn)(
+            beforeSignIn.run({
+              userId: stored.userId,
+              ...Users.emailField(signedInUser),
+              strategy: "passkey",
+            }),
+          );
 
           // BCR-004/THS-002: same canonical MFA attachment point
           // `@awthaq/password`'s own `signIn` consults, right before this
@@ -1488,6 +1552,34 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           return issued;
         },
       );
+
+      /**
+       * CSD-004: a failed assertion is the passkey strategy's failure signal —
+       * `auth.user.signInFailed`, so a stuffing/probing detector sees every
+       * strategy. Only the ceremony's own refusals count; a rate-limit, a
+       * `BeforeSignIn` veto or a second-factor divert are not failed assertions.
+       */
+      const authenticateVerify: PasskeyShape["authenticateVerify"] = (input, context) =>
+        authenticateCeremony(input, context).pipe(
+          Effect.tapError((error) =>
+            error._tag === "InvalidCredentials" ||
+            error._tag === "PasskeyChallengeInvalid" ||
+            error._tag === "PasskeyUserVerificationRequired" ||
+            error._tag === "PasskeyCounterAnomaly"
+              ? events.publish({
+                  _tag: "auth.user.signInFailed",
+                  strategy: "passkey",
+                  reason: "assertionInvalid",
+                  ...(input.ip === undefined ? {} : { clientIp: input.ip }),
+                })
+              : Effect.void,
+          ),
+          // EOTS-001: `awthaq.passkey.authenticateVerify`.
+          Observability.authSpan("awthaq.passkey.authenticateVerify", {
+            "awthaq.plugin": "passkey",
+            [Observability.Field.strategy]: "passkey",
+          }),
+        );
 
       const listCredentials: PasskeyShape["listCredentials"] = (userId) =>
         credentials.listByUser(userId);
@@ -1664,43 +1756,3 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
     }),
   });
 }
-
-/**
- * CSG-001/DRS-002 (.issues/high): a real tap on the core
- * `Hooks.BeforeUserDelete` veto point (CSG-002, already wired into
- * `Users.ts`'s own `delete_` for both layers) that sweeps this plugin's
- * own `passkey_credential` rows — and, since BPAS-003, the user's stable
- * WebAuthn handle — for the deleted user. `PasskeyCredentials`/
- * `PasskeyUserHandles` are resolved once at layer-build time so the tap
- * handler itself carries no further service requirement, matching
- * `VetoTap`'s own fixed-`R` signature. Fires from inside `Users.delete_`,
- * which `@awthaq/server`'s `Account.ts` already calls from within its own
- * `SqlTransaction` — this tap's own write joins that same transaction.
- *
- * **A separate export, not merged into `Passkey.layer` itself:**
- * `Hooks.BeforeUserDelete` is a module-level singleton whose tap registry
- * freezes permanently after its first `run()` (BEH-EA-024) — a real,
- * empirically-confirmed constraint (CSG-002's own resolution comment).
- * `Passkey.layer` is built repeatedly across a real test suite (a fresh
- * `Layer` per test/file, all sharing one module load); merging the tap in
- * there means every build after the point's first run anywhere in the
- * same process dies with `HookPointFrozen`. A composition that wants this
- * erasure guarantee provides `Passkey.beforeUserDeleteErasure` once,
- * application-wide, the same opt-in posture `RateLimits.layer`/
- * `Slots.layer` already use for their own registries.
- */
-export const beforeUserDeleteErasure: Layer.Layer<
-  never,
-  never,
-  PasskeyCredentials.PasskeyCredentials | PasskeyUserHandles.PasskeyUserHandles
-> = Layer.unwrap(
-  Effect.gen(function* () {
-    const credentials = yield* PasskeyCredentials.PasskeyCredentials;
-    const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
-    return Hooks.BeforeUserDelete.tap((input) =>
-      credentials
-        .deleteAllByUser(Users.UserId(input.id))
-        .pipe(Effect.andThen(handles.deleteByUser(Users.UserId(input.id))), Effect.as(input)),
-    );
-  }),
-);

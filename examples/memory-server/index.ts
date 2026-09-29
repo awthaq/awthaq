@@ -26,11 +26,11 @@ import {
   TeamRecords,
 } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { AuditLog, Auth, AuthEvents, Verification } from "@awthaq/core";
-import { PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Auth, Retention, SecuritySignals } from "@awthaq/core";
+import { RateLimiter } from "@awthaq/ports";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
-import { Authentication, BodyLimit, Csrf } from "@awthaq/server";
+import { AuthHttp, Authentication, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import { EvaluationServicesNone, role } from "@qadi/core";
 import { RequirePermissionLive } from "@qadi/http";
@@ -40,6 +40,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { createServer } from "node:http";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -115,18 +116,13 @@ const OrganizationMemory = Layer.mergeAll(
   // once per composition, per `OrganizationHooksLive`'s own doc comment.
   OrganizationHooks.OrganizationHooksLive,
 );
-const PasswordExtras = Layer.mergeAll(
-  Verification.layerMemory,
-  PasswordHasher.layerArgon2id,
-  FetchHttpClient.layer,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(AuditLog.layerMemory));
+// The one thing `Password` needs that `TestAuth`'s bundle deliberately leaves to the caller:
+// the HTTP transport for the breach-check lookup. `Verification`, the `PasswordHasher`,
+// `AuthEvents` and `AuditLog` all come from the bundle (ETVS-004) — `Roles` below is built
+// over that same `AuthEvents`/`AuditLog`, so its audit events land next to everyone else's.
+const PasswordExtras = FetchHttpClient.layer;
 
-// `Roles` publishes audit events, so it is built over the same `AuthEvents`/`AuditLog`
-// the Password extras provide.
-const RolesLive = Roles.Roles.layer.pipe(
-  Layer.provide(Roles.config([platformAdmin])),
-  Layer.provideMerge(PasswordExtras),
-);
+const RolesLive = Roles.Roles.layer.pipe(Layer.provide(Roles.config([platformAdmin])));
 
 // 3. `TestAuth.layer` is the whole pipeline over memory — the same
 //    machinery `packages/*/test/AuthHttp.test.ts` files and this repo's
@@ -141,6 +137,7 @@ const AppLayer = TestAuth.layer(
     AuthenticationLive,
     CsrfProtectionLive,
     OrganizationMemory,
+    PasswordExtras,
     RolesLive,
     GuardLive,
   ),
@@ -156,9 +153,44 @@ const audited = AuthorizationAudit.auditAuthorizationAnnotations(built.api);
 //    in-process test client.
 //    `BodyLimit.layer` bounds every request body (256 KiB by default, 413
 //    beyond it) — without it Effect's server reads bodies with no cap.
-const ServerLive = HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppLayer))).pipe(
+//    EOTS-006 (wayfinder ticket 27): `HttpRouter.serve` already logs one structured line per
+//    request (`http.method`/`http.url`/`http.status`; a host running its own request logger
+//    passes `disableLogger`, and `AuthHttp.tracer`/`AuthHttp.requestLogger` are the same
+//    middlewares for a `toWebHandler` host). `RequestContext.layer` stamps a correlation id,
+//    the client address and the user agent on every audit row a request causes, and
+//    `AuthHttp.layerRedactedHeaders` keeps the session cookie and rotated token out of any
+//    header a logger or tracer prints.
+//    CSG-003: `Retention.layerScheduled` is the opt-in retention sweep (expired sessions,
+//    old verification rows; the audit trail is kept for ever unless `Retention.config`
+//    sets a window). It shares the app's own stores, so it lives in the same layer graph.
+//    CSG-008: `SecuritySignals.layer` turns the published breach signals into incidents (log line,
+//    metric, and an `IncidentSink` if one is provided).
+const ServerLive = HttpRouter.serve(
+  Layer.mergeAll(
+    BodyLimit.layer,
+    RequestContext.layer,
+    Retention.layerScheduled,
+    SecuritySignals.layer,
+  ).pipe(
+    Layer.provideMerge(AppLayer),
+  ),
+).pipe(
+  Layer.provide(AuthHttp.layerRedactedHeaders),
   Layer.provide(NodeHttpServer.layer(createServer, { port: 3001 })),
 );
 
-console.log("awthaq example (memory-backed, Password + Organization) listening on :3001");
-audited.pipe(Effect.andThen(Layer.launch(ServerLive)), NodeRuntime.runMain);
+// Structured JSON logs in production, pretty logs otherwise; a logging *backend* is the
+// host's choice, never the library's (ticket 27 §4).
+const LoggingLive = Logger.layer([
+  process.env["NODE_ENV"] === "production" ? Logger.consoleJson : Logger.consolePretty(),
+]);
+
+const Startup = Layer.effectDiscard(
+  Effect.logInfo("awthaq example (memory-backed, Password + Organization) listening on :3001"),
+);
+
+audited.pipe(
+  Effect.andThen(Layer.launch(Layer.merge(ServerLive, Startup))),
+  Effect.provide(LoggingLive),
+  NodeRuntime.runMain,
+);

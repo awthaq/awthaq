@@ -1,14 +1,11 @@
 // CSG-001/DRS-002 (.issues/high): `PasskeyCredentials.deleteAllByUser` and
-// `Passkey.beforeUserDeleteErasure`'s own tap wiring. A dedicated file —
-// `Hooks.BeforeUserDelete`'s tap registry is a module-level singleton that
-// freezes after its own first `run()` (BEH-EA-024), so this suite's own
-// `Users.delete` call must be the only one to ever touch it in this module
-// load, mirroring `HooksWiringMemory.test.ts`'s identical reasoning.
-import { Hooks, Users } from "@awthaq/core";
+// `Passkey.passkeyErasure` (the plugin's `Erasure` contribution, CSG-001).
+import { DataExport, Erasure, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
@@ -56,34 +53,93 @@ suiteDeleteAllByUser(
   PasskeyCredentials.layerMemory,
 );
 
-describe("Passkey.beforeUserDeleteErasure", () => {
-  const TestLayer = Users.layerMemory.pipe(
-    Layer.provide(Hooks.BeforeUserDelete.layer),
-    Layer.provide(Passkey.beforeUserDeleteErasure),
-    Layer.provideMerge(PasskeyCredentials.layerMemory),
+describe("Passkey erasure contribution", () => {
+  const TestLayer = PasskeyCredentials.layerMemory.pipe(
     Layer.provideMerge(PasskeyUserHandles.layerMemory),
+    Layer.provideMerge(Erasure.registryLayer),
     Layer.provide(NodeCrypto.layer),
   );
 
-  it.effect("Users.delete sweeps every passkey_credential row for that user", () =>
+  it.effect(
+    "registers itself as `passkey` and sweeps credentials and the WebAuthn user handle",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* Erasure.ErasureRegistry;
+        const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+        const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
+        const erased = Users.UserId("user-erase");
+        const kept = Users.UserId("user-keep");
+        yield* credentials.create(credentialInput("cred-erase-1", erased));
+        yield* credentials.create(credentialInput("cred-erase-2", erased));
+        yield* credentials.create(credentialInput("cred-keep", kept));
+        const handleBefore = yield* handles.getOrCreate(erased);
+        const keptHandle = yield* handles.getOrCreate(kept);
+
+        yield* Layer.build(Passkey.passkeyErasure);
+        const contributions = yield* registry.contributions;
+        assert.deepStrictEqual(
+          contributions.map((c) => c.id),
+          ["passkey"],
+        );
+        for (const c of contributions)
+          yield* c.erase({ userId: erased, email: "erase@example.com" });
+
+        assert.deepStrictEqual(yield* credentials.listByUser(erased), []);
+        assert.strictEqual((yield* credentials.listByUser(kept)).length, 1);
+        // BPAS-003: the user's stable WebAuthn handle goes with the account, so one
+        // minted afterwards is a fresh value.
+        assert.notStrictEqual(yield* handles.getOrCreate(erased), handleBefore);
+        assert.strictEqual(yield* handles.getOrCreate(kept), keptHandle);
+      }).pipe(Effect.scoped, Effect.provide(TestLayer)),
+  );
+});
+
+// CSG-005: the plugin's section of the data-subject export.
+describe("Passkey export contribution", () => {
+  const TestLayer = PasskeyCredentials.layerMemory.pipe(
+    Layer.provideMerge(DataExport.registryLayer),
+    Layer.provide(NodeCrypto.layer),
+  );
+
+  it.effect("registers as `passkey` and exports credential metadata, never key material", () =>
     Effect.gen(function* () {
-      const users = yield* Users.Users;
+      const registry = yield* DataExport.DataExportRegistry;
       const credentials = yield* PasskeyCredentials.PasskeyCredentials;
-      const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
-      const user = yield* users.create({
-        identity: { _tag: "Email", email: "erase@example.com" },
-        name: "Erase",
-      });
-      yield* credentials.create(credentialInput("cred-erase-1", user.id));
-      yield* credentials.create(credentialInput("cred-erase-2", user.id));
-      const handleBefore = yield* handles.getOrCreate(user.id);
+      const mine = Users.UserId("user-mine");
+      yield* credentials.create(credentialInput("cred-1", mine));
+      yield* credentials.create(credentialInput("cred-other", Users.UserId("user-other")));
 
-      yield* users.delete(user.id);
+      yield* Layer.build(Passkey.passkeyExport);
+      const contributions = yield* registry.contributions;
+      assert.deepStrictEqual(
+        contributions.map((c) => c.id),
+        ["passkey"],
+      );
+      const section = yield* contributions[0]!.collect({ userId: mine, email: "m@example.com" });
 
-      assert.deepStrictEqual(yield* credentials.listByUser(user.id), []);
-      // BPAS-003: the user's stable WebAuthn handle goes with the account — one
-      // minted afterwards is a fresh value, the old one is gone.
-      assert.notStrictEqual(yield* handles.getOrCreate(user.id), handleBefore);
-    }).pipe(Effect.provide(TestLayer)),
+      const shape = Schema.decodeUnknownSync(
+        Schema.Struct({
+          credentials: Schema.Array(
+            Schema.Struct({
+              id: Schema.String,
+              name: Schema.String,
+              deviceType: Schema.String,
+              transports: Schema.Array(Schema.String),
+              createdAt: Schema.String,
+              lastUsedAt: Schema.String,
+            }),
+          ),
+        }),
+      )(section);
+      assert.deepStrictEqual(
+        shape.credentials.map((c) => [c.id, c.name, c.deviceType, c.transports]),
+        [["cred-1", "My Passkey", "singleDevice", ["internal"]]],
+      );
+      const text = JSON.stringify(section);
+      for (const secret of ["publicKey", "webauthnUserId", "wau-cred-1", "counter"]) {
+        assert.notInclude(text, secret);
+      }
+      assert.notInclude(text, "cred-other");
+    }).pipe(Effect.scoped, Effect.provide(TestLayer)),
   );
 });

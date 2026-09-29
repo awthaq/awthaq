@@ -183,6 +183,11 @@ export interface TeamRecordsShape {
     organizationId: string,
     userId: Users.UserId,
   ) => Effect.Effect<ReadonlyArray<string>>;
+  /**
+   * CSG-001: removes a user from every team of every organization (the account is
+   * being erased), decrementing each `memberCount`. Idempotent; atomic under `layerSql`.
+   */
+  readonly removeUserFromAllTeams: (userId: Users.UserId) => Effect.Effect<void>;
   /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findTeamMembership: (
     teamId: string,
@@ -553,6 +558,24 @@ export const layerMemory = Layer.effect(
         return [removed.map(([, row]) => row.teamId), { teams, memberships }] as const;
       });
 
+    const removeUserFromAllTeams: TeamRecordsShape["removeUserFromAllTeams"] = (userId) =>
+      Ref.update(state, (s): State => {
+        const removed = Array.from(HashMap.entries(s.memberships)).filter(
+          ([, row]) => row.userId === userId,
+        );
+        const memberships = removed.reduce((acc, [key]) => HashMap.remove(acc, key), s.memberships);
+        const teams = removed.reduce((acc, [, row]) => {
+          const team = HashMap.get(acc, row.teamId);
+          return Option.isSome(team)
+            ? HashMap.set(acc, row.teamId, {
+                ...team.value,
+                memberCount: Math.max(0, team.value.memberCount - 1),
+              })
+            : acc;
+        }, s.teams);
+        return { teams, memberships };
+      });
+
     const findTeamMembership: TeamRecordsShape["findTeamMembership"] = (teamId, userId) =>
       Ref.get(state).pipe(
         Effect.map((s) => HashMap.get(s.memberships, membershipKeyOf(teamId, userId))),
@@ -596,6 +619,7 @@ export const layerMemory = Layer.effect(
       updateTeamMemberRole,
       removeTeamMember,
       removeUserFromOrganizationTeams,
+      removeUserFromAllTeams,
       findTeamMembership,
       listTeamMembers,
       listTeamsByUser,
@@ -849,6 +873,13 @@ export const layerSql = Layer.effect(
           INNER JOIN organization_team t ON t.id = tm."teamId"
           WHERE t."organizationId" = ${r.organizationId} AND tm."userId" = ${r.userId}
         `,
+    });
+
+    const listTeamIdsOfUserQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ userId: Schema.String }),
+      Result: Schema.Struct({ teamId: Schema.String }),
+      execute: (r) =>
+        sql`SELECT "teamId" AS "teamId" FROM organization_team_membership WHERE "userId" = ${r.userId}`,
     });
 
     const adjustMemberCount = (teamId: string, delta: number) =>
@@ -1125,6 +1156,18 @@ export const layerSql = Layer.effect(
         )
         .pipe(Effect.orDie);
 
+    const removeUserFromAllTeams: TeamRecordsShape["removeUserFromAllTeams"] = (userId) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            for (const { teamId } of yield* listTeamIdsOfUserQuery({ userId })) {
+              yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
+              yield* adjustMemberCount(teamId, -1);
+            }
+          }),
+        )
+        .pipe(Effect.orDie);
+
     const findTeamMembership: TeamRecordsShape["findTeamMembership"] = (teamId, userId) =>
       findTeamMembershipQuery({ teamId, userId }).pipe(
         Effect.map(Option.map(toTeamMembershipRecord)),
@@ -1160,6 +1203,7 @@ export const layerSql = Layer.effect(
       updateTeamMemberRole,
       removeTeamMember,
       removeUserFromOrganizationTeams,
+      removeUserFromAllTeams,
       findTeamMembership,
       listTeamMembers,
       listTeamsByUser,

@@ -15,10 +15,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Tracer from "effect/Tracer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
@@ -130,6 +133,7 @@ const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Session
   list: () => Effect.die("not used in this test"),
   findOwned: () => Effect.die("not used in this test"),
   isLive: () => Effect.die("not used in this test"),
+  purgeExpired: () => Effect.die("not used in this test"),
   reauthenticate: () => Effect.die("not used in this test"),
 });
 
@@ -688,6 +692,7 @@ describe("Authentication per-request cache (TS-003/NHS-006)", () => {
       list: () => Effect.die("not used in this test"),
       findOwned: () => Effect.die("not used in this test"),
       isLive: () => Effect.die("not used in this test"),
+      purgeExpired: () => Effect.die("not used in this test"),
       reauthenticate: () => Effect.die("not used in this test"),
     });
 
@@ -920,5 +925,105 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
           Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
         ),
       ),
+  );
+});
+
+// EOTS-003/MAPS-007 (ticket 27): a rejected credential is observable without leaking
+// it, and an authenticated request's trace identifies the principal and session.
+describe("Authentication observability", () => {
+  const capture = () => {
+    const records: Array<{ readonly level: string; readonly text: string }> = [];
+    const layer = Layer.mergeAll(
+      Logger.layer([
+        Logger.make((options) => {
+          records.push({
+            level: options.logLevel,
+            text: JSON.stringify([
+              options.message,
+              options.fiber.getRef(References.CurrentLogAnnotations),
+            ]),
+          });
+        }),
+      ]),
+      Layer.succeed(References.MinimumLogLevel, "Debug"),
+    );
+    return { records, layer };
+  };
+
+  const tracing = () => {
+    const spans: Array<Tracer.Span> = [];
+    const base = Tracer.Tracer.defaultValue();
+    const layer = Layer.succeed(
+      Tracer.Tracer,
+      Tracer.make({
+        span: (options) => {
+          const span = base.span(options);
+          spans.push(span);
+          return span;
+        },
+      }),
+    );
+    return { spans, layer };
+  };
+
+  it.effect(
+    "an unknown session cookie logs session.verify.failed with the reason and no credential material",
+    () => {
+      const logs = capture();
+      const secret = "totally-made-up-secret-value";
+      return Effect.gen(function* () {
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        const failure = yield* client.required
+          .whoAmI({ headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=sess-unknown.${secret}` } })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Unauthenticated");
+        const failed = logs.records.filter((r) => r.text.includes("session.verify.failed"));
+        assert.strictEqual(failed.length, 1);
+        assert.include(failed[0]?.text ?? "", "Sessions/NotFound");
+        assert.include(failed[0]?.text ?? "", '"auth.scheme":"cookie"');
+        const everything = logs.records.map((r) => r.text).join("\n");
+        assert.notInclude(everything, secret);
+        assert.notInclude(everything, "sess-unknown");
+      }).pipe(Effect.provide(Layer.merge(TestLayer, logs.layer)));
+    },
+  );
+
+  it.effect("a request with no credential at all logs nothing about a failed verification", () => {
+    const logs = capture();
+    return Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      yield* client.required.whoAmI({ headers: {} }).pipe(Effect.flip);
+      assert.isFalse(logs.records.some((r) => r.text.includes("session.verify.failed")));
+    }).pipe(Effect.provide(Layer.merge(TestLayer, logs.layer)));
+  });
+
+  it.effect(
+    "an authenticated request has an awthaq.principal.resolve span naming the principal and session, and no credential",
+    () => {
+      const trace = tracing();
+      return Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session, token } = yield* sessions.issue({ userId });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        yield* client.required.whoAmI({
+          headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+        });
+        const resolves = trace.spans.filter((span) => span.name === "awthaq.principal.resolve");
+        assert.isAbove(resolves.length, 0);
+        // The principal and session are annotated on whichever span was current when the
+        // principal was resolved (the request's span, or this resolution's).
+        const annotated = trace.spans.filter(
+          (span) => span.attributes.get("auth.principal.ref") === userId,
+        );
+        assert.isAbove(annotated.length, 0);
+        assert.strictEqual(annotated[0]?.attributes.get("auth.session.id"), session.id);
+        assert.strictEqual(annotated[0]?.attributes.get("auth.principal.type"), "user");
+        const secret = Redacted.value(token).slice(session.id.length + 1);
+        const allValues = trace.spans.flatMap((span) =>
+          [...span.attributes.values()].map((value) => String(value)),
+        );
+        assert.isFalse(allValues.some((value) => value.includes(secret)));
+      }).pipe(Effect.provide(TestLayer.pipe(Layer.provideMerge(trace.layer))));
+    },
   );
 });

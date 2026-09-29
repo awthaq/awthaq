@@ -55,7 +55,7 @@
 // so it reports the full, precise BEH-EA-136 taxonomy.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { Hooks, Users } from "@awthaq/core";
+import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -422,7 +422,8 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
       payload: AuthenticateVerifyPayload,
       success: SessionContract.SessionDto,
       // Wayfinder ticket 03 (BCR-004/THS-002): `Hooks.TwoFactorRequired`
-      // when a `Hooks.BeforeSessionIssue` tap diverts.
+      // when a `Hooks.BeforeSessionIssue` tap diverts. NAM-002:
+      // `HookPoint.HookAborted` from a `Hooks.BeforeSignIn` veto.
       error: [
         PasskeyChallengeInvalid,
         PasskeyUserVerificationRequired,
@@ -432,6 +433,7 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
         // SCP-001: `Users.assertCanSignIn` refused a suspended user.
         Users.UserSuspended,
         Api.RateLimited,
+        HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
         // MNA-001: an unrecognised `X-Awthaq-Token-Delivery` value.
         Api.InvalidTokenDelivery,

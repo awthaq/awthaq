@@ -3,7 +3,7 @@ ID: "MW-001"
 Title: "No observability substrate: two log statements in the whole library, no tracer/logger interceptor"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "test"
 Source: "packages/test/src/TestAuth.ts:31"
 Auditor: "matias-woloski"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `test` · reported by **Matias Woloski — Co-founder/former CTO of Auth0** (`matias-woloski`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `TestAuth.ts:28-30` matches the evidence verbatim. `grep -rn "Effect.logError" packages/**/src` finds exactly the two cited call sites (`AuthEvents.ts:294`, `HookPoint.ts:258`), and `grep -rl "withSpan" packages/**/src` finds none — no request-logging middleware or span instrumentation exists anywhere in the tree. Designing an observability substrate (what to log, span boundaries, a tracer-interceptor contract test) is a genuine architecture/product decision, not a mechanical patch. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `observability-substrate`. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:284`. Fix: Implement wayfinder ticket 27 in its stated order: HTTP re-exports, business-logic spans, field convention + metrics, then the redaction interceptor (EOTS-002). (effort L). Full dossier: `.plan/slices/02-core-events-hooks.md`.
+
+**Resolved (2026-09-29):** Wayfinder ticket 27 implemented in its stated order. (1) AuthHttp.tracer/requestLogger re-exports. (2) Spans: awthaq.session.verify/issue (both layers, span carries the id half of the token only when id-shaped and bounded, never the secret), awthaq.password.<operation> + awthaq.password.verify, awthaq.oauth.callback, awthaq.passkey.authenticateVerify, awthaq.hook.dispatch, awthaq.event.publish, awthaq.event.handle (linked root span), awthaq.principal.resolve. (3) New packages/core/src/Observability.ts: the field vocabulary (Field), span names (Span), the metric taxonomy (session issued/verify-failed{reason}/verify-duration histogram, login failed{strategy}, event dropped/observer-error, hook observer error, subscriptions active, security incident), authSpan (attributes restricted to string|number|boolean), logObserverFailure. Counters are wired at their sites (two at the AuthEvents.publish choke point). (4) ADR-EA-027 records the field naming/policy (spec/decisions/027-observability-substrate.md). (5) EOTS-002's redaction interceptor landed last. README Observability section. Tests: packages/core/test/Observability.test.ts (recording tracer: spans exist, ids only, no secret; failure metric with reason; oversized hostile id never reaches a span; issued counter; publish span; hook span), Password.test.ts, Authentication.test.ts. Metric names follow the ticket (underscored); the earlier awthaq.ratelimit.exceeded keeps its dotted name (documented in the ADR).

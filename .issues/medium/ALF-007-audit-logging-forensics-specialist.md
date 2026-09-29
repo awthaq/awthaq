@@ -3,7 +3,7 @@ ID: "ALF-007"
 Title: "on() subscriptions attach asynchronously — events published during startup are silently lost"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:298"
 Auditor: "audit-logging-forensics-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Audit Logging & Forensics Specialist** (`audit-logging-forensics-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Register the subscription synchronously during Layer build before forking the dr
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `auth-events-subscription`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:405`. Fix: Register the PubSub subscription synchronously during the subscription Layer's build, then fork the drain loop over that already-registered subscription. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AuthEventsShape.subscribe registers the PubSub subscription synchronously in the caller's Scope; on()/onBatch register it while the subscription Layer builds and then fork the drain over the registered stream. stream stays lazy (documented). Tests: AuthEvents.test.ts 'on(): an event published right after the Layer is built is delivered' as it.effect with a Queue and no sleeps (the old it.live + 20ms sleep test is gone).

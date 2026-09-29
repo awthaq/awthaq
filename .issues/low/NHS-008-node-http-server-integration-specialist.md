@@ -45,3 +45,5 @@ Ship an optional request-id middleware in @awthaq/server (generate or propagate 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `observability-substrate`. Duplicate of `MW-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/server/src/index.ts:10`. Full dossier: `.plan/slices/06-server-api.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `MW-001-matias-woloski` — closed by its fix (see that issue's Resolved comment).

@@ -18,6 +18,7 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthPlugin from "./AuthPlugin.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
+import * as HookPoint from "./HookPoint.ts";
 import type { Migrations } from "./Migrations.ts";
 import * as Slots from "./Slots.ts";
 
@@ -280,11 +281,25 @@ export interface ManifestConfig {
   readonly descriptor: ConfigDescriptor;
 }
 
+/** PERS-003: one statically declared tap in a point's resolved chain. */
+export interface ManifestTap {
+  readonly plugin: string;
+  readonly order: number;
+}
+
 /** BEH-EA-016: read off the composed classes, never authored (`archive/design/plugins-as-layers.md` §7). */
 export interface Manifest {
   readonly plugins: ReadonlyArray<ManifestPlugin>;
   /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
   readonly config: ReadonlyArray<ManifestConfig>;
+  /**
+   * PERS-003/BEH-EA-096: every plugin-declared tap (`AuthPlugin.layer`'s `taps`
+   * option), per hook point key, in the order the runtime chain runs them —
+   * derived with `HookPoint.compareTaps`, the same comparator the runtime uses,
+   * without building any layer. Application taps (`Point.tap` in the host) are
+   * not declared statically and run after every entry listed here.
+   */
+  readonly hooks: Readonly<Record<string, ReadonlyArray<ManifestTap>>>;
 }
 
 /**
@@ -519,6 +534,30 @@ const renumberMigrations = (order: ReadonlyArray<AuthPlugin.Any>): Migrations =>
   return out;
 };
 
+const buildHooks = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+): Readonly<Record<string, ReadonlyArray<ManifestTap>>> => {
+  const byPoint = new Map<
+    string,
+    Array<{ readonly owner: AuthPlugin.Any; readonly order: number }>
+  >();
+  for (const plugin of order) {
+    for (const tap of plugin.taps ?? []) {
+      const entries = byPoint.get(tap.point) ?? [];
+      entries.push({ owner: plugin, order: tap.order });
+      byPoint.set(tap.point, entries);
+    }
+  }
+  return Object.fromEntries(
+    [...byPoint].map(([point, entries]) => [
+      point,
+      entries
+        .toSorted(HookPoint.compareTaps)
+        .map((entry) => ({ plugin: entry.owner.id, order: entry.order })),
+    ]),
+  );
+};
+
 const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
   plugins: order.map((plugin) => ({
     id: plugin.id,
@@ -530,6 +569,7 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
   config: order.flatMap((plugin) =>
     (plugin.config ?? []).map((descriptor) => ({ pluginId: plugin.id, descriptor })),
   ),
+  hooks: buildHooks(order),
 });
 
 const hasRoute = (endpoint: object): endpoint is { readonly method: string; readonly path: string } =>

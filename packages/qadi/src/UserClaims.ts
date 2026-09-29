@@ -23,7 +23,7 @@
 // Firebase import mapping: `role`-shaped claims -> `Roles.assign`; every other custom claim ->
 // `UserClaims.merge`/`set`. See `packages/qadi/README.md`.
 
-import { AuthEvents, AuthPlugin, Defects, Hooks, Migrations, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, DataExport, Defects, Erasure, Hooks, Migrations, Users } from "@awthaq/core";
 import { AttributeResolveError, AttributeResolver } from "@qadi/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -222,6 +222,28 @@ const sqlMake = Effect.gen(function* () {
   return yield* serviceOver({ read, modify });
 });
 
+/**
+ * CSG-001, wayfinder ticket 30: this plugin's part of `AccountErasure.eraseAccount` —
+ * removes the erased user's claims document. Part of `UserClaims.layer`/`layerSql`,
+ * which therefore require `Erasure.ErasureRegistry`.
+ */
+export const claimsExport = DataExport.contribute({
+  id: "claims",
+  make: Effect.gen(function* () {
+    const claims = yield* UserClaims;
+    return (subject: DataExport.DataExportSubject) =>
+      claims.get(subject.userId).pipe(Effect.map((document) => ({ claims: document })));
+  }),
+});
+
+export const claimsErasure = Erasure.contribute({
+  id: "claims",
+  make: Effect.gen(function* () {
+    const claims = yield* UserClaims;
+    return (subject: Erasure.ErasureSubject) => claims.delete(subject.userId);
+  }),
+});
+
 export class UserClaims extends AuthPlugin.Service<UserClaims, UserClaimsShape>()("claims", {
   apiVersion: 1,
   // Like `Roles`: no HTTP contract of its own, so `Auth.make([UserClaims])` alone has zero groups.
@@ -229,10 +251,16 @@ export class UserClaims extends AuthPlugin.Service<UserClaims, UserClaimsShape>(
   tables: ["claims_user"],
   migrations: userClaimsMigrations,
 }) {
-  static readonly layer = AuthPlugin.layer(UserClaims, { make: memoryMake });
+  static readonly layer = AuthPlugin.layer(UserClaims, {
+    make: memoryMake,
+    contributes: Layer.mergeAll(claimsErasure, claimsExport),
+  });
 
   /** The same service over the `claims_user` table (run `UserClaims.migrations`, or `Auth.make`'s aggregate). */
-  static readonly layerSql = AuthPlugin.layer(UserClaims, { make: sqlMake });
+  static readonly layerSql = AuthPlugin.layer(UserClaims, {
+    make: sqlMake,
+    contributes: Layer.mergeAll(claimsErasure, claimsExport),
+  });
 }
 
 // ---- the qadi attribute --------------------------------------------------------

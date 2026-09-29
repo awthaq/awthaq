@@ -33,8 +33,8 @@ Feature: Events
     Scenario: Publishing an event returns without waiting for any subscriber to finish handling it
       Given a subscriber to "AuthEvents" that takes a long time to handle each event
       When an event is published while that subscriber is still processing a previous event
-      Then "publish" returns as soon as the event is enqueued
-      And the publishing fiber is not suspended waiting on the subscriber
+      Then "publish" returns as soon as the event is recorded and offered to the bounded bus, whether or not the bus accepted it
+      And the publishing fiber is not suspended waiting on the subscriber or on the bus's capacity
 
     @REQ-EA-262
     Scenario: A sign-in is not slowed down by a slow subscriber observing it

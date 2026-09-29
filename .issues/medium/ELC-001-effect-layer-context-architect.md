@@ -3,7 +3,7 @@ ID: "ELC-001"
 Title: "HookPoint tap registry is module-scoped mutable state, contradicting the codebase's own per-composition service convention"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts:174"
 Auditor: "effect-layer-context-architect"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `core` · reported by **Effect Layer/Context Architect** (`effect-layer-context-architect`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Give each hook point a per-composition registry service (the SlotsRegistry patte
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hook-registry-per-composition`. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:200`. Fix: Move each point's tap registry out of the module closure into the point's own per-composition service: the point's `.layer` owns a `Ref` of registrations; `tap()` returns a Layer that *requires* the point (RIn = Self) and registers through it. Freezing becomes per-built-layer. (effort L). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Per-composition hook registries: HookPoint.ts no longer has module-level state (the registry is allocated by each point's own .layer via makeRegistry<F>); tap() returns Layer<never, never, Self> so tapping an unprovided point is a compile error (packages/core/test/HookPoint.types.test.ts, @ts-expect-error). Freezing is per built layer (test 'two independently built compositions do not share taps or freeze state'). nextSequence counter deleted. Comments describing the singleton updated (Hooks.ts, RateLimits.ts, Organization.ts, Passkey.ts, docs/plugin-authoring.md, test headers); spec/traceability.md INV-EA-005 row now names the type test. Erasure taps in Organization/Passkey stay separate exports for now: CSG-001 (P11) replaces them with the ErasureRegistry. Gates: typecheck, full vitest, test:bdd, spec:verify:strict, oxlint.

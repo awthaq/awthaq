@@ -3,7 +3,7 @@ ID: "SCP-008"
 Title: "HookPoint machinery shipped but no concrete point is wired into real user flows for SCIM integration"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts:50"
 Auditor: "scim-provisioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `core` · reported by **SCIM Provisioning Specialist** (`scim-provisioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ When AuthCore lands with BeforeSignUp/AfterSignIn, add the provisioning-relevant
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `core-hook-point-coverage`. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:50`. Fix: Close the non-SCIM part now via NAM-002's plan (BeforeSignUp on every creation path); add deactivation hook/event points in the same change that implements ticket 09's deactivation state. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Non-SCIM part closed by NAM-002 (BeforeSignUp now guards the OAuth first-login creation path too, with strategy on the input, and AfterSignUp exists). The deactivation hook points (BeforeUserDeactivate/AfterUserDeactivated) and the auth.user.deactivated event are deliberately not built: they belong to ticket 09's deactivation state (P14, UserRecord model) and land in the same change.

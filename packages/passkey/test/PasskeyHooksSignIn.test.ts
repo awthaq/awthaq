@@ -28,7 +28,6 @@ import {
 const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(RateLimits.layer),
   Layer.provideMerge(RateLimiter.layerPermissive),
   // BEH-EA-093: unconditionally diverts — enough to prove the wiring is
@@ -41,6 +40,8 @@ const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Session
       ),
     ),
   ),
+  // The tap requires its point, so `HooksLive` feeds both (ELC-001).
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

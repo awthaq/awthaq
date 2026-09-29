@@ -860,7 +860,9 @@ const eventsSuite = (
       yield* Effect.forkChild(
         events.stream.pipe(
           Stream.filter((event) => event._tag.startsWith("auth.session.")),
-          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
+          Stream.runForEach((event) =>
+            Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
+          ),
         ),
         { startImmediately: true },
       );
@@ -931,6 +933,66 @@ const eventsSuite = (
             reason: "signOut",
           },
         ]);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("RRS-008: issue({ supersedes }) publishes auth.session.superseded, then the successor's issued", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        let successorId = "";
+        const seen = yield* collecting(
+          sessions.issue({ userId, supersedes: a.session.id }).pipe(
+            Effect.tap((issued) =>
+              Effect.sync(() => {
+                successorId = issued.session.id;
+              }),
+            ),
+          ),
+        );
+        assert.deepStrictEqual(
+          seen.map((event) => event._tag),
+          ["auth.session.superseded", "auth.session.issued"],
+        );
+        const [superseded] = seen;
+        if (superseded?._tag === "auth.session.superseded") {
+          assert.strictEqual(superseded.sessionId, a.session.id);
+          assert.strictEqual(superseded.supersededBy, successorId);
+          assert.strictEqual(superseded.familyId, a.session.id);
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("RRS-008: a superseding issue whose ancestor is not live publishes no superseded event", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const seen = yield* collecting(
+          sessions.issue({ userId, supersedes: Sessions.SessionId("gone") }),
+        );
+        assert.deepStrictEqual(
+          seen.map((event) => event._tag),
+          ["auth.session.issued"],
+        );
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("RRS-008: two concurrent verifies of a stale session publish exactly one auth.session.rotated", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        // Past the throttled-touch interval, so a verify both refreshes and rotates.
+        yield* TestClock.adjust(Duration.hours(1));
+        const seen = yield* collecting(
+          Effect.all([Effect.exit(sessions.verify(a.token)), Effect.exit(sessions.verify(a.token))], {
+            concurrency: 2,
+          }),
+        );
+        assert.strictEqual(seen.filter((event) => event._tag === "auth.session.rotated").length, 1);
+        const rotated = seen.find((event) => event._tag === "auth.session.rotated");
+        if (rotated?._tag === "auth.session.rotated") {
+          assert.strictEqual(rotated.sessionId, a.session.id);
+          assert.strictEqual(rotated.familyId, a.session.id);
+        }
       }).pipe(Effect.provide(layer)),
     );
 
@@ -1049,7 +1111,9 @@ const capSuite = (
           yield* Effect.forkChild(
             events.stream.pipe(
               Stream.filter((event) => event._tag === "auth.session.revoked"),
-              Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
+              Stream.runForEach((event) =>
+                Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
+              ),
             ),
             { startImmediately: true },
           );

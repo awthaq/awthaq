@@ -3,7 +3,7 @@ ID: "IDS-006"
 Title: "Lifecycle events under-attribute: denied event omits the target, stopped event omits the admin"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:66"
 Auditor: "impersonation-delegation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `core` · reported by **Impersonation & Delegation Specialist** (`impersonation-delegation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Add targetUserId to the denied event and adminUserId/targetUserId to the stopped
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `auth-event-schema`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:130`. Fix: Add attribution fields to the impersonation lifecycle events. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** auth.admin.impersonationDenied gains operation ('impersonate'|'forceStop'|'list') and optional targetUserId/sessionId; auth.admin.impersonationStopped gains adminUserId and targetUserId (from the closed episode record). Admin.ts deny(caller, attempt) names the refused call; sweepExpired/stopImpersonating/forceStop publish both parties. Tests: packages/admin/test/Admin.test.ts (denied names attempted target; stopped carries admin and target).

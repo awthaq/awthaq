@@ -90,6 +90,8 @@ REQUIREMENT: A verification token past its `expiresAt` MUST be treated as
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 states this as a lifecycle property of the entity, not of whatever garbage-collection process eventually removes expired rows: "rows past this instant are treated as already invalid by every read operation, even before they are physically removed." awthaq's plan follows the same rule so that expiry enforcement never depends on the timeliness of a background sweep.
 
+**As shipped (CSG-003, ADR-EA-033):** the physical removal that rule anticipates is `Retention.sweep`, an explicit, opt-in operation (`Retention.layerScheduled` runs it on `RetentionConfig.sweepInterval`; nothing else calls it). `Verification.purgeExpired(before)` deletes tokens consumed or expired before the cutoff and reservations expired before it, in bounded batches, in both layers; the sweep passes `now - verificationForensicWindow` (default 90 days), so a consumed row stays as replay evidence (BEH-EA-058) for that window and a live token is never touched. Ordinary reads and `issue` still never delete history (`packages/core/test/Retention.test.ts`).
+
 ## BEH-EA-062: Consuming a verification token is race-safe — at most one concurrent caller succeeds
 
 ```text

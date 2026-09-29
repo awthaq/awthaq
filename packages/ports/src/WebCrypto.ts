@@ -10,14 +10,25 @@
 //
 //   const AppLayer = MyLayer.pipe(Layer.provide(WebCrypto.layer));
 //
+// Everything the library needs from `Crypto` — randomness, uuidv7 ids, SHA-256 digests (and
+// HMAC-SHA256, built from them in `Hmac.ts`) — is covered; what is *not* edge-friendly is
+// password hashing (argon2id/scrypt in WASM burns CPU budgets), which belongs on the origin.
+//
 // The layer dies at build time when no Web Crypto object exists (better than a later,
 // per-call failure in a security primitive); a digest failure is a `PlatformError`.
 
-import * as Defects from "./Defects.ts";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
+import * as Defects from "./Defects.ts";
+
+/** The Web Crypto object the layer reads; defaults to `globalThis.crypto`, overridable for tests and embedded runtimes. */
+export const WebCryptoApi = Context.Reference<typeof globalThis.crypto | undefined>(
+  "awthaq/ports/WebCrypto/WebCryptoApi",
+  { defaultValue: () => globalThis.crypto },
+);
 
 /** `crypto.getRandomValues` refuses more than 65536 bytes per call. */
 const MAX_RANDOM_CHUNK = 65_536;
@@ -34,7 +45,7 @@ const digestFailure = (description: string, cause?: unknown) =>
 export const layer = Layer.effect(
   Crypto.Crypto,
   Effect.gen(function* () {
-    const webCrypto = globalThis.crypto;
+    const webCrypto = yield* WebCryptoApi;
     if (webCrypto === undefined) {
       return yield* Defects.invalidConfiguration("Crypto", "awthaq: the Web Crypto API (globalThis.crypto) is not available");
     }

@@ -87,6 +87,8 @@ reject anyway; it is never itself the boundary.
 
 ### A stateless edge check: `@awthaq/next/edge`
 
+On an edge runtime, provide `WebCrypto.layer` (from `@awthaq/ports`) wherever the Node docs show `NodeCrypto.layer`: it is a `Crypto` service over `globalThis.crypto`, so nothing pulls `node:crypto` into the bundle. Keep password hashing (argon2id/scrypt) on the origin; the edge tier does session/JWT verification and redirects.
+
 Presence lets a forged or long-expired cookie through. If you also run
 `@awthaq/jwt`, turn on its opt-in session-mirror cookie —
 `JwtConfig.config({ issuer, sessionCookie: true })` — and every

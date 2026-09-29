@@ -526,4 +526,39 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
+  // ALF-010: `AuditLog.list`'s `occurredAfter`/`occurredBefore` range and the
+  // retention sweep's `occurredAt < cutoff` delete both filter on the timestamp,
+  // which had no index (only the tag and actor columns did). `IF NOT EXISTS`
+  // keeps an out-of-band `CREATE INDEX CONCURRENTLY` (a large table) possible.
+  migration(24, "create_auth_audit_log_occurred_at_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`CREATE INDEX IF NOT EXISTS auth_audit_log_occurred_at ON auth_audit_log ("occurredAt")`,
+      sqlite: () =>
+        sql`CREATE INDEX IF NOT EXISTS auth_audit_log_occurred_at ON auth_audit_log ("occurredAt")`,
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // CWM-004: the event relay's persisted position — one row per named relay holding the
+  // id of the last audit event it delivered (`auth_audit_log.id`, a time-ordered uuidv7),
+  // so a restart resumes instead of redelivering the whole log or skipping ahead.
+  migration(25, "create_auth_relay_cursor", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`
+        CREATE TABLE auth_relay_cursor (
+          name TEXT PRIMARY KEY,
+          "lastEventId" TEXT NOT NULL,
+          "updatedAt" TIMESTAMPTZ NOT NULL
+        )`,
+      sqlite: () =>
+        sql`
+        CREATE TABLE auth_relay_cursor (
+          name TEXT PRIMARY KEY,
+          "lastEventId" TEXT NOT NULL,
+          "updatedAt" TEXT NOT NULL
+        )`,
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
 ]);

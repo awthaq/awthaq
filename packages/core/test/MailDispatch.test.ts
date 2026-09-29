@@ -36,7 +36,9 @@ const withDispatcher = <A, E, R>(
       yield* Effect.forkScoped(
         events.stream.pipe(
           Stream.filter((event) => event._tag === "auth.mail.failed"),
-          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
+          Stream.runForEach((event) =>
+            Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
+          ),
         ),
         { startImmediately: true },
       );

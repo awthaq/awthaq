@@ -3,7 +3,7 @@ ID: "CSG-008"
 Title: "Breach-detection signals are published but never consumed by any pipeline"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:45"
 Auditor: "compliance-soc2-gdpr-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **Compliance (SOC2/GDPR) Specialist** (`compliance-soc2-gdpr-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Define a SecuritySignal subscriber in the server composition root that applies t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `security-signal-pipeline`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:108`. Fix: Ship an opt-in `SecuritySignals` subscriber layer that applies configurable threshold rules over the security tags and emits incidents (log + metric + optional incident sink port). (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Opt-in SecuritySignals detector, packages/core/src/SecuritySignals.ts, exported from @awthaq/core. One multi-tag AuthEvents.on subscription (race-free, supervised) over the tags a configured rule names; a sliding window per (rule, key) over the envelope's occurredAt (TestClock-controllable); an incident when a rule's threshold is reached inside its window, after which the bucket restarts so a sustained attack raises one incident per threshold events. Default rules (SecuritySignals.defaultRules, replaceable via SecuritySignals.config({ rules, maxBuckets })): session.reuse >=1 (per user, high), passkey.counterAnomaly >=1 (per credential, high), token.replay 5 per identifier / 10 min (medium; the incident never names the identifier since it can be a mailbox), signIn.failedByAddress 10 per clientIp / 10 min and signIn.failedByIdentifier 5 per identifierDigest / 10 min (medium; uses the ESA-005 digest and clientIp, no oracle), admin.impersonationDenied 3 per admin / 10 min (high). SecuritySignals.rule builds a rule over one tag with a key selector typed to that tag (no assertion). Incidents are reported by a warning log `auth.security.incident`, the existing awthaq_security_incident_total{rule} counter, and the IncidentSink Context.Reference (default no-op) an app backs with a table/pager; a sink that fails is logged (auth.security.sink.error) and never stops detection. The bucket table is bounded (maxBuckets, expired first then least recently seen). Tests: packages/core/test/SecuritySignals.test.ts (10 cases under TestClock: single counter anomaly raises, session reuse, N replays raise one incident and N-1 do not, window sliding, per-key buckets, sustained attack cadence, address vs digest independence, per-admin denials, custom rules replace defaults, failing sink, bounded buckets). Spec: As-shipped paragraph on BEH-EA-103 (13-events.md), README 'Detecting attacks', examples/memory-server opts in. Decision noted: incidents are not re-published as an AuthEvent (the sink is where an app records them durably); detection runs over the bus's at-most-once delivery, the durable trail stays AuditLog.

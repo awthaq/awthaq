@@ -7,12 +7,14 @@ import {
   AuditLog,
   AuthEvents,
   Auth,
+  DataExport,
+  Erasure,
   Hooks,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -115,6 +117,9 @@ describe("AR-003: the admin tier", () => {
           Layer.provide(AuthHttp.coreHandlers),
           Layer.provide(AuthenticationLive),
           Layer.provide(CsrfProtectionLive),
+          // The account group's erasure cascade and data export (CSG-001/CSG-005), and its limiter.
+          Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
+          Layer.provideMerge(RateLimiter.layerPermissive),
           Layer.provideMerge(SqlTransaction.layerNoop),
           Layer.provideMerge(Accounts.layerMemory),
           Layer.provideMerge(Verification.layerMemory),

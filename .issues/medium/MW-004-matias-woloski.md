@@ -57,3 +57,5 @@ Thread plugin identity into .tap() (Auth.make already computes topological posit
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `hook-registry-per-composition`. Duplicate of `JH-003` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:44`. Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `JH-003-jared-hanson` — closed by its fix (see that issue's Resolved comment).

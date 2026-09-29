@@ -18,9 +18,10 @@ import {
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
+  DataExport,
+  Erasure,
   Errors,
   HookPoint,
-  Hooks,
   Migrations,
   Users,
 } from "@awthaq/core";
@@ -1528,6 +1529,83 @@ const organizationMigrations: Migrations.Migrations = [
   },
 ];
 
+// ---- erasure --------------------------------------------------------------------
+
+/**
+ * CSG-001/DRS-002 (.issues/high), wayfinder ticket 30: this plugin's part of
+ * `AccountErasure.eraseAccount`, part of `Organization.layer` itself (it requires
+ * `Erasure.ErasureRegistry`, so a composition without one does not compile). It
+ * removes every row that names the erased user: their memberships, their team
+ * memberships (`memberCount`s decremented), the invitations they sent or that
+ * were addressed to their email (the row holds it in plaintext), and their
+ * active-context rows (DRS-008). It runs inside `eraseAccount`'s transaction.
+ */
+export const organizationErasure = Erasure.contribute({
+  id: "organization",
+  make: Effect.gen(function* () {
+    const members = yield* MembershipRecords.MembershipRecords;
+    const teams = yield* TeamRecords.TeamRecords;
+    const invitations = yield* InvitationRecords.InvitationRecords;
+    const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
+    return (subject: Erasure.ErasureSubject) =>
+      Effect.all(
+        [
+          teams.removeUserFromAllTeams(subject.userId),
+          members.deleteAllByUser(subject.userId),
+          activeContext.deleteAllByUser(subject.userId),
+          invitations.removeAllForUser(subject.userId, subject.email),
+        ],
+        { discard: true },
+      );
+  }),
+});
+
+/**
+ * CSG-005: this plugin's section of the data-subject export — the organizations the person
+ * belongs to and their role in each, the teams they are on, and the invitations they sent
+ * or received. An invitation carries no third party's address (the invitee's email is
+ * their data, not the subject's), and a role is a name, never a permission secret.
+ */
+export const organizationExport = DataExport.contribute({
+  id: "organization",
+  make: Effect.gen(function* () {
+    const members = yield* MembershipRecords.MembershipRecords;
+    const teams = yield* TeamRecords.TeamRecords;
+    const invitations = yield* InvitationRecords.InvitationRecords;
+    const invitationView = (row: InvitationRecords.InvitationRecord) => ({
+      organizationId: row.organizationId,
+      role: [...row.role],
+      status: row.status,
+      createdAt: DateTime.formatIso(row.createdAt),
+      expiresAt: DateTime.formatIso(row.expiresAt),
+    });
+    return (subject: DataExport.DataExportSubject) =>
+      Effect.gen(function* () {
+        const memberships = yield* members.listByUser(subject.userId);
+        const teamRows = yield* Effect.forEach(memberships, (membership) =>
+          teams.listTeamsByUser(membership.organizationId, subject.userId),
+        );
+        return {
+          memberships: memberships.map((membership) => ({
+            organizationId: membership.organizationId,
+            role: [...membership.role],
+            createdAt: DateTime.formatIso(membership.createdAt),
+          })),
+          teams: teamRows.flat().map((team) => ({
+            id: team.id,
+            organizationId: team.organizationId,
+            name: team.name,
+          })),
+          invitationsSent: (yield* invitations.listByInviter(subject.userId)).map(invitationView),
+          invitationsReceived:
+            subject.email === undefined
+              ? []
+              : (yield* invitations.listByEmail(subject.email)).map(invitationView),
+        };
+      });
+  }),
+});
+
 // ---- plugin ---------------------------------------------------------------------
 
 export class Organization extends AuthPlugin.Service<Organization, OrganizationShape>()(
@@ -1551,6 +1629,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 ) {
   static readonly layer = AuthPlugin.layer(Organization, {
     handlers: OrganizationHandlers,
+    contributes: Layer.mergeAll(organizationErasure, organizationExport),
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
       const orgs = yield* OrganizationRecords.OrganizationRecords;
@@ -2410,7 +2489,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 _tag: "auth.organization.invitationCreated",
                 invitationId: rotated.id,
                 organizationId,
-                email: rotated.email,
               });
               return rotated;
             } else {
@@ -2435,7 +2513,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             _tag: "auth.organization.invitationCreated",
             invitationId: record.id,
             organizationId,
-            email: record.email,
           });
           yield* afterCreateInvitation.run({
             organizationId,
@@ -3295,49 +3372,3 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     }),
   });
 }
-
-/**
- * CSG-001/DRS-002 (.issues/high): a real tap on the core
- * `Hooks.BeforeUserDelete` veto point (CSG-002) that sweeps this plugin's
- * own `organization_membership` rows for the deleted user.
- * `MembershipRecords` is resolved once at layer-build time so the tap
- * handler carries no further service requirement, matching `VetoTap`'s
- * own fixed-`R` signature.
- *
- * **A separate export, not merged into `Organization.layer` itself** —
- * see `@awthaq/passkey`'s own `beforeUserDeleteErasure` for why:
- * `Hooks.BeforeUserDelete`'s tap registry is a module-level singleton
- * that freezes permanently after its first `run()` (BEH-EA-024,
- * empirically confirmed per CSG-002's own resolution comment), so
- * merging a tap into a `Layer` rebuilt repeatedly across a test suite
- * would die with `HookPointFrozen` once the point has run anywhere in
- * the same process. A composition provides
- * `Organization.beforeUserDeleteErasure` once, application-wide — the
- * same opt-in posture `RateLimits.layer`/`Slots.layer` already use.
- *
- * Deliberately scoped to membership (plus, since DRS-008, the user's
- * `organization_active_context` rows) in this pass —
- * `organization_team_membership` and `organization_invitation` (the
- * latter matched by both `inviterId` and the deleted user's own email)
- * are real, still-open gaps this same mechanism can close, tracked as
- * explicit follow-up rather than silently left undone (CSG-001's own
- * resolution comment).
- */
-export const beforeUserDeleteErasure: Layer.Layer<
-  never,
-  never,
-  MembershipRecords.MembershipRecords | ActiveContextRecords.ActiveContextRecords
-> = Layer.unwrap(
-  Effect.gen(function* () {
-    const membershipRecords = yield* MembershipRecords.MembershipRecords;
-    const activeContextRecords = yield* ActiveContextRecords.ActiveContextRecords;
-    return Hooks.BeforeUserDelete.tap((input) => {
-      const userId = Users.UserId(input.id);
-      // DRS-008: the active-context rows are keyed by session but indexed by
-      // user, so erasure reaches them too.
-      return membershipRecords
-        .deleteAllByUser(userId)
-        .pipe(Effect.andThen(activeContextRecords.deleteAllByUser(userId)), Effect.as(input));
-    });
-  }),
-);

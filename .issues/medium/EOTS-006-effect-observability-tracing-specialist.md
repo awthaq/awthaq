@@ -3,7 +3,7 @@ ID: "EOTS-006"
 Title: "packages/server ships no logging/observability surface; example app uses bare console.log"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "examples/memory-server/index.ts:88"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Add an `AuthObservability` layer to `@awthaq/server` that composes a Logger repl
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `observability-substrate`. Evidence at HEAD ec065a7: `examples/memory-server/index.ts:106`. Fix: Follow wayfinder ticket 27 (MW-001's decision): re-export HttpMiddleware.tracer/logger from AuthHttp (not a bespoke AuthObservability logger — the decision leaves logging/metrics backends to the host), and make the example demonstrate the recommended composition: structured JSON logging + request logger + Effect.logInfo startup line. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AuthHttp.tracer and AuthHttp.requestLogger are direct re-exports of HttpMiddleware.tracer/logger (documented composition, no backend opinion). examples/memory-server: no bare console.log any more (Effect.logInfo startup layer), Logger.layer with consoleJson in production / consolePretty otherwise, RequestContext.layer + AuthHttp.layerRedactedHeaders wired. Deviation from the dossier: HttpRouter.serve already applies HttpMiddleware.logger by default, so no serve middleware option is needed; the re-exports are for toWebHandler hosts. README Observability section. examples/sql-server does not exist in this repo, so only memory-server is updated.

@@ -31,7 +31,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
 import { storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import * as SecretHash from "./SecretHash.ts";
+import * as Observability from "./Observability.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
+import { drainBatches } from "./internal/purgeBatches.ts";
 import { UserId } from "./Users.ts";
 
 /**
@@ -401,6 +403,14 @@ export interface SessionsShape {
     reason: AuthEvents.SessionRevocationReason,
   ) => Effect.Effect<void, StoreUnavailable>;
   /**
+   * CSG-003: retention. Physically deletes every session — tombstoned rows
+   * included — whose absolute or idle expiry is before `before`, and resolves to
+   * how many went. Expiry is otherwise a read-time rejection (the row stays), so
+   * this is what bounds the table; `Retention.sweep` calls it with `now - sessionGrace`.
+   * Publishes nothing: an expired session was already dead.
+   */
+  readonly purgeExpired: (before: DateTime.Utc) => Effect.Effect<number>;
+  /**
    * BEH-EA-054: exactly the user's *live* sessions — not tombstoned, past
    * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
    * (`lastActiveAt` descending), identically in both layers (ESS-005/
@@ -523,7 +533,7 @@ const evictionOrder = (
 /** ESA-006: the one `auth.session.issued` both layers publish. */
 const publishIssued = (
   events: AuthEvents.AuthEventsShape,
-  session: { readonly id: string; readonly userId: UserId },
+  session: { readonly id: SessionId; readonly userId: UserId },
   familyId: string,
   actingAs: Option.Option<ActingAs>,
 ) =>
@@ -534,6 +544,46 @@ const publishIssued = (
     familyId,
     ...(Option.isSome(actingAs) ? { actingAs: actingAs.value } : {}),
   });
+
+/**
+ * ticket 27 §2 (MW-001): `awthaq.session.issue`, annotated with the new session's
+ * id — the public half of the token, approved for spans; never the secret half.
+ */
+const traceIssue =
+  (issue: SessionsShape["issue"]): SessionsShape["issue"] =>
+  (input) =>
+    issue(input).pipe(
+      Effect.tap(({ session }) =>
+        Effect.annotateCurrentSpan(Observability.Field.sessionId, session.id),
+      ),
+      Effect.withSpan(Observability.Span.sessionIssue),
+    );
+
+/**
+ * ticket 27 §2/§4 (MW-001): `awthaq.session.verify`, its latency histogram and
+ * `awthaq_session_verify_failed_total{reason}` (`not-found` or `expired`). The
+ * span carries the id half of the presented token when it has one — never the
+ * secret half, never the whole token.
+ */
+const traceVerify =
+  (verify: SessionsShape["verify"]): SessionsShape["verify"] =>
+  (token) => {
+    const raw = Redacted.value(token);
+    const separator = raw.indexOf(".");
+    // A presented id is attacker-controlled: only an id-shaped, bounded one reaches a span.
+    const presentedId = separator > 0 ? raw.slice(0, separator) : "";
+    const announce = /^[A-Za-z0-9-]{1,64}$/.test(presentedId)
+      ? Effect.annotateCurrentSpan(Observability.Field.sessionId, presentedId)
+      : Effect.void;
+    return Observability.observeSessionVerify(
+      (error: SessionNotFound | SessionExpired | StoreUnavailable) =>
+        error._tag === "SessionExpired"
+          ? "expired"
+          : error._tag === "Sessions/NotFound"
+            ? "not-found"
+            : "unavailable",
+    )(Effect.andThen(announce, verify(token)));
+  };
 
 interface SessionRow {
   readonly id: SessionId;
@@ -626,12 +676,16 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         // alarm and a family revocation). RRS-003: tombstoned, not deleted —
         // the ancestor's own `familyId` is what this row inherits; a row with
         // no live `supersedes` ancestor founds a fresh family, `familyId = id`.
-        const { row, evicted } = yield* Ref.modify(
+        const { row, evicted, superseded } = yield* Ref.modify(
           state,
           (
             s,
           ): readonly [
-            { readonly row: SessionRow; readonly evicted: ReadonlyArray<SessionRow> },
+            {
+              readonly row: SessionRow;
+              readonly evicted: ReadonlyArray<SessionRow>;
+              readonly superseded: Option.Option<SessionRow>;
+            },
             HashMap.HashMap<SessionId, SessionRow>,
           ] => {
             // TMS-004: rows are otherwise removed only on revoke; prune
@@ -690,11 +744,22 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             const evictedRows = existing.filter((r) => evictedIds.has(r.id));
             const kept = HashMap.filter(withAncestor, (r) => !evictedIds.has(r.id));
             return [
-              { row: created, evicted: evictedRows },
+              { row: created, evicted: evictedRows, superseded: ancestor },
               HashMap.set(kept, id, created),
             ] as const;
           },
         );
+        // RRS-008: the rotation's own event, published from `Sessions` so every
+        // strategy's `supersedes` is covered, only when a live ancestor was tombstoned.
+        if (Option.isSome(superseded)) {
+          yield* events.publish({
+            _tag: "auth.session.superseded",
+            sessionId: superseded.value.id,
+            supersededBy: id,
+            familyId: superseded.value.familyId,
+            userId: superseded.value.userId,
+          });
+        }
         for (const gone of evicted) {
           yield* events.publish({
             _tag: "auth.session.revoked",
@@ -876,6 +941,14 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           }
           return { session: toView(current.value), rotated: Option.none() };
         }
+        // RRS-008: only the call that won the rotation announces it — the
+        // concurrent loser took the branch above and reports `rotated: none`.
+        yield* events.publish({
+          _tag: "auth.session.rotated",
+          sessionId: id,
+          familyId: touched.value.familyId,
+          userId: touched.value.userId,
+        });
         return {
           session: toView(touched.value),
           rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
@@ -964,6 +1037,18 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           ),
         );
 
+      const purgeExpired: SessionsShape["purgeExpired"] = (before) =>
+        Ref.modify(state, (s) => {
+          const cutoff = DateTime.toEpochMillis(before);
+          const kept = HashMap.filter(
+            s,
+            (row) =>
+              DateTime.toEpochMillis(row.absoluteExpiresAt) >= cutoff &&
+              DateTime.toEpochMillis(row.idleExpiresAt) >= cutoff,
+          );
+          return [HashMap.size(s) - HashMap.size(kept), kept] as const;
+        });
+
       const toItem = (row: SessionRow, current: SessionId | undefined): SessionListItem => ({
         id: row.id,
         createdAt: row.createdAt,
@@ -1028,12 +1113,13 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
       );
 
       return {
-        issue,
-        verify,
+        issue: traceIssue(issue),
+        verify: traceVerify(verify),
         revoke,
         revokeOwned,
         revokeOthers,
         revokeAll,
+        purgeExpired,
         list,
         findOwned,
         isLive,
@@ -1104,6 +1190,7 @@ export const layerSql: Layer.Layer<
         // what this new row inherits; no live `supersedes` ancestor founds a
         // fresh family, `familyId = id`.
         let familyId = id;
+        let superseded: { readonly id: SessionId; readonly familyId: string } | undefined;
         if (input.supersedes !== undefined) {
           const ancestor = yield* repo
             .tombstone({ id: input.supersedes, supersededBy: id, supersededAt: now })
@@ -1112,7 +1199,10 @@ export const layerSql: Layer.Layer<
                 NoSuchElementError: () => Effect.succeed(undefined),
               }),
             );
-          if (ancestor !== undefined) familyId = SessionId(ancestor.familyId);
+          if (ancestor !== undefined) {
+            familyId = SessionId(ancestor.familyId);
+            superseded = { id: input.supersedes, familyId: ancestor.familyId };
+          }
         }
         const insert = yield* repo.models.Session.insert
           .makeEffect({
@@ -1150,17 +1240,27 @@ export const layerSql: Layer.Layer<
             evicted.push(goneId);
           }
         }
-        return { inserted, evicted };
+        return { inserted, evicted, superseded };
       });
-      const { inserted: row, evicted } = yield* input.supersedes === undefined &&
+      const { inserted: row, evicted, superseded } = yield* input.supersedes === undefined &&
       config.maxConcurrent === undefined
         ? persist
         : sql.withTransaction(persist);
+      // RRS-008: see `layerMemory.issue`.
+      if (superseded !== undefined) {
+        yield* events.publish({
+          _tag: "auth.session.superseded",
+          sessionId: superseded.id,
+          supersededBy: id,
+          familyId: superseded.familyId,
+          userId: input.userId,
+        });
+      }
       for (const goneId of evicted) {
         yield* events.publish({
           _tag: "auth.session.revoked",
           userId: input.userId,
-          sessionId: goneId,
+          sessionId: SessionId(goneId),
           scope: "one",
           reason: "limitEvicted",
         });
@@ -1324,6 +1424,13 @@ export const layerSql: Layer.Layer<
         );
         return { session: toSessionView(current), rotated: Option.none() };
       }
+      // RRS-008: only the call that won the rotation announces it.
+      yield* events.publish({
+        _tag: "auth.session.rotated",
+        sessionId: id,
+        familyId: touched.value.familyId,
+        userId: UserId(touched.value.userId),
+      });
       return {
         session: toSessionView(touched.value),
         rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
@@ -1406,6 +1513,9 @@ export const layerSql: Layer.Layer<
         ),
         Effect.catchTag("SqlError", storeUnavailable("Sessions.revokeAll")),
       );
+
+    const purgeExpired: SessionsShape["purgeExpired"] = (before) =>
+      drainBatches((limit) => repo.deleteExpiredBefore(before, limit).pipe(Effect.orDie));
 
     const toItem = (row: SqlModels.Session, current: SessionId | undefined): SessionListItem => ({
       id: SessionId(row.id),
@@ -1514,12 +1624,13 @@ export const layerSql: Layer.Layer<
     );
 
     return {
-      issue,
-      verify,
+      issue: traceIssue(issue),
+      verify: traceVerify(verify),
       revoke,
       revokeOwned,
       revokeOthers,
       revokeAll,
+      purgeExpired,
       list,
       findOwned,
       isLive,

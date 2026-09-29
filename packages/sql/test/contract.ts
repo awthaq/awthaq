@@ -65,6 +65,7 @@ export const repositoriesLayer = <E>(
     Repositories.VerificationRepositoryLive,
     Repositories.VerificationReservationsRepositoryLive,
     Repositories.AuditLogRepositoryLive,
+    Repositories.RelayCursorRepositoryLive,
   ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 };
 
@@ -960,6 +961,158 @@ export const contractCases = (
         );
       }).pipe(Effect.provide(RepositoriesLive)),
     );
+    // ALF-010: retention deletes are one bounded statement each.
+    it.effect(
+      "AuditLog.deleteOccurredBefore removes only rows older than the cutoff for the given tags",
+      () =>
+        Effect.gen(function* () {
+          const auditLog = yield* Repositories.AuditLogRepository;
+          const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
+          const at = (days: number) => DateTime.addDuration(t0, Duration.days(days));
+          const rows = [
+            { id: "a", eventTag: "auth.one", days: 0 },
+            { id: "b", eventTag: "auth.two", days: 0 },
+            { id: "c", eventTag: "auth.one", days: 10 },
+            { id: "d", eventTag: "auth.three", days: 0 },
+          ];
+          for (const { id, eventTag, days } of rows) {
+            yield* auditLog.insert({
+              id,
+              eventTag,
+              actorUserId: null,
+              occurredAt: at(days),
+              correlationId: null,
+              payload: { id },
+            });
+          }
+          const remaining = auditLog
+            .list({ eventTag: null, actorUserId: null, occurredAfter: null, occurredBefore: null })
+            .pipe(Effect.map((all) => all.map((row) => row.id).sort()));
+
+          // only the listed tag, only before the cutoff: `a` goes; `c` is newer, `b`/`d` other tags
+          assert.strictEqual(
+            yield* auditLog.deleteOccurredBefore({
+              cutoff: at(5),
+              eventTags: ["auth.one"],
+              exceptTags: [],
+              limit: 100,
+            }),
+            1,
+          );
+          assert.deepStrictEqual(yield* remaining, ["b", "c", "d"]);
+
+          // every tag but `auth.three`, bounded by `limit`: `b` goes, `d` is excepted
+          assert.strictEqual(
+            yield* auditLog.deleteOccurredBefore({
+              cutoff: at(5),
+              eventTags: null,
+              exceptTags: ["auth.three"],
+              limit: 1,
+            }),
+            1,
+          );
+          assert.deepStrictEqual(yield* remaining, ["c", "d"]);
+          assert.strictEqual(
+            yield* auditLog.deleteOccurredBefore({
+              cutoff: at(5),
+              eventTags: null,
+              exceptTags: ["auth.three"],
+              limit: 100,
+            }),
+            0,
+          );
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect(
+      "CSG-003: deleteExpiredBefore removes expired sessions, tokens and reservations, bounded by limit, and reports the count",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Repositories.SessionsRepository;
+          const verification = yield* Repositories.VerificationRepository;
+          const reservations = yield* Repositories.VerificationReservationsRepository;
+          const users = yield* Repositories.UsersRepository;
+          const user = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "retention@example.com", name: "R" }),
+          );
+          const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
+          const at = (days: number) => DateTime.addDuration(t0, Duration.days(days));
+          const cutoff = at(10);
+
+          const session = (hash: string, absolute: DateTime.Utc) =>
+            sessions.insert(
+              M.Session.insert.make({
+                userId: user.id,
+                secretHash: hash,
+                ipAddress: null,
+                userAgent: null,
+                absoluteExpiresAt: absolute,
+                idleExpiresAt: Model.Override(absolute),
+                actingAsType: null,
+                actingAsId: null,
+                familyId: Schema.decodeUnknownSync(Models.SessionId)(`family-${hash}`),
+                supersededBy: null,
+                supersededAt: null,
+                reusedAt: null,
+              }),
+            );
+          const old1 = yield* session("old1", at(1));
+          yield* session("old2", at(2));
+          const live = yield* session("live", at(30));
+          assert.strictEqual(yield* sessions.deleteExpiredBefore(cutoff, 1), 1);
+          assert.strictEqual(yield* sessions.deleteExpiredBefore(cutoff, 100), 1);
+          assert.strictEqual(yield* sessions.deleteExpiredBefore(cutoff, 100), 0);
+          assert.strictEqual((yield* sessions.findById(live.id)).id, live.id);
+          assert.strictEqual(
+            (yield* sessions.findById(old1.id).pipe(Effect.flip))._tag,
+            "NoSuchElementError",
+          );
+
+          const token = (
+            identifier: string,
+            expiresAt: DateTime.Utc,
+            consumedAt: DateTime.Utc | null,
+          ) =>
+            verification.insert(
+              M.VerificationToken.insert.make({
+                identifier,
+                valueHash: `hash-${identifier}`,
+                expiresAt,
+                consumedAt,
+              }),
+            );
+          yield* token("expired", at(1), null);
+          yield* token("consumed-long-ago", at(30), at(2));
+          yield* token("consumed-recently", at(30), at(20));
+          yield* token("live", at(30), null);
+          assert.strictEqual(yield* verification.deleteExpiredBefore(cutoff, 100), 2);
+          assert.strictEqual(yield* verification.deleteExpiredBefore(cutoff, 100), 0);
+
+          assert.isTrue(
+            yield* reservations.claim({ identifier: "r-old", expiresAt: at(1), now: t0 }),
+          );
+          assert.isTrue(
+            yield* reservations.claim({ identifier: "r-live", expiresAt: at(30), now: t0 }),
+          );
+          assert.strictEqual(yield* reservations.deleteExpiredBefore(cutoff, 100), 1);
+          assert.strictEqual(yield* reservations.deleteExpiredBefore(cutoff, 100), 0);
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    // CWM-004: the event relay's persisted position.
+    it.effect("RelayCursor: get is empty until set, set upserts, and names are independent", () =>
+      Effect.gen(function* () {
+        const cursors = yield* Repositories.RelayCursorRepository;
+        const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
+        assert.isTrue(Option.isNone(yield* cursors.get("billing")));
+        yield* cursors.set("billing", "event-1", t0);
+        yield* cursors.set("siem", "event-9", t0);
+        yield* cursors.set("billing", "event-2", DateTime.addDuration(t0, Duration.minutes(1)));
+        assert.deepStrictEqual(yield* cursors.get("billing"), Option.some("event-2"));
+        assert.deepStrictEqual(yield* cursors.get("siem"), Option.some("event-9"));
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
     it.effect("BAM-008: idToken round-trips through the repository and is ciphertext at rest", () =>
       Effect.gen(function* () {
         const accounts = yield* Repositories.AccountsRepository;

@@ -3,7 +3,7 @@ ID: "RRS-008"
 Title: "No session-lifecycle events: rotation, supersession, and reuse are unobservable"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:24"
 Auditor: "refresh-token-rotation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `core` · reported by **Refresh Token Rotation Specialist** (`refresh-token-rotation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ Add auth.session.rotated (published on the winning CAS rotation write) and auth.
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `auth-event-taxonomy`. Already fixed by commit 9017a8a. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:68`. Fix: Publish session lifecycle events from Sessions itself (both layers), not per plugin. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Sessions itself (both layers) publishes auth.session.rotated (only the winning in-place rotation; the concurrent loser reports rotated:none and publishes nothing) and auth.session.superseded (when issue tombstones a live supersedes ancestor); auth.session.issued was already published from Sessions.issue. Tests: Sessions.test.ts on both layers (superseded then issued order; no superseded for a non-live ancestor; exactly one rotated under two concurrent verifies).

@@ -3,7 +3,7 @@ ID: "CSD-004"
 Title: "No failed-authentication event is published — stuffing detection has no signal to subscribe to"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:12"
 Auditor: "credential-stuffing-defense-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **Credential Stuffing Defense Specialist** (`credential-stuffing-defense-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Publish a typed auth.signin.failed event (userId when resolvable, strategy, and 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `auth-event-taxonomy`. Already fixed by commit f5eb570. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:56`. Fix: Enrich the failure event with `ip` and a keyed, non-reversible `identifierDigest`, and publish it from every strategy's failure path. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** auth.user.signInFailed gains clientIp and identifierDigest (HMAC-SHA256 over the normalized attempted identifier keyed by PasswordConfig.identifierDigestKey, default a per-process random key; computed identically for real and nonexistent accounts) and reasons assertionInvalid/callbackRejected; published by Password (both failure paths), Passkey.authenticateVerify (wrapper over the ceremony) and OAuth.callback (wrapper over the flow, only OAuthCallbackFailed). Deviation: the source-address field is named clientIp because the envelope already owns ip (the request context). Tests: Password.test.ts (digest stable per identifier, normalized, distinct across identifiers, no email/userId), passkey and oauth failure-event tests.

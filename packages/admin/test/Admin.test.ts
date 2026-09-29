@@ -141,6 +141,14 @@ describe("Admin", () => {
 
         const collected = yield* Fiber.join(seen);
         assert.strictEqual(collected.length, 1);
+        // IDS-006: the denied event names the refused call and the attempted target.
+        const [denied] = collected;
+        assert.strictEqual(denied?._tag, "auth.admin.impersonationDenied");
+        if (denied?._tag === "auth.admin.impersonationDenied") {
+          assert.strictEqual(denied.adminUserId, adminId);
+          assert.strictEqual(denied.operation, "impersonate");
+          assert.strictEqual(denied.targetUserId, targetId);
+        }
 
         const listed = yield* sessions.list(targetId);
         assert.strictEqual(listed.length, 0);
@@ -492,13 +500,26 @@ describe("Admin", () => {
   /** Collects every `impersonationStopped` event published from now on (the fork is registered before it returns). */
   const collectStopped = Effect.gen(function* () {
     const events = yield* AuthEvents.AuthEvents;
-    const seen = yield* Ref.make<ReadonlyArray<{ sessionId: string; endedBy: string }>>([]);
+    const seen = yield* Ref.make<
+      ReadonlyArray<{
+        sessionId: string;
+        endedBy: string;
+        adminUserId: string;
+        targetUserId: string;
+      }>
+    >([]);
     yield* events.stream.pipe(
       Stream.runForEach((event) =>
         event._tag === "auth.admin.impersonationStopped"
           ? Ref.update(seen, (all) => [
               ...all,
-              { sessionId: event.sessionId, endedBy: event.endedBy },
+              {
+                sessionId: event.sessionId,
+                endedBy: event.endedBy,
+                // IDS-006: both parties, so a consumer need not join the audit rows.
+                adminUserId: event.adminUserId,
+                targetUserId: event.targetUserId,
+              },
             ])
           : Effect.void,
       ),
@@ -533,7 +554,12 @@ describe("Admin", () => {
         yield* admin.list(caller);
         yield* TestClock.adjust(Duration.millis(10));
         assert.deepStrictEqual(yield* Ref.get(seen), [
-          { sessionId: issued.session.id, endedBy: "expired" },
+          {
+            sessionId: issued.session.id,
+            endedBy: "expired",
+            adminUserId: adminId,
+            targetUserId: targetId,
+          },
         ]);
       }).pipe(Effect.scoped, Effect.provide(buildLayer(allow))),
   );

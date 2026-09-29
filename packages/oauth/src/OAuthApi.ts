@@ -12,7 +12,7 @@
 // went wrong" redirect belongs, not this plugin.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { Hooks, Users } from "@awthaq/core";
+import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -190,7 +190,8 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       success: HttpApiSchema.Empty(302),
       // Shipping-gap map (.scratch/shipping-gaps), ticket 13: rate-limited.
       // Wayfinder ticket 03 (BCR-004/THS-002): `Hooks.TwoFactorRequired`
-      // when a `Hooks.BeforeSessionIssue` tap diverts.
+      // when a `Hooks.BeforeSessionIssue` tap diverts. NAM-002:
+      // `HookPoint.HookAborted` from a `Hooks.BeforeSignIn`/`BeforeSignUp` veto.
       error: [
         ProviderNotFound,
         ProviderUnavailable,
@@ -200,6 +201,7 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
         // SCP-001: `Users.assertCanSignIn` refused a suspended user.
         Users.UserSuspended,
         Api.RateLimited,
+        HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
       ],
     }),

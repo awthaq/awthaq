@@ -42,7 +42,7 @@ describe("Migrations.run", () => {
     }).pipe(Effect.provide(SqlLive)),
   );
 
-  // N11: `coreMigrations` (ids 1-17) and the index-numbered plugin list both
+  // N11: `coreMigrations` and the index-numbered plugin list both
   // number from 1. Sharing one tracking table made the migrator skip every
   // plugin migration whose id was <= the newest core id, silently.
   it.effect("N11: core and plugin migrations apply on one database without skipping", () =>
@@ -62,6 +62,7 @@ describe("Migrations.run", () => {
       // The two owners keep separate ledgers.
       const core = yield* sql`SELECT migration_id FROM effect_sql_migrations`;
       const plugins = yield* sql`SELECT migration_id FROM awthaq_plugin_migrations`;
+      // Derived, not hard-coded: a new core migration must not touch this test.
       assert.strictEqual(core.length, (yield* CoreMigrations.coreMigrations).length);
       assert.strictEqual(plugins.length, 2);
     }).pipe(Effect.provide(SqlLive)),

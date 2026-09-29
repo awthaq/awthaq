@@ -3,7 +3,7 @@ ID: "ARF-006"
 Title: "Recovery is invisible to the event system: no resetRequested/resetCompleted/passwordChanged events, no owner-notification hook"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:23"
 Auditor: "account-recovery-flow-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `core` · reported by **Account Recovery Flow Specialist** (`account-recovery-flow-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add auth.password.resetRequested/resetCompleted and auth.password.changed events
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `auth-event-taxonomy`. Already fixed by commit 45325bb. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:96`. Fix: Add and publish `auth.password.resetRequested` and `auth.user.emailVerified`. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** auth.password.resetRequested (real account only, published from inside the detached mail branch, at most once via a Ref guard, so no enumeration/timing side channel) and auth.user.emailVerified (after the verify transaction commits) added to the schema union, AuditLog.actorOf and Password.ts. Test: Password.test.ts (real account publishes, unknown email publishes nothing; verifyEmail publishes).

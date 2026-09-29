@@ -17,6 +17,7 @@ import {
   HookPoint,
   Hooks,
   MailDispatch,
+  Observability,
   RateLimits,
   Sessions,
   Users,
@@ -47,6 +48,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as PasswordApi from "./PasswordApi.ts";
 import * as PasswordRateLimits from "./PasswordRateLimits.ts";
 
@@ -115,6 +117,14 @@ export interface PasswordConfigShape {
    * notice. See ADR-EA-018.
    */
   readonly signUpEnumeration: "reveal" | "conceal";
+  /**
+   * CSD-004: the secret `auth.user.signInFailed.identifierDigest` is keyed
+   * with. `None` (default) generates a random key per process — enough for a
+   * single-process detector, but digests do not survive a restart or match
+   * across instances; set a stable secret (>= 32 bytes) to correlate attempts
+   * across a fleet and over time.
+   */
+  readonly identifierDigestKey: Option.Option<Redacted.Redacted<string>>;
 }
 
 const defaultPasswordConfig: PasswordConfigShape = {
@@ -128,6 +138,7 @@ const defaultPasswordConfig: PasswordConfigShape = {
   links: {},
   requireVerifiedEmail: true,
   signUpEnumeration: "reveal",
+  identifierDigestKey: Option.none(),
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -212,7 +223,9 @@ export interface PasswordShape {
     | PasswordApi.EmailNotVerified
     | Users.UserSuspended
     | Api.RateLimited
-    | Hooks.TwoFactorRequired | Errors.StoreUnavailable
+    | HookPoint.HookAborted
+    | Hooks.TwoFactorRequired
+    | Errors.StoreUnavailable
   >;
   /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
   readonly requestReset: (input: {
@@ -647,10 +660,68 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // dispatcher this layer owns — supervised, retried, bounded, observable
       // and drained on shutdown — in place of unowned `forkDetach` fibers.
       const mailDispatcher = yield* MailDispatch.make;
+      // CSD-004: a keyed, non-reversible digest of the *attempted* identifier,
+      // for the failure event. Computed identically for a real and a
+      // nonexistent account, so it is no existence oracle; keyed so it cannot
+      // be dictionary-reversed from the audit table.
+      const digestKey = Option.isSome(config.identifierDigestKey)
+        ? new TextEncoder().encode(Redacted.value(config.identifierDigestKey.value))
+        : yield* crypto.randomBytes(32).pipe(Effect.orDie);
+      const identifierDigest = (email: string) =>
+        Hmac.hmacSha256(
+          crypto,
+          digestKey,
+          new TextEncoder().encode(`signin-identifier:${config.rateLimitEmailKey(email)}`),
+        ).pipe(Effect.map(Hmac.toHex), Effect.orDie);
+      /**
+       * EOTS-001/ticket 27 §2: the hash check is its own span (`awthaq.password.verify`),
+       * so a trace shows where sign-in latency goes. No attribute is derived from the
+       * password, the hash or the identifier.
+       */
+      const verifyPassword = (candidate: Redacted.Redacted<string>, hash: PasswordHasher.PhcHash) =>
+        hasher
+          .verify(candidate, hash)
+          .pipe(
+            Observability.authSpan(Observability.Span.passwordVerify, {
+              [Observability.Field.strategy]: "password",
+            }),
+          );
+      /**
+       * EOTS-001: every operation is one `awthaq.password.<operation>` span
+       * (`awthaq.plugin`, `auth.strategy`); the handlers annotate `user.id` once the
+       * user is known. Never the email, the password or a token.
+       */
+      const traced =
+        <Args extends ReadonlyArray<unknown>, A, E, R>(
+          operation: string,
+          run: (...args: Args) => Effect.Effect<A, E, R>,
+        ) =>
+        (...args: Args) =>
+          run(...args).pipe(
+            Observability.authSpan(`awthaq.password.${operation}`, {
+              "awthaq.plugin": "password",
+              [Observability.Field.strategy]: "password",
+            }),
+          );
+      /** ALF-003/CSD-004: the failure signal, with the two dimensions a stuffing detector keys on. */
+      const publishSignInFailed = Effect.fnUntraced(function* (
+        reason: "invalidCredentials" | "emailNotVerified" | "suspended",
+        input: { readonly email: string; readonly ip?: string },
+      ) {
+        yield* events.publish({
+          _tag: "auth.user.signInFailed",
+          strategy: "password",
+          reason,
+          identifierDigest: yield* identifierDigest(input.email),
+          ...(input.ip === undefined ? {} : { clientIp: input.ip }),
+        });
+      });
       // AOMS-006/BCR-004 (.issues/high, wayfinder ticket 03): the mechanism
       // an Auth0-Rule-style sign-up policy, and the MFA divert point a
       // future `TwoFactor` plugin taps, both attach through.
       const beforeSignUp = yield* Hooks.BeforeSignUp;
+      const afterSignUp = yield* Hooks.AfterSignUp;
+      const beforeSignIn = yield* Hooks.BeforeSignIn;
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
 
@@ -736,30 +807,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           ),
         );
 
-      /**
-       * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s
-       * own `veto` helper — the same translation): BEH-EA-090 requires a
-       * veto abort to reach the caller as a typed `HookAborted`, not the
-       * bare `HookAbort` a tap itself fails with.
-       */
-      const vetoBeforeSignUp = (
-        effect: Effect.Effect<
-          { readonly email: string; readonly name: string },
-          HookPoint.HookAbort
-        >,
-      ): Effect.Effect<{ readonly email: string; readonly name: string }, HookPoint.HookAborted> =>
-        effect.pipe(
-          Effect.catchTag(
-            "HookAbort",
-            (abort) =>
-              new HookPoint.HookAborted({
-                point: "auth.user.signUp",
-                code: abort.code,
-                message: abort.message,
-              }),
-          ),
-        );
-
       /** Issues a verify-email token and mails it; dispatched, never awaited. */
       const dispatchVerificationMail = (user: Users.UserRecord) =>
         mailDispatcher.dispatch(
@@ -810,8 +857,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // allow-list) may reject the sign-up outright, or amend the input
         // for whatever taps run after it — before the (comparatively
         // expensive) password hash is even computed.
-        const vetoedSignUp = yield* vetoBeforeSignUp(
-          beforeSignUp.run({ email: input.email, name }),
+        const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
+          beforeSignUp.run({ email: input.email, name, strategy: "password" }),
         );
         const hash = yield* hasher.hash(input.password);
         return { vetoedSignUp, hash };
@@ -856,6 +903,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
+        yield* afterSignUp.run({ userId: user.id, ...Users.emailField(user), strategy: "password" });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
@@ -907,6 +955,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             );
           if (Option.isSome(created)) {
             yield* events.publish({ _tag: "auth.user.created", userId: created.value.id });
+            yield* afterSignUp.run({
+              userId: created.value.id,
+              ...Users.emailField(created.value),
+              strategy: "password",
+            });
             yield* dispatchVerificationMail(created.value);
             return;
           }
@@ -948,7 +1001,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             });
             // BEH-EA-114: this call happens on every attempt, real or not —
             // see `dummyHash`'s own comment.
-            const verified = yield* hasher.verify(
+            const verified = yield* verifyPassword(
               input.password,
               Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
             );
@@ -966,26 +1019,20 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           // `UserSignInFailedEvent`'s own doc comment for why this
           // carries no `userId`/email despite the wire response's own
           // uniform-response discipline not applying here.
-          yield* events.publish({
-            _tag: "auth.user.signInFailed",
-            strategy: "password",
-            reason: "invalidCredentials",
-          });
+          yield* publishSignInFailed("invalidCredentials", input);
           return yield* Effect.fail(new Api.InvalidCredentials());
         }
         const user = userOpt.value;
         const account = accountOpt.value;
         const hash = hashOpt.value;
+        // EOTS-001: the credential is proven, so the span may name the user (an id, never the email).
+        yield* Effect.annotateCurrentSpan("user.id", user.id);
 
         // Upstream-hardening ticket 04: checked only now that a genuinely
         // correct password is confirmed — never before, so this can't be
         // used to probe whether a guessed password is even close to right.
         if (config.requireVerifiedEmail && !Users.isEmailVerified(user)) {
-          yield* events.publish({
-            _tag: "auth.user.signInFailed",
-            strategy: "password",
-            reason: "emailNotVerified",
-          });
+          yield* publishSignInFailed("emailNotVerified", input);
           return yield* Effect.fail(new PasswordApi.EmailNotVerified());
         }
 
@@ -993,13 +1040,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // password is proven correct (a wrong password never learns the
         // account is suspended).
         yield* Users.assertCanSignIn(user).pipe(
-          Effect.tapError(() =>
-            events.publish({
-              _tag: "auth.user.signInFailed",
-              strategy: "password",
-              reason: "suspended",
-            }),
-          ),
+          Effect.tapError(() => publishSignInFailed("suspended", input)),
         );
 
         if (config.rehashOnLogin && hasher.needsRehash(Redacted.value(hash))) {
@@ -1008,6 +1049,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             .updateCredentialHash(account.id, Redacted.make(rehashed))
             .pipe(Effect.orDie);
         }
+
+        // NAM-002: the sign-in veto (an Auth.js `signIn` callback returning
+        // `false`), consulted only now that the password is proven — so a
+        // `HookAborted` here can never be used to probe a guessed password.
+        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
+          beforeSignIn.run({ userId: user.id, ...Users.emailField(user), strategy: "password" }),
+        );
 
         // BCR-004/THS-002: THE canonical MFA attachment point — consulted
         // here, right before this flow's own `sessions.issue`, never
@@ -1048,9 +1096,17 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // regardless of mail-provider health.
         if (Option.isSome(userOpt)) {
           const user = userOpt.value;
+          // ARF-006: the earliest takeover signal, published from *inside* the
+          // detached branch (an audit write on the response path would make an
+          // existing account slower than an unknown one) and at most once even
+          // if the mail work is retried.
+          const announced = Ref.makeUnsafe(false);
           yield* mailDispatcher.dispatch(
             { template: "reset-password", userId: user.id },
             Effect.gen(function* () {
+              if (!(yield* Ref.getAndSet(announced, true))) {
+                yield* events.publish({ _tag: "auth.password.resetRequested", userId: user.id });
+              }
               // ARF-004: an OAuth-/passkey-only account has no password to
               // reset — a token would only lead to a dead link. Looked up
               // here, inside the dispatched work, so both branches still cost
@@ -1221,7 +1277,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // retry. `resendVerification` mints a fresh token, so it isn't
         // fatal, but it's still the identical consume-then-apply
         // atomicity gap `SqlTransaction` exists to close.
-        yield* sqlTransaction
+        const verifiedUserId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
               const consumed = yield* verification.consume(identifier, value).pipe(
@@ -1251,9 +1307,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   IdentityMismatch: Effect.die,
                 }),
               );
+              return userId;
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
+        // ARF-006: after the commit, like `resetCompleted`.
+        yield* events.publish({ _tag: "auth.user.emailVerified", userId: verifiedUserId });
       });
 
       const changePassword: PasswordShape["changePassword"] = Effect.fnUntraced(function* (input) {
@@ -1276,7 +1335,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // timing, so the real hasher call always runs regardless (TSS-006:
         // held to the same timing floor as `signIn`).
         const verified = yield* withTimingFloor(
-          hasher.verify(
+          verifyPassword(
             input.currentPassword,
             Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
           ),
@@ -1330,7 +1389,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // password credential at all distinguish "wrong password" from
         // "no password set" by timing (TSS-006: same timing floor).
         const verified = yield* withTimingFloor(
-          hasher.verify(
+          verifyPassword(
             input.currentPassword,
             Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
           ),
@@ -1351,15 +1410,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       return Password.of({
-        signUp,
-        signUpConcealed,
-        signIn,
-        requestReset,
-        resendVerification,
-        confirmReset,
-        verifyEmail,
-        changePassword,
-        reauthenticate,
+        signUp: traced("signUp", signUp),
+        signUpConcealed: traced("signUpConcealed", signUpConcealed),
+        signIn: traced("signIn", signIn),
+        requestReset: traced("requestReset", requestReset),
+        resendVerification: traced("resendVerification", resendVerification),
+        confirmReset: traced("confirmReset", confirmReset),
+        verifyEmail: traced("verifyEmail", verifyEmail),
+        changePassword: traced("changePassword", changePassword),
+        reauthenticate: traced("reauthenticate", reauthenticate),
       });
     }),
   });

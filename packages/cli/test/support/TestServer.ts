@@ -4,8 +4,18 @@
 // speak to it exactly as they speak to a deployed server — through the generated `HttpApiClient`
 // with `Authorization: Bearer` — so what the suite proves is the wire, not a stub.
 import { AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, AuthEvents, Hooks, Sessions, Users, Verification } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  DataExport,
+  Erasure,
+  Hooks,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
+import { RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
@@ -15,13 +25,17 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as NetAddress from "effect/unstable/net/NetAddress";
 
-const Base = Layer.mergeAll(
-  SqlTransaction.layerNoop,
-  Sessions.layerMemory,
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Verification.layerMemory,
-).pipe(
+// CSG-001/CSG-005: the account group's erasure cascade and export, built over the same stores.
+const Base = Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      SqlTransaction.layerNoop,
+      Sessions.layerMemory,
+      Users.layerMemory,
+      Accounts.layerMemory,
+      Verification.layerMemory,
+    ),
+  ),
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Hooks.HooksLive),

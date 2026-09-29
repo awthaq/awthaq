@@ -6,10 +6,7 @@
 //
 // Both points are tapped once, up front, and exercised by two different
 // emails within the *same* test — `flagged@example.com` diverts,
-// `ada@example.com` continues through — rather than two separate tests,
-// since a second test wanting different tap behavior on either point
-// would die against the first test's own already-frozen registry
-// (BEH-EA-024).
+// `ada@example.com` continues through.
 import {
   AuditLog,
   Hooks,
@@ -60,7 +57,6 @@ const CoreLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(
     Layer.mergeAll(
       // BEH-EA-093: diverts only the flagged user; every other user
@@ -85,6 +81,8 @@ const CoreLive = Layer.mergeAll(
       ),
     ),
   ),
+  // The taps require their points, so `HooksLive` feeds both (ELC-001).
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
