@@ -7,114 +7,24 @@
 // this suite proves the plugin's own ceremony/persistence/enumeration-safety
 // logic, not `@simplewebauthn/server`'s cryptography (that's
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
-import { AuditLog, Hooks, AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
+import { buildLayer, registerNewUser } from "./passkeyTestLayers.ts";
 import {
   ORIGIN,
-  RP_ID,
   buildClientDataJSON,
   extractChallenge,
   mockWebAuthn,
 } from "./passkeyTestFixtures.ts";
 
-const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-/**
- * The `passkey`/`passkey.credentials` groups declare `.middleware(Api.Authentication)`
- * (`PasskeyApi.ts`) — merged into `Passkey.Passkey.layer` regardless of
- * whether a test ever dispatches real HTTP, so this domain-level suite
- * still has to satisfy it, the same way `AuthHttp.test.ts` would.
- */
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-/**
- * CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `PasskeyGroup` and
- * `PasskeyCredentialsGroup` now also carry `.middleware(Api.CsrfProtection)`
- * (`PasskeyApi.ts`) — merged into `Passkey.Passkey.layer` regardless of
- * whether a test ever dispatches real HTTP, the same as `AuthenticationLive`
- * above.
- */
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("passkey-domain-test-csrf-secret"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const PortsLive = (webAuthn: Layer.Layer<WebAuthn.WebAuthn>) =>
-  Layer.mergeAll(webAuthn, ChallengeStore.layerMemory, PasskeyCredentials.layerMemory).pipe(
-    Layer.provideMerge(NodeCrypto.layer),
-  );
-
-const buildLayer = (
-  webAuthn: Layer.Layer<WebAuthn.WebAuthn>,
-  configOverrides?: Partial<Passkey.PasskeyConfigShape>,
-) =>
-  Passkey.Passkey.layer.pipe(
-    Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN], ...configOverrides })),
-    Layer.provide(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(PortsLive(webAuthn)),
-  );
-
 const TestLayer = buildLayer(mockWebAuthn());
-
-/** Creates a user, issues a session, and registers `cred-mock-1` for that user — the shared setup every credential-management/authentication test starts from. */
-const registerNewUser = (
-  email: string,
-): Effect.Effect<
-  { readonly userId: Users.UserId; readonly sessionId: Sessions.SessionId },
-  unknown,
-  Passkey.Passkey | Users.Users | Sessions.Sessions
-> =>
-  Effect.gen(function* () {
-    const passkey = yield* Passkey.Passkey;
-    const users = yield* Users.Users;
-    const sessions = yield* Sessions.Sessions;
-    const user = yield* users.create({ email, name: email });
-    const issued = yield* sessions.issue({ userId: user.id });
-    const options = yield* passkey.registerOptions(user.id, issued.session.id);
-    yield* passkey.registerVerify(user.id, issued.session.id, {
-      credential: {
-        id: "cred-mock-1",
-        rawId: "cred-mock-1",
-        type: "public-key",
-        response: {
-          clientDataJSON: buildClientDataJSON({
-            type: "webauthn.create",
-            challenge: extractChallenge(options),
-            origin: ORIGIN,
-          }),
-          attestationObject: "",
-        },
-      },
-    });
-    return { userId: user.id, sessionId: issued.session.id };
-  });
 
 describe("Passkey", () => {
   it.effect("BEH-EA-130/134: register/verify persists a credential and links an Accounts row", () =>
@@ -175,7 +85,7 @@ describe("Passkey", () => {
         },
       });
 
-      const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
       const clientDataJSON = buildClientDataJSON({
         type: "webauthn.get",
         challenge: extractChallenge(options),
@@ -200,7 +110,7 @@ describe("Passkey", () => {
     () =>
       Effect.gen(function* () {
         const passkey = yield* Passkey.Passkey;
-        const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
         const clientDataJSON = buildClientDataJSON({
           type: "webauthn.get",
           challenge: extractChallenge(options),
@@ -263,7 +173,7 @@ describe("Passkey", () => {
         // of whether a future cascade also cleans it up.
         yield* users.delete(user.id);
 
-        const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
         const clientDataJSON = buildClientDataJSON({
           type: "webauthn.get",
           challenge: extractChallenge(options),
@@ -287,7 +197,7 @@ describe("Passkey", () => {
   it.effect("a replayed or expired challenge is rejected as PasskeyChallengeInvalid", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;
-      const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
       const clientDataJSON = buildClientDataJSON({
         type: "webauthn.get",
         challenge: extractChallenge(options),
@@ -336,7 +246,7 @@ describe("Passkey", () => {
           },
         });
 
-        const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
         const clientDataJSON = buildClientDataJSON({
           type: "webauthn.get",
           challenge: extractChallenge(options),
@@ -385,7 +295,7 @@ describe("Passkey", () => {
         { startImmediately: true },
       );
 
-      const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
       const clientDataJSON = buildClientDataJSON({
         type: "webauthn.get",
         challenge: extractChallenge(options),
@@ -479,6 +389,7 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
 
         const options = yield* passkey.registerOptionsConditional(user.id, issued.session.id);
         const record = yield* passkey.registerVerify(user.id, issued.session.id, {
+          ceremony: "conditional",
           credential: {
             id: "cred-mock-1",
             rawId: "cred-mock-1",
