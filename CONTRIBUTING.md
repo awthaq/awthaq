@@ -54,6 +54,16 @@ drifted.
   opening a pull request. `pnpm check` runs everything CI does, including
   the BDD suite and spec traceability check.
 
+## The quality dashboard (local only)
+
+`node scripts/generate-quality-dashboard.mjs` renders `type-quality-dashboard.html`
+from per-package KPI JSON files in `.quality-metrics/`. Both are gitignored and
+nothing in `pnpm check` uses them; the script's header documents the JSON contract.
+The renderer refuses metrics that no longer describe the code (a `sourceSha` older than
+a change under the package's `src/`, a file or line count that differs from the live
+tree, an unknown package), so stale numbers cannot be rendered silently. The
+type-safety rules that matter (`as`, `any`) are lint rules, not dashboard KPIs.
+
 ## Bumping the `effect` release candidate
 
 `effect` is pinned exact in `pnpm-workspace.yaml`'s catalog. Comments and docs

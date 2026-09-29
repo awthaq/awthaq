@@ -1,20 +1,45 @@
 #!/usr/bin/env node
 // Generates a self-contained HTML type-system quality dashboard for the
-// awthaq monorepo from per-package KPI JSON files (see
-// /tmp/awthaq-kpi/CONTRACT.md for the 50-KPI contract).
+// awthaq monorepo from per-package KPI JSON files.
 //
-// Usage: node scripts/generate-quality-dashboard.mjs [--metrics-dir DIR] [--out FILE]
+// Usage: node scripts/generate-quality-dashboard.mjs [--metrics-dir DIR] [--out FILE] [--allow-stale]
+//
+// The dashboard is a *local* artifact (MTS-011, DESS-005): the rendered
+// `type-quality-dashboard.html` and the `.quality-metrics/` inputs are both
+// gitignored, and nothing in `pnpm check` consumes them. The type-safety numbers
+// that matter are enforced as lint rules instead (`typescript/consistent-type-assertions`,
+// `no-explicit-any`), which cannot go stale. There is no in-repo extractor: the JSON
+// files come from whatever measured them, so this renderer refuses inputs that no
+// longer describe the code (a Sep-12 snapshot once rendered "empty placeholder"
+// packages as if they were current).
+//
+// Input contract, one `<package>.json` per package in the metrics directory:
+//   {
+//     "package": "core",               // the workspace package's name, scoped or not (packages/*/package.json)
+//     "path": "packages/core",
+//     "sourceSha": "<commit sha>",     // HEAD when the KPIs were measured
+//     "kpis": { "A": {...}, "B": {...}, "C": {...}, "D": { "fileCount", "totalLoc", ... }, "E": {...} },
+//     "details": { "risks": [...] }    // optional
+//   }
+// `D.fileCount` is the number of `src/**/*.{ts,tsx}` files and `D.totalLoc` their total
+// physical lines. A file is *fresh* when no `src` file of its package changed between
+// `sourceSha` and HEAD and both counts match the live tree; any stale file, unknown package
+// or leftover `@effect-auth/` name exits 1 unless `--allow-stale` is passed.
 
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const argv = process.argv.slice(2);
 function argOf(name, fallback) {
   const i = argv.indexOf(name);
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
 }
-const METRICS_DIR = resolve(argOf("--metrics-dir", ".quality-metrics"));
-const OUT = resolve(argOf("--out", "type-quality-dashboard.html"));
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const METRICS_DIR = resolve(argOf("--metrics-dir", join(ROOT, ".quality-metrics")));
+const OUT = resolve(argOf("--out", join(ROOT, "type-quality-dashboard.html")));
+const ALLOW_STALE = argv.includes("--allow-stale");
 
 // ---------------------------------------------------------------------------
 // 50-KPI registry. dir: lower|higher|band|bool. scored:false => context KPI.
@@ -700,17 +725,69 @@ function computeScores(pkg) {
 // ---------------------------------------------------------------------------
 // Load metrics
 // ---------------------------------------------------------------------------
+/** Why a metrics file no longer describes the code, or `[]` when it is fresh. */
+function stalenessOf(file, raw) {
+  const problems = [];
+  if (JSON.stringify(raw).includes("@effect-auth/")) {
+    problems.push("mentions @effect-auth/ (the pre-rename package names)");
+  }
+  const dir = typeof raw.path === "string" ? join(ROOT, raw.path) : undefined;
+  const manifest = dir === undefined ? undefined : join(dir, "package.json");
+  if (manifest === undefined || !existsSync(manifest)) {
+    return [...problems, "names a package that is not in the workspace: " + raw.path].map((p) => file + ": " + p);
+  }
+  const manifestName = JSON.parse(readFileSync(manifest, "utf8")).name;
+  if (manifestName !== raw.package && !manifestName.endsWith("/" + raw.package)) {
+    problems.push("package name " + raw.package + " does not match " + raw.path + "/package.json");
+  }
+  const srcDir = join(dir, "src");
+  if (typeof raw.sourceSha !== "string") {
+    problems.push("has no sourceSha, so its age is unknown");
+  } else {
+    try {
+      const changed = execFileSync("git", ["diff", "--name-only", raw.sourceSha, "HEAD", "--", raw.path + "/src"], {
+        cwd: ROOT,
+        encoding: "utf8",
+      }).trim();
+      if (changed !== "") problems.push("measured at " + raw.sourceSha.slice(0, 7) + "; src has changed since");
+    } catch {
+      problems.push("sourceSha " + raw.sourceSha + " is not a commit in this repository");
+    }
+  }
+  const sources = existsSync(srcDir)
+    ? readdirSync(srcDir, { recursive: true }).filter((n) => /\.(ts|tsx)$/.test(n))
+    : [];
+  const loc = sources.reduce((n, f) => n + readFileSync(join(srcDir, f), "utf8").split("\n").length, 0);
+  if (raw.kpis?.D?.fileCount !== sources.length) {
+    problems.push("fileCount " + raw.kpis?.D?.fileCount + " but src has " + sources.length + " files");
+  }
+  if (raw.kpis?.D?.totalLoc !== loc) {
+    problems.push("totalLoc " + raw.kpis?.D?.totalLoc + " but src has " + loc + " lines");
+  }
+  return problems.map((p) => file + ": " + p);
+}
+
 function loadPackages() {
   const files = readdirSync(METRICS_DIR).filter(
     (f) => f.endsWith(".json") && f !== "repo-checks.json",
   );
   const pkgs = [];
+  const stale = [];
   for (const f of files) {
     const raw = JSON.parse(readFileSync(join(METRICS_DIR, f), "utf8"));
+    stale.push(...stalenessOf(f, raw));
     const pkg = { name: raw.package, path: raw.path, kpis: raw.kpis, details: raw.details ?? {} };
     pkg.scores = computeScores(pkg);
     pkg.loc = raw.kpis.D.totalLoc;
     pkgs.push(pkg);
+  }
+  if (stale.length > 0) {
+    console.error("quality-dashboard: the metrics do not describe the current code:");
+    for (const problem of stale) console.error("  - " + problem);
+    if (!ALLOW_STALE) {
+      console.error("Re-measure, or pass --allow-stale to render them anyway.");
+      process.exit(1);
+    }
   }
   pkgs.sort((a, b) => (b.scores.overall ?? 0) - (a.scores.overall ?? 0));
   return pkgs;
