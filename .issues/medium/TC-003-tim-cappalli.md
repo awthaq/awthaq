@@ -3,7 +3,7 @@ ID: "TC-003"
 Title: "No ceremony timeout knob; browser ceremony lifetime and server challenge TTL are unaligned"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/ChallengeStore.ts:56"
 Auditor: "tim-cappalli"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `passkey` · reported by **Tim Cappalli — WebAuthn / Passkeys Standards Contributor** (`tim-cappalli`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Add timeout to PasskeyConfig and the port input shapes, set it explicitly in bot
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-ceremony-policy`. Evidence at HEAD ec065a7: `packages/passkey/src/ChallengeStore.ts:55`. Fix: Expose ceremony timeout (≤ challenge TTL), hints and extension passthrough on the port and PasskeyConfig; set them explicitly in every options generator. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Explicit ceremony timing: port RegistrationOptionsInput/AuthenticationOptionsInput gain timeout/hints/extensions (ports tests echo them); ChallengeStore exports CHALLENGE_TTL; PasskeyConfig gains ceremonyTimeout (default 4m30s), hints, extensions, and Passkey.layer refuses to build when ceremonyTimeout exceeds the TTL; every options generator (register, conditional, authenticate, reauthenticate) sets them. Tests: PasskeyCeremony.test.ts (all four options carry timeout 270000; configured timeout/hints/extensions reach the port; over-TTL config fails to build), ports WebAuthn.test.ts, PasskeyRealPort.test.ts (real options timeout). Decision: extensions default left to the library's own default (credProps on registration). Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

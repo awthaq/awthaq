@@ -3,7 +3,7 @@ ID: "CB-004"
 Title: "Counter-anomaly \"log + step-up\" policy is unreachable — library hard-fails regressions first"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:585"
 Auditor: "christiaan-brand"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `passkey` · reported by **Christiaan Brand — W3C WebAuthn Specification Co-editor** (`christiaan-brand`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Pick one policy and implement it for real: either keep the library's hard-fail a
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-counter-anomaly-policy`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:796`. Fix: Move counter-regression detection out of the library into the plugin so the decided 'log + step-up' policy actually runs, with an optional strict mode. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Counter policy moved into the plugin: port verifyAuthentication passes the library a stored counter of 0 (StoredCredential.counter removed from the port) and reports newCounter; PasskeyConfig.counterAnomalyPolicy 'flag'|'reject' (default flag); regression check shared by authenticateVerify and reauthenticateVerify; PasskeyCounterAnomaly added to both error unions and raised under reject; PasskeyCredentials.recordUsage never lowers the stored counter. Tests: ports WebAuthn.test.ts (regressed assertion verifies with its newCounter), PasskeyCounterAnomaly.test.ts, and PasskeyRealPort.test.ts (real regressed assertion flagged + audited under flag, PasskeyCounterAnomaly under reject; red before: PasskeyVerificationFailed/InvalidCredentials). BDD: REQ-EA-381 un-skipped as a flag|reject Scenario Outline. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

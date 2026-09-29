@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
+import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
 
 const credentialInput = (id: string, userId: Users.UserId) => ({
   id,
@@ -60,6 +61,7 @@ describe("Passkey.beforeUserDeleteErasure", () => {
     Layer.provide(Hooks.BeforeUserDelete.layer),
     Layer.provide(Passkey.beforeUserDeleteErasure),
     Layer.provideMerge(PasskeyCredentials.layerMemory),
+    Layer.provideMerge(PasskeyUserHandles.layerMemory),
     Layer.provide(NodeCrypto.layer),
   );
 
@@ -67,13 +69,18 @@ describe("Passkey.beforeUserDeleteErasure", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+      const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
       const user = yield* users.create({ email: "erase@example.com", name: "Erase" });
       yield* credentials.create(credentialInput("cred-erase-1", user.id));
       yield* credentials.create(credentialInput("cred-erase-2", user.id));
+      const handleBefore = yield* handles.getOrCreate(user.id);
 
       yield* users.delete(user.id);
 
       assert.deepStrictEqual(yield* credentials.listByUser(user.id), []);
+      // BPAS-003: the user's stable WebAuthn handle goes with the account — one
+      // minted afterwards is a fresh value, the old one is gone.
+      assert.notStrictEqual(yield* handles.getOrCreate(user.id), handleBefore);
     }).pipe(Effect.provide(TestLayer)),
   );
 });

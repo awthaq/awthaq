@@ -52,3 +52,5 @@ Either narrow AttestationConveyance to 'none' until the enterprise module exists
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `webauthn-attestation-policy`. Duplicate of `HSK-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/ports/src/WebAuthn.ts:73`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `HSK-002-hardware-security-key-specialist` — closed by its fix (see that issue's Resolved comment).

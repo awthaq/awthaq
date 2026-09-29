@@ -27,6 +27,20 @@
 // re-exported from this package's own `index.ts`, exactly like
 // `AuthClient` already is.
 //
+// **Signals (TC-004/BPAS-006).** The WebAuthn Signals API lets the server tell
+// the browser's credential manager what it currently accepts, so a deleted
+// passkey stops being offered. Every signal here is fire-and-forget: an
+// unsupported browser, a failed `GET /passkey/signals`, or a browser-side
+// rejection is swallowed and can never change a ceremony's outcome or error
+// type. `allAcceptedCredentials` is sent after a delete and after every
+// successful sign-in (which also prunes stale credentials for the common
+// case); `currentUserDetails` is exposed for an app to call after a profile
+// change. `unknownCredential` is only ever sent from the *signed-in*
+// `reauthenticate` ceremony, when the server reports the presented credential
+// is not the caller's own — never from the anonymous sign-in, whose uniform
+// `InvalidCredentials` (BEH-EA-136) must not become an existence oracle, and
+// where a bad signature would otherwise get a perfectly valid passkey hidden.
+//
 // **Takes an already-built client slice, not a connection to build one
 // itself.** `passkeyClient(client)` accepts the three `PasskeyApi` group
 // clients an app has already constructed via `HttpApiClient.make`/`group`
@@ -46,22 +60,23 @@ import type { PasskeyApi } from "@awthaq/passkey";
 import {
   browserSupportsWebAuthn,
   getBrowserCapabilities,
+  sendSignal,
   startAuthentication,
   startRegistration,
   type AuthenticationResponseJSON,
-  type PublicKeyCredentialCreationOptionsJSON,
-  type PublicKeyCredentialRequestOptionsJSON,
   type RegistrationResponseJSON,
+  type SendSignalAllAcceptedCredentialsOpts,
+  type SendSignalCurrentUserDetailsOpts,
+  type SendSignalUnknownCredentialOpts,
 } from "@simplewebauthn/browser";
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 import * as PasskeyClientError from "./PasskeyClientError.ts";
 
-/** The three `PasskeyApi` group clients this module needs — whatever an app already built against its own composed contract, never fewer. */
+/** The four `PasskeyApi` group clients this module needs — whatever an app already built against its own composed contract, never fewer. */
 export type PasskeyApiClient = Pick<
   HttpApiClient.ForApi<typeof PasskeyApi.PasskeyApi>,
-  "passkey" | "passkey.authenticate" | "passkey.credentials"
+  "passkey" | "passkey.authenticate" | "passkey.credentials" | "passkey.reauthenticate"
 >;
 
 export type PasskeyClientCapabilitySupport = "supported" | "unsupported" | "unknown";
@@ -85,6 +100,12 @@ export interface PasskeyClientCapabilities {
   readonly hybridTransport: PasskeyClientCapabilitySupport;
   readonly passkeyPlatformAuthenticator: PasskeyClientCapabilitySupport;
   readonly userVerifyingPlatformAuthenticator: PasskeyClientCapabilitySupport;
+  /** TC-004: whether this client will act on `allAcceptedCredentials`/`currentUserDetails`/`unknownCredential` signals. */
+  readonly signalAllAcceptedCredentials: PasskeyClientCapabilitySupport;
+  readonly signalCurrentUserDetails: PasskeyClientCapabilitySupport;
+  readonly signalUnknownCredential: PasskeyClientCapabilitySupport;
+  /** Whether the browser can use one RP ID's passkey across related origins. */
+  readonly relatedOrigins: PasskeyClientCapabilitySupport;
 }
 
 /** `authenticate()`'s own wire session — `@awthaq/api`'s `SessionContract.SessionDto`, not a parallel type (mirrors `AuthClient.ts`'s own `Session` alias). */
@@ -105,32 +126,11 @@ const UNSUPPORTED_CAPABILITIES: PasskeyClientCapabilities = {
   hybridTransport: "unsupported",
   passkeyPlatformAuthenticator: "unsupported",
   userVerifyingPlatformAuthenticator: "unsupported",
+  signalAllAcceptedCredentials: "unsupported",
+  signalCurrentUserDetails: "unsupported",
+  signalUnknownCredential: "unsupported",
+  relatedOrigins: "unsupported",
 };
-
-// ---------------------------------------------------------------------------
-// The two `.../options` endpoints answer `Schema.Unknown` on the wire (see
-// `PasskeyApi.ts`'s own header comment: the browser's own WebAuthn
-// dictionary shape is "not a domain concept this contract owns"). Rather
-// than casting that `unknown` to `@simplewebauthn/browser`'s own option
-// types, these guards perform a real (if minimal) structural check —
-// narrowing without copying or stripping any of the object's other
-// fields, unlike a `Schema.Struct` decode would.
-// ---------------------------------------------------------------------------
-
-const isCreationOptionsJSON = (value: unknown): value is PublicKeyCredentialCreationOptionsJSON =>
-  Predicate.isReadonlyObject(value) &&
-  Predicate.hasProperty(value, "challenge") &&
-  Predicate.hasProperty(value, "rp") &&
-  Predicate.hasProperty(value, "user") &&
-  Predicate.hasProperty(value, "pubKeyCredParams");
-
-const isRequestOptionsJSON = (value: unknown): value is PublicKeyCredentialRequestOptionsJSON =>
-  Predicate.isReadonlyObject(value) && Predicate.hasProperty(value, "challenge");
-
-const malformedOptionsPayload = (endpoint: string): PasskeyClientError.PasskeyCeremonyFailed =>
-  new PasskeyClientError.PasskeyCeremonyFailed({
-    cause: new Error(`awthaq: ${endpoint} returned a malformed WebAuthn options payload`),
-  });
 
 // ---------------------------------------------------------------------------
 // Wire shape conversions — the two `Passkey.ts`-side schemas capture only
@@ -147,6 +147,10 @@ const toRegistrationCredentialInput = (
   response: {
     clientDataJSON: credential.response.clientDataJSON,
     attestationObject: credential.response.attestationObject,
+    // HSK-003: carry the browser-reported transports to the server.
+    ...(credential.response.transports === undefined
+      ? {}
+      : { transports: credential.response.transports }),
   },
   type: "public-key",
 });
@@ -177,9 +181,6 @@ const registerPasskey = (client: PasskeyApiClient) =>
       return yield* new PasskeyClientError.PasskeyNotSupported();
     }
     const optionsJSON = yield* client.passkey.registerOptions();
-    if (!isCreationOptionsJSON(optionsJSON)) {
-      return yield* malformedOptionsPayload("registerOptions");
-    }
     const credential = yield* Effect.tryPromise({
       try: () => startRegistration({ optionsJSON }),
       catch: PasskeyClientError.fromCeremonyFailure,
@@ -204,15 +205,14 @@ const registerPasskeyConditional = (client: PasskeyApiClient) =>
     if (!browserSupportsWebAuthn()) return;
     const optionsJSON = yield* client.passkey.registerOptionsConditional();
     yield* Effect.gen(function* () {
-      if (!isCreationOptionsJSON(optionsJSON)) {
-        return yield* malformedOptionsPayload("registerOptionsConditional");
-      }
       const credential = yield* Effect.tryPromise({
         try: () => startRegistration({ optionsJSON, useAutoRegister: true }),
         catch: PasskeyClientError.fromCeremonyFailure,
       });
       yield* client.passkey.registerVerify({
-        payload: { credential: toRegistrationCredentialInput(credential) },
+        // WPS-003: names the ceremony so the server consumes the conditional
+        // challenge scope and leaves any modal one alone.
+        payload: { credential: toRegistrationCredentialInput(credential), ceremony: "conditional" },
       });
     }).pipe(Effect.catch(() => Effect.void));
   });
@@ -239,29 +239,108 @@ const authenticate = (
     ].authenticateOptions({
       payload: { ...(options?.email === undefined ? {} : { email: options.email }) },
     });
-    if (!isRequestOptionsJSON(optionsJSON)) {
-      return yield* malformedOptionsPayload("authenticateOptions");
-    }
     const credential = yield* Effect.tryPromise({
       try: () => startAuthentication({ optionsJSON, useBrowserAutofill }),
       catch: PasskeyClientError.fromCeremonyFailure,
     });
-    return yield* client["passkey.authenticate"].authenticateVerify({
+    const session = yield* client["passkey.authenticate"].authenticateVerify({
       payload: { ceremonyId, credential: toAuthenticationCredentialInput(credential) },
     });
+    // TC-004: now signed in, tell the credential manager what this account
+    // accepts — prunes any passkey that was since deleted server-side.
+    yield* signalAcceptedCredentials(client);
+    return session;
   });
+
+// ---------------------------------------------------------------------------
+// reauthenticate — the signed-in step-up ceremony (`passkey.reauthenticate`).
+// ---------------------------------------------------------------------------
+
+const reauthenticate = (client: PasskeyApiClient) =>
+  Effect.gen(function* () {
+    if (!browserSupportsWebAuthn()) {
+      return yield* new PasskeyClientError.PasskeyNotSupported();
+    }
+    const optionsJSON = yield* client["passkey.reauthenticate"].reauthenticateOptions();
+    const credential = yield* Effect.tryPromise({
+      try: () => startAuthentication({ optionsJSON }),
+      catch: PasskeyClientError.fromCeremonyFailure,
+    });
+    yield* client["passkey.reauthenticate"]
+      .reauthenticateVerify({
+        payload: { credential: toAuthenticationCredentialInput(credential) },
+      })
+      .pipe(
+        // TC-004 (decision B): the caller is authenticated, so "this
+        // credential is not yours / not known" is safe to act on — tell the
+        // credential manager to stop offering it. The error still propagates.
+        Effect.tapErrorTag("PasskeyCredentialNotFound", () =>
+          optionsJSON.rpId === undefined
+            ? Effect.void
+            : sendSignalSafely({
+                signalName: "unknownCredential",
+                rpID: optionsJSON.rpId,
+                credentialID: credential.id,
+              }),
+        ),
+      );
+  });
+
+// ---------------------------------------------------------------------------
+// Signals — fire-and-forget (see this module's own header).
+// ---------------------------------------------------------------------------
+
+/** Never fails and never throws: an unsupported browser or a rejected signal is simply dropped. */
+const sendSignalSafely = (
+  options:
+    | SendSignalUnknownCredentialOpts
+    | SendSignalAllAcceptedCredentialsOpts
+    | SendSignalCurrentUserDetailsOpts,
+) => Effect.promise(() => sendSignal(options).catch(() => undefined));
+
+/** Fetches what the server accepts (`GET /passkey/signals`, authenticated) and sends `allAcceptedCredentials`. Never fails. */
+const signalAcceptedCredentials = (client: PasskeyApiClient) =>
+  client["passkey.credentials"].signals().pipe(
+    Effect.flatMap((signals) =>
+      sendSignalSafely({
+        signalName: "allAcceptedCredentials",
+        rpID: signals.rpId,
+        userID: signals.userId,
+        allAcceptedCredentialIDs: [...signals.allAcceptedCredentialIds],
+      }),
+    ),
+    Effect.ignore,
+  );
+
+/** Sends `currentUserDetails` — call after the user changes their account name. Never fails. */
+const signalCurrentUserDetails = (client: PasskeyApiClient) =>
+  client["passkey.credentials"].signals().pipe(
+    Effect.flatMap((signals) =>
+      sendSignalSafely({
+        signalName: "currentUserDetails",
+        rpID: signals.rpId,
+        userID: signals.userId,
+        userName: signals.name,
+        userDisplayName: signals.displayName,
+      }),
+    ),
+    Effect.ignore,
+  );
 
 // ---------------------------------------------------------------------------
 // Credential management — thin pass-throughs, no ceremony involved.
 // ---------------------------------------------------------------------------
 
-const listPasskeys = (client: PasskeyApiClient) => client["passkey.credentials"].list();
+const listPasskeys = (client: PasskeyApiClient) => client["passkey.credentials"].listCredentials();
 
 const renamePasskey = (client: PasskeyApiClient, id: string, name: string) =>
-  client["passkey.credentials"].rename({ params: { id }, payload: { name } });
+  client["passkey.credentials"].renameCredential({ params: { id }, payload: { name } });
 
 const deletePasskey = (client: PasskeyApiClient, id: string) =>
-  client["passkey.credentials"].remove({ params: { id } });
+  client["passkey.credentials"]
+    .removeCredential({ params: { id } })
+    // TC-004: a deleted passkey must stop being offered by the credential manager.
+    .pipe(Effect.tap(() => signalAcceptedCredentials(client)));
 
 /**
  * Never fails — every capability check degrades to `"unsupported"` on a
@@ -278,6 +357,10 @@ const getClientCapabilities: Effect.Effect<PasskeyClientCapabilities> = Effect.p
     hybridTransport: capabilities.hybridTransport,
     passkeyPlatformAuthenticator: capabilities.passkeyPlatformAuthenticator,
     userVerifyingPlatformAuthenticator: capabilities.userVerifyingPlatformAuthenticator,
+    signalAllAcceptedCredentials: capabilities.signalAllAcceptedCredentials,
+    signalCurrentUserDetails: capabilities.signalCurrentUserDetails,
+    signalUnknownCredential: capabilities.signalUnknownCredential,
+    relatedOrigins: capabilities.relatedOrigins,
   };
 });
 
@@ -286,9 +369,11 @@ export const passkeyClient = (client: PasskeyApiClient) => ({
   registerPasskeyConditional: () => registerPasskeyConditional(client),
   authenticate: (options?: { readonly autoFill?: boolean; readonly email?: string }) =>
     authenticate(client, options),
+  reauthenticate: () => reauthenticate(client),
   listPasskeys: () => listPasskeys(client),
   renamePasskey: (id: string, name: string) => renamePasskey(client, id, name),
   deletePasskey: (id: string) => deletePasskey(client, id),
+  signalCurrentUserDetails: () => signalCurrentUserDetails(client),
   getClientCapabilities: () => getClientCapabilities,
 });
 

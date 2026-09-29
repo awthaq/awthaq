@@ -210,11 +210,10 @@ Feature: Passkey and WebAuthn
 
     # Shipping-gap map (.scratch/shipping-gaps), ticket 25: the "counter
     # anomaly" row is split out below into its own, separately-tagged
-    # Scenario Outline rather than kept in this table — a Gherkin `@skip`
-    # tag applies to a whole Scenario Outline, not to one `Examples` row,
-    # and `PasskeyCounterAnomaly` is real but genuinely never thrown by
-    # `authenticateVerify` (see the split-out scenario below for why), so
-    # it can't share this table's 7 rows, which really are all thrown.
+    # Scenario Outline rather than kept in this table — it is only thrown
+    # under `counterAnomalyPolicy: "reject"` (under the default "flag" the
+    # ceremony still succeeds), so it can't share this table's 7 rows, which
+    # are thrown unconditionally.
     @REQ-EA-378
     Scenario Outline: Each distinct ceremony failure surfaces as its own typed Schema.TaggedError
       Given a ceremony that fails for the reason "<failure>"
@@ -244,24 +243,22 @@ Feature: Passkey and WebAuthn
       When "PasskeyCredentialNotFound" is returned
       Then the response does not reveal whether any credential exists for that identifier, distinguishably from a credential that exists but fails verification
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 25: pruned, not
-    # force-implemented — this scenario's literal expectation ("reported
-    # as PasskeyCounterAnomaly", "not silently accepted") contradicts the
-    # real, deliberate implementation: `Passkey.ts`'s own `authenticateVerify`
-    # treats a counter regression as "log + step-up, not an instant kill"
-    # (its own comment) — it publishes `auth.passkey.counterAnomaly` on
-    # `AuthEvents` and the ceremony still succeeds. `PasskeyApi.ts`'s own
-    # `PasskeyCounterAnomaly` doc comment confirms this is intentional: the
-    # type is declared for BEH-EA-136's closed list and for a future caller
-    # to `catchTag` against if the policy ever changes, but "deliberately
-    # never appears in any endpoint's error union". Forcing this scenario
-    # green would mean asserting a failure that cannot occur; this is a
-    # genuine spec/implementation divergence, flagged here rather than
-    # hidden, not assumed to be a defect in either direction.
-    @skip
+    # CB-004/WPS-006: a counter regression on an otherwise-verified assertion
+    # (`newCounter <= stored`, and not the normal 0 === 0 of an authenticator
+    # that never reports one) now actually reaches the plugin's policy — the
+    # port no longer lets the library throw first. `counterAnomalyPolicy`
+    # "flag" (the default, wayfinder ticket 08's "log + step-up, not an instant
+    # kill") signs in and flags the credential; "reject" fails the ceremony
+    # with the typed anomaly. Either way the credential is flagged and the
+    # anomaly is audited.
     @REQ-EA-381
-    Scenario: A counter regression on an otherwise-verified assertion is reported as its own typed anomaly, not silently accepted
-      Given a stored credential with a nonzero counter, and an authentication assertion whose returned counter does not exceed it
-      When "authenticateVerify" processes the assertion
-      Then the failure is reported as "PasskeyCounterAnomaly"
-      And it is not silently accepted as an ordinary successful authentication
+    Scenario Outline: A counter regression on a verified assertion follows the configured policy
+      Given a stored credential with a nonzero counter, and an authentication assertion whose returned counter does not exceed it, under the "<policy>" counter-anomaly policy
+      When "authenticateVerify" processes the regressed assertion
+      Then the outcome is "<outcome>"
+      And the credential is flagged for the counter anomaly
+
+      Examples:
+        | policy | outcome               |
+        | reject | PasskeyCounterAnomaly |
+        | flag   | a session is issued   |

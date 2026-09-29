@@ -9,8 +9,8 @@
 // `WebAuthn` is still mocked (`Layer.mock`, BEH-EA-195) — this proves the
 // wire contract, not the cryptography (ticket 02's own job).
 import { Api } from "@awthaq/api";
-import { Users, Accounts, Sessions, AuditLog, Hooks, AuthEvents } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
+import { Users, Accounts, Sessions, AuditLog, Hooks, AuthEvents, RateLimits } from "@awthaq/core";
+import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -27,6 +27,7 @@ import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyApi from "../src/PasskeyApi.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
+import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
 import {
   ORIGIN,
   RP_ID,
@@ -43,6 +44,8 @@ const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Session
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Hooks.HooksLive),
+  Layer.provideMerge(RateLimits.layer),
+  Layer.provideMerge(RateLimiter.layerPermissive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -103,9 +106,13 @@ const buildAppLayer = (webAuthn: Layer.Layer<WebAuthn.WebAuthn>) =>
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
-      Layer.mergeAll(webAuthn, ChallengeStore.layerMemory, PasskeyCredentials.layerMemory).pipe(
-        Layer.provideMerge(NodeCrypto.layer),
-      ),
+      Layer.mergeAll(
+        webAuthn,
+        ChallengeStore.layerMemory,
+        PasskeyCredentials.layerMemory,
+        PasskeyUserHandles.layerMemory,
+        ClientAddress.layerDirect,
+      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
@@ -358,6 +365,8 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
       Effect.gen(function* () {
         const cookie = yield* Effect.promise(() => issueSessionCookieHeader("manage@example.com"));
 
+        // WPS-010: a credential id is globally unique, and the earlier tests in
+        // this file share this app's stores — so this test registers its own id.
         const optionsResponse = yield* Effect.promise(() =>
           post(handler, "/passkey/register/options", {}, { cookie }),
         );
@@ -368,8 +377,8 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
             "/passkey/register/verify",
             {
               credential: {
-                id: "cred-mock-1",
-                rawId: "cred-mock-1",
+                id: "cred-manage-1",
+                rawId: "cred-manage-1",
                 type: "public-key",
                 response: {
                   clientDataJSON: buildClientDataJSON({
@@ -396,7 +405,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
 
         const renameResponse = yield* Effect.promise(() =>
           handler(
-            new Request(`${ORIGIN}/passkey/credentials/cred-mock-1`, {
+            new Request(`${ORIGIN}/passkey/credentials/cred-manage-1`, {
               method: "PATCH",
               headers: {
                 "content-type": "application/json",
@@ -411,7 +420,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
 
         const removeResponse = yield* Effect.promise(() =>
           handler(
-            new Request(`${ORIGIN}/passkey/credentials/cred-mock-1`, {
+            new Request(`${ORIGIN}/passkey/credentials/cred-manage-1`, {
               method: "DELETE",
               headers: {
                 cookie: withCsrfCookie(cookie),
@@ -446,5 +455,111 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         const docs = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/docs`)));
         assert.strictEqual(docs.status, 200);
       }),
+  );
+
+  // AVS-003: a generated client (and the docs) see the real WebAuthn options
+  // dictionary, not `{}`.
+  it.effect(
+    "AVS-003: the OpenAPI document declares a structured schema for the options endpoints",
+    () =>
+      Effect.gen(function* () {
+        const openapi = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/openapi.json`)));
+        const document = JSON.stringify(yield* Effect.promise(() => openapi.json()));
+        // `challenge`/`pubKeyCredParams`/`rp` only appear if the schema is modeled, never for `unknown`.
+        assert.include(document, "pubKeyCredParams");
+        assert.include(document, "excludeCredentials");
+        assert.include(document, "allowCredentials");
+        assert.include(document, "/passkey/signals");
+      }),
+  );
+
+  // BPAS-006/TC-004: the Signals surface is authenticated and per-caller.
+  it.effect(
+    "the signals endpoint 401s without a session and answers only the caller's own ids with one",
+    () =>
+      Effect.gen(function* () {
+        const anonymous = yield* Effect.promise(() =>
+          handler(new Request(`${ORIGIN}/passkey/signals`)),
+        );
+        assert.strictEqual(anonymous.status, 401);
+
+        const cookie = yield* Effect.promise(() => issueSessionCookieHeader("signals@example.com"));
+        const optionsResponse = yield* Effect.promise(() =>
+          post(handler, "/passkey/register/options", {}, { cookie }),
+        );
+        const options = yield* Effect.promise(() => optionsResponse.json());
+        yield* Effect.promise(() =>
+          post(
+            handler,
+            "/passkey/register/verify",
+            {
+              credential: {
+                id: "cred-signals-1",
+                rawId: "cred-signals-1",
+                type: "public-key",
+                response: {
+                  clientDataJSON: buildClientDataJSON({
+                    type: "webauthn.create",
+                    challenge: extractChallenge(options),
+                    origin: ORIGIN,
+                  }),
+                  attestationObject: "",
+                },
+              },
+            },
+            { cookie },
+          ),
+        );
+
+        const response = yield* Effect.promise(() =>
+          handler(new Request(`${ORIGIN}/passkey/signals`, { headers: { cookie } })),
+        );
+        assert.strictEqual(response.status, 200);
+        const body = (yield* Effect.promise(() => response.json())) as {
+          rpId: string;
+          userId: string;
+          allAcceptedCredentialIds: ReadonlyArray<string>;
+        };
+        assert.strictEqual(body.rpId, RP_ID);
+        assert.deepStrictEqual(body.allAcceptedCredentialIds, ["cred-signals-1"]);
+        assert.strictEqual(body.userId, (options as { user: { id: string } }).user.id);
+      }),
+  );
+
+  it.effect("WPS-010: registering an id another account already owns answers 409", () =>
+    Effect.gen(function* () {
+      const register = (email: string, id: string) =>
+        Effect.gen(function* () {
+          const cookie = yield* Effect.promise(() => issueSessionCookieHeader(email));
+          const optionsResponse = yield* Effect.promise(() =>
+            post(handler, "/passkey/register/options", {}, { cookie }),
+          );
+          const options = yield* Effect.promise(() => optionsResponse.json());
+          return yield* Effect.promise(() =>
+            post(
+              handler,
+              "/passkey/register/verify",
+              {
+                credential: {
+                  id,
+                  rawId: id,
+                  type: "public-key",
+                  response: {
+                    clientDataJSON: buildClientDataJSON({
+                      type: "webauthn.create",
+                      challenge: extractChallenge(options),
+                      origin: ORIGIN,
+                    }),
+                    attestationObject: "",
+                  },
+                },
+              },
+              { cookie },
+            ),
+          );
+        });
+      assert.strictEqual((yield* register("dup-a@example.com", "cred-dup-http")).status, 200);
+      assert.strictEqual((yield* register("dup-b@example.com", "cred-dup-http")).status, 409);
+    }),
   );
 });

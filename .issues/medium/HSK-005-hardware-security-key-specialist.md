@@ -55,3 +55,5 @@ Extend session issuance with an authentication-method/assurance record (amr/AAL-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-assurance`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:832`. Fix: Record per-session authentication assurance (amr + UV + credential facts) at issuance and expose it to qadi policies. (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-human.
+
+**Plan note (2026-09-29, P08):** left open (session-assurance, P15). P08 did not add an `amr`/assurance signal: `Sessions.issue` in `authenticateVerify` (`packages/passkey/src/Passkey.ts`) still passes only `{ userId }`. Passing the client `ip`/`userAgent` and an authentication-method claim into `Sessions.issue` needs the P01/P07/P16 session-issuance work first (Sessions.ts is being edited by P01). The plumbing point is ready: `authenticateVerify` already takes `ip` in its input and its handler resolves it through `ClientAddress`.
