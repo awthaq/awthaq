@@ -17,7 +17,10 @@ describe("RateLimiter.layer + layerStoreMemory (BEH-EA-105/106)", () => {
       yield* limiter.consume(input);
       yield* limiter.consume(input);
       const failure = yield* limiter.consume(input).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "RateLimited");
+      // RBS-010: the port's own error must not share the wire error's `RateLimited` tag,
+      // and must not carry the raw bucket key (emails, IPs).
+      assert.strictEqual(failure._tag, "RateLimitExceeded");
+      assert.isFalse("key" in failure);
       assert.isTrue(failure.retryAfterMillis > 0);
       assert.isTrue(failure.retryAfterMillis <= 10_000);
     }).pipe(Effect.provide(MemoryLive)),

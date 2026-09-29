@@ -3,7 +3,7 @@
 // spec/behaviors/14-rate-limiting.md, BEH-EA-107/108/110/111 — the
 // domain-stratum half of rate limiting: which of a plugin's own endpoints
 // it may throttle, and how those rules are aggregated and ordered for
-// introspection. The port itself (`RateLimiter`, `RateLimited`, the
+// introspection. The port itself (`RateLimiter`, `RateLimitExceeded`, the
 // fixed-window memory store) lives in `@awthaq/ports`'s
 // `RateLimiter.ts` — see that module's own header comment for why the two
 // halves are split this way.

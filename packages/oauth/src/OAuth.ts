@@ -640,7 +640,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           })
           .pipe(
             Effect.catchTag(
-              "RateLimited",
+              "RateLimitExceeded",
               (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
             ),
           );

@@ -667,7 +667,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       /**
        * Ticket 12: every call site below passes its own `key`/`limit`/
        * `window` from `RATE_LIMITS`, and maps the port's own domain
-       * `RateLimited` (`@awthaq/ports`) onto the wire-level
+       * `RateLimitExceeded` (`@awthaq/ports`) onto the wire-level
        * `Api.RateLimited` — the same class `PasswordShape`'s own error
        * unions declare and `PasswordApi`'s endpoints carry, so no separate
        * mapping is needed again at the HTTP handler layer.
@@ -680,7 +680,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           .consume({ key, limit: rule.limit, window: rule.window })
           .pipe(
             Effect.catchTag(
-              "RateLimited",
+              "RateLimitExceeded",
               (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
             ),
           );

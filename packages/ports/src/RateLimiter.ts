@@ -41,9 +41,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
-/** BEH-EA-106: exceeding a configured limit fails with this, never a generic or untyped error. */
-export class RateLimited extends Data.TaggedError("RateLimited")<{
-  readonly key: string;
+/**
+ * BEH-EA-106: exceeding a configured limit fails with this, never a generic or untyped error.
+ *
+ * RBS-010: named apart from the wire-level `Api.RateLimited` (two classes
+ * sharing one `_tag` made `catchTag("RateLimited")` ambiguous), and carries
+ * no bucket key — keys embed emails and IPs, and must not travel to whatever
+ * logs the error.
+ */
+export class RateLimitExceeded extends Data.TaggedError("RateLimitExceeded")<{
   readonly retryAfterMillis: number;
 }> {}
 
@@ -55,7 +61,7 @@ export interface ConsumeInput {
 
 /** BEH-EA-105: the port a plugin requires and the application provides — never bundled by a plugin (ADR-EA-010). */
 export interface RateLimiterShape {
-  readonly consume: (input: ConsumeInput) => Effect.Effect<void, RateLimited>;
+  readonly consume: (input: ConsumeInput) => Effect.Effect<void, RateLimitExceeded>;
 }
 
 export class RateLimiter extends Context.Service<RateLimiter, RateLimiterShape>()(
@@ -96,7 +102,7 @@ export const layer: Layer.Layer<RateLimiter, never, RateLimiterStore> = Layer.ef
           0,
           DateTime.toEpochMillis(bucket.resetAt) - DateTime.toEpochMillis(now),
         );
-        return yield* Effect.fail(new RateLimited({ key: input.key, retryAfterMillis }));
+        return yield* Effect.fail(new RateLimitExceeded({ retryAfterMillis }));
       });
     return RateLimiter.of({ consume });
   }),
