@@ -489,7 +489,7 @@ describe("server handler invariants (GC-003/GC-008)", () => {
         const exit = yield* currentUser.pipe(
           Effect.provideService(
             Api.CurrentPrincipal,
-            new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }) }),
+            new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }), scopes: [] }),
           ),
           Effect.exit,
         );

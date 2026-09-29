@@ -341,7 +341,7 @@ describe("Authentication", () => {
       decorate: (
         _principal: Api.Principal,
         response: HttpServerResponse.HttpServerResponse,
-        context: { readonly scheme: "cookie" | "bearer" | "impersonation" },
+        context: { readonly scheme: "cookie" | "bearer" | "impersonation" | "apiKey" },
       ) => Ref.update(schemes, (seen) => [...seen, context.scheme]).pipe(Effect.as(response)),
     });
     return Effect.gen(function* () {
@@ -742,11 +742,16 @@ describe("Authentication per-request cache (TS-003/NHS-006)", () => {
 
 // EHA-006/NHS-010: the contract and the wire.
 describe("Authentication contract (EHA-006, NHS-010)", () => {
-  it("NHS-010: the security middlewares declare their keys in order impersonation, cookie, bearer (APS-006)", () => {
-    const order = ["impersonation", "cookie", "bearer"];
+  it("NHS-010: the security middlewares declare their keys in order impersonation, cookie, [apiKey,] bearer (APS-006, OCM-002)", () => {
+    // OCM-002: `apiKey` (`x-api-key`) sits before `bearer` on the session-tier middlewares; the admin tier never accepts one.
+    const order = ["impersonation", "cookie", "apiKey", "bearer"];
     assert.deepStrictEqual(Object.keys(Api.Authentication.security), order);
-    assert.deepStrictEqual(Object.keys(Api.AdminAuthentication.security), order);
     assert.deepStrictEqual(Object.keys(Api.OptionalAuthentication.security), order);
+    assert.deepStrictEqual(Object.keys(Api.AdminAuthentication.security), [
+      "impersonation",
+      "cookie",
+      "bearer",
+    ]);
   });
 
   it("EHA-006: the OpenAPI document lists a 401 for Authentication endpoints but none for OptionalAuthentication", () => {

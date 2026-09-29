@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-09 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-066's native-client paragraph restated as shipped behaviour — opt-in bearer delivery (MNA-001), `set-auth-token` rotation, CSRF bootstrap (MNA-009) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-066's native-client paragraph restated as shipped behaviour — opt-in bearer delivery (MNA-001), `set-auth-token` rotation, CSRF bootstrap (MNA-009) <br> 1.2 (2026-09-29): bearer/`x-api-key` credential-resolver registry (MAPS-001/MAPS-004/NAM-001), `apiKey` scheme (OCM-002) |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```ts
 export class Authentication extends HttpApiMiddleware.Service<Authentication>()("Authentication", {
-  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken }
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, apiKey: ApiKeyHeader, bearer: BearerToken }
 }) {}
 ```
 
@@ -38,6 +38,8 @@ REQUIREMENT: `Authentication`'s cookie handler MUST attempt to resolve
 ```
 
 APS-006: `impersonation` exists so `@awthaq/admin`'s `impersonate` (BEH-EA-213) can deliver its session without overwriting the browser's single `__Host-session`; the admin's own cookie survives untouched and is restored the moment the impersonation cookie is cleared or its session hard-expires (a failed `impersonation` handler simply falls through). `OptionalAuthentication` declares the identical record. `@awthaq/qadi`'s Path B extractor and `@awthaq/next`'s `getSession` apply the same precedence so every entry point evaluates one identity per request.
+
+OCM-002: `apiKey` (the `x-api-key` request header, ADR-EA-022) is declared between `cookie` and `bearer`, so `bearer` remains the last scheme and owns the final `WWW-Authenticate` challenge. `AdminAuthentication` does not declare it: the admin surface never accepts a long-lived API key unless a deployment overrides that tier.
 
 `archive/PRD.md` §10 places the cookie scheme first in the record shown throughout the design (`security: { cookie: SessionCookie, bearer }`), matching the browser-first cookie flow every worked example in `archive/design/usage-examples-v4.md` §1–§5 exercises. Because the record's own key order is the strategy chain (BEH-EA-028), moving bearer ahead of cookie is a one-line, explicit change to the middleware's definition, never an implicit precedence a caller has to infer.
 
@@ -57,6 +59,8 @@ REQUIREMENT: The bearer handler MUST resolve an `Authorization: Bearer
              presenting its session token as a bearer credential is
              recognized identically to a browser presenting the cookie.
 ```
+
+**Bearer credential resolvers (MAPS-001/MAPS-004/NAM-001, wayfinder ticket 33).** A bearer (and `x-api-key`) credential is offered first to the resolvers plugins have contributed to `@awthaq/server`'s `CredentialResolvers` registry (ADR-EA-012: an aggregating registry, ordered by `order` then `id`, frozen at first read; `Authentication.contribute(carrier, { id, claims, resolve })`). `claims` is a cheap shape check (a JOSE `typ`, a key prefix) that never verifies; the first contribution whose `claims` matches resolves the credential straight to an `Api.Principal` and no other contribution is tried, so a claimed credential that fails is `Unauthenticated`. A bearer credential nobody claims falls through to the opaque session lookup above, unchanged; an unclaimed `x-api-key` is `Unauthenticated`. A stateless (non-session) principal delivers no rotated token, but `PostAuthResponseHook` still runs, told the scheme (`bearer` or `apiKey`). `@awthaq/jwt` contributes a `jwt` resolver for its own principal tokens when `JwtConfig.acceptAsBearer` is on (default off; bare `verify`, revocation lag bounded by `ttl`; a `signJWT({ audience })` token for another audience is rejected by the audience check), and `@awthaq/api-key` contributes the service-token and API-key resolvers. The registry is read per request through `Effect.serviceOption`, so `AuthenticationLive`'s requirements are unchanged and an app without one behaves as before. `@awthaq/qadi`'s Path B extractor resolves credentials through the same path.
 
 **Native clients (MNA-001/MNA-009, wayfinder ticket 17).** A mobile or CLI client with no cookie jar reaches the same contract with a bearer token, and the whole path now exists. *Acquisition:* every session-minting response (password sign-up/sign-in/change-password, passkey authenticate, the OAuth native exchange — BEH-EA-128) honours the request header `X-Awthaq-Token-Delivery: bearer`; the session token is then the response DTO's optional `token` field, no `Set-Cookie` is written, and the response is `Cache-Control: no-store`. The header is opt-in per request — absent, the cookie-only behaviour is byte-for-byte unchanged, and a live token never appears in a body a browser's JS can read — and any other value is a `400 InvalidTokenDelivery` raised before a session is minted. `@awthaq/server`'s `SessionDelivery` (`mode` + `deliver`) is the one implementation every issuing handler routes through, so cookie and body token are mutually exclusive per request and a plugin never sets the session cookie itself. *Presentation:* `Authorization: Bearer <token>` resolves as above. *Rotation:* when `Sessions.verify` rotates a bearer-presented session's secret the new token is returned in the `set-auth-token` response header (`Api.ROTATED_TOKEN_HEADER`). Storing the token (Keychain/Keystore) is the application's responsibility. The `{ csrf: false }` contract variant (BEH-EA-171) is not built yet: a native client's *first* mutating request (sign-in has no `Authorization` header yet) still passes CSRF by obtaining the `__Host-csrf` cookie and echoing it in `x-csrf-token`; every later request carries `Authorization` and is exempt (MNA-008). Magic-link sign-in is unimplemented.
 
@@ -164,7 +168,7 @@ REQUIREMENT: There MUST be no configuration, priority number, or runtime
 
 This entry closes the loop opened by BEH-EA-028 and BEH-EA-065 (whose first entry, `impersonation`, is itself a declaration in the record — APS-006 needed no ordering knob to put it ahead of `cookie`): `archive/PRD.md` §10 states "the record *is* the strategy chain" as a design commitment, not merely a today's-default — there is deliberately no second, independent ordering knob to keep in sync with the declaration, which is exactly the kind of implicit, easy-to-desynchronize convention `research/09-plugin-architecture.md` Q27 documents Babel's plugin/preset ordering rules as a cautionary example of.
 
-Only the *declaration's* key order matters (NHS-010): Effect iterates the declaration's `security` record and looks the Live handlers up by key, so the key order of the record an implementation returns is irrelevant, and no Live-side code depends on a scheme's position. A test pins the `security` keys of `Authentication`, `AdminAuthentication` and `OptionalAuthentication` to `["impersonation", "cookie", "bearer"]` (APS-006 declares `impersonation` first).
+Only the *declaration's* key order matters (NHS-010): Effect iterates the declaration's `security` record and looks the Live handlers up by key, so the key order of the record an implementation returns is irrelevant, and no Live-side code depends on a scheme's position. A test pins the `security` keys of `Authentication` and `OptionalAuthentication` to `["impersonation", "cookie", "apiKey", "bearer"]` and those of `AdminAuthentication` to `["impersonation", "cookie", "bearer"]` (APS-006 declares `impersonation` first; OCM-002 adds `apiKey` ahead of `bearer`). Credential types a plugin adds through the `CredentialResolvers` registry are not schemes and never change this chain.
 
 _Previous: [BEH-EA-064](08-verification-tokens.md#beh-ea-064-purpose-scoped-flows-respond-uniformly-regardless-of-whether-their-target-exists)_
 _Next: [BEH-EA-073](10-csrf.md#beh-ea-073-sec-fetch-site-is-the-primary-csrf-signal)_

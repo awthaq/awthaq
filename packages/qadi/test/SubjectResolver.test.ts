@@ -58,6 +58,7 @@ describe("SubjectResolver (default)", () => {
       const resolver = yield* SubjectResolver.SubjectResolver;
       const principal = new Api.ApiKeyPrincipal({
         ref: new Api.PrincipalRef({ type: "apikey", id: "key-1" }),
+        scopes: [],
       });
       const subject = yield* resolver.resolve(principal);
       assert.strictEqual(subject.id, "apikey:key-1");
@@ -70,6 +71,7 @@ describe("SubjectResolver (default)", () => {
       const resolver = yield* SubjectResolver.SubjectResolver;
       const principal = new Api.ServicePrincipal({
         ref: new Api.PrincipalRef({ type: "service", id: "svc-1" }),
+        scopes: [],
       });
       const subject = yield* resolver.resolve(principal);
       assert.strictEqual(subject.id, "service:svc-1");

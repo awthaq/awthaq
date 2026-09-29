@@ -33,12 +33,20 @@ export class UserPrincipal extends Schema.TaggedClass<UserPrincipal>()("User", {
   emailVerified: Schema.optional(Schema.Boolean),
 }) {}
 
+/**
+ * OCM-002/BEH-EA-140: a long-lived API key (`@awthaq/api-key`). `scopes` are
+ * the credential's own grants — the one source `@awthaq/qadi`'s subject
+ * resolver maps onto `AuthSubject.permissions`; never derived from a user.
+ */
 export class ApiKeyPrincipal extends Schema.TaggedClass<ApiKeyPrincipal>()("ApiKey", {
   ref: PrincipalRef,
+  scopes: Schema.Array(Schema.String),
 }) {}
 
+/** MAPS-003/BEH-EA-141: a machine caller (`client_credentials`); `scopes` are the negotiated grant carried by its short-lived token. */
 export class ServicePrincipal extends Schema.TaggedClass<ServicePrincipal>()("Service", {
   ref: PrincipalRef,
+  scopes: Schema.Array(Schema.String),
 }) {}
 
 export class AnonymousPrincipal extends Schema.TaggedClass<AnonymousPrincipal>()("Anonymous", {
@@ -175,6 +183,14 @@ export const ImpersonationCookie = HttpApiSecurity.apiKey({
 });
 export const BearerToken = HttpApiSecurity.bearer;
 
+/**
+ * OCM-002/ADR-EA-022: where an API key travels. A header of its own rather than
+ * `Authorization: Bearer`, which stays reserved for JWTs (session-less
+ * propagation tokens, M2M tokens) so the two strategies never double-try.
+ */
+export const API_KEY_HEADER_NAME = "x-api-key";
+export const ApiKeyHeader = HttpApiSecurity.apiKey({ key: API_KEY_HEADER_NAME, in: "header" });
+
 /** BEH-EA-080: the CSRF cookie/header names are fixed, never per-plugin configurable. */
 export const CSRF_COOKIE_NAME = "__Host-csrf";
 export const CSRF_HEADER_NAME = "x-csrf-token";
@@ -188,12 +204,21 @@ export const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: "c
  * matters). APS-006: `impersonation` is declared first of all, so an
  * impersonation cookie shadows the caller's own session cookie; its handler
  * only accepts a session carrying `actingAs` and otherwise falls through.
+ * OCM-002: `apiKey` (the `x-api-key` header) sits between `cookie` and
+ * `bearer`, so `bearer` stays the last scheme and still owns the final
+ * `WWW-Authenticate` challenge. `AdminAuthentication` deliberately does not
+ * declare it: the admin surface never accepts a long-lived API key by default.
  */
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
   { provides: CurrentPrincipal }
 >()("Authentication", {
-  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
+  security: {
+    impersonation: ImpersonationCookie,
+    cookie: SessionCookie,
+    apiKey: ApiKeyHeader,
+    bearer: BearerToken,
+  },
   error: Unauthenticated,
 }) {}
 
@@ -229,7 +254,12 @@ export class OptionalAuthentication extends HttpApiMiddleware.Service<
   OptionalAuthentication,
   { provides: CurrentPrincipal }
 >()("OptionalAuthentication", {
-  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
+  security: {
+    impersonation: ImpersonationCookie,
+    cookie: SessionCookie,
+    apiKey: ApiKeyHeader,
+    bearer: BearerToken,
+  },
 }) {}
 
 /** BEH-EA-030/076/079: a plain (non-security) middleware — CSRF is a request-property check, not a credential scheme. */
