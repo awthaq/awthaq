@@ -1,6 +1,6 @@
 // @awthaq/two-factor — TwoFactorStore
 //
-// THS-001 step 3, BCR-002, THS-005 (BEH-EA-261/262): this plugin's own persistence — two records
+// THS-001 step 3, BCR-002, THS-005 (BEH-EA-264/265): this plugin's own persistence — two records
 // services, each with a `layerMemory` and a `layerSql`, and the migrations for the two tables.
 // Built directly against `effect/unstable/sql`'s `SqlSchema` (the table belongs to the plugin, not
 // the shared stratum), with row codecs from the ambient client's dialect (`SqlModels.dialectFields`).

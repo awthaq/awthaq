@@ -401,7 +401,7 @@ const subjectResolverMake = Effect.gen(function* () {
             : Effect.succeed([found]);
         }).pipe(Effect.map((groups) => groups.flat()));
         const subject = fromRoles({ id: `user:${userId}`, roles: matched });
-        // BEH-EA-142/BEH-EA-255: the same attributes the default resolver attaches (actingAs, amr, aal, ...).
+        // BEH-EA-142/BEH-EA-258: the same attributes the default resolver attaches (actingAs, amr, aal, ...).
         return withAttributes(subject, QadiSubjectResolver.principalAttributes(principal));
       });
     },

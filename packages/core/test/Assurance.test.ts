@@ -1,4 +1,4 @@
-// SOS-005 / AAPS-006 (BEH-EA-255): the assurance vocabulary derived from a session's `amr`.
+// SOS-005 / AAPS-006 (BEH-EA-258): the assurance vocabulary derived from a session's `amr`.
 import { assert, describe, it } from "@effect/vitest";
 import * as Assurance from "../src/Assurance.ts";
 import type { AuthMethod } from "../src/Sessions.ts";

@@ -125,9 +125,9 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `25-testing-harness.md` | 193–200 | Testing Harness |
 | `26-cli.md` | 201–208, 225–229 | CLI |
 | `27-admin-impersonation.md` | 209–224 | Admin and Impersonation |
-| `31-two-factor.md` | 257–263 | Two-Factor Authentication |
-| `32-magic-link.md` | 264–267 | Magic Link |
-| `33-email-otp.md` | 268–271 | Email OTP |
+| `31-two-factor.md` | 260–266 | Two-Factor Authentication |
+| `32-magic-link.md` | 267–270 | Magic Link |
+| `33-email-otp.md` | 271–274 | Email OTP |
 
 ### `spec/process/`
 

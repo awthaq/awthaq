@@ -82,7 +82,7 @@ describe("Roles (SubjectResolver override)", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  // AAPS-006 (BEH-EA-255): the Roles override keeps the session-trust attributes the default resolver attaches.
+  // AAPS-006 (BEH-EA-258): the Roles override keeps the session-trust attributes the default resolver attaches.
   it.effect("the Roles resolver preserves amr, authenticatedAt and aal on the subject", () =>
     Effect.gen(function* () {
       const roles = yield* Roles.Roles;

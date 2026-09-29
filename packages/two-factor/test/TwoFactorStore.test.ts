@@ -1,4 +1,4 @@
-// THS-001 step 3, BCR-002, THS-005 (BEH-EA-261/262): the two records services over both layers —
+// THS-001 step 3, BCR-002, THS-005 (BEH-EA-264/265): the two records services over both layers —
 // `layerMemory` and `layerSql` on a real database (SQLite by default, Postgres under
 // `AWTHAQ_POSTGRES_URL`/`pnpm run test:pg`) with the plugin's real migrations, never a hand-written
 // `CREATE TABLE`.

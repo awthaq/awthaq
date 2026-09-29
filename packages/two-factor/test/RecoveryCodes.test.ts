@@ -1,4 +1,4 @@
-// THS-001 step 8, BCR-001 (BEH-EA-261): minting, displaying and normalising recovery codes.
+// THS-001 step 8, BCR-001 (BEH-EA-264): minting, displaying and normalising recovery codes.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";

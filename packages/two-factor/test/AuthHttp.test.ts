@@ -1,4 +1,4 @@
-// THS-001, ARF-005 (BEH-EA-256 to BEH-EA-263): the plugin over a real `HttpRouter`, composed the way a
+// THS-001, ARF-005 (BEH-EA-259 to BEH-EA-266): the plugin over a real `HttpRouter`, composed the way a
 // host composes it — `Auth.make([Password, TwoFactor])` served through `TestAuth.layer` — so the
 // wire contract is what is proven: a first factor answers 401 `TwoFactorRequired { challengeId }`
 // with no session cookie, `/two-factor/verify` completes it, and the reset endpoint asks for the

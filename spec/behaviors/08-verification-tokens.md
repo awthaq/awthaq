@@ -37,7 +37,7 @@ MLO-009/ARF-007/ARF-009: the mailed form is `<purpose>:<publicId>.<secret>`, bui
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 documents `Verification` as "a generic, single-purpose ephemeral keyed value store," whose `identifier` is an arbitrary string whose meaning is defined entirely by the caller that created the row. awthaq's plan adopts the same generic entity but requires the purpose to be encoded in the identifier's own naming convention, so a password-reset token and an email-verification token are structurally distinct rows even when both happen to exist for the same user at once.
 
-**Caller-formatted values (BCR-005).** `issue` mints the value itself: 256-bit hex by default, or — with `format: { _tag: "Numeric", digits }` (4 to 10 digits) — a uniformly random decimal code drawn by rejection sampling over `Crypto.randomBytes`, never a string the caller supplies, so hashing and single-use cannot be bypassed. The input type requires `maxAttempts` whenever a `format` is given (a short value without a guess budget does not type-check). `@awthaq/magic-link`'s `EmailOtp` is the consumer (BEH-EA-268).
+**Caller-formatted values (BCR-005).** `issue` mints the value itself: 256-bit hex by default, or — with `format: { _tag: "Numeric", digits }` (4 to 10 digits) — a uniformly random decimal code drawn by rejection sampling over `Crypto.randomBytes`, never a string the caller supplies, so hashing and single-use cannot be bypassed. The input type requires `maxAttempts` whenever a `format` is given (a short value without a guess budget does not type-check). `@awthaq/magic-link`'s `EmailOtp` is the consumer (BEH-EA-271).
 
 
 ## BEH-EA-058: A verification token's consumption and the state change it authorizes commit in one transaction
@@ -123,7 +123,7 @@ REQUIREMENT: A caller that needs to claim an identifier exclusively (a
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as a distinct operation from ordinary consumption — `reserve-verification-value` — used, for example, to serialize the "promote an unverified user on email proof" operation (§2.3) against a concurrent second promotion of the same user. awthaq's plan reuses the same generic `Verification` entity for this purpose rather than introducing a second, lock-specific table.
 
-**The resend window (MLO-002).** `reserve` is the resend-window primitive: `MagicLink` and `EmailOtp` reserve `<purpose>-resend:<normalised address>` for their `resendWindow` before minting and mailing a second artifact, so two concurrent requests (or a client hammering "resend") send one message, below and independent of the rate limiter (BEH-EA-265, BEH-EA-269).
+**The resend window (MLO-002).** `reserve` is the resend-window primitive: `MagicLink` and `EmailOtp` reserve `<purpose>-resend:<normalised address>` for their `resendWindow` before minting and mailing a second artifact, so two concurrent requests (or a client hammering "resend") send one message, below and independent of the rate limiter (BEH-EA-268, BEH-EA-272).
 
 
 ## BEH-EA-064: Purpose-scoped flows respond uniformly regardless of whether their target exists
