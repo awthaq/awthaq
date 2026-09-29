@@ -8,7 +8,11 @@
 
 import { Api } from "@awthaq/api";
 import { Hmac, LegacySessionBridge } from "@awthaq/ports";
-import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
+import {
+  Models as SqlModels,
+  ReadRouting as SqlReadRouting,
+  Repositories as SqlRepositories,
+} from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -402,10 +406,15 @@ export interface SessionsShape {
    * Exhaustive: `layerSql` drains every repository page rather than silently
    * truncating (TIR-003), bounded by `LIST_LIMIT` with a logged warning if a
    * user somehow exceeds it. Not for keyed lookups — use `findOwned`.
+   *
+   * RRC-001: `options.consistency: "eventual"` lets a configured read replica
+   * serve the listing (`layerSql` only); the default is the primary. Pass it
+   * for a display-only device list, never for a liveness decision.
    */
   readonly list: (
     userId: UserId,
     current?: SessionId,
+    options?: SqlReadRouting.ReadOptions,
   ) => Effect.Effect<ReadonlyArray<SessionListItem>>;
   /**
    * TIR-003/ESS-005: the keyed ownership lookup every point query goes
@@ -1401,13 +1410,22 @@ export const layerSql: Layer.Layer<
     // repository applies the liveness predicate at `now`, SMS-002) rather
     // than one 200-row page — a silent truncation used to drop the newest,
     // i.e. current, session from the list.
-    const drainLive = Effect.fnUntraced(function* (userId: UserId) {
+    const drainLive = Effect.fnUntraced(function* (
+      userId: UserId,
+      options?: SqlReadRouting.ReadOptions,
+    ) {
       const now = yield* DateTime.now;
       const rows: Array<SqlModels.Session> = [];
       let cursor: Option.Option<SqlRepositories.Cursor> = Option.none();
       while (rows.length < LIST_LIMIT) {
         const page = yield* repo
-          .listByUser(userId, now, Option.getOrUndefined(cursor), SqlRepositories.MAX_PAGE_SIZE)
+          .listByUser(
+            userId,
+            now,
+            Option.getOrUndefined(cursor),
+            SqlRepositories.MAX_PAGE_SIZE,
+            options,
+          )
           .pipe(Effect.orDie);
         rows.push(...page.items);
         if (Option.isNone(page.nextCursor)) return rows;
@@ -1419,8 +1437,8 @@ export const layerSql: Layer.Layer<
       return rows;
     });
 
-    const list: SessionsShape["list"] = (userId, current) =>
-      drainLive(userId).pipe(
+    const list: SessionsShape["list"] = (userId, current, options) =>
+      drainLive(userId, options).pipe(
         Effect.map((rows) => newestActivityFirst(rows.map((row) => toItem(row, current)))),
       );
 

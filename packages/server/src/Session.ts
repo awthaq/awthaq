@@ -60,7 +60,8 @@ export const SessionHandlers = HttpApiBuilder.group(
 
       list: Effect.fnUntraced(function* () {
         const { userId, sessionId } = yield* currentUser;
-        const items = yield* sessions.list(userId, sessionId);
+        // RRC-001: a display-only listing — the one session read a replica may serve.
+        const items = yield* sessions.list(userId, sessionId, { consistency: "eventual" });
         return items.map(toDto);
       }),
 
