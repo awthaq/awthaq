@@ -75,7 +75,9 @@ const Migrated = Layer.effectDiscard(
         supersededAt TEXT,
         reusedAt TEXT,
         amr TEXT NOT NULL DEFAULT '[]',
-        tenantId TEXT
+        tenantId TEXT,
+        previousSecretHash TEXT,
+        previousSecretExpiresAt TEXT
       )
     `;
   }),

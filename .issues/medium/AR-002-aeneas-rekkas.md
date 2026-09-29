@@ -3,7 +3,7 @@ ID: "AR-002"
 Title: "Self-service flows are ad-hoc endpoints, not resumable flow state machines"
 Level: medium
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "password"
 Source: "packages/password/src/PasswordApi.ts:136"
 Auditor: "aeneas-rekkas"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `password` · reported by **Aeneas Rekkas — Founder/CEO of Ory** (`aeneas-rekkas`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Either document one-shot endpoints as the deliberate contract (and lean on the d
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `password-api-contract-hygiene`. Evidence at HEAD ec065a7: `packages/password/src/PasswordApi.ts:149`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/07-password-mfa.md`.
+
+**Wontfix (2026-09-29):** An architectural preference, not a defect: awthaq follows the one-shot HttpApi endpoint shape (ADR-EA-003) and gives each multi-step journey its own typed, server-held challenge instead of a generic Kratos-style flow resource. The journey the finding cites (factor two) is served by the divert outcome `Hooks.TwoFactorRequired { challenge }` whose state lives in `Verification` with its own expiry and single-use consumption (BEH-EA-093/264), OAuth keeps its own `oauth.flow` state, and AR-001 is resolved that way. A flow resource would be a parallel API surface over the same state with no consumer. What a user does instead: drive the multi-step journey with the typed challenge the diverted outcome carries; a headless UI that wants re-rendering state builds it on the client from the tagged errors. Recorded in BEH-EA-093 (spec/behaviors/12-hooks.md).

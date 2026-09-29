@@ -147,3 +147,52 @@ describe("RateLimits.enforceRule (PV-240)", () => {
     }).pipe(Effect.provide(Live)),
   );
 });
+
+// SOS-007: an SMS-sending endpoint needs a recipient dimension, so pumping is capped per destination.
+describe("RateLimits.phoneKey (SOS-007)", () => {
+  const readPhone = (input: unknown) =>
+    typeof input === "object" && input !== null && "phone" in input ? input.phone : undefined;
+
+  it("spellings of one number share one bucket", () => {
+    const key = RateLimits.phoneKey(readPhone, { defaultCountryCode: "1" });
+    const spellings = ["+1 (555) 0100", "1-555-0100", "+15550100", "001 555 0100"];
+    assert.strictEqual(new Set(spellings.map((phone) => key({ phone }))).size, 1);
+    assert.strictEqual(key({ phone: "+15550100" }), "phone:+15550100");
+  });
+
+  it("different numbers get different buckets", () => {
+    const key = RateLimits.phoneKey(readPhone);
+    assert.notStrictEqual(key({ phone: "+15550100" }), key({ phone: "+15550101" }));
+  });
+
+  it("input that is not a phone number falls into one shared invalid bucket, never an unthrottled one", () => {
+    const key = RateLimits.phoneKey(readPhone);
+    assert.strictEqual(key({ phone: "not a number" }), "phone:invalid");
+    assert.strictEqual(key({ phone: 5550100 }), "phone:invalid");
+    assert.strictEqual(key(undefined), "phone:invalid");
+    // No default country code: a national-format number cannot be resolved, so it is invalid too.
+    assert.strictEqual(key({ phone: "555-0100" }), "phone:invalid");
+  });
+
+  const Live = RateLimiter.layer.pipe(
+    Layer.provide(RateLimiter.layerStoreMemory),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+  );
+
+  it.effect("plugs into a rule as its `key` function and enforces per destination", () =>
+    Effect.gen(function* () {
+      const sendRule = {
+        ...rule(RateLimits.phoneKey(readPhone), "sendCode"),
+        limit: 1,
+      };
+      yield* RateLimits.enforceRule(sendRule, { phone: "+1 555 0100" });
+      const refused = yield* RateLimits.enforceRule(sendRule, { phone: "+15550100" }).pipe(
+        Effect.flip,
+      );
+      assert.strictEqual(refused._tag, "RateLimitExceeded");
+      // A different destination has its own budget.
+      yield* RateLimits.enforceRule(sendRule, { phone: "+15550199" });
+    }).pipe(Effect.provide(Live)),
+  );
+});

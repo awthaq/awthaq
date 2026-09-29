@@ -351,6 +351,12 @@ const sessionFields = {
   // every other insert-only field on this table — it needs an `update`
   // variant. `Model.Sensitive` still omits it from every JSON variant.
   secretHash: Model.Sensitive(Schema.String),
+  // RRS-005: the hash the last rotation replaced, accepted alongside `secretHash` until
+  // `previousSecretExpiresAt` (a per-dialect DateTime column added by each class). Written only by the
+  // touch's own targeted UPDATE; constructor-defaulted to `null` so a fresh insert never names it.
+  previousSecretHash: Model.Sensitive(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
   ipAddress: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   userAgent: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   // BEH-EA-209: the caller's own identity, immutable once issued — no
@@ -512,6 +518,7 @@ class PgSession extends Model.Class<PgSession>("Session")({
   supersededAt: pgFields.nullableDateTime,
   /** Set at most once — the first (and only ever recorded) time a tombstoned row is presented again. */
   reusedAt: pgFields.nullableDateTime,
+  previousSecretExpiresAt: pgFields.nullableDateTimeDefaultNull,
 }) {}
 
 class PgVerificationToken extends Model.Class<PgVerificationToken>("VerificationToken")({
@@ -565,6 +572,7 @@ class SqliteSession extends Model.Class<SqliteSession>("Session")({
   lastActiveAt: sqliteFields.dateTimeUpdate,
   supersededAt: sqliteFields.nullableDateTime,
   reusedAt: sqliteFields.nullableDateTime,
+  previousSecretExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
 }) {}
 
 class SqliteVerificationToken extends Model.Class<SqliteVerificationToken>("VerificationToken")({

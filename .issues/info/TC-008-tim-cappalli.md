@@ -3,7 +3,7 @@ ID: "TC-008"
 Title: "No Related Origin Requests support for multi-origin passkey deployments"
 Level: info
 Category: "api"
-Status: needs-triage
+Status: resolved
 Package: "—"
 Source: ".scratch/passkey/spec.md:357"
 Auditor: "tim-cappalli"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `api` · `—` · reported by **Tim Cappalli — WebAuthn / Passkeys Standards Contributor** (`tim-cappalli`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ When multi-domain demand appears, add a tiny optional handler that serves the va
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `None`. Evidence at HEAD ec065a7: `.scratch/passkey/spec.md:357`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/13-repo-features-tooling.md`.
+
+**Resolved (2026-09-29):** Implemented WebAuthn Related Origin Requests, config-gated and off by default. `PasskeyConfig.relatedOrigins` (default []) lists exact https origins outside `rpId`; `checkOrigin` accepts them for register/authenticate/reauthenticate (exempt from the rpId host-suffix check like android origins; never an allowed top origin), the port's `expectedOrigin` is origins + relatedOrigins, a malformed entry (non-https, path, not an origin) refuses to build the layer, and a new anonymous group `passkey.wellKnown` serves `GET /.well-known/webauthn` as `{ origins }` JSON (404 `PasskeyRelatedOriginsNotConfigured` while empty). Tests: PasskeyCeremony.test.ts 'TC-008: related origins' (default refused, accepted on all three ceremonies with the port told to expect it, unlisted refused, not a top origin, bad config refuses to build), AuthHttp.test.ts (404 by default, JSON when configured), AuthComposition group list. Docs: passkey README config row and route list, spec/behaviors/17-passkey.md. Deployment note: the browser fetches the document from the rpId host, so route that path to the app.

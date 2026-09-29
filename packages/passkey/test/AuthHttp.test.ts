@@ -96,11 +96,14 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const buildAppLayer = (webAuthn: Layer.Layer<WebAuthn.WebAuthn>) =>
+const buildAppLayer = (
+  webAuthn: Layer.Layer<WebAuthn.WebAuthn>,
+  configOverrides?: Partial<Passkey.PasskeyConfigShape>,
+) =>
   Layer.mergeAll(
     AuthHttp.routes(PasskeyApi.PasskeyApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Passkey.Passkey.layer),
-      Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN] })),
+      Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN], ...configOverrides })),
       Layer.provide(AuthenticationLive),
     ),
     AuthHttp.docs(PasskeyApi.PasskeyApi),
@@ -642,6 +645,38 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         });
       assert.strictEqual((yield* register("dup-a@example.com", "cred-dup-http")).status, 200);
       assert.strictEqual((yield* register("dup-b@example.com", "cred-dup-http")).status, 409);
+    }),
+  );
+});
+
+// TC-008: WebAuthn Related Origin Requests — the well-known document a browser fetches from the rpId host.
+describe("GET /.well-known/webauthn (TC-008)", () => {
+  it.effect("is a 404 unless related origins are configured (off by default)", () =>
+    Effect.gen(function* () {
+      const response = yield* Effect.promise(() =>
+        handler(new Request(`${ORIGIN}/.well-known/webauthn`)),
+      );
+      assert.strictEqual(response.status, 404);
+    }),
+  );
+
+  it.effect("serves the configured related origins as JSON, anonymously", () =>
+    Effect.gen(function* () {
+      const related = HttpRouter.toWebHandler(
+        buildAppLayer(mockWebAuthn(), {
+          relatedOrigins: ["https://example.co.uk", "https://example.de"],
+        }),
+        { memoMap: Layer.makeMemoMapUnsafe() },
+      );
+      const response = yield* Effect.promise(() =>
+        related.handler(new Request(`${ORIGIN}/.well-known/webauthn`)),
+      );
+      assert.strictEqual(response.status, 200);
+      assert.include(response.headers.get("content-type") ?? "", "application/json");
+      assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+        origins: ["https://example.co.uk", "https://example.de"],
+      });
+      yield* Effect.promise(() => related.dispose());
     }),
   );
 });

@@ -3,7 +3,7 @@ ID: "RRS-005"
 Title: "Zero grace window on rotation: any missed delivery permanently kills the legitimate client"
 Level: medium
 Category: "security"
-Status: needs-triage
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:161"
 Auditor: "refresh-token-rotation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **Refresh Token Rotation Specialist** (`refresh-token-rotation-specialist`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Keep the previous secretHash in a graceHash column accepted for a short window (
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `session-verify-hardening`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:191`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Resolved (2026-09-29):** Implemented a bounded rotation grace window. `SessionConfig.rotationGrace` (optional, default `DEFAULT_ROTATION_GRACE` = 30s, `Duration.zero` = immediate invalidation, i.e. the old behaviour) keeps the secret a throttled touch replaces as a previous-secret hash with its own expiry (`previousSecretHash`/`previousSecretExpiresAt`, core migration 29, written by the same compare-and-swap in `SessionsRepository.touch` and by `Ref.modify` in `layerMemory`). Presenting it inside the window verifies for that session only, re-rotates (the missed-delivery recovery: `rotated` hands back a fresh secret) and publishes `auth.session.rotated` with the new optional `viaGrace` flag; it is never a reuse signal (RRS-003 family revocation and `auth.session.reuse` stay exclusive to a tombstoned row's *current* secret, and a previous secret on a tombstoned row is refused without side effects). Both hashes are always compared so timing does not reveal an open window. Tests (Sessions.test.ts graceSuite, both layers, written before the implementation): lost-delivery recovery, expiry of the window, zero disables, a configured window is honoured, previous secret is per-session, no reuse/family revocation from a grace hit (incl. a since-superseded row), RRS-003 reuse detection still fires with grace configured, viaGrace event; sql contract asserts the touch stores the previous hash. Existing tests that assumed instant invalidation were updated (ticket-01 test, next GetSession). Spec: BEH-EA-052 'Rotation grace window' paragraph. Documented trade-off: two racing rotations can leave a cookie jar on the earlier secret, which then survives only for the window. Gates: clean-build typecheck, full vitest 3085, bdd 1282, test:pg 502, spec:verify:strict, oxlint/oxfmt clean.

@@ -3,7 +3,7 @@ ID: "DRS-004"
 Title: "Session token carries no shard/region hint; verify is a bare findById that needs a global directory under any partitioning"
 Level: medium
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "core"
 Source: "packages/core/src/Sessions.ts:474"
 Auditor: "data-residency-sharding-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `core` · reported by **Data Residency & Sharding Specialist** (`data-residency-sharding-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Pick the contract now: either shard by userId (token gains a region hint derived
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `read-replica-routing`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:747`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Wontfix (2026-09-29):** The choice the finding asks to be encoded is now recorded in ADR-EA-014 ('The token is location-blind on purpose'), and no region prefix is added to the token. A hint baked into the cookie would freeze a residency layout into every issued session, whereas residency is decided a level up: a tenant is an organization with a config-validated `homeRegion` and the organization-to-shard mapping is data (ADR-EA-018 Decisions 4 and 9), every session records its `tenantId` (DRS-001), and replica reads are opt-in and never used for liveness (ADR-EA-024, `ReadRouting`). What a user does instead: a sharded deployment provides its own `Sessions`/`SessionsRepository` layer that routes by a hash of the (UUIDv7) session id and answers `list`/`revokeAll`/`revokeOthers` by scatter-gather, or keeps the small session table in one global store while users and organizations shard.

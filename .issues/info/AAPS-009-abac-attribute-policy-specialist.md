@@ -3,7 +3,7 @@ ID: "AAPS-009"
 Title: "ApiKey/Service principals carry no attribute payload; attribute policies deny them by construction"
 Level: info
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "qadi"
 Source: "packages/qadi/src/SubjectResolver.ts:74"
 Auditor: "abac-attribute-policy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `qadi` · reported by **ABAC Attribute-Based Policy Specialist** (`abac-attribute-policy-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -51,3 +51,5 @@ When designing the api-key plugin, add the scopes field to ApiKeyPrincipal and m
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `session-assurance-channel`. Evidence at HEAD ec065a7: `packages/qadi/src/SubjectResolver.ts:74`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`.
+
+**Wontfix (2026-09-29):** Overtaken by events rather than a defect. `ApiKeyPrincipal` and `ServicePrincipal` now carry `scopes` (OCM-002, MAPS-003; `packages/api/src/Api.ts`), `@awthaq/api-key` and the client-credentials path populate them, and the qadi `SubjectResolver` maps them to permissions (BEH-EA-140/141). The 'no reserved typed location for scopes' gap the finding predicted no longer exists. A policy that needs more than scopes on a machine caller attaches its own attributes through the subject attribute mapping.

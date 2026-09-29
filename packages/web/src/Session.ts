@@ -60,8 +60,8 @@ export interface Session {
   readonly session: Sessions.SessionView;
   /**
    * BO-001/IC-001: `Sessions.verify` may rotate the session's secret on a
-   * throttled touch (`Sessions.ts`'s own header: the old secret "stops
-   * verifying immediately — no grace window"), and this field carries that
+   * throttled touch (`Sessions.ts`'s own header: the old secret keeps
+   * verifying only for `SessionConfig.rotationGrace`), and this field carries that
    * fresh token exactly when this call was the one that rotated it —
    * `undefined` otherwise. A Server Component render has no mutable cookie
    * jar to deliver it through (Next.js RSCs cannot set cookies at all); a

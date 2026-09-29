@@ -3,7 +3,7 @@ ID: "SOS-002"
 Title: "No SmsSender port: the archive design reserved auth.sms but the ports stratum never implemented it"
 Level: medium
 Category: "architecture"
-Status: needs-triage
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/index.ts:27"
 Auditor: "sms-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `ports` · reported by **SMS OTP Specialist** (`sms-otp-specialist`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Add ports/src/SmsSender.ts mirroring Mailer's structure: an SmsMessage shape car
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `mailer-typed-delivery-errors`. Evidence at HEAD ec065a7: `packages/ports/src/index.ts:27`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** Added `SmsSender` to @awthaq/ports (src/SmsSender.ts, exported from index): `SmsMessage { to (normalised E.164), template, data? }`, `send`/`sent`/`development`, layers `layerNoop` (dies loudly, defect names the template only, EOTS-010), `layerMemory`, `layerConsole` (dev only, logs the code), and a typed `SmsDeliveryFailed { template, reason, retryable, cause? }` mirroring `Mailer`'s `MailDeliveryFailed`. Tests: packages/ports/test/SmsSender.test.ts. spec/overview.md ports inventory and table, ports README. No provider or plugin ships (ADR-EA-021's SMS plugin remains its own work); ports sits below core so the destination is typed as a string that core's `Phone.normalizePhone` produces (`Users.findByPhone`/promoteIdentity already take the branded `E164`); no plugin consumes both yet, so nothing more is wired. Deferred: an `sms-development` finding in `awthaq doctor --build` (CLI is another agent's area this round).

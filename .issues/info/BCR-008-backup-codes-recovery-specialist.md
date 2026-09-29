@@ -3,7 +3,7 @@ ID: "BCR-008"
 Title: "Show-once primitive already exists: issue returns the plaintext value exactly once as Redacted"
 Level: info
 Category: "dx"
-Status: needs-triage
+Status: wontfix
 Package: "core"
 Source: "packages/core/src/Verification.ts:96"
 Auditor: "backup-codes-recovery-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `dx` · `core` · reported by **Backup Codes & Account Recovery Specialist** (`backup-codes-recovery-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Reuse it as-is for code generation; the plugin's job reduces to batch-issuing 10
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `verification-otp-substrate`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:100`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Wontfix (2026-09-29):** A positive observation, not a defect: `Verification.issue` returns the plaintext once as `Redacted` and persists only the hash. It has since been built on: `@awthaq/two-factor` mints ten recovery codes at `confirm`, returns them once, keeps only a `PasswordHasher` hash of each (BEH-EA-264), and deliberately has no plaintext read-back (BCR-007). Nothing to change; a user wanting a fresh set regenerates the whole set.

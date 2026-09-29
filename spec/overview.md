@@ -44,7 +44,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 |---|---|---|
 | 1 Contract | `@awthaq/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication` and `CsrfProtection` middleware definitions, core groups. Isomorphic — no server code, importable in the browser. |
 | 1 Contract | `@awthaq/<plugin>/api` | Each plugin's own groups, schemas, errors, and contract `HttpApi`. |
-| 2 Ports | `@awthaq/ports` | The capabilities a plugin requires and the application provides: `PasswordHasher`, `Mailer`, `WebAuthn`, `Encryption`, `KeyProvider`, `RateLimiter`, `SqlTransaction`, `ClientAddress`, `LegacySessionBridge`, `WebCrypto`, plus helpers (`Hmac`, `RefreshingCache`, `Defects`, `Tenant`, `PasswordHasherWorkerPool`, `OutboundUrl`) and the `XmlSignature` and `HostResolver` services. Each service ships the layers its own module documents — not a uniform `layer`/`layerNoop`/`layerMemory` triple. |
+| 2 Ports | `@awthaq/ports` | The capabilities a plugin requires and the application provides: `PasswordHasher`, `Mailer`, `SmsSender`, `WebAuthn`, `Encryption`, `KeyProvider`, `RateLimiter`, `SqlTransaction`, `ClientAddress`, `LegacySessionBridge`, `WebCrypto`, plus helpers (`Hmac`, `RefreshingCache`, `Defects`, `Tenant`, `PasswordHasherWorkerPool`, `OutboundUrl`) and the `XmlSignature` and `HostResolver` services. Each service ships the layers its own module documents — not a uniform `layer`/`layerNoop`/`layerMemory` triple. |
 | 3 Persistence | `@awthaq/sql` | Models, repositories, migration records, memory twins. |
 | 4 Domain | `@awthaq/core` | Domain services, hook points, `AuthEvents`, config references, slots, the `Auth` namespace. |
 | 5 HTTP | `@awthaq/server` | Middleware implementations, core handlers, `AuthHttp`. |
@@ -106,6 +106,7 @@ PasswordHasher
 PasswordHasherWorkerPool
 RateLimiter
 RefreshingCache
+SmsSender
 SqlTransaction
 Tenant
 WebAuthn
@@ -119,6 +120,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 |---|---|---|
 | `PasswordHasher` | `Context.Service` | `layerArgon2id`, `layerScrypt`; worker-pool variants in `PasswordHasherWorkerPool`; a verify-only `LegacyPasswordVerifiers` `Context.Reference` for imported foreign hashes (bcrypt, Firebase scrypt, better-auth scrypt) |
 | `Mailer` | `Context.Service` | `layerNoop`, `layerMemory`; `send` fails with a typed `MailDeliveryFailed` (EEM-002) |
+| `SmsSender` | `Context.Service` | `layerNoop`, `layerMemory`, `layerConsole`; `send` fails with a typed `SmsDeliveryFailed` (SOS-002); the destination is an E.164 string, its rate-limit key is `RateLimits.phoneKey` (SOS-007) |
 | `WebAuthn` | `Context.Service` | `layerSimpleWebAuthn` |
 | `Encryption` | `Context.Service` | `layer` (requires `KeyProvider` and `Crypto`); keyed envelopes, lazy re-encryption ([ADR-EA-019](decisions/019-encryption-key-rotation.md)) |
 | `KeyProvider` | `Context.Service` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS`, `AWTHAQ_ENCRYPTION_KEY_ID`); `layerEphemeral` (dev only, opt-in, never a fallback; refused under `NODE_ENV=production` without `AWTHAQ_ALLOW_EPHEMERAL_KEY=true`); implement the port for a KMS |

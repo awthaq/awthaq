@@ -218,8 +218,8 @@ export const BearerTokenStoreMemory = Layer.effect(
  * MNA-005/MNA-006: `make(api, { baseUrl, transformClient: bearerTransformClient(store) })`
  * — attaches `Authorization: Bearer <token>` from the store on every request
  * and captures a rotated token (`Api.ROTATED_TOKEN_HEADER`, the server's
- * throttled-touch rotation, BEH-EA-052 — there is no grace window, so a missed
- * capture logs the client out) from every response, whatever its status. A
+ * throttled-touch rotation, BEH-EA-052 — the replaced secret survives only
+ * `SessionConfig.rotationGrace`, so a missed capture logs the client out once that passes) from every response, whatever its status. A
  * response without the header leaves the stored token unchanged. Contract for
  * callers: an idle-expired or revoked token surfaces as the typed
  * `Unauthenticated`; re-authenticate and `set` a fresh token.

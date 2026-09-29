@@ -59,8 +59,8 @@ contract variant is still unbuilt (`Auth.make` has no composition-level CSRF opt
 
 ## Bearer (native, CLI, server-to-server) clients
 
-The session token rotates on the server's throttled touch (there is no grace
-window), so a bearer client must capture the rotated token from every response:
+The session token rotates on the server's throttled touch (the replaced secret
+survives only `SessionConfig.rotationGrace`, 30 seconds by default), so a bearer client must capture the rotated token from every response:
 
 ```ts
 import { AuthClient } from "@awthaq/client";

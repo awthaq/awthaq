@@ -315,6 +315,12 @@ On violation:  BAD_REQUEST BACKUP_CODES_NOT_ENABLED / INVALID_BACKUP_CODE
                there is no client-facing precondition to violate).
 ```
 
+> **awthaq deviation (BCR-007):** not implemented. awthaq stores each backup
+> code only as an irreversible `PasswordHasher` hash and never keeps a
+> reversible copy, so there is no plaintext to read back; a set is shown once
+> at generation and replaced wholesale to obtain a new one
+> ([BEH-EA-264](../../spec/behaviors/31-two-factor.md)).
+
 ---
 
 ## 6. Configuration-driven behavior variants
