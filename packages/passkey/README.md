@@ -1,9 +1,5 @@
 # @awthaq/passkey
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+The Passkey plugin over the `WebAuthn` port: registration and authentication ceremonies (`/passkey/register/*`, `/passkey/authenticate/*`), credential listing/management, reauthentication (`/passkey/reauthenticate/*`) and a `ChallengeStore` (memory, SQL and stateless cookie variants). Mounted under `"auth"`, group `"passkey"`. `PasskeyReauthRequired` is this plugin's step-up error.
 
-Plugin (M4). The Passkey plugin against the WebAuthn port.
-
-**Planned first module:** Passkey.ts (spec/behaviors/17-passkey.md, BEH-EA-129–136)
-
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+See [`spec/behaviors/17-passkey.md`](../../spec/behaviors/17-passkey.md) (BEH-EA-129–136).

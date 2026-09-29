@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-18 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-142's false citation of "file 06's admin plugin" — file 06 is Users and Accounts, not an Admin plugin; no Admin plugin behaviors exist yet (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-142's false citation of "file 06's admin plugin" — file 06 is Users and Accounts, not an Admin plugin; no Admin plugin behaviors exist yet (CCR-EA-002) <br> 1.2 (2026-09-29): Status banner corrected to implemented-with-deviations (RRM-009); BEH-EA-138's enforcement point restated as layer-build, not `Auth.make` (RRM-012); BEH-EA-139 gained catalog validation, `UnknownRole`, drift observability and role-change audit events (RRM-003/004/005/010) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> **Status: implemented with deviations.** `@awthaq/roles` ships BEH-EA-137–139, 142 and 143 (`Roles.layer` / `Roles.layerSql`, the `SubjectResolver` slot override, catalog validation, role-change audit events). Deviations: BEH-EA-138's exclusivity is enforced when layers are built via the opt-in `Slots.SlotsRegistry`, not by `Auth.make`'s type checker (see that behavior); BEH-EA-140/141 (API-key/service scopes become permissions) are not implemented — `ApiKeyPrincipal`/`ServicePrincipal` carry no `scopes` field yet; BEH-EA-144's session-view exposure follows `@awthaq/qadi`'s standalone `GET /subject`.
 
 ## BEH-EA-137: The SubjectResolver slot defaults to identity-only
 
@@ -37,16 +37,18 @@ _Previous: [BEH-EA-136](17-passkey.md#beh-ea-136-typed-errors-are-enumeration-sa
 
 ```ts
 export const auth = Auth.make([Password, Organization, Roles])
-// installing a second plugin that overrides SubjectResolver is a compile error at Auth.make
+// installing a second plugin that overrides SubjectResolver fails when the layers are built
 ```
 
 ```text
 REQUIREMENT: At most one installed plugin MAY override the `SubjectResolver`
-             slot; installing two plugins that both override it MUST fail at
-             `Auth.make`, not at first request.
+             slot; installing two plugins that both override it MUST fail
+             during composition — when the layers are built (through
+             `Slots.SlotsRegistry`, provided by `Slots.layer`) — before any
+             request is served, naming both owners and the slot.
 ```
 
-`SubjectResolver` is a `Context.Reference` slot per ADR-EA-012 — exclusive by construction, unlike a registry which aggregates. `usage-qadi.md` §1 states the enforcement point directly: the conflict is a compile error at `Auth.make`, the same place PRD §9.2 already lists slot conflicts as failing. Two plugins each redefining what a subject's roles mean would produce silently inconsistent authorization depending on plugin order — the slot design removes that failure mode entirely rather than documenting a resolution order.
+`SubjectResolver` is a `Context.Reference` slot per ADR-EA-012 — exclusive by construction, unlike a registry which aggregates. `usage-qadi.md` §1 places the enforcement at `Auth.make`, but a `Context.Reference` slot override is invisible to `Auth.make`'s type-level checks (a structural limit of `Context.Reference` in this `effect` version — see `packages/core/src/Slots.ts`'s header), so the shipped enforcement point is layer construction: `Slots.override` registers each claim with `Slots.SlotsRegistry` and the second claim fails with `SlotConflict`, which still happens at startup rather than on a request (`packages/roles/test/AuthComposition.test.ts` pins it). Two plugins each redefining what a subject's roles mean would produce silently inconsistent authorization depending on plugin order — the slot design removes that failure mode entirely rather than documenting a resolution order.
 
 _Previous: [BEH-EA-137](18-roles-subject-resolver.md#beh-ea-137-the-subjectresolver-slot-defaults-to-identity-only) | Next: [BEH-EA-139](18-roles-subject-resolver.md#beh-ea-139-roles-flatten-through-the-dag-once-per-resolution)_
 

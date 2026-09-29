@@ -1,9 +1,5 @@
 # @awthaq/admin
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+Admin impersonation: off by default, admin-gated, reason required, hard expiry, dual identity, fully audited (NFR-EA-007). Endpoints: `POST /admin/impersonate/:userId`, `POST /admin/stop-impersonating`, `POST /admin/force-stop/:sessionId`, `GET /admin`. Impersonation records persist via `ImpersonationRecords` (memory and SQL), and the impersonated identity reaches qadi as the `actingAs` subject attribute.
 
-Plugin (M7). Impersonation: off by default, admin-gated, reason required, hard expiry, dual identity, fully audited (NFR-EA-007).
-
-**Planned first module:** not yet specified — see spec/models/15-admin-impersonation.md (non-normative adoption record) and spec/roadmap.md M7
-
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+See [`spec/behaviors/27-admin-impersonation.md`](../../spec/behaviors/27-admin-impersonation.md) (BEH-EA-209–220) and [`spec/models/15-admin-impersonation.md`](../../spec/models/15-admin-impersonation.md).

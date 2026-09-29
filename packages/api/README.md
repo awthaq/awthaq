@@ -1,9 +1,13 @@
 # @awthaq/api
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+Contract stratum (1): the isomorphic HTTP contract — no server code, importable in the browser.
 
-Contract stratum (1). Principal, SessionView, SubjectDto, errors, Authentication and CsrfProtection middleware definitions, core groups — isomorphic, no server code, importable in the browser.
+**Shipped**
 
-**Planned first module:** Api.ts (spec/behaviors/04-contract-stratum.md, BEH-EA-025–032)
+- `Api` (`Api.ts`, BEH-EA-025/027/028/029/030): the `Principal` variants (`UserPrincipal`, `ApiKeyPrincipal`, `ServicePrincipal`, `anonymousPrincipal`), the contract errors (`Unauthenticated`, `InvalidCredentials`, `CsrfRejected`, `ReauthRequired`, ...) and the `Authentication` / `OptionalAuthentication` / `CsrfProtection` middleware *declarations*.
+- `SessionContract` (`Session.ts`, BEH-EA-031): the core `session` group (`/session`, `/session/list`, `/session/sign-out`, `/session/revoke*`).
+- `AccountContract`, `AuthCore` (the shared `"auth"` HttpApi id the core groups mount under) and `SubjectContract` (`SubjectDto`, the wire shape of qadi's `AuthSubject`).
 
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+**Not yet**: `SessionView` as one combined struct (BEH-EA-026) and folding the core groups into `Auth.make`'s composed `api` (BEH-EA-032) — the core groups are served standalone via `AuthCore.AuthCoreApi` today.
+
+See [`spec/behaviors/04-contract-stratum.md`](../../spec/behaviors/04-contract-stratum.md) and [`spec/overview.md`](../../spec/overview.md).

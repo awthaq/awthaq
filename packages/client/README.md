@@ -1,9 +1,9 @@
 # @awthaq/client
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+Isomorphic Effect client derived from the merged contract.
 
-Client. AtomHttpApi client and session atom — the isomorphic Effect client derived from the merged contract.
+**Shipped**: `AuthClient` (BEH-EA-169–176: `make`/`makeWith`/`group`/`endpoint`/`urlBuilder` are `HttpApiClient`'s own functions, plus the session store and a Promise facade) and `PasskeyClient` (the browser-side WebAuthn ceremony helper over `@simplewebauthn/browser`, layered on an already-built `PasskeyApi` client).
 
-**Planned first module:** AuthClient.ts (spec/behaviors/22-client-effect.md, BEH-EA-169–176)
+The reactive `AtomHttpApi` binding lives in [`@awthaq/react`](../react). A reauth demand is decodable with `Api.isReauthRequired` from `@awthaq/api`.
 
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+See [`spec/behaviors/22-client-effect.md`](../../spec/behaviors/22-client-effect.md).

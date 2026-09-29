@@ -11,9 +11,11 @@
 // group at all). A minimal companion plugin with one real endpoint is
 // composed alongside `Roles` to prove its own manifest entry composes
 // correctly without a real HTTP dependency between the two packages.
-import { Auth, AuthPlugin } from "@awthaq/core";
+import { AuditLog, Auth, AuthEvents, AuthPlugin, Slots } from "@awthaq/core";
+import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -51,4 +53,44 @@ describe("Auth.make([Roles])", () => {
       { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [] },
     ]);
   });
+});
+
+// RRM-012: BEH-EA-138's exclusivity is enforced when the layers are *built*
+// (through the opt-in `Slots.SlotsRegistry`), before any request is served —
+// not by `Auth.make`'s type checker, which cannot observe a `Context.Reference`
+// override (`Slots.ts`'s and `SubjectResolver.ts`'s own header comments give the
+// structural reason).
+describe("SubjectResolver slot exclusivity (BEH-EA-138)", () => {
+  const otherPlugin: AuthPlugin.Any = {
+    id: "organization",
+    apiVersion: 1,
+    contract: { identifier: "auth", groups: {} },
+    tables: [],
+    migrations: [],
+    dependsOn: [],
+    layer: Layer.empty,
+  };
+
+  const CoreLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+  const RolesInstalled = Roles.Roles.layer.pipe(
+    Layer.provide(Roles.config([])),
+    Layer.provideMerge(CoreLive),
+  );
+  const OtherOverride = Slots.override(
+    otherPlugin,
+    QadiSubjectResolver.SubjectResolver,
+    Effect.succeed({
+      resolve: (principal) => Effect.succeed(QadiSubjectResolver.resolveIdentityOnly(principal)),
+    }),
+  );
+
+  it.effect("two SubjectResolver overrides with Slots.layer fail with SlotConflict at build", () =>
+    Effect.gen(function* () {
+      yield* Effect.scoped(Layer.build(RolesInstalled));
+      const failure = yield* Effect.scoped(Layer.build(OtherOverride)).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "SlotConflict");
+      assert.strictEqual(failure.firstOwner, "roles");
+      assert.strictEqual(failure.secondOwner, "organization");
+    }).pipe(Effect.provide(Slots.layer)),
+  );
 });

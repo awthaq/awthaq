@@ -55,15 +55,15 @@ Feature: Roles and the Subject Resolver
     @REQ-EA-386
     Scenario: Two plugins overriding SubjectResolver fail composition, naming both and the slot
       Given a plugin tuple containing "Roles" and "Organization", both overriding the "SubjectResolver" slot
-      When "Auth.make" composes the tuple
+      When the composition's layers are built with the slots registry provided
       Then composition is rejected
       And the rejection names "Roles", "Organization", and "SubjectResolver"
 
     @REQ-EA-387
-    Scenario: The slot conflict is caught at Auth.make and never deferred to the first request
+    Scenario: The slot conflict is caught when the layers are built and never deferred to the first request
       Given a plugin tuple containing "Roles" and "Organization", both overriding the "SubjectResolver" slot
       When an application attempts to build and run a server from that tuple
-      Then no server ever starts, because composition already failed at "Auth.make"
+      Then no server ever starts, because composition already failed while the layers were being built
       And the conflict is never surfaced as a first-request runtime error
 
   # BEH-EA-139 — spec/behaviors/18-roles-subject-resolver.md

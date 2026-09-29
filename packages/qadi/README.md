@@ -1,9 +1,21 @@
 # @awthaq/qadi
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+The authorization bridge to [qadi](https://github.com/leaderiop/qadi): awthaq answers *who is asking*, qadi answers *what they may do* (ADR-EA-009). This package is the bridge, not an authorizer of its own.
 
-Authorization bridge (6). AuthorizedSubject middleware, SubjectExtractor layer, obligation handlers — the bridge to qadi, not an authorizer of its own (ADR-EA-009).
+**Shipped**
 
-**Planned first module:** AuthorizedSubject.ts (spec/behaviors/19-qadi-bridge-path-a.md, BEH-EA-145–152); also SubjectExtractor.ts, Resolvers.ts
+- **Path A** — `AuthorizedSubject` middleware (`CurrentPrincipal` → qadi's `CurrentSubject`), with `withAuthorizedSubject` / `withOptionalAuthorizedSubject` applying the middleware pair in the one order that works (BEH-EA-145).
+- **Path B** — `SubjectExtractorLive` (raw request → `AuthSubject` for `@qadi/http`'s `RequirePermission`, BEH-EA-153) and `AuthorizationAudit.auditAuthorizationAnnotations(api)`, a startup check that every endpoint in a `RequirePermission`-guarded group declares a permission or `publicEndpoint`.
+- `SubjectResolver` — the slot `@awthaq/roles` overrides; the default resolves identity only (BEH-EA-137).
+- `Resolvers` — `UserAttributes` (`email`, `emailVerified`, `name`; typed via `userAttr`, memoized per request, outages map to `AttributeResolveError`) and `ObligationHandlers.reauth` (step-up; fails with the wire-decodable `Api.ReauthRequired`, fails closed on a malformed obligation).
+- `AttributeResolvers.attributeResolverRegistry` — composes several `AttributeResolver` layers without one silently shadowing another.
+- `SubjectApi` — `GET /subject`; `SubjectApi.config([...])` names resolver-backed attributes to expose to the client.
+- `DecisionLogging` — opt-in `DecisionSinkLog` / `DecisionSinkAudit` (denials into the log / the durable `AuditLog`).
 
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+**Decision cache scope** (wayfinder ticket 12). qadi's `DecisionCache` is safe against token downgrade but unsafe against *backend* revocation when it outlives a request. The default is a per-request cache: declare `RequestDecisionCache` last (outermost) on a guarded group. If you provide `decisionCacheLayer` at application scope instead, you must also provide `DecisionCacheInvalidationLive` once, application-wide — it flushes the cache on every organization/team observe hook, dynamic-role change and user-attribute change. It cannot cover *your own* resolvers' data: call `DecisionCache.clear` from those mutations. See [`spec/appendices/02-qadi-path-a-end-to-end.md`](../../spec/appendices/02-qadi-path-a-end-to-end.md).
+
+**Claims authenticate; they do not authorize.** A JWT (`@awthaq/jwt`'s `definePayload` claims) or any other bearer token proves who the caller is; its claims are *not* projected into `AuthSubject`, and the default `SubjectResolver` yields identity only (BEH-EA-137). Re-home `auth.jwt()`-style facts: platform roles into `@awthaq/roles`, tenant membership/roles into `@awthaq/organization` relations, everything else into an `AttributeResolver` or your own `SubjectResolver` override — read from the live session, so revocation is immediate. The RLS migration guide ([`spec/appendices/04-rls-to-qadi-migration.md`](../../spec/appendices/04-rls-to-qadi-migration.md)) maps each shape.
+
+**Consistency and bringing your own graph engine.** A relationship answer is as fresh as the organization records layer it reads; a request-scoped cache preserves that. To use OpenFGA/SpiceDB instead, replace the `OrganizationQadi.relationships` layer with one backed by that engine and export membership tuples from the `AfterAddMember` / `AfterRemoveMember` hook points — no adapter ships.
+
+See [`spec/behaviors/19-qadi-bridge-path-a.md`](../../spec/behaviors/19-qadi-bridge-path-a.md), [`20-qadi-bridge-path-b.md`](../../spec/behaviors/20-qadi-bridge-path-b.md) and [`21-qadi-resolvers-obligations.md`](../../spec/behaviors/21-qadi-resolvers-obligations.md).

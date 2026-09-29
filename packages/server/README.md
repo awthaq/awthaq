@@ -1,9 +1,7 @@
 # @awthaq/server
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+HTTP stratum (5): the implementations of the contract's middleware and the mechanism that registers a composed `HttpApi` with a router.
 
-HTTP stratum (5). Middleware implementations, core handlers, AuthHttp — the mechanism that registers a composed HttpApi with a router.
+**Shipped**: `Authentication` / `OptionalAuthentication` (cookie first, bearer second, per-request session memoization, rotated-secret delivery — BEH-EA-065–072), `Csrf` (double-submit cookie — BEH-EA-073–080), `Session` (the core `session` group handlers), `Account` (the core account group, including `deleteUser`'s transactional erasure cascade) and `AuthHttp` (`routes`/`docs`, the error-to-status mapping — BEH-EA-081–088).
 
-**Planned first module:** Authentication.ts (spec/behaviors/09-authentication-middleware.md, BEH-EA-065–072); also Csrf.ts, AuthHttp.ts
-
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+See [`spec/behaviors/09-authentication-middleware.md`](../../spec/behaviors/09-authentication-middleware.md), [`10-csrf.md`](../../spec/behaviors/10-csrf.md) and [`11-http-error-mapping.md`](../../spec/behaviors/11-http-error-mapping.md).
