@@ -13,6 +13,7 @@ import { OAuthProvider } from "@awthaq/oauth";
 import { Password } from "@awthaq/password";
 import { PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthorizedSubject } from "@awthaq/qadi";
+import type { Authorized, Permission } from "@qadi/core";
 import { PublicEndpoint } from "@qadi/http";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -106,6 +107,11 @@ export const ordered = bridgedBase
 export const orderedLeavesNothing: [HttpApiGroup.MiddlewareServices<typeof ordered>] extends [never]
   ? true
   : false = true;
+
+// type-gate: guard-witness-is-not-a-boolean
+const removeWithWitness = (_witness: Authorized<Permission>, _id: string) => Effect.void;
+// @ts-expect-error - `true` is not the branded witness only `guard` mints (BEH-EA-151, REQ-EA-423)
+export const flagInPlaceOfWitness = removeWithWitness(true, "project-42");
 
 // ---- 20-qadi-bridge-path-b.feature: BEH-EA-155 (REQ-EA-435) ----
 

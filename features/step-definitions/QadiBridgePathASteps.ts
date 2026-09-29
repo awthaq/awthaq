@@ -8,13 +8,26 @@ import { defineSteps } from "@effect-cucumber/vitest";
 import {
   CurrentSubject,
   EvaluationServicesNone,
+  assert as assertPolicy,
+  check,
+  currentSubjectLayer,
   decide,
+  enforce,
+  enforceProjected,
+  eq,
+  filter,
+  guard,
+  hasPermission,
+  hasResourceAttribute,
   isAllowed,
+  literal,
   makeSubject,
+  permission,
   permissionKey,
 } from "@qadi/core";
 import type { PermissionKey } from "@qadi/core";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import assert from "node:assert/strict";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -69,7 +82,72 @@ const outageKindOf = (name: string) =>
         ? "history"
         : undefined;
 
+// ---- REQ-EA-408: each row of BEH-EA-146's table, run -------------------------------------------
+
+const recipeRead = permission("project", "read");
+const recipeCaller = makeSubject({ id: "user:alice", permissions: [permissionKey(recipeRead)] });
+const recipeEnvironment = Layer.merge(currentSubjectLayer(recipeCaller), EvaluationServicesNone);
+const recipePolicy = hasPermission(recipeRead);
+const recipeProject = { id: "p1", name: "Plan", budget: "1200000" };
+
+/** What each call returns for the need it is chosen for; `undefined` for a shape that does not fit. */
+const runRecipe = (call: string) => {
+  switch (call) {
+    case "check":
+      return check(recipePolicy, { resource: recipeProject }).pipe(
+        Effect.map((allowed) => allowed === true),
+      );
+    case "decide":
+      return decide(recipePolicy, { resource: recipeProject }).pipe(
+        Effect.map(
+          (decision) =>
+            decision._tag === "Allow" && "trace" in decision && "obligations" in decision,
+        ),
+      );
+    case "assert":
+      return assertPolicy(recipePolicy).pipe(Effect.map(() => true));
+    case "enforce":
+      return enforce(recipePolicy)(Effect.succeed("ran")).pipe(
+        Effect.map((value) => value === "ran"),
+      );
+    case "enforceProjected":
+      return enforceProjected(hasPermission(recipeRead, { fields: ["id", "name"] }), {
+        resource: recipeProject,
+      })(Effect.succeed(recipeProject)).pipe(
+        Effect.map((view) => "name" in view && !("budget" in view)),
+      );
+    case "filter":
+      return filter(hasResourceAttribute("tenant", eq(literal("acme"))), [
+        { id: "a", tenant: "acme" },
+        { id: "b", tenant: "other" },
+      ]).pipe(Effect.map((kept) => kept.length === 1 && kept[0]?.["id"] === "a"));
+    case "guard":
+      return guard(recipeRead, recipePolicy)(recipeProject, (witness) =>
+        Effect.succeed(witness.permission.action === "read"),
+      );
+    default:
+      return Effect.succeed(false);
+  }
+};
+
 export const pathASteps = defineSteps<World>(({ Given, When, Then }) => {
+  Given("a handler with the need {string}", function* (need: string) {
+    yield* setOutcome("need", need);
+  });
+
+  When("the handler is implemented", function* () {
+    yield* setOutcome("implemented", true);
+  });
+
+  Then(
+    "it uses {string}, whose result has the shape that need calls for",
+    function* (call: string) {
+      const name = call.split(/[(\s/]/)[0] ?? "";
+      const ok = yield* runRecipe(name).pipe(Effect.provide(recipeEnvironment));
+      assert.equal(ok, true, `${call} did not produce the shape its need calls for`);
+    },
+  );
+
   // ---- BEH-EA-145: AuthorizedSubject bridges CurrentPrincipal to CurrentSubject ----
 
   const assertChain = Effect.fn("features.pathA.assertChain")(function* (chain: string) {

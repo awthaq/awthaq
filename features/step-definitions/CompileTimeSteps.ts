@@ -237,6 +237,26 @@ export const authorizedSubjectTypeSteps = defineSteps(({ Given, When, Then }) =>
   );
 });
 
+/** BEH-EA-151 (19-qadi-bridge-path-a.feature). */
+export const witnessTypeSteps = defineSteps(({ Given, Then }) => {
+  Given(
+    "a handler needing downstream proof that {string} was granted for {string}",
+    function* (_permission: string, _resource: string) {
+      yield* Effect.void;
+    },
+  );
+
+  Then(
+    "it does not thread a boolean flag as a substitute for the witness",
+    gate("guard-witness-is-not-a-boolean", ["@ts-expect-error", "removeWithWitness(true"]),
+  );
+
+  Then(
+    "the downstream removal function's signature requires the actual witness value, not a boolean",
+    gate("guard-witness-is-not-a-boolean", ["Authorized<Permission>"]),
+  );
+});
+
 /** BEH-EA-155 (20-qadi-bridge-path-b.feature). */
 export const publicEndpointTypeSteps = defineSteps(({ Given, When, Then }) => {
   Given("an endpoint in a RequirePermission-middlewared group", function* () {
