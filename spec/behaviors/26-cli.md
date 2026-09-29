@@ -355,7 +355,7 @@ interface CredentialStore { get; set; clear }   // Effect-returning, Redacted in
 REQUIREMENT: Session-command credentials MUST be stored through a
              `CredentialStore` port (`get`/`set`/`clear`) whose default Layer
              resolves the OS-native store first (macOS Keychain, Linux Secret
-             Service, Windows Credential Manager). Only when none is
+             Service, Windows DPAPI through PowerShell). Only when none is
              reachable MAY it fall back to
              `$XDG_CONFIG_HOME/awthaq/credentials.json` created with mode
              0600 inside a 0700 directory, and the CLI MUST warn once when it
@@ -366,7 +366,7 @@ REQUIREMENT: Session-command credentials MUST be stored through a
 
 A CLI token is a bearer credential to a user's account, and the ecosystem's recurring failure is a plaintext dotfile in the home directory that any process of that user (or a backup tool) can read. Keychain-first with a 0600 file as the last resort (a headless Linux CI runner, a container) is the order that keeps the common desktop case safe and the constrained case working; the environment override exists precisely so CI never needs the store at all. This is the CLI-side counterpart of [BEH-EA-066](09-authentication-middleware.md#beh-ea-066-the-bearer-handler-is-tried-after-the-cookie-handler-fails-over-the-same-session-resolution-logic)'s note that a native client carries a bearer token from a keychain: mobile storage stays the application's job, the CLI's is specified here.
 
-*Implementation* (`CredentialStore.ts`; `test/CredentialStore.test.ts`, with a fake `security`/`secret-tool` behind an `Exec` port so no test touches a real keychain, and a real temporary directory for the file modes). The secret never travels on a command line: the Keychain backend drives `security -i` (commands on stdin) and `secret-tool store` reads the secret from stdin. **Not shipped:** a Windows Credential Manager backend. Windows uses the file fallback, with the warning; mode bits do not restrict a file on Windows, so this is the honest limit rather than an untested `cmdkey` call that would put the secret on argv.
+*Implementation* (`CredentialStore.ts`; `test/CredentialStore.test.ts`, with a fake `security`/`secret-tool`/`powershell.exe` behind an `Exec` port so no test touches a real keychain or needs Windows, and a real temporary directory for the file modes). The secret never travels on a command line: the Keychain backend drives `security -i` (commands on stdin), `secret-tool store` reads the secret from stdin, and the Windows backend pipes the secret to `powershell.exe` (else `pwsh`) on stdin, where `ConvertTo-SecureString -AsPlainText | ConvertFrom-SecureString` turns it into a DPAPI (CurrentUser) blob kept in `%APPDATA%\awthaq\credential.dpapi`; reading hands the blob back on stdin and prints only the secret. DPAPI protects against another user and offline disk theft, not against another process of the same user. `cmdkey` (secret on argv) and Credential Manager proper (needs a module or P/Invoke to read a secret back) were rejected (ADR-EA-027); a Windows with no PowerShell, or a refused write, uses the 0600 file with the warning.
 
 _Previous: [BEH-EA-227](26-cli.md#beh-ea-227-session-commands-login-logout-whoami-are-outbound-only-clients-of-a-running-auth-server) | Next: [BEH-EA-229](26-cli.md#beh-ea-229-plugins-declare-their-configuration-statically-and-config-list-prints-it-redacted)_
 
