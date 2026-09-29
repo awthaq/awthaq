@@ -174,11 +174,7 @@ Feature: Two-Factor Authentication
       When "alice" presents her current authenticator code with her challenge
       Then the second factor issues a session for "alice" recording "pwd", "otp" and "mfa"
 
-    # @skip: a compile-time property (composing TwoFactor without a gate does not type-check); the
-    # gate is a type-level marker with no runtime effect to observe. Covered by
-    # packages/two-factor/test/TwoFactor.types.test.ts (pluginRequiresTheSessionGate,
-    # pluginRequiresAResetGuard, sessionGateProvidesItsMarker) which the typecheck compiles
-    @skip
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-1039
     Scenario: Composing the plugin without a gate is a compile error
       Given a composition of "TwoFactor" that omits "sessionGate" or "credentialResetGate"

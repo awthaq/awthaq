@@ -135,9 +135,7 @@ Feature: Rate Limiting
       When "consume" derives a bucket key for a sign-in request
       Then the bucket key is the deterministic value that function computes for that request
 
-    # @skip: compile-time (the RateLimitKey type admits only the two strategies or a function); asserted by tsc via
-    # @ts-expect-error in packages/core/test/RateLimits.types.test.ts.
-    @skip
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
     @REQ-EA-292
     Scenario: A rule must not key on a caller-controlled arbitrary value without the plugin author opting in explicitly
       Given a plugin author declaring a rule using only the built-in "principal" or "ip" strategies

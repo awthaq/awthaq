@@ -44,10 +44,7 @@ Feature: Email OTP
       When many numeric values are minted
       Then every digit occurs about equally often
 
-    # @skip: compile-time property — `Verification.issue`'s input type has no field through which a
-    # caller could choose the value of a numeric row (packages/core/src/Verification.ts, IssueInput),
-    # so there is nothing to observe at runtime.
-    @skip
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
     @REQ-EA-1102
     Scenario: A caller-chosen string is never accepted as a numeric value
       When a caller tries to supply its own numeric value

@@ -79,11 +79,7 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
       Then it is treated as legitimately public
       And no permission is evaluated for it
 
-    # @skip: compile-time property: PublicEndpoint's annotation value is qadi's PublicDeclaration
-    #   ({ reason: string }), so a bare boolean does not type-check; enforced by @qadi/http's own
-    #   types (../qadi packages/http) on every typecheck, and there is no runtime validation to
-    #   observe.
-    @skip
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
     @REQ-EA-435
     Scenario: Declaring PublicEndpoint without a documented reason string is not a legal declaration
       Given an endpoint in a RequirePermission-middlewared group

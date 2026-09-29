@@ -18,12 +18,7 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       Then "AuthorizedSubject" reads "CurrentPrincipal" already provided by "Authentication"
       And "AuthorizedSubject" provides qadi's "CurrentSubject" to every handler in the group via "SubjectResolver"
 
-    # @skip: compile-time property: a group declaring AuthorizedSubject without Authentication
-    #   leaves CurrentPrincipal unsatisfied in the type system, so composition cannot even be
-    #   written; asserted at the type level by packages/qadi/test/AuthorizedSubject.test.ts 'the
-    #   reversed order leaves CurrentPrincipal unsatisfied' (expectTypeOf), enforced on every `pnpm
-    #   run typecheck`.
-    @skip
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-406
     Scenario: A group declaring AuthorizedSubject without Authentication preceding it fails composition, not at first request
       Given an endpoint group that declares ".middleware(AuthorizedSubject)" without ".middleware(Authentication)" preceding it in the chain

@@ -10,22 +10,13 @@ Feature: Hooks
   @BEH-EA-089
   Rule: A hook point is declared as a service carrying its own kind
 
-    # @skip: compile-time (BEH-EA-089's own definition is TypeScript, and the shipped API has no
-    # single `HookPoint.Service({ kind, input })` form: `veto`/`observe`/`divert` are three
-    # factories, so `kind` cannot be omitted; `input` is a required argument). Asserted by
-    # tsc via @ts-expect-error in packages/core/test/HookPointDefinition.types.test.ts.
-    @skip
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-242
     Scenario: Defining a hook point requires declaring a kind of "veto", "observe", or "divert"
       Given a "HookPoint.Service" definition that omits a "kind"
       When the hook point class is defined
       Then the definition fails to compile, naming "kind" as required
 
-    # @skip: compile-time (BEH-EA-089's own definition is TypeScript, and the shipped API has no
-    # single `HookPoint.Service({ kind, input })` form: `veto`/`observe`/`divert` are three
-    # factories, so `kind` cannot be omitted; `input` is a required argument). Asserted by
-    # tsc via @ts-expect-error in packages/core/test/HookPointDefinition.types.test.ts.
-    @skip
     @REQ-EA-243
     Scenario: Defining a hook point requires declaring an input schema
       Given a "HookPoint.Service" definition that declares a "kind" but omits an "input" schema
@@ -124,11 +115,7 @@ Feature: Hooks
   @BEH-EA-094 @compile-time
   Rule: Tapping a hook point nobody defines is a type error, not a silent no-op
 
-    # @skip: compile-time (INV-EA-005: the tap's Layer requires its point, so an undefined point
-    # stays in the composition's RIn and `Layer.launch` does not type-check). Asserted by tsc via
-    # @ts-expect-error in packages/core/test/HookPoint.types.test.ts and
-    # HookPointDefinition.types.test.ts.
-    @skip
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-253
     Scenario: A tap on a hook point no installed plugin defines keeps that point's service in the composed Layer's RIn
       Given a plugin tuple where no installed plugin's Layer provides "SomeHookPoint" in its "ROut"
@@ -137,11 +124,6 @@ Feature: Hooks
       Then "SomeHookPoint" remains in the composed Layer's "RIn"
       And composition fails to compile, identical in kind to a missing port
 
-    # @skip: compile-time (INV-EA-005: the tap's Layer requires its point, so an undefined point
-    # stays in the composition's RIn and `Layer.launch` does not type-check). Asserted by tsc via
-    # @ts-expect-error in packages/core/test/HookPoint.types.test.ts and
-    # HookPointDefinition.types.test.ts.
-    @skip
     @REQ-EA-254
     Scenario: A tap left on a hook point after its defining plugin is uninstalled is a compile error, not a silent no-op
       Given a tap registered on a hook point that "Invite" used to define

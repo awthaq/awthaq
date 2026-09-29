@@ -96,11 +96,7 @@ Feature: Password Authentication
       Then "Password" hashes and verifies passwords using "PasswordHasher.layerScrypt"
       And no change is made to "Password"'s own code to accept the substitution
 
-    # @skip: "the composition remains incomplete" is a compile-time property (an unsatisfied
-    # Layer requirement is a type error where it is composed, not a runtime outcome), so no
-    # runtime step can express it; covered by the type-level test "BEH-EA-115: Password.layer
-    # requires a PasswordHasher" in packages/password/test/Password.test.ts.
-    @skip
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-312
     Scenario: Password bundles no hashing implementation of its own
       Given an application composing "Password" with no "PasswordHasher" Layer provided
@@ -245,12 +241,6 @@ Feature: Password Authentication
       When it provides "Password.config({ minLength: 16 })"
       Then the tightened policy takes effect without installing any different plugin class
 
-    # @skip: a structural claim about object identity (the plugin class's own `contract`, `tables`
-    # and `migrations` statics are constants a Layer cannot touch), so a runtime scenario could
-    # only assert a tautology; the behavior that IS runtime (the override takes effect) is
-    # REQ-EA-325, and `Password.config` is typed `Partial<PasswordConfigShape>`, which carries
-    # no contract or migration field to override.
-    @skip
     @REQ-EA-326
     Scenario: Overriding minLength does not change Password's contract, table set, or migrations
       Given "Password.config({ minLength: 16 })" is provided in place of the default "minLength: 8"

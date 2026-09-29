@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { twoFactorSecuritySteps } from "../../step-definitions/TwoFactorSecuritySteps.ts";
 import { twoFactorSteps } from "../../step-definitions/TwoFactorSteps.ts";
 import { WorldLive } from "../../step-definitions/TwoFactorWorld.ts";
+import { twoFactorGateTypeSteps } from "../../step-definitions/CompileTimeSteps.ts";
 
 const feature = await loadFeature(
   fileURLToPath(new URL("./31-two-factor.feature", import.meta.url)),
@@ -11,4 +12,5 @@ const feature = await loadFeature(
 describeFeature(feature, WorldLive, ({ use }) => {
   use(twoFactorSteps);
   use(twoFactorSecuritySteps);
+  use(twoFactorGateTypeSteps);
 });
