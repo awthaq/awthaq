@@ -86,6 +86,15 @@ export interface ConsumeInput {
 export interface RateLimiterShape {
   readonly consume: (input: ConsumeInput) => Effect.Effect<void, RateLimitExceeded>;
   /**
+   * BCR-006: the read half of a budget that only *failures* spend. Fails with the same
+   * `RateLimitExceeded` `consume` would once the bucket for `key` already holds `limit` or more,
+   * but never counts this call — so a caller can refuse an attempt *before* evaluating it (a
+   * locked second factor must not get a free guess), and `consume` only on the failures it
+   * should charge. An escalating rule's active block is honoured too. Fails open when the store
+   * is unavailable, per `RateLimiterConfig` exactly like `consume`.
+   */
+  readonly check: (input: ConsumeInput) => Effect.Effect<void, RateLimitExceeded>;
+  /**
    * NHS-005/BEH-EA-201: set by `layerPermissive`, which disables every rule, so
    * `awthaq doctor --build` can flag it left in a production composition.
    */
@@ -219,7 +228,27 @@ export const layer: Layer.Layer<RateLimiter, never, RateLimiterStore> = Layer.ef
         ? consumePlain(input)
         : consumeEscalating(input, input.escalation)
       ).pipe(Effect.catchTag("RateLimiterStoreUnavailable", onUnavailable), Effect.asVoid);
-    return RateLimiter.of({ consume });
+
+    // BCR-006: peek, never increment. A block (escalation) is a bucket whose window is the penalty.
+    const check: RateLimiterShape["check"] = (input) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        if (input.escalation !== undefined) {
+          const block = yield* store.peek(blockKey(input.key));
+          if (Option.isSome(block)) {
+            return yield* new RateLimitExceeded({
+              retryAfterMillis: untilMillis(block.value.resetAt, now),
+            });
+          }
+        }
+        const bucket = yield* store.peek(input.key);
+        if (Option.isSome(bucket) && bucket.value.count >= input.limit) {
+          return yield* new RateLimitExceeded({
+            retryAfterMillis: untilMillis(bucket.value.resetAt, now),
+          });
+        }
+      }).pipe(Effect.catchTag("RateLimiterStoreUnavailable", onUnavailable), Effect.asVoid);
+    return RateLimiter.of({ consume, check });
   }),
 );
 
@@ -360,6 +389,6 @@ export const layerPermissive = Layer.effect(
             "awthaq: RateLimiter.layerPermissive is active — every registered rate-limit rule is disabled (tests only; use RateLimiter.layerMemory or a shared store in production)",
           ),
     );
-    return RateLimiter.of({ consume: () => warnOnce, permissive: true });
+    return RateLimiter.of({ consume: () => warnOnce, check: () => Effect.void, permissive: true });
   }),
 );

@@ -18,10 +18,12 @@
 // - `setUserPassword` writes the hash through the `PasswordHasher` port (never a hash of this
 //   package's own), replaces the credential — or creates the password credential if the user had
 //   none — and revokes every session of the user (reason `admin`) in the same transaction, so a
-//   session an attacker held does not survive the reset. It does not consult
-//   `Hooks.BeforeCredentialReset` yet: that hook belongs to the two-factor program (P15) and is not
-//   on this branch; once it lands, a second factor's veto over credential resets must be run here
-//   too (Plan note on BAM-005).
+//   session an attacker held does not survive the reset. It consults `Hooks.BeforeCredentialReset`
+//   (ARF-005) with no second-factor code, exactly like a self-service reset that has none: for a
+//   user protected by a second factor the veto refuses (`HookAborted`, code `TWO_FACTOR_REQUIRED`)
+//   and nothing is written. An administrator cannot supply the user's factor, so the safe default
+//   is that an admin cannot silently replace the password of an MFA-protected account; a
+//   deployment that wants an administrative override taps the hook with its own policy.
 
 import { Api } from "@awthaq/api";
 import {
@@ -33,6 +35,7 @@ import {
   Erasure,
   Errors,
   HookPoint,
+  Hooks,
   Sessions,
   Tenant,
   Users,
@@ -92,6 +95,7 @@ export interface AdminAccountsShape {
     | AdminAccountsApi.AdminSelfActionRefused
     | AdminAccountsApi.AdminNoEmailIdentity
     | AdminAccountsApi.AdminWeakPassword
+    | HookPoint.HookAborted
     | Errors.StoreUnavailable
   >;
 }
@@ -162,6 +166,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
       const crypto = yield* Crypto.Crypto;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const adminConfig = yield* AdminConfig;
+      const beforeCredentialReset = yield* Hooks.BeforeCredentialReset;
 
       /** Gate first (a denied caller learns nothing about ids or refusal rules), same event as `Admin`'s user gates. */
       const authorize = Effect.fnUntraced(function* (
@@ -267,6 +272,10 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
           yield* sqlTransaction
             .withTransaction(
               Effect.gen(function* () {
+                // ARF-005: the same veto a self-service reset runs, with no second-factor code.
+                yield* HookPoint.aborted(Hooks.BeforeCredentialReset)(
+                  beforeCredentialReset.run({ userId }),
+                );
                 const account = yield* accountStore.findByProviderSubject(
                   Accounts.PASSWORD_PROVIDER_ID,
                   userId,

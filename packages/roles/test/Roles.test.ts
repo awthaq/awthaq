@@ -82,6 +82,27 @@ describe("Roles (SubjectResolver override)", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // AAPS-006 (BEH-EA-258): the Roles override keeps the session-trust attributes the default resolver attaches.
+  it.effect("the Roles resolver preserves amr, authenticatedAt and aal on the subject", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const resolver = yield* QadiSubjectResolver.SubjectResolver;
+      const userId = Users.UserId("44444444-4444-4444-4444-444444444444");
+      yield* roles.assign(userId, "owner");
+      const subject = yield* resolver.resolve(
+        new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: userId }),
+          sessionId: "s-1",
+          amr: ["hwk", "user"],
+          authenticatedAt: 1_700_000_000,
+        }),
+      );
+      assert.deepStrictEqual(subject.attributes["amr"], ["hwk", "user"]);
+      assert.strictEqual(subject.attributes["authenticatedAt"], 1_700_000_000);
+      assert.strictEqual(subject.attributes["aal"], "aal3");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   // RRM-003 (+YL-005, TS-008): a typo'd or stale role name is loud at assign time.
   it.effect("assign of a name outside the catalog fails UnknownRole and stores nothing", () =>
     Effect.gen(function* () {

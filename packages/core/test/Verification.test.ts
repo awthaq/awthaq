@@ -371,6 +371,114 @@ const suite = (
         yield* verification.deleteAllByUser(target);
       }).pipe(Effect.provide(layer)),
     );
+
+    // BCR-005: a caller-formatted (numeric) value, minted inside Verification.
+    it.effect("BCR-005: a numeric token is exactly N digits and consumes once", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const { value } = yield* verification.issue({
+          identifier: "email-otp:digits@example.com",
+          ttl: Duration.minutes(5),
+          format: { _tag: "Numeric", digits: 6 },
+          maxAttempts: 3,
+        });
+        assert.match(Redacted.value(value), /^[0-9]{6}$/);
+        yield* verification.consume("email-otp:digits@example.com", value);
+        const replay = yield* verification
+          .consume("email-otp:digits@example.com", value)
+          .pipe(Effect.flip);
+        assert.strictEqual(replay._tag, "Verification/TokenConsumed");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BCR-005: numeric digits are drawn uniformly (no modulo bias)", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const counts = Array.from({ length: 10 }, () => 0);
+        for (let i = 0; i < 1500; i += 1) {
+          const { value } = yield* verification.issue({
+            identifier: `email-otp:uniform-${i}`,
+            ttl: Duration.minutes(5),
+            format: { _tag: "Numeric", digits: 6 },
+            maxAttempts: 3,
+          });
+          for (const digit of Redacted.value(value))
+            counts[Number(digit)] = (counts[Number(digit)] ?? 0) + 1;
+        }
+        // 9000 digits, expectation 900 each: a chi-square statistic over 10 buckets (df 9)
+        // stays far below 27.88 (p = 0.001) for an unbiased source.
+        const expected = 900;
+        const chi = counts.reduce(
+          (sum, observed) => sum + (observed - expected) ** 2 / expected,
+          0,
+        );
+        assert.isBelow(chi, 27.88);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // SOS-004: a per-token attempt budget — a 6-digit code must not be guessable within its TTL.
+    it.effect(
+      "SOS-004: a token with maxAttempts 3 is burned by 3 wrong guesses, even for the right value next",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const identifier = "email-otp:budget@example.com";
+          const { value } = yield* verification.issue({
+            identifier,
+            ttl: Duration.minutes(5),
+            format: { _tag: "Numeric", digits: 6 },
+            maxAttempts: 3,
+          });
+          const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
+          for (let i = 0; i < 3; i += 1) {
+            const failure = yield* verification.consume(identifier, wrong).pipe(Effect.flip);
+            assert.strictEqual(failure._tag, "Verification/TokenConsumed");
+          }
+          const late = yield* verification.consume(identifier, value).pipe(Effect.flip);
+          assert.strictEqual(late._tag, "Verification/TokenConsumed");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("SOS-004: fewer wrong guesses than the budget leave the token usable", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "email-otp:budget-ok@example.com";
+        const { value } = yield* verification.issue({
+          identifier,
+          ttl: Duration.minutes(5),
+          format: { _tag: "Numeric", digits: 6 },
+          maxAttempts: 3,
+        });
+        const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
+        yield* verification.consume(identifier, wrong).pipe(Effect.flip);
+        yield* verification.consume(identifier, wrong).pipe(Effect.flip);
+        const consumed = yield* verification.consume(identifier, value);
+        assert.strictEqual(consumed.identifier, identifier);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("SOS-004: a 256-bit token without maxAttempts is never burned by wrong guesses", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "verify-email:no-budget";
+        const { value } = yield* verification.issue({ identifier, ttl: Duration.minutes(5) });
+        for (let i = 0; i < 10; i += 1) {
+          yield* verification.consume(identifier, Redacted.make("wrong")).pipe(Effect.flip);
+        }
+        const consumed = yield* verification.consume(identifier, value);
+        assert.strictEqual(consumed.identifier, identifier);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("SOS-004: a wrong guess against an unknown identifier changes nothing", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const failure = yield* verification
+          .consume("email-otp:nobody@example.com", Redacted.make("123456"))
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Verification/TokenConsumed");
+      }).pipe(Effect.provide(layer)),
+    );
   });
 };
 

@@ -71,7 +71,9 @@
       "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"],
       "@awthaq/scim": ["./packages/scim/src/index.ts"],
       "@awthaq/next/edge": ["./packages/next/src/edge.ts"],
-      "@awthaq/oauth/presets": ["./packages/oauth/src/presets/index.ts"]
+      "@awthaq/oauth/presets": ["./packages/oauth/src/presets/index.ts"],
+      "@awthaq/webhooks": ["./packages/webhooks/src/index.ts"],
+      "@awthaq/saml": ["./packages/saml/src/index.ts"]
     },
     "plugins": [
       {

@@ -69,6 +69,19 @@ export class EmailNotVerified extends Schema.TaggedError<EmailNotVerified>()(
 ) {}
 
 /**
+ * ARF-005 (BEH-EA-259): the account has a second factor and the reset request carried none — the
+ * `Hooks.BeforeCredentialReset` veto refused with code `TWO_FACTOR_REQUIRED`. `401`, like
+ * `Hooks.TwoFactorRequired` at sign-in: the emailed link was valid, but that alone no longer
+ * suffices; clients branch on `_tag` and resubmit with `secondFactorCode`. Any other veto code
+ * reaches the caller as the generic `HookAborted`.
+ */
+export class SecondFactorRequired extends Schema.TaggedError<SecondFactorRequired>()(
+  "SecondFactorRequired",
+  {},
+  { httpApiStatus: 401 },
+) {}
+
+/**
  * BAM-009: the change-email confirmation mail could not be delivered. The requester is
  * authenticated, so unlike the enumeration-uniform flows the failure is surfaced (the token stays
  * unconsumed and expires; asking again mints a fresh one). `502`, like the organization
@@ -127,6 +140,11 @@ export type ResendVerificationPayload = typeof ResendVerificationPayload.Type;
 export const ConfirmResetPayload = Schema.Struct({
   token: Schema.Redacted(Schema.String),
   password: PasswordInput,
+  /**
+   * ARF-005: a TOTP or recovery code, required only when the account has a second factor
+   * (`@awthaq/two-factor`'s `credentialResetGate`); ignored otherwise.
+   */
+  secondFactorCode: Schema.optionalKey(Schema.Redacted(Schema.String)),
 });
 export type ConfirmResetPayload = typeof ConfirmResetPayload.Type;
 
@@ -256,7 +274,14 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // (`minLength`/`breachCheck`) any other newly-set password is. A
       // plain array, not `Schema.Union` — see `signUp`'s own comment above.
       // Ticket 12: rate-limited.
-      error: [TokenConsumed, WeakPassword, Api.RateLimited],
+      // ARF-005: `SecondFactorRequired` (401) / `HookAborted` when a `BeforeCredentialReset` tap refuses.
+      error: [
+        TokenConsumed,
+        WeakPassword,
+        Api.RateLimited,
+        SecondFactorRequired,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(

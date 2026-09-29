@@ -1,4 +1,4 @@
-// MTI-011/P20a: steps for 31-organization.feature. Givens arrange state through the real HTTP
+// MTI-011/P20a: steps for 35-organization.feature. Givens arrange state through the real HTTP
 // surface wherever a real caller could (so a Given cannot succeed by a route the scenario
 // then fails to exercise); the only direct store writes are `has joined ... as` (the trusted
 // `addMember` path SCIM and imports use, which the HTTP group deliberately has no route for)

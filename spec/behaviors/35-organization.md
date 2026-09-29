@@ -3,7 +3,7 @@
 >
 > | Property | Value |
 > |---|---|
-> | Document ID | EFAUTH-BEH-31 |
+> | Document ID | EFAUTH-BEH-35 |
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
@@ -14,7 +14,7 @@
 
 > `@awthaq/organization` composes as `Auth.make([Organization])` and serves the `organization` HTTP group at `/organization/...`, all behind `Api.Authentication` and `Api.CsrfProtection`. It is the multi-tenant membership plugin ([MOD-EA-014](../models/14-organization.md)): the behaviors below are what an application relies on to treat an organization as a tenant boundary. Roles and statements are the plugin's own `PermissionEngine` ([ADR-EA-025](../decisions/025-global-roles-vs-organization-roles.md)), never a qadi round trip; tenancy resolution and tenant-stamped rows are [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none) through [BEH-EA-237](28-tenancy.md#beh-ea-237-a-suspended-organization-refuses-organization-scoped-access), and the qadi relationship grammar is [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership).
 
-## BEH-EA-258: An organization has a unique slug, its creator becomes its first member, and creating one is bounded by policy and quota
+## BEH-EA-283: An organization has a unique slug, its creator becomes its first member, and creating one is bounded by policy and quota
 
 ```text
 REQUIREMENT: `POST /organization` MUST create the organization and make the
@@ -31,9 +31,9 @@ REQUIREMENT: `POST /organization` MUST create the organization and make the
 
 The creator's membership and the organization are written together, so there is never an organization nobody belongs to. The finite default quota exists so an open sign-up cannot mint unbounded tenants; a deployment that wants that opts out explicitly.
 
-_Previous: [BEH-EA-253](30-scim.md#beh-ea-253-provisioning-lifecycle-changes-are-published-as-events) | Next: [BEH-EA-259](31-organization.md#beh-ea-259-organization-data-is-member-only-and-a-non-member-cannot-tell-an-organization-that-exists-from-one-that-does-not)_
+_Previous: [BEH-EA-253](30-scim.md#beh-ea-253-provisioning-lifecycle-changes-are-published-as-events) | Next: [BEH-EA-284](35-organization.md#beh-ea-284-organization-data-is-member-only-and-a-non-member-cannot-tell-an-organization-that-exists-from-one-that-does-not)_
 
-## BEH-EA-259: Organization data is member-only, and a non-member cannot tell an organization that exists from one that does not
+## BEH-EA-284: Organization data is member-only, and a non-member cannot tell an organization that exists from one that does not
 
 ```text
 REQUIREMENT: Every `/organization/:organizationId/...` endpoint MUST answer
@@ -52,9 +52,9 @@ REQUIREMENT: Every `/organization/:organizationId/...` endpoint MUST answer
 
 This is the tenant boundary at the HTTP surface: a `403` would confirm the organization exists, so the plugin spends it only on people who are already inside. Every scenario for this rule is adversarial by construction: a fully authenticated caller from tenant A aims at tenant B's identifiers and must learn nothing and change nothing. Cross-tenant ids inside a path (a team of B under A's id) are the classic confused-deputy shape and are refused by scoping every lookup to the organization in the path.
 
-_Previous: [BEH-EA-258](31-organization.md#beh-ea-258-an-organization-has-a-unique-slug-its-creator-becomes-its-first-member-and-creating-one-is-bounded-by-policy-and-quota) | Next: [BEH-EA-260](31-organization.md#beh-ea-260-an-organization-always-keeps-an-owner-and-only-an-owner-may-delete-it)_
+_Previous: [BEH-EA-283](35-organization.md#beh-ea-283-an-organization-has-a-unique-slug-its-creator-becomes-its-first-member-and-creating-one-is-bounded-by-policy-and-quota) | Next: [BEH-EA-285](35-organization.md#beh-ea-285-an-organization-always-keeps-an-owner-and-only-an-owner-may-delete-it)_
 
-## BEH-EA-260: An organization always keeps an owner, and only an owner may delete it
+## BEH-EA-285: An organization always keeps an owner, and only an owner may delete it
 
 ```text
 REQUIREMENT: An operation that would leave an organization with no member
@@ -70,9 +70,9 @@ REQUIREMENT: An operation that would leave an organization with no member
 
 The invariant is checked where the roles are read, not where the request arrives, so `leave`, `removeMember` and `updateMemberRole` cannot disagree about what "last owner" means.
 
-_Previous: [BEH-EA-259](31-organization.md#beh-ea-259-organization-data-is-member-only-and-a-non-member-cannot-tell-an-organization-that-exists-from-one-that-does-not) | Next: [BEH-EA-261](31-organization.md#beh-ea-261-an-invitation-is-an-emailed-capability-for-one-address-with-its-own-lifecycle)_
+_Previous: [BEH-EA-284](35-organization.md#beh-ea-284-organization-data-is-member-only-and-a-non-member-cannot-tell-an-organization-that-exists-from-one-that-does-not) | Next: [BEH-EA-286](35-organization.md#beh-ea-286-an-invitation-is-an-emailed-capability-for-one-address-with-its-own-lifecycle)_
 
-## BEH-EA-261: An invitation is an emailed capability for one address, with its own lifecycle
+## BEH-EA-286: An invitation is an emailed capability for one address, with its own lifecycle
 
 ```text
 REQUIREMENT: An invitation MUST be mailed to its address with a random
@@ -94,9 +94,9 @@ REQUIREMENT: An invitation MUST be mailed to its address with a random
 
 The token is a capability, so it is treated like the verification tokens of [BEH-EA-060](08-verification-tokens.md#beh-ea-060-a-verification-token-is-hashed-at-rest): hashed at rest, compared in constant time, and never echoed. Binding acceptance to the invited address as well means a forwarded mail does not confer membership on whoever received it.
 
-_Previous: [BEH-EA-260](31-organization.md#beh-ea-260-an-organization-always-keeps-an-owner-and-only-an-owner-may-delete-it) | Next: [BEH-EA-262](31-organization.md#beh-ea-262-membership-invitation-and-team-quotas-are-enforced-per-organization)_
+_Previous: [BEH-EA-285](35-organization.md#beh-ea-285-an-organization-always-keeps-an-owner-and-only-an-owner-may-delete-it) | Next: [BEH-EA-287](35-organization.md#beh-ea-287-membership-invitation-and-team-quotas-are-enforced-per-organization)_
 
-## BEH-EA-262: Membership, invitation and team quotas are enforced per organization
+## BEH-EA-287: Membership, invitation and team quotas are enforced per organization
 
 ```text
 REQUIREMENT: The plugin MUST refuse an addition that would exceed a limit
@@ -111,9 +111,9 @@ REQUIREMENT: The plugin MUST refuse an addition that would exceed a limit
 
 Limits are checked against the stored count at the moment of the write, not cached at configuration time, which is what lets a per-organization override take effect on the next request.
 
-_Previous: [BEH-EA-261](31-organization.md#beh-ea-261-an-invitation-is-an-emailed-capability-for-one-address-with-its-own-lifecycle) | Next: [BEH-EA-263](31-organization.md#beh-ea-263-a-role-can-only-be-conferred-by-someone-who-holds-everything-it-grants)_
+_Previous: [BEH-EA-286](35-organization.md#beh-ea-286-an-invitation-is-an-emailed-capability-for-one-address-with-its-own-lifecycle) | Next: [BEH-EA-288](35-organization.md#beh-ea-288-a-role-can-only-be-conferred-by-someone-who-holds-everything-it-grants)_
 
-## BEH-EA-263: A role can only be conferred by someone who holds everything it grants
+## BEH-EA-288: A role can only be conferred by someone who holds everything it grants
 
 ```text
 REQUIREMENT: Every path that assigns roles (`invite`, `updateMemberRole`,
@@ -131,9 +131,9 @@ REQUIREMENT: Every path that assigns roles (`invite`, `updateMemberRole`,
 
 Without the guard, any holder of `member:update` could promote themselves: the endpoint that edits roles would be the privilege-escalation path. The guard is the discretionary-access-control rule "you cannot give what you do not have", applied uniformly rather than per endpoint.
 
-_Previous: [BEH-EA-262](31-organization.md#beh-ea-262-membership-invitation-and-team-quotas-are-enforced-per-organization) | Next: [BEH-EA-264](31-organization.md#beh-ea-264-the-active-organization-is-per-session-requires-membership-and-never-outlives-it)_
+_Previous: [BEH-EA-287](35-organization.md#beh-ea-287-membership-invitation-and-team-quotas-are-enforced-per-organization) | Next: [BEH-EA-289](35-organization.md#beh-ea-289-the-active-organization-is-per-session-requires-membership-and-never-outlives-it)_
 
-## BEH-EA-264: The active organization is per session, requires membership, and never outlives it
+## BEH-EA-289: The active organization is per session, requires membership, and never outlives it
 
 ```text
 REQUIREMENT: `POST /organization/active` MUST record the active organization
@@ -147,9 +147,9 @@ REQUIREMENT: `POST /organization/active` MUST record the active organization
 
 The active organization is a convenience pointer, never an authority: every request is still authorized against the caller's membership, so a stale pointer could at worst mislead a UI. It is re-validated on read so it cannot.
 
-_Previous: [BEH-EA-263](31-organization.md#beh-ea-263-a-role-can-only-be-conferred-by-someone-who-holds-everything-it-grants) | Next: [BEH-EA-265](31-organization.md#beh-ea-265-organization-changes-are-published-as-events-and-a-hook-can-veto-them)_
+_Previous: [BEH-EA-288](35-organization.md#beh-ea-288-a-role-can-only-be-conferred-by-someone-who-holds-everything-it-grants) | Next: [BEH-EA-290](35-organization.md#beh-ea-290-organization-changes-are-published-as-events-and-a-hook-can-veto-them)_
 
-## BEH-EA-265: Organization changes are published as events, and a hook can veto them
+## BEH-EA-290: Organization changes are published as events, and a hook can veto them
 
 ```text
 REQUIREMENT: Creating an invitation, adding a member (by accepting an
@@ -165,4 +165,4 @@ REQUIREMENT: Creating an invitation, adding a member (by accepting an
 
 Events carry identifiers only so the audit trail names who was added or removed without becoming a second copy of personal data; the erasure clause is the organization plugin's contribution to the erasure registry ([BEH-EA-254](06-domain-users-accounts.md#beh-ea-254-a-person-can-export-everything-the-system-holds-about-them-as-one-document-and-no-plugin-can-be-left-out) is its export-side mirror).
 
-_Previous: [BEH-EA-264](31-organization.md#beh-ea-264-the-active-organization-is-per-session-requires-membership-and-never-outlives-it)_
+_Previous: [BEH-EA-289](35-organization.md#beh-ea-289-the-active-organization-is-per-session-requires-membership-and-never-outlives-it)_

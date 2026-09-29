@@ -1,4 +1,4 @@
-// BDD-005/P20a: steps for 32-jwt.feature. A step reads a token the way a downstream service
+// BDD-005/P20a: steps for 36-jwt.feature. A step reads a token the way a downstream service
 // would (decode the compact JWS, verify against the served JWKS) and never reaches into the
 // plugin's private state; the operator actions (rotating, revoking a key, denylisting a `jti`,
 // revoking a session) call the same public functions an operator or the CLI calls.

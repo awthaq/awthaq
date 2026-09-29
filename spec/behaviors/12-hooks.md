@@ -106,6 +106,9 @@ REQUIREMENT: A tap on a `kind: "divert"` hook point MUST be able to redirect
 
 `archive/PRD.md` §13 names `BeforeSessionIssue` as the canonical `divert` point, and `archive/design/usage-examples-v4.md` §9 shows the two-factor plugin's step-up flow as the worked example: an ordinary `password.signIn` call is diverted into a `TwoFactorRequired` outcome the client catches and answers with a second call, rather than the sign-in either succeeding outright or failing outright. This is what lets a step-up authentication flow be added by installing a plugin, with no change to the password plugin's own definition.
 
+**As shipped (ARF-005, THS-001).** `@awthaq/two-factor` is the first divert consumer: `Hooks.BeforeSignIn` returns `TwoFactorRequired { challenge }` for a user with a confirmed second factor, and every first-factor sign-in (password, magic link, email OTP) handles the alternative through the shared finalisation step, so no session exists until the challenge is proved. The divert context carries `amr`, the methods already proved, and `Hooks.BeforeCredentialReset` (a veto, `{ userId, secondFactorCode? }`) is consulted by `confirmReset` inside its transaction (BEH-EA-259).
+
+
 ## BEH-EA-094: Tapping a hook point nobody defines is a type error, not a silent no-op
 
 > **Invariant:** [INV-EA-005](../invariants.md#inv-ea-005-a-hook-tap-on-an-undefined-hook-point-keeps-the-application-from-compiling)
@@ -138,7 +141,7 @@ REQUIREMENT: A plugin that needs to react to a change in core-owned data
              migration or service code.
 ```
 
-**As shipped (CSG-001/DRS-002, ADR-EA-031):** erasure — the one reaction that must not be optional or swallowed — is no longer a `BeforeUserDelete` tap the host opts into. `Erasure.AccountErasure.eraseAccount` runs the `BeforeUserDelete` veto first, then, in one `SqlTransaction`, every plugin's `Erasure.contribute` contribution, the core rows and the audit pseudonymization, then publishes `auth.user.deleted`. A plugin's layer (`AuthPlugin.layer(Self, { contributes })`) requires `Erasure.ErasureRegistry`, so omitting the registry does not compile; a contribution that fails rolls everything back (`packages/core/test/AccountErasure.test.ts`). The schema remains FK-less by design (SEA-001): no database-level cascade exists, and none is needed.
+**As shipped (CSG-001/DRS-002, ADR-EA-033):** erasure — the one reaction that must not be optional or swallowed — is no longer a `BeforeUserDelete` tap the host opts into. `Erasure.AccountErasure.eraseAccount` runs the `BeforeUserDelete` veto first, then, in one `SqlTransaction`, every plugin's `Erasure.contribute` contribution, the core rows and the audit pseudonymization, then publishes `auth.user.deleted`. A plugin's layer (`AuthPlugin.layer(Self, { contributes })`) requires `Erasure.ErasureRegistry`, so omitting the registry does not compile; a contribution that fails rolls everything back (`packages/core/test/AccountErasure.test.ts`). The schema remains FK-less by design (SEA-001): no database-level cascade exists, and none is needed.
 
 `archive/design/plugins-as-layers.md` §8 shows exactly this pattern: the `Invite` plugin purges its own `acme.invite_invitation` rows for a deleted user by tapping `BeforeUserDelete`, a point core defines, rather than by declaring a foreign key into `users` and relying on a database-level cascade the linker would have to know about. This is the hook-system's contribution to the shared-table isolation BEH-EA-040 requires at the persistence stratum: cross-plugin reactions are explicit, typed, and ordered, never implicit database-level side effects.
 

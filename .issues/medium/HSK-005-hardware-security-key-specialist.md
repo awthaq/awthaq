@@ -3,7 +3,7 @@ ID: "HSK-005"
 Title: "Passkey sign-in emits no assurance signal, so a qadi-level 'hardware key required' policy is unimplementable"
 Level: medium
 Category: "api"
-Status: ready-for-human
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:599"
 Auditor: "hardware-security-key-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `passkey` · reported by **Hardware Security Key (FIDO U2F/CTAP) Specialist** (`hardware-security-key-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-assurance`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:832`. Fix: Record per-session authentication assurance (amr + UV + credential facts) at issuance and expose it to qadi policies. (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-human.
 
 **Plan note (2026-09-29, P08):** left open (session-assurance, P15). P08 did not add an `amr`/assurance signal: `Sessions.issue` in `authenticateVerify` (`packages/passkey/src/Passkey.ts`) still passes only `{ userId }`. Passing the client `ip`/`userAgent` and an authentication-method claim into `Sessions.issue` needs the P01/P07/P16 session-issuance work first (Sessions.ts is being edited by P01). The plumbing point is ready: `authenticateVerify` already takes `ip` in its input and its handler resolves it through `ClientAddress`.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option A per plan: record amr at issuance (Passkey passkeyAmr: hwk or swk plus user when user-verified) and expose amr, authenticatedAt and derived assurance to qadi policies through SubjectResolver.principalAttributes. Tests: packages/passkey, packages/qadi, packages/roles suites; Assurance.test.ts.

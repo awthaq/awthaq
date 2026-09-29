@@ -37,6 +37,7 @@ import {
   Observability,
   RateLimits,
   Sessions,
+  Tenant,
   Users,
 } from "@awthaq/core";
 import { ClientAddress, Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
@@ -61,6 +62,21 @@ import { hmacSha256 } from "./Hmac.ts";
 import * as PasskeyApi from "./PasskeyApi.ts";
 import * as PasskeyCredentials from "./PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
+
+/**
+ * HSK-005/THS-003 (BEH-EA-258): how a verified assertion authenticated the user, as RFC 8176
+ * method references — `hwk` for a device-bound (`singleDevice`) credential, `swk` for a synced
+ * (`multiDevice`) one, plus `user` when the authenticator performed user verification. This is
+ * what lets a policy require a hardware-bound key (`amr contains "hwk"`) or user verification,
+ * and what `Assurance` maps onto aal2/aal3.
+ */
+const passkeyAmr = (verified: {
+  readonly credentialDeviceType: "singleDevice" | "multiDevice";
+  readonly userVerified: boolean;
+}): ReadonlyArray<Sessions.AuthMethod> => {
+  const key: Sessions.AuthMethod = verified.credentialDeviceType === "singleDevice" ? "hwk" : "swk";
+  return verified.userVerified ? [key, "user"] : [key];
+};
 
 /** BEH-EA-044-style reserved provider id, this plugin's own concern (BEH-EA-004: confined to its own scope). */
 const PASSKEY_PROVIDER_ID = "passkey";
@@ -994,7 +1010,13 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const challengeStore = yield* ChallengeStore.ChallengeStore;
       const credentials = yield* PasskeyCredentials.PasskeyCredentials;
       const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
-      const config = yield* PasskeyConfig;
+      // EP-007 (ADR-EA-018 Decision 8): the ceremony policy — rpId, origins, attestation,
+      // user verification, counter-anomaly posture, reauth window — is decided per operation, so a
+      // tenant's `Passkey.config(...)` provided in the calling fiber applies to that request; with
+      // none, the build-time value applies exactly as before. The boot validations below and the
+      // decoy `enumerationSecret` are boot-scoped by nature and read the built value.
+      const builtConfig = yield* PasskeyConfig;
+      const configNow = Tenant.configInForce(PasskeyConfig, builtConfig);
       const crypto = yield* Crypto.Crypto;
       const limiter = yield* RateLimiter.RateLimiter;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
@@ -1008,7 +1030,8 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       // TC-003: the browser's prompt must not outlive the challenge it answers.
       if (
-        Duration.toMillis(config.ceremonyTimeout) > Duration.toMillis(ChallengeStore.CHALLENGE_TTL)
+        Duration.toMillis(builtConfig.ceremonyTimeout) >
+        Duration.toMillis(ChallengeStore.CHALLENGE_TTL)
       ) {
         return yield* Defects.invalidConfiguration(
           "ceremonyTimeout",
@@ -1016,9 +1039,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         );
       }
       // HSK-002: conveyance is a request, not a verification.
-      if (config.attestation !== "none" && config.attestationPolicy === undefined) {
+      if (builtConfig.attestation !== "none" && builtConfig.attestationPolicy === undefined) {
         yield* Effect.logWarning(
-          `awthaq: PasskeyConfig.attestation is "${config.attestation}" but no attestationPolicy is set — attestation is requested but nothing is verified or enforced (conveyance is not verification). Set attestationPolicy.trustedAaguids to make it binding.`,
+          `awthaq: PasskeyConfig.attestation is "${builtConfig.attestation}" but no attestationPolicy is set — attestation is requested but nothing is verified or enforced (conveyance is not verification). Set attestationPolicy.trustedAaguids to make it binding.`,
         );
       }
       // WPS-009/BEH-EA-132: a stateless store bounds replay by TTL only.
@@ -1029,7 +1052,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       }
       // TC-001: decoys are keyed by a secret so they are unguessable and stable per email.
       const enumerationSecret =
-        config.enumerationSecret ??
+        builtConfig.enumerationSecret ??
         (yield* Effect.gen(function* () {
           yield* Effect.logWarning(
             "awthaq: PasskeyConfig.enumerationSecret is not set — a random per-process secret is used for the decoy allowCredentials of unknown emails, so decoys differ across instances/restarts. Set one shared secret for multi-instance deployments.",
@@ -1121,6 +1144,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         sessionId: string,
       ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable> =>
         Effect.gen(function* () {
+          const config = yield* configNow;
           const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAgeSeconds);
           const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));
           if (Option.isNone(current)) {
@@ -1133,11 +1157,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         });
 
       /** TC-003: the knobs every options generator sets explicitly. */
-      const ceremonyKnobs = {
+      const ceremonyKnobsOf = (config: PasskeyConfigShape) => ({
         timeout: config.ceremonyTimeout,
         ...(config.hints === undefined ? {} : { hints: config.hints }),
         ...(config.extensions === undefined ? {} : { extensions: config.extensions }),
-      };
+      });
 
       /** BPAS-003: one stable per-user handle in every registration's options; `credentials.create` stores exactly it. */
       const creationOptions = Effect.fnUntraced(function* (
@@ -1145,6 +1169,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         scope: string,
         authenticatorSelection: WebAuthn.AuthenticatorSelection,
       ) {
+        const config = yield* configNow;
         const user = yield* users.findById(userId).pipe(Effect.orDie);
         const existing = yield* credentials.listByUser(userId);
         const challenge = yield* challengeStore.issue(scope);
@@ -1159,7 +1184,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           excludeCredentials: existing.map((row) => ({ id: row.id, transports: row.transports })),
           attestation: config.attestation,
           authenticatorSelection,
-          ...ceremonyKnobs,
+          ...ceremonyKnobsOf(config),
         });
         return yield* Schema.decodeUnknownEffect(
           PasskeyApi.PublicKeyCredentialCreationOptionsSchema,
@@ -1177,6 +1202,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const registerOptions: PasskeyShape["registerOptions"] = Effect.fnUntraced(
         function* (userId, sessionId) {
+          const config = yield* configNow;
           yield* requireFreshSession(userId, sessionId);
           return yield* creationOptions(
             userId,
@@ -1188,6 +1214,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const registerOptionsConditional: PasskeyShape["registerOptionsConditional"] =
         Effect.fnUntraced(function* (userId, sessionId) {
+          const config = yield* configNow;
           yield* requireFreshSession(userId, sessionId);
           // CB-009: Conditional Create cannot produce UV=1, so it is unavailable
           // whenever the RP requires user verification.
@@ -1211,7 +1238,10 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
        * HSK-002: whether a verified registration's attestation satisfies the
        * configured policy (vacuously, when none is configured).
        */
-      const attestationAcceptable = (verified: WebAuthn.VerifiedRegistration): boolean => {
+      const attestationAcceptable = (
+        verified: WebAuthn.VerifiedRegistration,
+        config: PasskeyConfigShape,
+      ): boolean => {
         const policy = config.attestationPolicy;
         if (policy === undefined) return true;
         // No statement at all: nothing to base any trust in the claimed model on.
@@ -1225,6 +1255,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const registerVerify: PasskeyShape["registerVerify"] = Effect.fnUntraced(
         function* (userId, sessionId, input) {
+          const config = yield* configNow;
           yield* requireFreshSession(userId, sessionId);
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
           if (Option.isNone(clientDataOpt)) {
@@ -1275,7 +1306,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             return yield* Effect.fail(new PasskeyApi.PasskeyUserVerificationRequired());
           }
 
-          if (!attestationAcceptable(verified)) {
+          if (!attestationAcceptable(verified, config)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyAttestationRejected());
           }
 
@@ -1346,6 +1377,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const authenticateOptions: PasskeyShape["authenticateOptions"] = Effect.fnUntraced(
         function* ({ email, ip }) {
+          const config = yield* configNow;
           yield* rateLimit(
             "authenticateOptionsByIp",
             `passkey:authenticate-options:ip:${ip ?? "unknown"}`,
@@ -1381,7 +1413,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             ...(config.authenticatorSelection.userVerification === undefined
               ? {}
               : { userVerification: config.authenticatorSelection.userVerification }),
-            ...ceremonyKnobs,
+            ...ceremonyKnobsOf(config),
           });
           return { ceremonyId, options };
         },
@@ -1401,6 +1433,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         verified: WebAuthn.VerifiedAuthentication,
       ): Effect.Effect<void, PasskeyApi.PasskeyCounterAnomaly> =>
         Effect.gen(function* () {
+          const config = yield* configNow;
           const regressed =
             verified.newCounter <= stored.counter &&
             !(verified.newCounter === 0 && stored.counter === 0);
@@ -1418,6 +1451,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const authenticateCeremony: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
         function* (input, context) {
+          const config = yield* configNow;
           // Per-source budget first: cheap to enforce, bounds signature work
           // and challenge probing from one address.
           yield* rateLimit(
@@ -1539,9 +1573,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // BCR-004/THS-002: same canonical MFA attachment point
           // `@awthaq/password`'s own `signIn` consults, right before this
           // flow's own `sessions.issue`.
+          const amr = passkeyAmr(verified);
           const point = yield* beforeSessionIssue.run({
             userId: stored.userId,
             strategy: "passkey",
+            amr,
           });
           if (point._tag === "Diverted") {
             return yield* Effect.fail(point.value);
@@ -1553,9 +1589,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
                 ...(input.ip !== undefined ? { ip: input.ip } : {}),
                 ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
               },
-              // THS-003: a hardware-bound key, plus user verification when the
-              // authenticator performed it.
-              amr: verified.userVerified ? ["hwk", "user"] : ["hwk"],
+              // THS-003/HSK-005: the kind of key (hardware-bound or synced), plus user
+              // verification when the authenticator performed it.
+              amr,
             })
             .pipe(Effect.orDie);
           yield* events.publish({
@@ -1600,6 +1636,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         credentials.listByUser(userId);
 
       const signals: PasskeyShape["signals"] = Effect.fnUntraced(function* (userId) {
+        const config = yield* configNow;
         const user = yield* users.findById(userId).pipe(Effect.orDie);
         const owned = yield* credentials.listByUser(userId);
         return {
@@ -1656,6 +1693,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const reauthenticateOptions: PasskeyShape["reauthenticateOptions"] = Effect.fnUntraced(
         function* (userId, sessionId) {
+          const config = yield* configNow;
           const owned = yield* credentials.listByUser(userId);
           const challenge = yield* challengeStore.issue(reauthenticateScope(sessionId));
           return yield* requestOptions({
@@ -1667,13 +1705,14 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             // merely possession, unlike ordinary `authenticateOptions`
             // which defers to `config.authenticatorSelection`.
             userVerification: "required",
-            ...ceremonyKnobs,
+            ...ceremonyKnobsOf(config),
           });
         },
       );
 
       const reauthenticateVerify: PasskeyShape["reauthenticateVerify"] = Effect.fnUntraced(
         function* (userId, sessionId, input) {
+          const config = yield* configNow;
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
           if (Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
@@ -1739,22 +1778,17 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
             .pipe(Effect.orDie);
 
-          yield* sessions
-            .reauthenticate(
-              Sessions.SessionId(sessionId),
-              verified.userVerified ? ["hwk", "user"] : ["hwk"],
-            )
-            .pipe(
-              Effect.catchTag("Sessions/NotFound", () =>
-                // `passkey.reauthenticate`'s own `Authentication` middleware
-                // already proved this exact session live moments ago — see
-                // `Password.ts`'s own identical `reauthenticate` comment.
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: reauthenticate's own current session vanished",
-                ),
+          yield* sessions.reauthenticate(Sessions.SessionId(sessionId), passkeyAmr(verified)).pipe(
+            Effect.catchTag("Sessions/NotFound", () =>
+              // `passkey.reauthenticate`'s own `Authentication` middleware
+              // already proved this exact session live moments ago — see
+              // `Password.ts`'s own identical `reauthenticate` comment.
+              Defects.invariantViolation(
+                "RowVanished",
+                "awthaq: reauthenticate's own current session vanished",
               ),
-            );
+            ),
+          );
         },
       );
 

@@ -3,7 +3,7 @@ ID: "SOS-001"
 Title: "SMS/phone OTP factor is absent from every implemented package; nearest-sibling plugins are empty placeholders"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "two-factor"
 Source: "packages/two-factor/src/index.ts:10"
 Auditor: "sms-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `two-factor` · reported by **SMS OTP Specialist** (`sms-otp-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [MFA/two-factor subsystem build-out](../../.scratch/resolve-ready-for-human-findings/issues/05-mfa-two-factor-subsystem.md) — ship the shared `EmailOtp` channel-OTP substrate now; defer the SMS channel itself to a later, explicitly degraded `sms-otp` plugin (NIST SP 800-63B-4 "restricted" OOB status), never installable as an account's sole factor. Flagged as a scope call for the user's sanity-check, not an engineering-inevitable conclusion. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passwordless-magic-link-email-otp`. Evidence at HEAD ec065a7: `packages/two-factor/src/index.ts:8`. Fix: Ship the EmailOtp substrate (6-digit, hashed, attempt-budgeted, resend-windowed) over Verification; record SMS as deferred. (effort L). Full dossier: `.plan/slices/07-password-mfa.md`.
+
+**Resolved (2026-09-29):** Shipped EmailOtp in @awthaq/magic-link: 6-digit Verification-minted code (BCR-005), hashed, per-code attempt budget (SOS-004), 60s resend window via Verification.reserve (MLO-002), uniform InvalidEmailOtp 401, always-202 request, shared channel step and MFA divert, amr [otp,email]. SMS deferred: ADR-EA-021 (separate restricted plugin, method sms). Tests: packages/magic-link/test/EmailOtp.test.ts. BEH-EA-271..247.

@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as LayerMap from "effect/LayerMap";
 import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -99,6 +100,32 @@ const ShortLivedSqlLayer = Sessions.layerSql.pipe(
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
+
+/** EP-007: the application's own map, tenant id -> that tenant's `SessionConfig` layer. */
+class TenantSessionConfig extends LayerMap.Service<TenantSessionConfig>()(
+  "test/TenantSessionConfig",
+  {
+    lookup: (tenantId: string) =>
+      Layer.merge(
+        Layer.succeed(
+          Sessions.SessionConfig,
+          tenantId === "strict"
+            ? {
+                absolute: Duration.minutes(1),
+                idle: Duration.seconds(30),
+                touchEvery: Duration.seconds(5),
+              }
+            : {
+                absolute: Duration.hours(1),
+                idle: Duration.minutes(30),
+                touchEvery: Duration.minutes(1),
+              },
+        ),
+        Tenant.configApplied(tenantId),
+      ),
+    idleTimeToLive: "1 minute",
+  },
+) {}
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
 
@@ -521,6 +548,55 @@ const suite = (
             DateTime.toEpochMillis(now) + 50,
           );
         }).pipe(Effect.provide(layer)),
+    );
+
+    // EP-007 (ADR-EA-018 Decision 8): the lifetimes are decided per operation, so one layer instance
+    // serves two tenants with different `SessionConfig`, and with no override the build-time
+    // (here: default) configuration applies exactly as before.
+    it.effect("EP-007: SessionConfig provided per request changes the session lifetimes", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const lifetimes = (tenantId: string | undefined) =>
+          Effect.gen(function* () {
+            const issued = sessions.issue({ userId });
+            const { session } = yield* tenantId === undefined
+              ? issued
+              : issued.pipe(Effect.provide(TenantSessionConfig.get(tenantId)));
+            return {
+              absolute:
+                DateTime.toEpochMillis(session.absoluteExpiresAt) -
+                DateTime.toEpochMillis(session.createdAt),
+              idle:
+                DateTime.toEpochMillis(session.idleExpiresAt) -
+                DateTime.toEpochMillis(session.createdAt),
+            };
+          });
+        const strict = yield* lifetimes("strict");
+        const relaxed = yield* lifetimes("relaxed");
+        const fallback = yield* lifetimes(undefined);
+        assert.deepStrictEqual(strict, { absolute: 60_000, idle: 30_000 });
+        assert.deepStrictEqual(relaxed, { absolute: 3_600_000, idle: 1_800_000 });
+        // No tenant: the default 30d absolute / 7d idle, untouched.
+        assert.deepStrictEqual(fallback, {
+          absolute: Duration.toMillis(Duration.days(30)),
+          idle: Duration.toMillis(Duration.days(7)),
+        });
+      }).pipe(Effect.provide(Layer.merge(layer, TenantSessionConfig.layer))),
+    );
+
+    it.effect("EP-007: a tenant's touchEvery decides whether verify rotates the secret", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.seconds(10));
+        // The default throttle is an hour: no rotation. The tenant asks for every 5 seconds.
+        const untouched = yield* sessions.verify(token);
+        assert.isTrue(Option.isNone(untouched.rotated));
+        const touched = yield* sessions
+          .verify(token)
+          .pipe(Effect.provide(TenantSessionConfig.get("strict")));
+        assert.isTrue(Option.isSome(touched.rotated));
+      }).pipe(Effect.provide(Layer.merge(layer, TenantSessionConfig.layer))),
     );
 
     // IDS-008: the self-act-as invariant lives in the primitive, not only in

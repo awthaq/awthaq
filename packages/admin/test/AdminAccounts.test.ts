@@ -82,11 +82,21 @@ const legalHold = Hooks.BeforeUserDelete.tap((input) =>
     : Effect.succeed(input),
 );
 
+/** What `@awthaq/two-factor`'s `credentialResetGate` does for an enrolled user asked with no code. */
+const secondFactorGate = Hooks.BeforeCredentialReset.tap(() =>
+  Effect.fail(new HookPoint.HookAbort({ code: "TWO_FACTOR_REQUIRED" })),
+);
+
 const buildLayer = (
   config: Partial<Admin.AdminConfigShape>,
-  options: { readonly mailer?: Layer.Layer<Mailer.Mailer>; readonly veto?: boolean } = {},
+  options: {
+    readonly mailer?: Layer.Layer<Mailer.Mailer>;
+    readonly veto?: boolean;
+    readonly resetVeto?: boolean;
+  } = {},
 ) => {
-  const stores = options.veto ? legalHold.pipe(Layer.provideMerge(CoreLive)) : CoreLive;
+  const withHold = options.veto ? legalHold.pipe(Layer.provideMerge(CoreLive)) : CoreLive;
+  const stores = options.resetVeto ? secondFactorGate.pipe(Layer.provideMerge(withHold)) : withHold;
   return AdminAccounts.AdminAccounts.layer.pipe(
     Layer.provide(Admin.config(config)),
     Layer.provide(AdminAuthenticationLive),
@@ -493,5 +503,37 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminSelfActionRefused");
     }).pipe(Effect.provide(buildLayer(manageAll))),
+  );
+});
+
+describe("AdminAccounts: setUserPassword consults BeforeCredentialReset (ARF-005)", () => {
+  it.effect(
+    "an admin cannot replace the password of an account a second factor protects: HookAborted, nothing written, sessions kept",
+    () =>
+      Effect.gen(function* () {
+        const { adminId, targetId, accounts, hasher, oldPassword } = yield* seed;
+        const admin = yield* AdminAccounts.AdminAccounts;
+        const sessions = yield* Sessions.Sessions;
+        const live = yield* sessions.issue({ userId: targetId });
+
+        const failure = yield* admin
+          .setUserPassword(asCaller(adminId), targetId, {
+            password: Redacted.make("a brand new strong password"),
+          })
+          .pipe(Effect.flip);
+
+        assert.strictEqual(failure._tag, "HookAborted");
+        if (failure._tag === "HookAborted") {
+          assert.strictEqual(failure.code, "TWO_FACTOR_REQUIRED");
+        }
+        const account = Option.getOrThrow(
+          yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, targetId),
+        );
+        const stored = Redacted.value(
+          Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
+        );
+        assert.isTrue(yield* hasher.verify(oldPassword, stored));
+        yield* sessions.verify(live.token);
+      }).pipe(Effect.provide(buildLayer(manageAll, { resetVeto: true }))),
   );
 });

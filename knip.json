@@ -18,28 +18,6 @@
         "src/passwordHasherWorker.ts"
       ]
     },
-    "packages/two-factor": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
-      ]
-    },
-    "packages/magic-link": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
-      ]
-    },
     "packages/cli": {
       "entry": [
         "test/fixtures/*.config.ts"

@@ -7,6 +7,7 @@
 import { Observability, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -62,6 +63,8 @@ const userPrincipalOf = (session: Sessions.SessionView): Api.UserPrincipal =>
     // APS-007/THS-003: how the session was authenticated (empty when the
     // issuing path recorded none), never a guess.
     amr: session.amr,
+    // AAPS-006/AOMS-012: OIDC `auth_time` (epoch seconds) — the freshness fact beside `amr`.
+    authenticatedAt: Math.floor(DateTime.toEpochMillis(session.authenticatedAt) / 1000),
   });
 
 export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succeed(

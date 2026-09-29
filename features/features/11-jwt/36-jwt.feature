@@ -15,8 +15,8 @@
 @jwt @tokens
 Feature: JWT
 
-  # BEH-EA-266 — spec/behaviors/32-jwt.md; see also ADR-EA-017
-  @BEH-EA-266
+  # BEH-EA-291 — spec/behaviors/36-jwt.md; see also ADR-EA-017
+  @BEH-EA-291
   Rule: A principal token is minted only for the authenticated caller, from nothing the caller supplies
 
     @REQ-EA-770
@@ -66,8 +66,8 @@ Feature: JWT
       When "alice" requests a token
       Then the response carries no "x-jwt-token" header
 
-  # BEH-EA-267 — spec/behaviors/32-jwt.md; see also ADR-EA-017
-  @BEH-EA-267
+  # BEH-EA-292 — spec/behaviors/36-jwt.md; see also ADR-EA-017
+  @BEH-EA-292
   Rule: The JWKS is public, holds public keys only, and tells verifiers how long to cache it
 
     @REQ-EA-776
@@ -93,8 +93,8 @@ Feature: JWT
       When an anonymous caller fetches the JWKS
       Then the response has the header "cache-control" set to "public, max-age=60"
 
-  # BEH-EA-268 — spec/behaviors/32-jwt.md; see also RFC 8725
-  @BEH-EA-268
+  # BEH-EA-293 — spec/behaviors/36-jwt.md; see also RFC 8725
+  @BEH-EA-293
   Rule: Verification is strict, and every way of failing it looks the same
 
     @REQ-EA-780
@@ -169,8 +169,8 @@ Feature: JWT
       When "alice" introspects the text "definitely.not.a-token"
       Then the introspection answer is exactly '{"active":false}'
 
-  # BEH-EA-269 — spec/behaviors/32-jwt.md
-  @BEH-EA-269
+  # BEH-EA-294 — spec/behaviors/36-jwt.md
+  @BEH-EA-294
   Rule: Principal tokens and general-purpose tokens are different classes that cannot pass for one another
 
     @REQ-EA-788
@@ -201,8 +201,8 @@ Feature: JWT
       Then the general-purpose verifier accepts the general-purpose token for the audience "inventory-service"
       And the general-purpose verifier refuses the general-purpose token for the default audience
 
-  # BEH-EA-270 — spec/behaviors/32-jwt.md
-  @BEH-EA-270
+  # BEH-EA-295 — spec/behaviors/36-jwt.md
+  @BEH-EA-295
   Rule: Introspection answers in the RFC 7662 shape, for callers who are themselves authenticated
 
     @REQ-EA-792
@@ -247,8 +247,8 @@ Feature: JWT
       When "alice" introspects the text "garbage"
       Then the introspection answer is exactly '{"active":false}'
 
-  # BEH-EA-271 — spec/behaviors/32-jwt.md; see also ADR-EA-017
-  @BEH-EA-271
+  # BEH-EA-296 — spec/behaviors/36-jwt.md; see also ADR-EA-017
+  @BEH-EA-296
   Rule: Signing keys rotate without invalidating live tokens, and an emergency rotation invalidates them at once
 
     @REQ-EA-797
@@ -300,8 +300,8 @@ Feature: JWT
       Given a configuration with a key grace period of 1 minutes
       Then the configuration is refused
 
-  # BEH-EA-272 — spec/behaviors/32-jwt.md; see also ADR-EA-012
-  @BEH-EA-272
+  # BEH-EA-297 — spec/behaviors/36-jwt.md; see also ADR-EA-012
+  @BEH-EA-297
   Rule: A minted token is not an origin credential unless the deployment opts in, and a downstream-only token never is
 
     @REQ-EA-802
@@ -350,8 +350,8 @@ Feature: JWT
       When someone calls the token endpoint with the general-purpose token as a bearer credential
       Then the response is 401
 
-  # BEH-EA-273 — spec/behaviors/32-jwt.md; see also BEH-EA-268
-  @BEH-EA-273
+  # BEH-EA-298 — spec/behaviors/36-jwt.md; see also BEH-EA-293
+  @BEH-EA-298
   Rule: A downstream service can verify tokens from the JWKS alone, and cannot check revocation
 
     @REQ-EA-808

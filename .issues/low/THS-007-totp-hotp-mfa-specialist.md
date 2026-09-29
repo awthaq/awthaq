@@ -3,7 +3,7 @@ ID: "THS-007"
 Title: "Pre-session challenge state (challenge cookie) has no implementation and an undecided TTL/binding design"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/06-two-factor-totp.md:29"
 Auditor: "totp-hotp-mfa-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `—` · reported by **TOTP/HOTP MFA Specialist** (`totp-hotp-mfa-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Specify the challenge as a first-class short-lived token: signed (or Encryption-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mfa-two-factor-hardening`. Evidence at HEAD ec065a7: `spec/models/06-two-factor-totp.md:29`. Fix: Write ticket 05's challenge design into ADR-EA-020: challengeId minted by Verification.issue (identifier bound to userId, 10-minute TTL, single-consume, replay event), one live challenge per account, revoked when 2FA is disabled. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Challenge design recorded in ADR-EA-020 and BEH-EA-262: challenge minted by Verification.issue (identifier bound to the user, 10-minute TTL, single consume, replay refused), one live challenge per account, revoked on disable; implemented and tested in packages/two-factor.

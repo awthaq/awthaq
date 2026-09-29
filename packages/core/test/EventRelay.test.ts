@@ -1,4 +1,4 @@
-// CWM-004/MAPS-010 (ADR-EA-030): `EventRelay`, the outbox relay that tails the durable audit log into an
+// CWM-004/MAPS-010 (ADR-EA-032): `EventRelay`, the outbox relay that tails the durable audit log into an
 // application-provided `EventTransport`. One suite over memory and over SQLite (audit log and cursor both in
 // `CoreMigrations`' tables); time is `TestClock`'s, so the settle delay and the poll interval cost nothing.
 import { CoreMigrations, Repositories } from "@awthaq/sql";

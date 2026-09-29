@@ -105,7 +105,10 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
     assert.equal(subject.id, `user:${actor.userId}`);
     assert.equal(subject.roles.size, 0);
     assert.equal(subject.permissions.size, 0);
-    assert.deepEqual(Object.keys(subject.attributes), []);
+    // BCR-004/P15: the default resolver now also carries how the session authenticated (`amr`, `aal`,
+    // `restrictedFactor`) so a policy can require a stronger factor. Nothing else - no role, permission or
+    // application attribute - is derived by default.
+    assert.deepEqual(Object.keys(subject.attributes).sort(), ["aal", "amr", "restrictedFactor"]);
   });
 
   Then(

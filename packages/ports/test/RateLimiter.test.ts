@@ -51,6 +51,35 @@ describe("RateLimiter.layer + layerStoreMemory (BEH-EA-105/106)", () => {
   );
 });
 
+describe("RateLimiter.check (BCR-006): the read half of a budget that only failures spend", () => {
+  it.effect("check never counts, and refuses once the bucket has reached the limit", () =>
+    Effect.gen(function* () {
+      const limiter = yield* RateLimiter.RateLimiter;
+      const input = { key: "2fa-fail:user-1", limit: 2, window: Duration.seconds(10) };
+      // Any number of checks against an empty bucket admit, and leave it empty.
+      for (let i = 0; i < 5; i += 1) yield* limiter.check(input);
+      yield* limiter.consume(input);
+      yield* limiter.check(input);
+      yield* limiter.consume(input);
+      // Two spent of two: the next attempt is refused before anything is evaluated...
+      const refused = yield* limiter.check(input).pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "RateLimitExceeded");
+      assert.isTrue(refused.retryAfterMillis > 0);
+      assert.isTrue(refused.retryAfterMillis <= 10_000);
+      // ...and refusing does not itself extend or advance anything: after the window it admits again.
+      yield* TestClock.adjust(Duration.seconds(10));
+      yield* limiter.check(input);
+    }).pipe(Effect.provide(MemoryLive)),
+  );
+
+  it.effect("layerPermissive's check never refuses", () =>
+    Effect.gen(function* () {
+      const limiter = yield* RateLimiter.RateLimiter;
+      yield* limiter.check({ key: "k", limit: 0, window: Duration.seconds(1) });
+    }).pipe(Effect.provide(RateLimiter.layerPermissive)),
+  );
+});
+
 describe("RateLimiter.layerStoreMemoryWith (RBS-003 bounded memory store)", () => {
   const window = Duration.seconds(10);
 

@@ -105,6 +105,34 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
     }).pipe(Effect.provide(ConnectionsLive)),
   );
 
+  it.effect(
+    "a host NAME that merely starts like an IPv6 prefix is accepted; real IPv6 private literals are not",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* OrganizationConnections.OrganizationConnectionStore;
+        const outcome = (url: string) =>
+          store
+            .create(oidcInput("org-1", { discoveryUrl: url, emailDomains: [] }))
+            .pipe(
+              Effect.match({ onFailure: (failure) => failure._tag, onSuccess: () => "created" }),
+            );
+        // Regression: `host.startsWith("fc" | "fd" | "fe80")` refused these legitimate names.
+        assert.strictEqual(
+          yield* outcome("https://fcm.acme.example/.well-known/openid-configuration"),
+          "created",
+        );
+        assert.strictEqual(
+          yield* outcome("https://fdic.acme.example/.well-known/openid-configuration"),
+          "created",
+        );
+        // The literals the prefix test existed for, plus an IPv4-mapped loopback it never caught.
+        assert.strictEqual(yield* outcome("https://[fc00::1]/x"), "InvalidConnection");
+        assert.strictEqual(yield* outcome("https://[fd12:3456::1]/x"), "InvalidConnection");
+        assert.strictEqual(yield* outcome("https://[fe80::1]/x"), "InvalidConnection");
+        assert.strictEqual(yield* outcome("https://[::ffff:127.0.0.1]/x"), "InvalidConnection");
+      }).pipe(Effect.provide(ConnectionsLive)),
+  );
+
   it.effect("rejects what an organization must not be able to point the server at", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;

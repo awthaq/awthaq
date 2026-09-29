@@ -48,3 +48,16 @@ export class TenantConfigApplied extends Context.Service<
 
 export const configApplied = (tenantId: string) =>
   Layer.succeed(TenantConfigApplied, TenantConfigApplied.of({ tenantId }));
+
+/**
+ * EP-007 (ADR-EA-018 Decision 8): the configuration in force for one operation. A value
+ * provided for `key` in the *calling* fiber (the tenant middleware does this from an
+ * application's `TenantConfig`) wins; with none, `built` — what the plugin read when its layer
+ * was built — applies, so `Layer.provide(Plugin.config(...))` keeps meaning what it always
+ * meant. A plain per-operation `yield* Reference` would silently ignore every build-time
+ * `config(...)`, because the layer's provision is not visible to the calling fiber.
+ */
+export const configInForce = <I, A>(key: Context.Key<I, A>, built: A) =>
+  Effect.contextWith((context: Context.Context<never>) =>
+    Effect.succeed(Context.getOrUndefined(context, key) ?? built),
+  );

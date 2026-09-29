@@ -2016,7 +2016,7 @@ describe("Organization", () => {
         }).pipe(Effect.provide(buildLayer())),
     );
 
-    // ESA-005/ADR-EA-029: events carry identifiers, never the invitee's address.
+    // ESA-005/ADR-EA-031: events carry identifiers, never the invitee's address.
     it.effect("an invitation is announced without the invitee's email", () =>
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;

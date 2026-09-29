@@ -41,7 +41,10 @@ suites=(
   packages/passkey/test/PasskeyUserHandle.test.ts
   packages/qadi/test/UserClaims.test.ts
   packages/scim/test/ScimRecords.test.ts
+  packages/two-factor/test/TwoFactorStore.test.ts
   packages/roles/test/RolesSql.test.ts
+  packages/saml/test/SamlRecords.test.ts
+  packages/webhooks/test/WebhookRecords.test.ts
 )
 
 if [[ -z "${AWTHAQ_POSTGRES_URL:-}" ]]; then

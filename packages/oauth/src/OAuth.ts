@@ -33,6 +33,7 @@ import {
   RateLimits,
   SessionCookie,
   Sessions,
+  Tenant,
   Users,
   Verification,
 } from "@awthaq/core";
@@ -62,7 +63,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as CallbackFailure from "./CallbackFailure.ts";
 import * as IdToken from "./IdToken.ts";
 import * as OAuthApi from "./OAuthApi.ts";
-import { OAuthConfig } from "./OAuthConfig.ts";
+import { OAuthConfig, type OAuthConfigShape } from "./OAuthConfig.ts";
 import * as OAuthProvider from "./OAuthProvider.ts";
 import * as OAuthProviders from "./OAuthProviders.ts";
 import * as ProviderHttp from "./ProviderHttp.ts";
@@ -676,7 +677,14 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
+      // EP-007 (ADR-EA-018 Decision 8): the per-request policy — trusted origins, auto-link list,
+      // timeouts, clock skew, rate-limit budgets — is decided per operation, so a tenant's
+      // `OAuth.config(...)` provided in the calling fiber applies to that request; with none, the
+      // build-time value applies exactly as before. Boot-scoped by nature: `baseUrl` (the
+      // redirect_uri registered with each provider), `nativeRedirectURLs` (validated here), the
+      // provider registry and the retry policy of the shared read client.
       const config_ = yield* OAuthConfig;
+      const configNow = Tenant.configInForce(OAuthConfig, config_);
       const crypto = yield* Crypto.Crypto;
       const httpClient = yield* HttpClient.HttpClient;
       const providers = yield* OAuthProviders.OAuthProviders;
@@ -766,6 +774,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         callback: CALLBACK_RATE_LIMIT,
         token: TOKEN_RATE_LIMIT,
       } = config_.rateLimits;
+      // Only registered above for introspection; enforcement reads the budget in force (EP-007).
       // The explicit return-type annotation below is a narrow, necessary
       // exception, not a style choice: passing `OAuth` (this class) into
       // anything typed `AuthPlugin.Any` (which itself requires a `layer`
@@ -811,8 +820,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // unfetchable discovery document dies before any request is served),
       // lazy ones on first use.
 
-      const trustedProviders =
-        config_.linking === "explicit" ? [] : config_.linking.trustedProviders;
+      const trustedProvidersOf = (config: OAuthConfigShape) =>
+        config.linking === "explicit" ? [] : config.linking.trustedProviders;
 
       /**
        * NAM-006: the provider ids `userId` actually has — never asserted,
@@ -827,11 +836,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           : Effect.succeed([]);
 
       const authorize: OAuthShape["authorize"] = Effect.fnUntraced(function* (providerId, input) {
+        const config = yield* configNow;
         // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
         yield* RateLimits.enforce({
           key: `oauth:authorize:${input.ip ?? "unknown"}`,
-          limit: AUTHORIZE_RATE_LIMIT.limit,
-          window: AUTHORIZE_RATE_LIMIT.window,
+          limit: config.rateLimits.authorize.limit,
+          window: config.rateLimits.authorize.window,
           meta: { group: "oauth", endpoint: "authorize", rule: "authorize", dimension: "ip" },
         }).pipe(
           Effect.provideService(RateLimiter.RateLimiter, limiter),
@@ -844,10 +854,10 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const provider = yield* providers.get(providerId);
         const nativeChallenge = input.native?.codeChallenge;
         const resolved = resolveCallbackURL(input.callbackURL, {
-          trustedOrigins: config_.trustedOrigins,
+          trustedOrigins: config.trustedOrigins,
           nativeRedirects,
           native: input.native !== undefined,
-          fallback: config_.defaultCallbackURL,
+          fallback: config.defaultCallbackURL,
         });
         const callbackURL = resolved.url;
         // MNA-004: the request still succeeds (REQ-EA-353) but the operator can see
@@ -912,11 +922,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       });
 
       const callbackFlow: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
+        const config = yield* configNow;
         // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
         yield* RateLimits.enforce({
           key: `oauth:callback:${input.ip ?? "unknown"}`,
-          limit: CALLBACK_RATE_LIMIT.limit,
-          window: CALLBACK_RATE_LIMIT.window,
+          limit: config.rateLimits.callback.limit,
+          window: config.rateLimits.callback.window,
           meta: { group: "oauth", endpoint: "callback", rule: "callback", dimension: "ip" },
         }).pipe(
           Effect.provideService(RateLimiter.RateLimiter, limiter),
@@ -1020,7 +1031,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           httpClient,
           provider,
           { code: input.code, codeVerifier, redirectUri },
-          config_.httpTimeouts.tokenExchange,
+          config.httpTimeouts.tokenExchange,
         );
         const exchangedAt = yield* DateTime.now;
 
@@ -1039,9 +1050,9 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     provider,
                     idToken: tokens.idToken,
                     nonce,
-                    jwksTimeout: config_.httpTimeouts.jwks,
-                    clockSkew: config_.clockSkew,
-                    maxIdTokenAge: config_.maxIdTokenAge,
+                    jwksTimeout: config.httpTimeouts.jwks,
+                    clockSkew: config.clockSkew,
+                    maxIdTokenAge: config.maxIdTokenAge,
                   })
             : undefined;
 
@@ -1060,7 +1071,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               })
               .pipe(
                 Effect.flatMap(ProviderHttp.decodeBody(ProviderResponses.UserinfoSchema)),
-                Effect.timeout(config_.httpTimeouts.userinfo),
+                Effect.timeout(config.httpTimeouts.userinfo),
                 Effect.catch((error) => CallbackFailure.providerFailure("userinfo", error)),
               )
           : undefined;
@@ -1131,7 +1142,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 // linking a trusted identity into it would hand them the
                 // victim's account the moment anything verifies that email.
                 const autoLink =
-                  trustedProviders.includes(providerId) &&
+                  trustedProvidersOf(config).includes(providerId) &&
                   profile.emailVerified === true &&
                   Users.isEmailVerified(existing.value);
                 if (!autoLink) {
@@ -1233,7 +1244,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     if (
                       profile.email !== undefined &&
                       profile.emailVerified === true &&
-                      trustedProviders.includes(providerId)
+                      trustedProvidersOf(config).includes(providerId)
                     ) {
                       yield* users.verifyEmail(user.id).pipe(Effect.orDie);
                     }
@@ -1293,6 +1304,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const point = yield* beforeSessionIssue.run({
           userId: targetUserId,
           strategy: providerId,
+          amr: ["fed"],
         });
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
@@ -1341,7 +1353,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const exchange = yield* verification
           .issue({
             identifier: exchangeIdentifier,
-            ttl: config_.nativeExchangeTtl,
+            ttl: config.nativeExchangeTtl,
             payload: exchangePayload,
             userId: targetUserId,
           })
@@ -1382,10 +1394,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         );
 
       const exchange: OAuthShape["exchange"] = Effect.fnUntraced(function* (input) {
+        const config = yield* configNow;
         yield* RateLimits.enforce({
           key: `oauth:token:${input.ip ?? "unknown"}`,
-          limit: TOKEN_RATE_LIMIT.limit,
-          window: TOKEN_RATE_LIMIT.window,
+          limit: config.rateLimits.token.limit,
+          window: config.rateLimits.token.window,
           meta: { group: "oauth.exchange", endpoint: "token", rule: "token", dimension: "ip" },
         }).pipe(
           Effect.provideService(RateLimiter.RateLimiter, limiter),

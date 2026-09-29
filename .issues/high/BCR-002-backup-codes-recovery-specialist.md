@@ -3,7 +3,7 @@ ID: "BCR-002"
 Title: "No bulk-invalidate, list, or count primitives anywhere in the Verification stack"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:586"
 Auditor: "backup-codes-recovery-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `sql` · reported by **Backup Codes & Account Recovery Specialist** (`backup-codes-recovery-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/sql/src/Repositories.ts:586-588` matches (`findByIdentifier, upsertLive, tryConsume`), and `VerificationRepositoryShape`/`VerificationShape` (core/src/Verification.ts:89+) expose only `issue`/`consume`/`reserve` — no bulk-invalidate, list, or count. `Accounts`/`Sessions` repositories already have `deleteAllByUser`/`deleteAllForUserExcept` (Repositories.ts:137/348/357) as the precedent pattern to mirror. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `two-factor-recovery-codes`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:698`. Fix: Don't add prefix/count primitives to VerificationRepository. Implement bulk-replace and count on the `two_factor_recovery_code` repository when the two-factor plugin is built (ticket 05). Verification history purging comes from CSG-003's `deleteExpiredBefore`. (effort M). Full dossier: `.plan/slices/05-sql.md`.
+
+**Resolved (2026-09-29):** Implemented on the two_factor_recovery_code repository (bulk replace in one transaction + unspent count), not on VerificationRepository, per the dossier. Tests: packages/two-factor/test/TwoFactorStore.test.ts (memory + SQLite), RecoveryCodes.test.ts.

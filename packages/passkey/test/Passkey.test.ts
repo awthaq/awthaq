@@ -20,12 +20,21 @@ import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 import { buildLayer, registerNewUser } from "./passkeyTestLayers.ts";
 import {
   ORIGIN,
+  assertionCredential,
   buildClientDataJSON,
   extractChallenge,
   mockWebAuthn,
 } from "./passkeyTestFixtures.ts";
 
 const TestLayer = buildLayer(mockWebAuthn());
+
+// HSK-005: a synced (multiDevice) passkey is a software key, a device-bound one a hardware key.
+const SyncedLayer = buildLayer(
+  mockWebAuthn({
+    authenticationVerified: { credentialDeviceType: "multiDevice", credentialBackedUp: true },
+  }),
+);
+const NoUvLayer = buildLayer(mockWebAuthn({ authenticationVerified: { userVerified: false } }));
 
 describe("Passkey", () => {
   it.effect("BEH-EA-130/134: register/verify persists a credential and links an Accounts row", () =>
@@ -110,6 +119,33 @@ describe("Passkey", () => {
 
       assert.strictEqual(issued.session.userId, user.id);
     }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // HSK-005 (BEH-EA-258): the session records *what kind* of key proved it, so a policy can tell them apart.
+  const signInAmr = (email: string) =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      yield* registerNewUser(email);
+      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
+      const issued = yield* passkey.authenticateVerify({
+        ceremonyId,
+        credential: assertionCredential({ options }),
+      });
+      return issued.session.amr;
+    });
+
+  it.effect("HSK-005: a synced (multiDevice) passkey with user verification records swk+user", () =>
+    signInAmr("hsk005-synced@example.com").pipe(
+      Effect.map((amr) => assert.deepStrictEqual(amr, ["swk", "user"])),
+      Effect.provide(SyncedLayer),
+    ),
+  );
+
+  it.effect("HSK-005: a device-bound passkey without user verification records hwk alone", () =>
+    signInAmr("hsk005-nouv@example.com").pipe(
+      Effect.map((amr) => assert.deepStrictEqual(amr, ["hwk"])),
+      Effect.provide(NoUvLayer),
+    ),
   );
 
   // CSD-003: the ceremony's request context is recorded on the issued session.

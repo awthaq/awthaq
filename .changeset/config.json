@@ -24,11 +24,13 @@
       "@awthaq/qadi",
       "@awthaq/react",
       "@awthaq/roles",
+      "@awthaq/saml",
       "@awthaq/scim",
       "@awthaq/server",
       "@awthaq/sql",
       "@awthaq/test",
-      "@awthaq/two-factor"
+      "@awthaq/two-factor",
+      "@awthaq/webhooks"
     ]
   ],
   "linked": [],

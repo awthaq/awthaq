@@ -3,7 +3,7 @@ ID: "SOS-004"
 Title: "Verification.consume enforces no attempt budget — unlimited guesses against a live token, safe only while codes are 256-bit"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Verification.ts:196"
 Auditor: "sms-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **SMS OTP Specialist** (`sms-otp-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Make attempt budgeting a first-class property of OTP-shaped verification: either
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `verification-otp-substrate`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:202`. Fix: Add an optional per-token attempt budget: each failed consume against a live row increments attempts; the row is burned at maxAttempts. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Per-token attempt budget: Verification.issue maxAttempts; a wrong presentation against a live row spends an attempt atomically (layerMemory Ref.modify; layerSql single UPDATE attempts = attempts + 1 with burn at the budget, core migration 28, recordFailedAttempt repository op) and the row is burned at maxAttempts; failure stays the uniform TokenConsumed. Tests: packages/core/test/Verification.test.ts. BEH-EA-062 As-shipped note.

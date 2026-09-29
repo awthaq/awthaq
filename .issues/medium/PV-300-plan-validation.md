@@ -12,13 +12,13 @@ Audit-Date: 2026-09-29
 ---
 # PV-300 — Organization existence oracles on `leave` and the team endpoints
 
-`MEDIUM` · `security` · `organization` · found while wiring `31-organization.feature` (P20a, MTI-011); not in the original audit
+`MEDIUM` · `security` · `organization` · found while wiring `35-organization.feature` (P20a, MTI-011); not in the original audit
 
 Status: **resolved**
 
 ## Summary
 
-MTI-009 promises that every `/organization/:organizationId/*` endpoint answers a non-member byte-identically for an existing and a non-existent id. Wiring the adversarial cross-tenant Rule (BEH-EA-259) showed four endpoints that did not keep it:
+MTI-009 promises that every `/organization/:organizationId/*` endpoint answers a non-member byte-identically for an existing and a non-existent id. Wiring the adversarial cross-tenant Rule (BEH-EA-284) showed four endpoints that did not keep it:
 
 - `POST /organization/:id/leave` answered `404 {"_tag":"MembershipNotFound"}` for an existing organization and `404 {"_tag":"OrganizationNotFound"}` for an unknown id.
 - With teams disabled (the default) every team endpoint ran the feature gate before the membership gate, so an outsider got `403 TeamsDisabled` for an existing organization and `404 OrganizationNotFound` for an unknown one.
@@ -29,7 +29,7 @@ Each one lets an authenticated caller from another tenant enumerate which organi
 
 ## Fix
 
-`Organization.leave` answers a non-member `OrganizationNotFound`; a new `requireTeamsFor(callerId, organizationId)` (membership gate, then the teams feature gate) replaces every bare `requireTeamsEnabled` in the team operations. Regression tests: `packages/organization/test/AuthHttp.test.ts` (extended probe list, and a teams-disabled case) and the `BEH-EA-259` scenarios in `features/features/10-organization/31-organization.feature`.
+`Organization.leave` answers a non-member `OrganizationNotFound`; a new `requireTeamsFor(callerId, organizationId)` (membership gate, then the teams feature gate) replaces every bare `requireTeamsEnabled` in the team operations. Regression tests: `packages/organization/test/AuthHttp.test.ts` (extended probe list, and a teams-disabled case) and the `BEH-EA-284` scenarios in `features/features/10-organization/35-organization.feature`.
 
 ## Comments
 

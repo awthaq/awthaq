@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-030 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
-> | Status | Accepted — relay implemented; first-party webhooks plugin not yet built |
+> | Status | Accepted — relay and the first-party webhooks plugin implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (CWM-004, MAPS-010, D2) |
+> | Change History | 1.0 (2026-09-29): Initial release (CWM-004, MAPS-010, D2); 1.1 (2026-09-29): the first-party `@awthaq/webhooks` plugin is built (Decision 7 rewritten; [BEH-EA-275 through 265](../behaviors/34-webhooks.md)) |
 
 ---
 
@@ -26,7 +26,14 @@
 4. **The position is a table, one row per relay name** (`auth_relay_cursor`, core migration 27; `RelayCursorStore.layerCursorSql`, with a memory store for tests). Relays with different names (one per consumer) are independent. Two processes running one name both deliver: safe, but run one per name.
 5. **A row that no longer decodes stops the relay at that row**, loudly (`auth.relay.failed`, `awthaq_relay_failures_total{relay}`), rather than skipping an event silently.
 6. **Posture.** What crosses the transport is identifiers and envelope only (ADR-EA-029), so an external consumer inherits it. Erasure pseudonymizes rows that a relay has not yet delivered; rows already delivered are the consumer's to erase on `auth.user.deleted`.
-7. **Webhooks are a consumer of this seam, not part of it.** A first-party `@awthaq/webhooks` plugin (endpoint table, Standard-Webhooks-style HMAC signing headers with `webhook-id` = `eventId`, retry, dead-letter, admin API) is an `EventTransport` over the relay. It is not built; the docs give the in-process recipe and the relay in the meantime.
+7. **Webhooks are a consumer of this seam, not part of it.** The first-party, opt-in `@awthaq/webhooks` plugin is an `EventTransport` over the relay. Its design, and why:
+   - **The transport only enqueues.** `deliver` inserts one `webhooks_delivery` row per (endpoint, event) — unique on that pair, so the relay's redelivered batch adds nothing — and returns; a separate worker sends. One relay cursor is one stream, so a transport that made the HTTP calls would let a single dead receiver stall every other endpoint and the cursor itself. Queue-then-send gives each endpoint its own retry clock and dead-letter state, and the cursor advances when the batch is durably queued.
+   - **Signed like Standard Webhooks**: `webhook-id` = `eventId` (stable across retries), `webhook-timestamp` re-stamped per attempt, HMAC-SHA256 `webhook-signature` under a per-endpoint `whsec_` secret that is generated here, shown once and stored only as an `Encryption` envelope; a rotation signs with both secrets for a grace window. `WebhookSignature.verify` is exported for receivers (replay window, constant-time compare).
+   - **At-least-once with retry, capped exponential backoff, dead-letter, a manual redrive, and auto-disable** after consecutive dead-letters; claims are leased, so two workers never send one row at once and a dead worker's row is sent again.
+   - **Endpoint URLs are an SSRF surface**: https only, no credentials, no private/loopback/link-local/reserved address or internal name (`OutboundUrl` in `@awthaq/ports`), and the name must resolve to public addresses only (`HostResolver`), at registration and again on every attempt; redirects are never followed; response bodies are never read or stored. DNS rebinding is narrowed, not closed (egress filtering remains the deployer's).
+   - **Payloads are identifiers only** ([ADR-EA-029](029-event-pii-posture.md)): declared free text is dropped, the client address only with `includeClientContext`, and credential- or contact-named fields are always dropped.
+   - **Administration is fail-closed** (`canManageWebhooks`, deny by default) on the admin tier, rate limited per administrator; the delivery log takes part in account erasure and export and is pruned after `deliveryRetention`.
+   Per-endpoint event filters (`*`, families, exact tags) are validated against the tags the library publishes. Audit rows carry no tenant id, so an endpoint is platform-wide, not per-tenant; scoping deliveries by tenant needs the tenant on the audit row first.
 
 ## Alternatives considered
 

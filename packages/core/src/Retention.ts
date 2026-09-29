@@ -1,6 +1,6 @@
 // @awthaq/core — Retention
 //
-// CSG-003/ALF-010 (wayfinder ticket 30, ADR-EA-031): the retention sweep. Expiry
+// CSG-003/ALF-010 (wayfinder ticket 30, ADR-EA-033): the retention sweep. Expiry
 // is a read-time rejection everywhere in this library — a session past its
 // absolute expiry, a verification token past its TTL, a reservation past its
 // window all stop *working* but their rows stay — so without a sweep the tables
@@ -22,7 +22,7 @@
 // operator confirms for their jurisdiction, not a universal truth.
 //
 // Not covered: `admin_impersonation` and its hash-chained ledger are retained by
-// decision (ADR-EA-031) — purging ended rows would break the chain that makes the
+// decision (ADR-EA-033) — purging ended rows would break the chain that makes the
 // ledger tamper-evident.
 
 import * as Context from "effect/Context";

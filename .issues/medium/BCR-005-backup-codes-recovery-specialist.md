@@ -3,7 +3,7 @@ ID: "BCR-005"
 Title: "Verification.issue mints its own 256-bit hex value, leaving no way to issue caller-formatted codes"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Verification.ts:152"
 Auditor: "backup-codes-recovery-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **Backup Codes & Account Recovery Specialist** (`backup-codes-recovery-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Decide the scheme up front: prefer per-code identifiers of the form 'backup-code
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `verification-otp-substrate`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:158`. Fix: Let Verification.issue mint caller-formatted values via a typed generator option (never a raw caller string), keeping hashing and single-use semantics. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Verification.issue mints the value itself: format {_tag: Numeric, digits} (4-10 digits, rejection sampling over Crypto.randomBytes), never a caller string; type requires maxAttempts for a numeric value; hashing and single use unchanged. Tests: packages/core/test/Verification.test.ts (memory + SQL). BEH-EA-057/244.

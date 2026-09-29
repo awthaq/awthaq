@@ -77,6 +77,12 @@
       "path": "packages/scim"
     },
     {
+      "path": "packages/webhooks"
+    },
+    {
+      "path": "packages/saml"
+    },
+    {
       "path": "features"
     },
     {

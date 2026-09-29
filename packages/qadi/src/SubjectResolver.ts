@@ -33,7 +33,7 @@
 // `Organization` already contest the exclusive slot (ADR-EA-012) and both delegate every
 // non-`User` principal here, so an API key never needs a third contender.
 import { Api } from "@awthaq/api";
-import { Slots } from "@awthaq/core";
+import { Assurance, Sessions, Slots } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import type { AuthSubject, PermissionKey } from "@qadi/core";
 import { anonymous, makeSubject, withAttributes } from "@qadi/core";
@@ -42,6 +42,34 @@ import { anonymous, makeSubject, withAttributes } from "@qadi/core";
 const isPermissionKey = (scope: string): scope is PermissionKey => {
   const colon = scope.indexOf(":");
   return colon > 0 && colon < scope.length - 1;
+};
+
+/**
+ * AAPS-006/SOS-005/HSK-005 (BEH-EA-258): the attributes every `User` subject carries, from the
+ * resolved principal — `actingAs` (BEH-EA-142) when impersonating, plus how the session was
+ * authenticated: `amr` (RFC 8176 method references, `[]` when the issuing path recorded none —
+ * the floor, never a guess), `authenticatedAt` (epoch seconds, absent when unknown), `aal` (the
+ * derived NIST assurance level, `Assurance.assuranceLevel`) and `restrictedFactor` (an SMS factor
+ * was used). A policy states `hasAttribute("aal", oneOf("aal2", "aal3"))` or
+ * `amr contains "hwk"` rather than re-deriving them at each check. Exported so an overriding
+ * resolver (`@awthaq/roles`) builds its subject with the identical attributes.
+ */
+export const principalAttributes = (
+  principal: Api.UserPrincipal,
+): Readonly<Record<string, unknown>> => {
+  const amr = (principal.amr ?? []).filter(Sessions.isAuthMethod);
+  const derived = Assurance.assurance(amr);
+  return {
+    ...(principal.actingAs === undefined
+      ? {}
+      : { actingAs: { type: principal.actingAs.type, id: principal.actingAs.id } }),
+    amr,
+    ...(principal.authenticatedAt === undefined
+      ? {}
+      : { authenticatedAt: principal.authenticatedAt }),
+    aal: derived.level,
+    restrictedFactor: derived.restricted,
+  };
 };
 
 export interface SubjectResolverShape {
@@ -64,14 +92,11 @@ export const resolveIdentityOnly = (principal: Api.Principal): AuthSubject => {
   switch (principal._tag) {
     case "Anonymous":
       return anonymous;
-    case "User": {
-      const subject = makeSubject({ id: `user:${principal.ref.id}` });
-      return principal.actingAs === undefined
-        ? subject
-        : withAttributes(subject, {
-            actingAs: { type: principal.actingAs.type, id: principal.actingAs.id },
-          });
-    }
+    case "User":
+      return withAttributes(
+        makeSubject({ id: `user:${principal.ref.id}` }),
+        principalAttributes(principal),
+      );
     case "ApiKey":
       return makeSubject({
         id: `apikey:${principal.ref.id}`,

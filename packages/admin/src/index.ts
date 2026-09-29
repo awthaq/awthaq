@@ -11,4 +11,5 @@ export * as AdminAccountsApi from "./AdminAccountsApi.ts";
 export * as AdminApi from "./AdminApi.ts";
 export * as AdminTenants from "./AdminTenants.ts";
 export * as AdminTenantsApi from "./AdminTenantsApi.ts";
+export * as ImpersonationOwnerNotice from "./ImpersonationOwnerNotice.ts";
 export * as ImpersonationRecords from "./ImpersonationRecords.ts";

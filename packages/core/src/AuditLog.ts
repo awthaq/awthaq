@@ -183,6 +183,13 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.organization.teamMemberRoleUpdated":
     case "auth.organization.teamMemberRemoved":
     case "auth.organization.permissionDenied":
+    case "auth.twoFactor.enabled":
+    case "auth.twoFactor.disabled":
+    case "auth.twoFactor.verified":
+    case "auth.twoFactor.challengeFailed":
+    case "auth.twoFactor.recoveryCodeUsed":
+    case "auth.twoFactor.recoveryCodesRegenerated":
+    case "auth.twoFactor.locked":
     case "auth.apiKey.created":
     case "auth.apiKey.revoked":
     case "auth.apiKey.rotated":

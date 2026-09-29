@@ -75,6 +75,12 @@
     },
     {
       "path": "packages/scim/tsconfig.src.json"
+    },
+    {
+      "path": "packages/saml/tsconfig.src.json"
+    },
+    {
+      "path": "packages/webhooks/tsconfig.src.json"
     }
   ]
 }

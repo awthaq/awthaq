@@ -134,9 +134,11 @@ export interface ActingAs {
  * so a typo cannot silently fail a policy check: `pwd` password, `hwk`
  * hardware-bound key (passkey), `swk` software key, `user` user verification,
  * `otp` one-time password, `mfa` multiple factors, `fed` federated identity
- * (OAuth), `email` proof of mailbox control.
+ * (OAuth), `email` proof of mailbox control, `sms` an SMS-delivered code — a *restricted*
+ * authenticator (NIST SP 800-63B-4), kept apart from `otp` so a policy can rank it lower
+ * (`Assurance`, SOS-005); no plugin records it yet (ADR-EA-021).
  */
-export type AuthMethod = "pwd" | "hwk" | "swk" | "user" | "otp" | "mfa" | "fed" | "email";
+export type AuthMethod = "pwd" | "hwk" | "swk" | "user" | "otp" | "mfa" | "fed" | "email" | "sms";
 
 const AUTH_METHODS: ReadonlySet<string> = new Set([
   "pwd",
@@ -147,9 +149,11 @@ const AUTH_METHODS: ReadonlySet<string> = new Set([
   "mfa",
   "fed",
   "email",
+  "sms",
 ]);
 
-const isAuthMethod = (value: unknown): value is AuthMethod =>
+/** Narrows a plain string to a known method — how a consumer of a principal's `amr` (a `string[]` on the wire) gets `AuthMethod`s. */
+export const isAuthMethod = (value: unknown): value is AuthMethod =>
   typeof value === "string" && AUTH_METHODS.has(value);
 
 /** Order-preserving union — `amr` only ever grows within a session. */
@@ -663,12 +667,16 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
     Effect.gen(function* () {
       const state = yield* Ref.make(HashMap.empty<SessionId, SessionRow>());
       const crypto = yield* Crypto.Crypto;
-      const config = yield* SessionConfig;
+      // EP-007 (ADR-EA-018 Decision 8): lifetimes are decided per operation — a tenant's
+      // `SessionConfig` provided in the calling fiber wins; with none, the build-time value applies.
+      const builtConfig = yield* SessionConfig;
+      const configNow = Tenant.configInForce(SessionConfig, builtConfig);
       const events = yield* AuthEvents.AuthEvents;
       const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
       const issue: SessionsShape["issue"] = Effect.fnUntraced(
         function* (input) {
+          const config = yield* configNow;
           yield* refuseSelfActingAs(input);
           const id = SessionId(yield* crypto.randomUUIDv7);
           const secret = toHex(yield* crypto.randomBytes(32));
@@ -821,6 +829,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
 
       const verify: SessionsShape["verify"] = Effect.fnUntraced(
         function* (token) {
+          const config = yield* configNow;
           const raw = Redacted.value(token);
           const separator = raw.indexOf(".");
           if (separator < 0) {
@@ -1175,12 +1184,15 @@ export const layerSql: Layer.Layer<
     const repo = yield* SqlRepositories.SessionsRepository;
     const sql = yield* SqlClient.SqlClient;
     const crypto = yield* Crypto.Crypto;
-    const config = yield* SessionConfig;
+    // EP-007: see `layerMemory`.
+    const builtConfig = yield* SessionConfig;
+    const configNow = Tenant.configInForce(SessionConfig, builtConfig);
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
     const issue: SessionsShape["issue"] = Effect.fnUntraced(
       function* (input) {
+        const config = yield* configNow;
         yield* refuseSelfActingAs(input);
         // Generated here, not left to `Model.UuidV7Insert`'s own
         // constructor-default: `familyId` needs this row's own `id` before
@@ -1327,6 +1339,7 @@ export const layerSql: Layer.Layer<
 
     const verify: SessionsShape["verify"] = Effect.fnUntraced(
       function* (token) {
+        const config = yield* configNow;
         const raw = Redacted.value(token);
         const separator = raw.indexOf(".");
         if (separator < 0) {

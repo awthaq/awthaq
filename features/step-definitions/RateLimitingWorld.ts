@@ -225,7 +225,7 @@ export const naiveLimiter = (limit: number) => {
       yield* Ref.set(count, seen + 1);
     });
   return {
-    limiter: RateLimiter.RateLimiter.of({ consume }),
+    limiter: RateLimiter.RateLimiter.of({ consume, check: () => Effect.void }),
     primeTo: (n: number) => Ref.set(count, n),
   };
 };
@@ -237,6 +237,7 @@ export const makeSpyLimiter = () => {
     RateLimiter.RateLimiter,
     RateLimiter.RateLimiter.of({
       consume: (input) => Ref.update(keys, (existing) => [...existing, input.key]),
+      check: () => Effect.void,
     }),
   );
   return { layer, keys: Ref.get(keys) };
@@ -247,7 +248,10 @@ export const strictLimiter = (limit: number) =>
   Layer.effect(
     RateLimiter.RateLimiter,
     Effect.map(RateLimiter.RateLimiter, (real) =>
-      RateLimiter.RateLimiter.of({ consume: (input) => real.consume({ ...input, limit }) }),
+      RateLimiter.RateLimiter.of({
+        consume: (input) => real.consume({ ...input, limit }),
+        check: (input) => real.check({ ...input, limit }),
+      }),
     ),
   ).pipe(Layer.provide(RateLimiter.layerMemory));
 
