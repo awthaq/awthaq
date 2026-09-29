@@ -12,11 +12,11 @@
     "paths": {
       "@/*": ["./src/*"],
       "@awthaq/api": ["../api/src/index.ts"],
-      "@awthaq/client": ["../client/src/index.ts"],
-      "@awthaq/core": ["../core/src/index.ts"],
       "@awthaq/jwt/verify": ["../jwt/src/verify.ts"],
       "@awthaq/server": ["../server/src/index.ts"],
-      "@awthaq/jwt": ["../jwt/src/index.ts"]
+      "@awthaq/jwt": ["../jwt/src/index.ts"],
+      "@awthaq/web": ["../web/src/index.ts"],
+      "@awthaq/web/cookies": ["../web/src/cookies.ts"]
     }
   },
   "references": [
@@ -24,16 +24,13 @@
       "path": "../api/tsconfig.src.json"
     },
     {
-      "path": "../client/tsconfig.src.json"
-    },
-    {
-      "path": "../core/tsconfig.src.json"
-    },
-    {
       "path": "../jwt/tsconfig.src.json"
     },
     {
       "path": "../server/tsconfig.src.json"
+    },
+    {
+      "path": "../web/tsconfig.src.json"
     }
   ]
 }

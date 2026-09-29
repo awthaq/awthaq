@@ -59,6 +59,7 @@ import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as AuthEvents from "./AuthEvents.ts";
 import type * as AuthPlugin from "./AuthPlugin.ts";
 import * as HookPoint from "./HookPoint.ts";
+import * as Phone from "./Phone.ts";
 
 /** BEH-EA-108: the built-in bucket-key strategies, plus an escape hatch for a plugin author who has already reasoned through the risk a fixed string key would otherwise carry (a caller-chosen value collectively locking out a NATed office, or an attacker-controlled bucket). */
 export type RateLimitKey = "principal" | "ip" | ((input: unknown) => string);
@@ -325,6 +326,32 @@ export const enforce = (input: EnforceInput) =>
         ),
       );
   });
+
+// ---- SOS-007: a recipient dimension ---------------------------------------------------------
+
+/**
+ * SOS-007: the bucket a per-destination limit counts against for an endpoint that sends to a phone
+ * number (an SMS one-time code, a voice call). The number is normalised to E.164 first
+ * (`Phone.normalizePhone`), so `+1 (555) 0100`, `1-555-0100` and `+15550100` share one budget instead
+ * of an attacker choosing spellings to multiply it; input that is not a phone number falls into one
+ * shared `invalid` bucket, never an unthrottled one. `read` names where the number lives in the
+ * endpoint's input — it stays out of the strategy, like the other keys, so a token or a code never
+ * becomes a bucket key.
+ *
+ * SMS pumping (toll fraud) is bounded by *simultaneous* caps, each its own rule: this recipient key,
+ * plus `"ip"` and, once signed in, `"principal"`. Removing the recipient rule is the red flag.
+ */
+export const phoneKey =
+  (
+    read: (input: unknown) => unknown,
+    options?: Phone.NormalizeOptions,
+  ): ((input: unknown) => string) =>
+  (input) => {
+    const raw = read(input);
+    const normalized =
+      typeof raw === "string" ? Phone.normalizePhone(raw, options) : Option.none<Phone.E164>();
+    return `phone:${Option.getOrElse(normalized, () => "invalid")}`;
+  };
 
 // ---- PV-240: key strategies ------------------------------------------------------------------
 

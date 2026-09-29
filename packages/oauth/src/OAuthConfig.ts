@@ -80,6 +80,14 @@ export interface OAuthConfigShape {
   readonly nativeRedirectURLs: ReadonlyArray<string>;
   /** MNA-003: how long a native exchange code may be redeemed for (default 60 seconds). It is single-use regardless. */
   readonly nativeExchangeTtl: Duration.Duration;
+  /**
+   * PV-016: answer a browser callback with a same-site interstitial (a `200` page that meta-refreshes to
+   * the landing URL) instead of a `302`, so the landing request carries a `SameSite=Strict` session
+   * cookie that the provider-initiated redirect chain would otherwise withhold. It applies only while
+   * the session cookie is `SameSite=Strict` (the default `Host` mode): `Lax`/`None` cookies need no
+   * bounce, and the native deep-link leg never bounces. Default `true`; set `false` to keep the plain `302`.
+   */
+  readonly bounce: boolean;
   readonly httpTimeouts: OAuthHttpTimeouts;
   readonly retry: OAuthRetryPolicy;
   readonly rateLimits: OAuthRateLimits;
@@ -124,6 +132,7 @@ const defaults = {
   defaultCallbackURL: "/",
   nativeRedirectURLs: [],
   nativeExchangeTtl: Duration.seconds(60),
+  bounce: true,
   httpTimeouts: {
     tokenExchange: Duration.seconds(10),
     jwks: Duration.seconds(5),

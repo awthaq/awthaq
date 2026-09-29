@@ -95,6 +95,9 @@
       "path": "examples/sql-server"
     },
     {
+      "path": "packages/web"
+    },
+    {
       "path": "packages/device-authorization"
     }
   ]

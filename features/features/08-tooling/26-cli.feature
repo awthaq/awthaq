@@ -569,7 +569,7 @@ Feature: CLI
   @BEH-EA-307
   Rule: Interactive login is the device authorization grant, polled with backoff
 
-    @REQ-EA-1209
+    @REQ-EA-1188
     Scenario: login prints the verification URL and code on stderr and stores the session once the person approves
       Given a running auth server offering the device authorization endpoints
       When "awthaq login" runs
@@ -577,26 +577,26 @@ Feature: CLI
       And the verification URL and user code were printed on stderr
       And the credential store was written once
 
-    @REQ-EA-1210
+    @REQ-EA-1189
     Scenario: login never prints the device code or the token
       Given a running auth server offering the device authorization endpoints
       When "awthaq login" runs
       Then neither the device code nor the token appears in the output
 
-    @REQ-EA-1211
+    @REQ-EA-1190
     Scenario: login adds 5 seconds to its interval on every slow_down
       Given a device token endpoint that answers "slow_down"
       When "awthaq login" polls
       Then each wait after a slow_down is at least 5 seconds longer than the wait before it
 
-    @REQ-EA-1212
+    @REQ-EA-1191
     Scenario: a denied login request ends with the authentication code and stores nothing
       Given the person denies the login request on the other device
       When "awthaq login" polls
       Then it exits with the authentication code
       And nothing is stored
 
-    @REQ-EA-1213
+    @REQ-EA-1192
     Scenario: a server without the device endpoints is unavailable and names the plugin
       Given a running auth server without the device authorization endpoints
       When "awthaq login" runs

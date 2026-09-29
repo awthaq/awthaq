@@ -3,7 +3,7 @@ ID: "PCS-007"
 Title: "Client-side decision invalidation is a disconnected model: reactivity keys, no server push"
 Level: info
 Category: "dx"
-Status: needs-triage
+Status: wontfix
 Package: "react"
 Source: "packages/react/src/AuthClientAtom.ts:97"
 Auditor: "permission-caching-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `dx` · `react` · reported by **Permission Caching Specialist** (`permission-caching-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -50,3 +50,5 @@ When server push arrives (SSE/WebSocket), publish AuthEvents authorization-fact 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `react-client-atoms-factory`. Evidence at HEAD ec065a7: `packages/react/src/AuthClientAtom.ts:97`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/11-frontend-next-react-client.md`.
+
+**Wontfix (2026-09-29):** Documented model, not a defect: client decisions refresh on session-keyed reactivity mutations or `useInvalidate` (BEH-EA-180/181, 'a stale decision is not a decision'). A server push channel is a new feature with no consumer today (speculative infrastructure). A user who needs out-of-band revocation to reach open tabs calls `useInvalidate`/`registry.refresh` from their own SSE/websocket handler or polls the subject atom with a refresh interval; the AuthEvents stream is available server-side for the producing half.

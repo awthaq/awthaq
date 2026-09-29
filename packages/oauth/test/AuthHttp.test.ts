@@ -186,7 +186,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
   );
 
   it.effect(
-    "BEH-EA-113-adjacent/083: callback answers 302 and sets the session cookie on success",
+    "BEH-EA-113-adjacent/083: callback answers the same-site interstitial (200) and sets the session cookie on success",
     () =>
       Effect.gen(function* () {
         const { handler } = HttpRouter.toWebHandler(AppLayer);
@@ -209,7 +209,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
             ),
           ),
         );
-        assert.strictEqual(callbackResponse.status, 302);
+        assert.strictEqual(callbackResponse.status, 200);
         const sessionCookie = callbackResponse.headers.get("set-cookie");
         assert.isString(sessionCookie);
         assert.match(sessionCookie ?? "", /^__Host-session=/);
@@ -385,7 +385,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const response = yield* runCallback(AppLayer);
-        assert.strictEqual(response.status, 302);
+        assert.strictEqual(response.status, 200);
         CookieAssertions.assertHostPrefixedCookie(
           CookieAssertions.findSetCookie(response, "__Host-session"),
           { httpOnly: true, sameSite: "strict" },
@@ -393,8 +393,8 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
       }),
   );
 
-  // PV-016: under the default `SameSite=Strict` cookie the first landing request after the provider's
-  // redirect chain may not carry the session; `HostLax` is the opt-in that fixes it (BEH-EA-055).
+  // PV-016: `HostLax` is the other fix for the Strict cookie's withheld first landing request (BEH-EA-055):
+  // a Lax cookie needs no interstitial, so the callback stays a plain 302.
   it.effect(
     "PV-016: with SessionCookie.config({ mode: HostLax }) the callback's session cookie is __Host- and SameSite=Lax",
     () =>
@@ -410,12 +410,117 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
       }),
   );
 
+  // PV-016: the landing page after sign-in. `GET /oauth/acme/authorize?link=true` is a route that answers
+  // 401 to an anonymous request and 302 to a signed-in one, so its status says whether the session
+  // cookie was on the first landing request.
+  const LANDING = "/oauth/acme/authorize?link=true";
+
+  /**
+   * A browser model for the redirect chain the provider started cross-site. A `SameSite=Strict` cookie
+   * is withheld from every request of that chain (a plain 302 lands inside it), but a request the
+   * document served by this site initiates (a meta refresh) is same-site and carries it.
+   */
+  const browserLanding = (layer: typeof AppLayer) =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(layer);
+      const authorize = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/authorize?callbackURL=${encodeURIComponent(LANDING)}`,
+          ),
+        ),
+      );
+      const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
+      const stateCookie = (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      const callback = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
+            { headers: { cookie: stateCookie } },
+          ),
+        ),
+      );
+      const session = CookieAssertions.findSetCookie(callback, "__Host-session");
+      const body = yield* Effect.promise(() => callback.clone().text());
+      const refresh = /http-equiv="refresh" content="0;url=([^"]*)"/.exec(body)?.[1];
+      const next = callback.status === 200 ? refresh : (callback.headers.get("location") ?? "");
+      const sameSiteInitiated = callback.status === 200;
+      const landing = yield* Effect.promise(() =>
+        handler(
+          new Request(new URL(next ?? "", "http://localhost"), {
+            headers: sameSiteInitiated ? { cookie: `${session.name}=${session.value}` } : {},
+          }),
+        ),
+      );
+      return { callback, body, landing };
+    });
+
+  it.effect(
+    "PV-016: the default callback answers a same-site interstitial, and the first landing request carries the session",
+    () =>
+      Effect.gen(function* () {
+        const { callback, body, landing } = yield* browserLanding(AppLayer);
+        assert.strictEqual(callback.status, 200);
+        assert.match(callback.headers.get("content-type") ?? "", /^text\/html/);
+        assert.isNull(callback.headers.get("location"));
+        assert.strictEqual(callback.headers.get("cache-control"), "no-store");
+        assert.strictEqual(callback.headers.get("referrer-policy"), "no-referrer");
+        assert.include(body, `content="0;url=${LANDING}"`);
+        CookieAssertions.assertHostPrefixedCookie(
+          CookieAssertions.findSetCookie(callback, "__Host-session"),
+          { httpOnly: true, sameSite: "strict" },
+        );
+        // Signed in on the very first request: the link flow starts (302), not 401 Unauthenticated.
+        assert.strictEqual(landing.status, 302);
+      }),
+  );
+
+  it.effect(
+    "PV-016: with bounce: false the callback is a plain 302 and the Strict cookie is withheld from the landing request",
+    () =>
+      Effect.gen(function* () {
+        const { callback, landing } = yield* browserLanding(
+          buildAppLayer({ config: { baseUrl, bounce: false } }),
+        );
+        assert.strictEqual(callback.status, 302);
+        assert.strictEqual(callback.headers.get("location"), LANDING);
+        assert.strictEqual(landing.status, 401);
+      }),
+  );
+
+  it.effect("PV-016: the landing URL is HTML-escaped into the interstitial", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const authorize = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/authorize?callbackURL=${encodeURIComponent("/a?x=1&y=2")}`,
+          ),
+        ),
+      );
+      const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
+      const callback = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
+            {
+              headers: { cookie: (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "" },
+            },
+          ),
+        ),
+      );
+      const body = yield* Effect.promise(() => callback.text());
+      assert.include(body, "/a?x=1&amp;y=2");
+      assert.notInclude(body, "x=1&y=2");
+    }),
+  );
+
   it.effect(
     "CSS-006: a successful callback expires __Host-oauth-state alongside the session cookie",
     () =>
       Effect.gen(function* () {
         const response = yield* runCallback(AppLayer);
-        assert.strictEqual(response.status, 302);
+        assert.strictEqual(response.status, 200);
         const state = CookieAssertions.findSetCookie(response, "__Host-oauth-state");
         CookieAssertions.assertExpiredCookie(state);
         // Cleared with the attributes it was set with, or a browser won't match it.
@@ -448,7 +553,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
       );
       assert.strictEqual(authorize.headers.get("referrer-policy"), "no-referrer");
       const callback = yield* runCallback(AppLayer);
-      assert.strictEqual(callback.status, 302);
+      assert.strictEqual(callback.status, 200);
       assert.strictEqual(callback.headers.get("referrer-policy"), "no-referrer");
       const failed = yield* Effect.promise(() =>
         handler(new Request("http://localhost/oauth/acme/callback?code=c1&state=bogus.state")),

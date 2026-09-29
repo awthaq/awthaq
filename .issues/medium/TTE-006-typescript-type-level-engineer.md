@@ -3,7 +3,7 @@ ID: "TTE-006"
 Title: "Double `any` in GroupsFor erases endpoint checking at the plugin contract boundary"
 Level: medium
 Category: "api"
-Status: needs-triage
+Status: wontfix
 Package: "core"
 Source: "packages/core/src/AuthPlugin.ts:34"
 Auditor: "typescript-type-level-engineer"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `core` · reported by **TypeScript Type-Level Engineer** (`typescript-type-level-engineer`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Keep the workaround but shrink its blast radius: alias the `any` once (`type Inv
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `plugin-composition-soundness`. Evidence at HEAD ec065a7: `packages/core/src/AuthPlugin.ts:31`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Wontfix (2026-09-29):** Upstream-forced: `HttpApiGroup`'s Endpoints parameter is invariant (`in out`), so no widened bound admits concrete groups; the double `any` only widens the constraint bound. Each plugin's concrete Groups is still inferred and its handlers are type-checked against it in `AuthPlugin.layer`, and the contract kit `TestAuth.runPluginContractTests` exercises the endpoints at test time. A type-safe alternative is not short: it needs upstream variance changes. A plugin author who wants compile-time protection relies on the handler typing in `AuthPlugin.layer` plus the contract tests.

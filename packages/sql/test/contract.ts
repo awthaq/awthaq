@@ -612,11 +612,16 @@ export const contractCases = (
             id: session.id,
             expectedSecretHash: "original-hash",
             secretHash: "rotated-by-first",
+            previousSecretHash: "original-hash",
+            previousSecretExpiresAt: now,
             lastActiveAt: now,
             idleExpiresAt: now,
           });
           assert.isTrue(Option.isSome(first), "the first caller should win the race");
           assert.strictEqual(Option.getOrThrow(first).secretHash, "rotated-by-first");
+          // RRS-005: the replaced hash is kept aside, with its expiry, by the same write.
+          assert.strictEqual(Option.getOrThrow(first).previousSecretHash, "original-hash");
+          assert.isNotNull(Option.getOrThrow(first).previousSecretExpiresAt);
 
           // The second caller's own compare-and-swap is guarded against the
           // now-stale hash it read before the first caller's write landed —

@@ -10,14 +10,14 @@ Feature: Device Authorization
   @BEH-EA-299
   Rule: A code request mints a hashed device code and an unambiguous user code for a registered client
 
-    @REQ-EA-1187
+    @REQ-EA-1193
     Scenario: A registered client is answered the RFC 8628 fields, with the user code shown as XXXX-XXXX
       Given a registered device client "awthaq-cli"
       When the client requests a device code
       Then the answer carries a device code, a user code, the verification URIs, an expiry of 900 seconds and an interval of 5 seconds
       And the user code is 8 symbols of the alphabet "BCDFGHJKLMNPQRSTVWXZ" shown as "XXXX-XXXX"
 
-    @REQ-EA-1188
+    @REQ-EA-1194
     Scenario: An unregistered client, and a scope the client is not registered for, are refused
       Given a registered device client "awthaq-cli"
       When a client named "nobody" requests a device code
@@ -74,14 +74,14 @@ Feature: Device Authorization
       Then the poll answers "expired_token"
       And the grant row no longer exists
 
-    @REQ-EA-1189
+    @REQ-EA-1195
     Scenario: The verification page rejects an expired code without deleting it
       Given a device code whose lifetime has elapsed
       When a signed-in user opens the verification page for it
       Then the page answers "InvalidUserCode"
       And the grant row still exists
 
-    @REQ-EA-1190
+    @REQ-EA-1196
     Scenario: A device code presented by another client, or one that never existed, is invalid_grant
       Given a device code that has been requested and not yet approved
       When another registered client polls with that device code
@@ -89,7 +89,7 @@ Feature: Device Authorization
       When a device polls with a device code that was never issued
       Then the poll answers "invalid_grant"
 
-    @REQ-EA-1191
+    @REQ-EA-1197
     Scenario: The token endpoint refuses another grant type and an empty device code
       Given a registered device client "awthaq-cli"
       When a device posts to "/device/token" with the grant type "password"
@@ -115,14 +115,14 @@ Feature: Device Authorization
       Then only "user_code" and "status" are disclosed
       And no client or scope context is shown
 
-    @REQ-EA-1192
+    @REQ-EA-1198
     Scenario: The claiming user sees which client asks for what
       Given a registered device client "set-top-box" with the scope "playback"
       And a claimed user code for the client "set-top-box" and the scope "playback"
       When the claiming user opens the verification page
       Then the page names the client "set-top-box" and the scope "playback"
 
-    @REQ-EA-1193
+    @REQ-EA-1199
     Scenario: An anonymous caller never claims a code
       Given a pending, unclaimed user code and a signed-in session
       When an anonymous caller opens the verification page
@@ -138,26 +138,26 @@ Feature: Device Authorization
       When a signed-in session tries to approve it
       Then the approval is refused as not claimed
 
-    @REQ-EA-1194
+    @REQ-EA-1200
     Scenario: A code claimed by another user is indistinguishable from an unknown one
       Given a claimed user code
       When a different signed-in user tries to approve it
       Then the approval is refused as "InvalidUserCode"
 
-    @REQ-EA-1195
+    @REQ-EA-1201
     Scenario: Two racing decisions cannot both win, and a decided code is not pending again
       Given a claimed user code
       When the claiming user approves and denies it concurrently
       Then exactly one decision succeeds
       And deciding the code again is refused as "InvalidUserCode"
 
-    @REQ-EA-1196
+    @REQ-EA-1202
     Scenario: An impersonation session cannot decide
       Given a claimed user code
       When an impersonation session of the claiming user tries to approve it
       Then the approval is refused as "DeviceApprovalRefused"
 
-    @REQ-EA-1197
+    @REQ-EA-1203
     Scenario: A required assurance level gates an approval but never a denial
       Given the plugin requires the assurance level "aal2"
       And a claimed user code held by a session that authenticated with a password only
@@ -177,7 +177,7 @@ Feature: Device Authorization
       Then the sixth attempt is rejected as rate limited
       And the limit applies both per IP and per session
 
-    @REQ-EA-1198
+    @REQ-EA-1204
     Scenario: Code requests are limited to 5 per window per source address
       Given the code endpoint's limit of 5 requests per 15 minutes per address
       When one address requests 6 device codes within that window
@@ -209,20 +209,20 @@ Feature: Device Authorization
       Then the issued session appears in the approving user's session list
       And it carries the device's client address and user agent
 
-    @REQ-EA-1199
+    @REQ-EA-1205
     Scenario: The session inherits how the approving session authenticated
       Given an approved device grant whose approving session authenticated with a password and a second factor
       When the device redeems it
       Then the issued session records the amr "pwd", "otp" and "mfa"
 
-    @REQ-EA-1200
+    @REQ-EA-1206
     Scenario: The approved poll answers a Bearer token, no-store, and sets no cookie
       Given an approved device grant
       When the device redeems it over the wire
       Then the wire answer is 200 with "token_type" "Bearer" and an "access_token"
       And the response is "no-store" and sets no cookie
 
-    @REQ-EA-1201
+    @REQ-EA-1207
     Scenario: A user with a confirmed second factor is diverted unless the approving session proved one
       Given a user with a confirmed second factor whose approving session authenticated with a password only
       And an approved device grant for that session
@@ -230,7 +230,7 @@ Feature: Device Authorization
       Then the poll answers "access_denied"
       And the grant row no longer exists
 
-    @REQ-EA-1202
+    @REQ-EA-1208
     Scenario: A suspended user gets no session
       Given an approved device grant
       And the approving user is then suspended
@@ -242,7 +242,7 @@ Feature: Device Authorization
   @BEH-EA-305
   Rule: Clients are public, registered by an operator and revocable
 
-    @REQ-EA-1203
+    @REQ-EA-1209
     Scenario: A registered client can be revoked, after which it obtains no code
       Given an operator registers the device client "living-room-tv" named "Living-room TV"
       When the client "living-room-tv" requests a device code
@@ -251,7 +251,7 @@ Feature: Device Authorization
       And the client "living-room-tv" requests a device code
       Then the request is refused as "invalid_client"
 
-    @REQ-EA-1204
+    @REQ-EA-1210
     Scenario: A configured client id cannot be registered again
       Given a registered device client "awthaq-cli"
       When an operator registers the device client "awthaq-cli" named "Impostor"
@@ -261,27 +261,27 @@ Feature: Device Authorization
   @BEH-EA-306
   Rule: Grants are audited, erased, exported and retained like any personal data
 
-    @REQ-EA-1205
+    @REQ-EA-1211
     Scenario: An approval is audited with the approver and the client, and never a code
       Given a claimed user code
       When the claiming user approves it
       Then the audit trail holds one "auth.deviceAuthorization.approved" row naming that user and the client
       And no audit row holds the device code or the user code
 
-    @REQ-EA-1206
+    @REQ-EA-1212
     Scenario: Erasing a user deletes the grants they claimed, and only theirs
       Given a claimed user code and another user's claimed user code
       When the first user is erased
       Then only the erased user's grant is gone
 
-    @REQ-EA-1207
+    @REQ-EA-1213
     Scenario: The data export lists the person's grants without any code or hash
       Given a claimed user code
       When the claiming user's data is exported
       Then the device-authorization section names the client and the status "pending"
       And it holds no code and no hash
 
-    @REQ-EA-1208
+    @REQ-EA-1214
     Scenario: Purging removes only grants past their expiry
       Given one device code that expired and one that is still live
       When the operator purges expired grants

@@ -83,6 +83,9 @@
       "path": "packages/webhooks/tsconfig.src.json"
     },
     {
+      "path": "packages/web/tsconfig.src.json"
+    },
+    {
       "path": "packages/device-authorization/tsconfig.src.json"
     }
   ]

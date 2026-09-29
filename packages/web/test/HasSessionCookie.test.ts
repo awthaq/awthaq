@@ -15,7 +15,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import { hasSessionCookie } from "../src/HasSessionCookie.ts";
-import type { HeadersLike } from "../src/index.ts";
+import type { HeadersLike } from "../src/CookieHeader.ts";
 
 const requestWithCookie = (cookieHeader: string | null): { readonly headers: HeadersLike } => ({
   headers: { get: (name) => (name.toLowerCase() === "cookie" ? cookieHeader : null) },

@@ -309,6 +309,115 @@ describe("MNA-007: platform (android:apk-key-hash:) origins", () => {
   );
 });
 
+// TC-008: WebAuthn Related Origin Requests — off by default; a configured related origin is accepted
+// by every ceremony and exempt from the rpId host-suffix check (that is the whole point of the feature).
+describe("TC-008: related origins", () => {
+  const RELATED = "https://example.co.uk";
+  const relatedConfig = { relatedOrigins: [RELATED] };
+
+  it.effect("by default a ceremony from an origin outside `origins` is refused", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const { userId, sessionId } = yield* newUserSession("tc008a@example.com");
+      const options = yield* passkey.registerOptions(userId, sessionId);
+      const failure = yield* passkey
+        .registerVerify(userId, sessionId, registrationPayload({ options, origin: RELATED }))
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "PasskeyOriginMismatch");
+    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+  );
+
+  it.effect(
+    "registration accepts a configured related origin; an unlisted one is still refused",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const { userId, sessionId } = yield* newUserSession("tc008b@example.com");
+        const options = yield* passkey.registerOptions(userId, sessionId);
+        const record = yield* passkey.registerVerify(
+          userId,
+          sessionId,
+          registrationPayload({ options, origin: RELATED }),
+        );
+        assert.strictEqual(record.id, "cred-mock-1");
+        const again = yield* passkey.registerOptions(userId, sessionId);
+        const failure = yield* passkey
+          .registerVerify(
+            userId,
+            sessionId,
+            registrationPayload({ options: again, id: "cred-2", origin: "https://example.de" }),
+          )
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "PasskeyOriginMismatch");
+      }).pipe(Effect.provide(buildLayer(mockWebAuthn(), relatedConfig))),
+  );
+
+  it.effect(
+    "sign-in and step-up accept a related origin, and the port is told to expect it",
+    () => {
+      const spy: Array<WebAuthn.VerifyAuthenticationInput> = [];
+      return Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const { userId, sessionId } = yield* registerNewUser("tc008c@example.com");
+
+        const signIn = yield* passkey.authenticateOptions({});
+        const issued = yield* passkey.authenticateVerify({
+          ceremonyId: signIn.ceremonyId,
+          credential: assertionCredential({ options: signIn.options, origin: RELATED }),
+        });
+        assert.strictEqual(issued.session.userId, userId);
+
+        const stepUp = yield* passkey.reauthenticateOptions(userId, sessionId);
+        yield* passkey.reauthenticateVerify(userId, sessionId, {
+          credential: assertionCredential({ options: stepUp, origin: RELATED }),
+        });
+        for (const call of spy) {
+          assert.include(call.expectedOrigin, RELATED);
+          assert.include(call.expectedOrigin, "https://example.com");
+        }
+        assert.strictEqual(spy.length, 2);
+      }).pipe(
+        Effect.provide(
+          buildLayer(mockWebAuthn({ spy: { verifyAuthentication: spy } }), relatedConfig),
+        ),
+      );
+    },
+  );
+
+  it.effect("a related origin is not an allowed top origin for an embedded ceremony", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      yield* registerNewUser("tc008d@example.com");
+      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
+      const refused = yield* passkey
+        .authenticateVerify({
+          ceremonyId,
+          credential: assertionCredential({
+            options,
+            origin: RELATED,
+            crossOrigin: true,
+            topOrigin: RELATED,
+          }),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "InvalidCredentials");
+    }).pipe(Effect.provide(buildLayer(mockWebAuthn(), relatedConfig))),
+  );
+
+  it.effect("the layer refuses to build with a related origin that is not an https origin", () =>
+    Effect.gen(function* () {
+      for (const bad of ["http://example.co.uk", "https://example.co.uk/path", "example.co.uk"]) {
+        const exit = yield* Effect.exit(
+          Effect.gen(function* () {
+            yield* Passkey.Passkey;
+          }).pipe(Effect.provide(buildLayer(mockWebAuthn(), { relatedOrigins: [bad] }))),
+        );
+        assert.isTrue(Exit.isFailure(exit), `${bad} should be refused`);
+      }
+    }),
+  );
+});
+
 describe("TC-003: explicit ceremony timeout, hints and extensions", () => {
   it.effect(
     "every options response carries the configured timeout, never above the challenge TTL",

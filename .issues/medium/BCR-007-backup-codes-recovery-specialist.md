@@ -3,7 +3,7 @@ ID: "BCR-007"
 Title: "better-auth design contract keeps a plaintext backup-code read path that contradicts the repo's own recommendation"
 Level: medium
 Category: "docs"
-Status: needs-triage
+Status: resolved
 Package: "—"
 Source: "better-auth/05-mfa-and-verification/01-two-factor.md:311"
 Auditor: "backup-codes-recovery-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **Backup Codes & Account Recovery Specialist** (`backup-codes-recovery-specialist`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Amend the design contract (or add a decision note in spec/decisions) stating awt
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** INVALID (confidence high); workstream `None`. Evidence at HEAD ec065a7: `better-auth/05-mfa-and-verification/01-two-factor.md:304`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/13-repo-features-tooling.md`.
+
+**Resolved (2026-09-29):** Reconciled in the docs: BEH-EA-264 now states that only an irreversible `PasswordHasher` hash of each recovery code is kept, the set is shown exactly once, and the reference design's server-only `viewBackupCodes` plaintext read-back is deliberately not implemented (verified: no such operation exists in packages/two-factor; the store only has `replaceAll`/`listUnused`/`markUsed`/`countUnused`/`deleteAllByUser`). The reference contract better-auth/05-mfa-and-verification/01-two-factor.md gained an 'awthaq deviation' note under viewBackupCodes pointing at BEH-EA-264. No code change.

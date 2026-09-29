@@ -124,6 +124,18 @@ export interface PasskeyConfigShape {
    * the default `[]` refuses every embedded ceremony.
    */
   readonly allowedTopOrigins: ReadonlyArray<string>;
+  /**
+   * TC-008: WebAuthn Related Origin Requests — extra web origins (exact `https` origins, e.g.
+   * `https://example.co.uk`) whose *host is not under `rpId`* but which may still use this relying
+   * party's passkeys. A ceremony from one is accepted like one from `origins`, minus the rpId host-suffix
+   * check (the authenticator data's `rpIdHash` still binds the credential to `rpId`), and the plugin
+   * serves the same list at `GET /.well-known/webauthn` — a document the browser fetches from
+   * `https://<rpId>/.well-known/webauthn` to decide whether to let the requesting origin use `rpId` at
+   * all, so the app must be reachable there. Off by default (`[]`: the endpoint answers 404); browsers
+   * consider only a handful of distinct registrable labels (five is the floor the specification asks
+   * clients to honour), so keep the list short.
+   */
+  readonly relatedOrigins: ReadonlyArray<string>;
   /** BEH-EA-135: defaults to `"none"`. Conveyance ≠ verification — see `attestationPolicy`. */
   readonly attestation: WebAuthn.AttestationConveyance;
   /** HSK-002: absent ⇒ no trust decision is made on attestation, and `Passkey.layer` warns when `attestation` asks for one anyway. */
@@ -192,6 +204,7 @@ const defaultPasskeyConfig: PasskeyConfigShape = {
   rpName: "awthaq",
   origins: ["http://localhost:3000"],
   allowedTopOrigins: [],
+  relatedOrigins: [],
   attestation: "none",
   authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
   conditionalCreate: true,
@@ -290,7 +303,7 @@ const checkOrigin = (
   clientData: ClientData,
   config: PasskeyConfigShape,
 ): Effect.Effect<void, PasskeyApi.PasskeyOriginMismatch | PasskeyApi.PasskeyRpIdMismatch> => {
-  if (!config.origins.includes(clientData.origin)) {
+  if (!acceptedOrigins(config).includes(clientData.origin)) {
     return Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
   }
   if (
@@ -300,10 +313,28 @@ const checkOrigin = (
     return Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
   }
   if (clientData.origin.startsWith(ANDROID_APK_KEY_HASH_ORIGIN_PREFIX)) return Effect.void;
+  // TC-008: a related origin is by definition not under `rpId`.
+  if (config.relatedOrigins.includes(clientData.origin)) return Effect.void;
   if (!originMatchesRpId(clientData.origin, config.rpId)) {
     return Effect.fail(new PasskeyApi.PasskeyRpIdMismatch());
   }
   return Effect.void;
+};
+
+/** TC-008: every origin a ceremony may report: the exact `origins` plus the Related Origin Requests list. */
+const acceptedOrigins = (config: PasskeyConfigShape): ReadonlyArray<string> => [
+  ...config.origins,
+  ...config.relatedOrigins,
+];
+
+/** TC-008: a related origin is an exact `https` origin — the shape `new URL(x).origin` round-trips. */
+const isHttpsOrigin = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.origin === value;
+  } catch {
+    return false;
+  }
 };
 
 /** CB-003: only forwarded to the port when the host allows any embedded ceremony at all. */
@@ -572,6 +603,8 @@ export interface PasskeyShape {
   ) => Effect.Effect<ReadonlyArray<PasskeyCredentials.PasskeyCredentialRecord>>;
   /** BPAS-006/TC-004: the rpId, stable user handle and accepted credential ids a browser's Signals API call needs. */
   readonly signals: (userId: Users.UserId) => Effect.Effect<PasskeySignals>;
+  /** TC-008: the origins `GET /.well-known/webauthn` serves — `PasskeyConfig.relatedOrigins` of the config in force for the request. */
+  readonly relatedOrigins: Effect.Effect<ReadonlyArray<string>>;
   readonly renameCredential: (
     userId: Users.UserId,
     id: string,
@@ -727,6 +760,23 @@ export const PasskeyHandlers = Layer.mergeAll(
         }) {
           const principal = yield* currentUserPrincipal;
           yield* passkey.removeCredential(Users.UserId(principal.ref.id), params.id);
+        }),
+      });
+    }),
+  ),
+  HttpApiBuilder.group(
+    PasskeyApi.PasskeyApi,
+    "passkey.wellKnown",
+    Effect.fnUntraced(function* (handlers) {
+      const passkey = yield* Passkey;
+      return handlers.handleAll({
+        // TC-008: public by design (a browser fetches it, credentialless, from the rpId host) and 404
+        // unless related origins are configured, so a deployment that never opted in exposes nothing.
+        relatedOrigins: Effect.fnUntraced(function* () {
+          const origins = yield* passkey.relatedOrigins;
+          if (origins.length === 0)
+            return yield* new PasskeyApi.PasskeyRelatedOriginsNotConfigured();
+          return new PasskeyApi.RelatedOriginsDto({ origins });
         }),
       });
     }),
@@ -1048,6 +1098,15 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           "awthaq: PasskeyConfig.ceremonyTimeout must not exceed the challenge TTL (five minutes, BEH-EA-132)",
         );
       }
+      // TC-008: a related origin the browser could never match (or that would widen the origin policy
+      // beyond an exact https origin) is a configuration error, not something to serve at the well-known URL.
+      const badRelated = builtConfig.relatedOrigins.find((origin) => !isHttpsOrigin(origin));
+      if (badRelated !== undefined) {
+        return yield* Defects.invalidConfiguration(
+          "relatedOrigins",
+          "awthaq: PasskeyConfig.relatedOrigins must be exact https origins (scheme and host[:port], no path or trailing slash)",
+        );
+      }
       // HSK-002: conveyance is a request, not a verification.
       if (builtConfig.attestation !== "none" && builtConfig.attestationPolicy === undefined) {
         yield* Effect.logWarning(
@@ -1291,7 +1350,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .verifyRegistration({
               response: toRegistrationResponseJSON(input.credential),
               expectedChallenge: clientData.challenge,
-              expectedOrigin: config.origins,
+              expectedOrigin: acceptedOrigins(config),
               expectedRpId: config.rpId,
               // CB-002: an ordinary (user-initiated) registration MUST show
               // user presence; only Conditional Create, which Chrome performs
@@ -1499,7 +1558,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               .verifyAuthentication({
                 response: toAuthenticationResponseJSON(input.credential),
                 expectedChallenge: clientData.challenge,
-                expectedOrigin: config.origins,
+                expectedOrigin: acceptedOrigins(config),
                 expectedRpId: config.rpId,
                 ...topOriginExpectation(config),
                 credential: decoyCredential,
@@ -1513,7 +1572,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .verifyAuthentication({
               response: toAuthenticationResponseJSON(input.credential),
               expectedChallenge: clientData.challenge,
-              expectedOrigin: config.origins,
+              expectedOrigin: acceptedOrigins(config),
               expectedRpId: config.rpId,
               ...topOriginExpectation(config),
               credential: {
@@ -1645,6 +1704,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const listCredentials: PasskeyShape["listCredentials"] = (userId) =>
         credentials.listByUser(userId);
 
+      const relatedOrigins: PasskeyShape["relatedOrigins"] = Effect.map(
+        configNow,
+        (config) => config.relatedOrigins,
+      );
+
       const signals: PasskeyShape["signals"] = Effect.fnUntraced(function* (userId) {
         const config = yield* configNow;
         const user = yield* users.findById(userId).pipe(Effect.orDie);
@@ -1755,7 +1819,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .verifyAuthentication({
               response: toAuthenticationResponseJSON(input.credential),
               expectedChallenge: clientData.challenge,
-              expectedOrigin: config.origins,
+              expectedOrigin: acceptedOrigins(config),
               expectedRpId: config.rpId,
               ...topOriginExpectation(config),
               credential: {
@@ -1810,6 +1874,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         authenticateVerify,
         listCredentials,
         signals,
+        relatedOrigins,
         renameCredential,
         removeCredential,
         reauthenticateOptions,

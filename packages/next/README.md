@@ -11,6 +11,13 @@ HTTP router into Next's own cookie jar) and `toInitialSession` /
 [`.scratch/next-package/spec.md`](../../.scratch/next-package/spec.md) for
 the full design decisions.
 
+The framework-neutral core — `getSession`, `applyRotatedSession`,
+`hasSessionCookie`, the `Set-Cookie` -> jar bridge and the CSRF-echoing
+in-process client — lives in [`@awthaq/web`](../web/README.md) (BO-004), which
+an Astro or SvelteKit adapter reuses; this package adds only what is
+Next-specific: the `React.cache` per-render dedup on `getSession`, the
+`withNextCookies`/`serverActionClient` names, the RSC seeds and the `edge` tier.
+
 This package deliberately ships no `ManagedRuntime` construction of its
 own — every function below takes an explicit runtime (or, for
 `withNextCookies`, an already-produced `Response`) as an argument. The
@@ -314,7 +321,8 @@ this package's design exists to make hard to write.
 
 `Sessions.verify` may rotate the session's secret on a throttled idle touch
 (at most once per `SessionConfig.touchEvery`, 1 hour by default) — the old
-secret stops verifying the moment that happens, no grace window.
+secret keeps verifying only for `SessionConfig.rotationGrace` (30 seconds by
+default) after that happens.
 `getSession`'s `Session` carries that fresh token on `session.rotated`
 (`undefined` when nothing rotated this call); deliver it in any context that
 holds a mutable cookie jar — a Server Action or a Route Handler:

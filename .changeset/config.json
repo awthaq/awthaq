@@ -31,6 +31,7 @@
       "@awthaq/sql",
       "@awthaq/test",
       "@awthaq/two-factor",
+      "@awthaq/web",
       "@awthaq/webhooks"
     ]
   ],

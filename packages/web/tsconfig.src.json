@@ -1,0 +1,34 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts"],
+  "compilerOptions": {
+    "composite": true,
+    // Web-platform types (`Request`/`Response`/`Headers`): the base config carries no DOM lib (AH-009).
+    "lib": ["ESNext", "DOM"],
+    "noEmit": false,
+    "outDir": "./lib",
+    "rootDir": "./src",
+    "tsBuildInfoFile": "./.tsbuildinfo",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@awthaq/api": ["../api/src/index.ts"],
+      "@awthaq/client": ["../client/src/index.ts"],
+      "@awthaq/core": ["../core/src/index.ts"],
+      "@awthaq/server": ["../server/src/index.ts"]
+    }
+  },
+  "references": [
+    {
+      "path": "../api/tsconfig.src.json"
+    },
+    {
+      "path": "../client/tsconfig.src.json"
+    },
+    {
+      "path": "../core/tsconfig.src.json"
+    },
+    {
+      "path": "../server/tsconfig.src.json"
+    }
+  ]
+}

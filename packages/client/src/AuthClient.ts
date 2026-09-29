@@ -28,7 +28,9 @@
 // against a contract without the `CsrfProtection` middleware, or one that
 // supplies its own `csrfClientLayer`/transport. Every mutating production
 // group *does* declare `CsrfProtection` (CSRF is on by default), so a
-// cookie-mode client needs `CsrfClientLive` below.
+// cookie-mode client needs `CsrfClientLive` below, and a cookie-less native client
+// `CsrfClientNative` (the server skips the double-submit for a request with no
+// `Cookie` header, BEH-EA-077, so its first sign-in needs no warm-up).
 import { Api, SessionContract } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -166,6 +168,19 @@ export const csrfClientLayer = (options?: CsrfClientOptions) => {
 export const CsrfClientLive: Layer.Layer<HttpApiMiddleware.ForClient<Api.CsrfProtection>> =
   csrfClientLayer();
 
+/**
+ * Native first sign-in (BEH-EA-077, cookie-less exemption): the client half for a program that
+ * has no cookie jar (a native app, a CLI, a server-to-server caller), so it never reads or echoes
+ * a `__Host-csrf` cookie and never retries a `CsrfRejected`. It still discharges
+ * `ForClient<CsrfProtection>` (the middleware is type-required), but the server no longer asks a
+ * request that carries no `Cookie` header at all for the double-submit pair, so the very first
+ * sign-in or sign-up needs no warm-up round trip. Pair it with `bearerTransformClient`.
+ */
+export const CsrfClientNative = csrfClientLayer({
+  readCookie: () => undefined,
+  bootstrapRetry: false,
+});
+
 // ---------------------------------------------------------------------------
 // MNA-005/PIL-005: the bearer-client contract
 // ---------------------------------------------------------------------------
@@ -203,8 +218,8 @@ export const BearerTokenStoreMemory = Layer.effect(
  * MNA-005/MNA-006: `make(api, { baseUrl, transformClient: bearerTransformClient(store) })`
  * — attaches `Authorization: Bearer <token>` from the store on every request
  * and captures a rotated token (`Api.ROTATED_TOKEN_HEADER`, the server's
- * throttled-touch rotation, BEH-EA-052 — there is no grace window, so a missed
- * capture logs the client out) from every response, whatever its status. A
+ * throttled-touch rotation, BEH-EA-052 — the replaced secret survives only
+ * `SessionConfig.rotationGrace`, so a missed capture logs the client out once that passes) from every response, whatever its status. A
  * response without the header leaves the stored token unchanged. Contract for
  * callers: an idle-expired or revoked token surfaces as the typed
  * `Unauthenticated`; re-authenticate and `set` a fresh token.
