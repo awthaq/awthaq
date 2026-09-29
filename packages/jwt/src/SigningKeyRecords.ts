@@ -9,12 +9,16 @@
 //
 // `privateKeyJwk` is `Option.Option<Redacted.Redacted<...>>` — `None` under
 // a remote-signing configuration (ticket 15's `KeyRing.registerRemoteKey`),
-// `Some` under local signing (ticket 07's `mint`). JWK objects are stored as
-// JSON text, the same manual `JSON.stringify`/`JSON.parse` convention
-// `@awthaq/organization`'s own `OrgRoleRecords.ts`/`MembershipRecords.ts`
-// already use for JSON-shaped columns — no `Schema.parseJson` machinery
-// needed for a shape this codebase already has a working, simpler pattern
-// for.
+// `Some` under local signing (ticket 07's `mint`). The public JWK is stored
+// as JSON text and decoded with `Schema.fromJsonString`, never a raw
+// `JSON.parse`. KRS-001/SMS-001: `layerSql` stores the *private* JWK as an
+// `@awthaq/ports` `Encryption` envelope, its AAD bound to the row's own `kid`
+// (so ciphertext copied onto another row fails authentication), never as JWK
+// JSON — a database dump or read replica no longer yields signing keys.
+// `layerMemory` keeps the JWK in process memory unencrypted; it exists for
+// tests and single-process use. Production deployments that must keep private
+// material out of the database entirely register a remote (KMS/HSM) key via
+// `KeyRing.registerRemoteKey` with a `JwtCodec.RemoteSigner`.
 //
 // `findCurrent`/`listVerifiable` were all ticket 07 needed. `markRotated`
 // (ticket 11) sets `rotatedAt`/`retiresAt` on a row — after this, that row
@@ -23,6 +27,7 @@
 // satisfying `listVerifiable` until `retiresAt` elapses, via the same
 // `isVerifiable` filter already in place.
 
+import { Encryption } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -146,22 +151,49 @@ const SigningKeyRow = Schema.Struct({
   retiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
 
-const toRecord = (row: typeof SigningKeyRow.Type): SigningKeyRecord => ({
-  kid: row.kid,
-  alg: row.alg,
-  publicKeyJwk: JSON.parse(row.publicKeyJwk),
-  privateKeyJwk: Option.fromNullishOr(row.privateKeyJwk).pipe(
-    Option.map((json) => Redacted.make(JSON.parse(json))),
-  ),
-  createdAt: row.createdAt,
-  rotatedAt: Option.fromNullishOr(row.rotatedAt),
-  retiresAt: Option.fromNullishOr(row.retiresAt),
-});
+const JwkJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
+
+/** KRS-001: the AAD that ties a `privateKeyJwk` envelope to the one row (and column) it belongs to. */
+const privateKeyAad = (kid: string): string => `jwt_signing_key:${kid}:privateKeyJwk`;
 
 export const layerSql = Layer.effect(
   SigningKeyRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const encryption = yield* Encryption.Encryption;
+
+    // An undecryptable or malformed signing key is a deployment fault (wrong
+    // or retired encryption key, tampered or swapped row), not something a
+    // caller can recover from, so it dies with a clear message.
+    const unreadable = (kid: string) => () =>
+      Effect.die(new Error(`awthaq/jwt: signing key "${kid}" could not be decoded or decrypted`));
+
+    const decodeRow = Effect.fnUntraced(function* (row: typeof SigningKeyRow.Type) {
+      const publicKeyJwk = yield* Schema.decodeUnknownEffect(JwkJson)(row.publicKeyJwk).pipe(
+        Effect.catch(unreadable(row.kid)),
+      );
+      const privateKeyJwk = yield* Option.match(Option.fromNullishOr(row.privateKeyJwk), {
+        onNone: () => Effect.succeed(Option.none<Redacted.Redacted<Jwk>>()),
+        onSome: (envelope) =>
+          encryption.decrypt(envelope, privateKeyAad(row.kid)).pipe(
+            Effect.flatMap(({ plaintext }) =>
+              Schema.decodeUnknownEffect(JwkJson)(Redacted.value(plaintext)),
+            ),
+            Effect.map((jwk) => Option.some(Redacted.make(jwk))),
+            Effect.catch(unreadable(row.kid)),
+          ),
+      });
+      const record: SigningKeyRecord = {
+        kid: row.kid,
+        alg: row.alg,
+        publicKeyJwk,
+        privateKeyJwk,
+        createdAt: row.createdAt,
+        rotatedAt: Option.fromNullishOr(row.rotatedAt),
+        retiresAt: Option.fromNullishOr(row.retiresAt),
+      };
+      return record;
+    });
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -215,26 +247,39 @@ export const layerSql = Layer.effect(
 
     const create: SigningKeyRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
+      const privateKeyJwk = yield* Option.match(input.privateKeyJwk, {
+        onNone: () => Effect.succeed(null),
+        onSome: (redacted) =>
+          encryption.encrypt(
+            Redacted.make(JSON.stringify(Redacted.value(redacted))),
+            privateKeyAad(input.kid),
+          ),
+      });
       const row = yield* insert({
         kid: input.kid,
         alg: input.alg,
         publicKeyJwk: JSON.stringify(input.publicKeyJwk),
-        privateKeyJwk: Option.match(input.privateKeyJwk, {
-          onNone: () => null,
-          onSome: (redacted) => JSON.stringify(Redacted.value(redacted)),
-        }),
+        privateKeyJwk,
         createdAt: now,
       }).pipe(Effect.orDie);
-      return toRecord(row);
+      return yield* decodeRow(row);
     });
 
     const findCurrent: SigningKeyRecordsShape["findCurrent"] = () =>
-      findCurrentQuery(undefined).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+      findCurrentQuery(undefined).pipe(
+        Effect.orDie,
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => Effect.map(decodeRow(row), Option.some),
+          }),
+        ),
+      );
 
     const listVerifiable: SigningKeyRecordsShape["listVerifiable"] = (now) =>
       listVerifiableQuery(now).pipe(
-        Effect.map((rows) => rows.map(toRecord)),
         Effect.orDie,
+        Effect.flatMap((rows) => Effect.forEach(rows, decodeRow)),
       );
 
     const markRotated: SigningKeyRecordsShape["markRotated"] = (kid, rotatedAt, retiresAt) =>

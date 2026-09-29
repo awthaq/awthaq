@@ -13,14 +13,18 @@
 // needs) also creates `jwt_token_revocation`, unused here but harmless —
 // the same shape `RevocationStore.test.ts` already accepts in reverse.
 import { Migrations } from "@awthaq/core";
+import { Encryption, KeyProvider } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Exit from "effect/Exit";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as Jwt from "../src/Jwt.ts";
 import * as KeyRing from "../src/KeyRing.ts";
@@ -34,7 +38,29 @@ const Migrated = Layer.effectDiscard(Migrations.run(Jwt.Jwt.migrations)).pipe(
   Layer.provide(SqlLive),
 );
 
+// KRS-001: `layerSql` encrypts `privateKeyJwk` through the `Encryption` port.
+const EncryptionLive = Encryption.layer.pipe(
+  Layer.provide(
+    KeyProvider.layerEnv.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              AWTHAQ_ENCRYPTION_KEYS: JSON.stringify([
+                { kid: "k1", key: Buffer.alloc(32, 7).toString("base64") },
+              ]),
+              AWTHAQ_ENCRYPTION_KEY_ID: "k1",
+            },
+          }),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
 const SqlRecords = SigningKeyRecords.layerSql.pipe(
+  Layer.provide(EncryptionLive),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
@@ -86,6 +112,46 @@ const suite = (
 
 suite("layerMemory", SigningKeyRecords.layerMemory);
 suite("layerSql", SqlRecords);
+
+// KRS-001 (+SMS-001-secrets-management-specialist): the private JWK is an
+// `Encryption` envelope bound to its own row, never JWK JSON.
+describe("layerSql private key at rest (KRS-001)", () => {
+  const TestLayer = KeyRing.KeyRing.layer.pipe(
+    Layer.provideMerge(SqlRecords),
+    Layer.provideMerge(TestConfig),
+    Layer.provideMerge(NodeCrypto.layer),
+  );
+
+  it.effect("never stores the private JWK in plaintext", () =>
+    Effect.gen(function* () {
+      yield* KeyRing.current;
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{ readonly privateKeyJwk: string | null }>`
+        SELECT privateKeyJwk FROM jwt_signing_key`;
+      assert.strictEqual(rows.length, 1);
+      const stored = rows[0]?.privateKeyJwk;
+      assert.isString(stored);
+      assert.notInclude(stored, '"d"');
+      const envelope = JSON.parse(Buffer.from(stored ?? "", "base64url").toString("utf8"));
+      assert.deepEqual(Object.keys(envelope).sort(), ["ciphertext", "iv", "kid", "v"]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("a privateKeyJwk ciphertext copied onto another kid's row fails to decrypt", () =>
+    Effect.gen(function* () {
+      const original = yield* KeyRing.current;
+      yield* KeyRing.rotateNow;
+      const sql = yield* SqlClient.SqlClient;
+      const records = yield* SigningKeyRecords.SigningKeyRecords;
+      const [donor] = yield* sql<{ readonly privateKeyJwk: string }>`
+        SELECT privateKeyJwk FROM jwt_signing_key WHERE kid = ${original.kid}`;
+      yield* sql`UPDATE jwt_signing_key SET privateKeyJwk = ${donor?.privateKeyJwk ?? ""}
+        WHERE kid <> ${original.kid}`;
+      const exit = yield* Effect.exit(records.findCurrent());
+      assert.isTrue(Exit.isFailure(exit));
+    }).pipe(Effect.provide(TestLayer)),
+  );
+});
 
 describe("algorithm selection", () => {
   it.effect("mints an ES256 key when configured", () =>

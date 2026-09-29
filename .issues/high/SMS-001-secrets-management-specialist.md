@@ -52,3 +52,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — SigningKeyRecords.ts:224 `JSON.stringify(Redacted.value(redacted))` matches verbatim and is written straight into `jwt_signing_key.privateKeyJwk` with no encryption; packages/sql/src/Repositories.ts:172 already wires an `Encryption` port for provider tokens, giving a directly reusable pattern. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `jwt-signing-key-at-rest-encryption`. Duplicate of `KRS-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/jwt/src/SigningKeyRecords.ts:224`. Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `KRS-001-key-rotation-specialist` — closed by its fix (see that issue's Resolved comment).
