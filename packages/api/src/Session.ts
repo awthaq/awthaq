@@ -4,10 +4,8 @@
 //
 // Core's own `session` `HttpApiGroup` — reserved, root-level ids
 // (`current`/`list`/`signOut`/`revoke`/`revokeOthers`), needing no plugin
-// to exist at all. Not yet folded into `Auth.make`'s composed `api`
-// (`Auth.ts`'s own header comment tracks that as separate, later work);
-// this is the standalone contract, wired to real handlers in
-// `@awthaq/server/src/Session.ts`.
+// to exist at all. Folded into `Auth.make`'s composed `api` (MW-002);
+// wired to real handlers in `@awthaq/server/src/Session.ts`.
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";

@@ -67,6 +67,7 @@ import {
   RateLimits,
   Sessions,
   Users,
+  Verification,
 } from "@awthaq/core";
 import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { AuthHttp } from "@awthaq/server";
@@ -76,6 +77,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
+import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 
 /**
  * BEH-EA-193: memory repositories, `Mailer.layerMemory`, and
@@ -95,6 +97,8 @@ const MemoryPorts = Layer.mergeAll(
   Users.layerMemory,
   Accounts.layerMemory,
   Sessions.layerMemory,
+  // MW-002: `AuthHttp.coreHandlers` (the always-served `account` group) needs it.
+  Verification.layerMemory,
   Mailer.layerMemory,
   RateLimiter.layerPermissive,
   RateLimits.layer,
@@ -171,8 +175,14 @@ const MemoryPorts = Layer.mergeAll(
  * `never` is what a contravariant slot accepts from any concrete success
  * type, the same reasoning `Auth.ts`'s own comments give for that field).
  */
-export function layer<P extends ReadonlyArray<AuthPlugin.Any>, MR, ME, MRIn>(
-  built: Auth.Built<P>,
+export function layer<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint,
+  MR,
+  ME,
+  MRIn,
+>(
+  built: Auth.Built<P, Extra>,
   middleware: Layer.Layer<MR, ME, MRIn>,
 ): Layer.Layer<
   | Layer.Success<typeof MemoryPorts>
@@ -180,13 +190,21 @@ export function layer<P extends ReadonlyArray<AuthPlugin.Any>, MR, ME, MRIn>(
   | Layer.Success<typeof HttpRouter.layer>
   | MR,
   ME,
-  Exclude<Layer.Services<Auth.Built<P>["layer"]> | MRIn, Layer.Success<typeof MemoryPorts> | MR>
+  Exclude<
+    | Layer.Services<Auth.Built<P, Extra>["layer"]>
+    | Layer.Services<typeof AuthHttp.coreHandlers>
+    | MRIn,
+    Layer.Success<typeof MemoryPorts> | MR
+  >
 >;
 export function layer(
-  built: Auth.Built<ReadonlyArray<AuthPlugin.Any>>,
+  built: Auth.Built<ReadonlyArray<AuthPlugin.Any>, HttpApiGroup.Constraint>,
   middleware: Layer.Layer<unknown, unknown, unknown>,
 ): Layer.Layer<never, unknown, unknown> {
+  // MW-002: `built.api` always carries core's session/account groups, so their
+  // handlers are part of every test pipeline (the same layer `AuthHttp.coreHandlers` gives a host).
   return AuthHttp.routes(built.api, {}).pipe(
+    Layer.provide(AuthHttp.coreHandlers),
     Layer.provide(built.layer),
     Layer.provide(middleware),
     Layer.provideMerge(MemoryPorts),

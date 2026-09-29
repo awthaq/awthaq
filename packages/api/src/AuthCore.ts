@@ -2,12 +2,12 @@
 //
 // The one top-level `HttpApi` id ("auth") core's own groups mount under
 // (BEH-EA-031: "its groups sit at the root of `/auth`"). `session`
-// (BEH-EA-031) and `account` (shipping-gap map, tickets 09/10) today;
-// `Auth.make`'s eventual plugin-contract merge (BEH-EA-032) will fold
-// plugin groups into an api built the same way, under the same "auth"
-// id — that composition is separate, later work (see `Auth.ts`'s own
-// header comment in `@awthaq/core`), not something this value needs
-// to anticipate.
+// (BEH-EA-031) and `account` (shipping-gap map, tickets 09/10).
+// MW-002: `Auth.make` seeds its composed `api` with these groups, so this is
+// the typed input `HttpApiBuilder.group` builds core's handlers against
+// (`AuthHttp.coreHandlers`), not a second document a host serves beside the
+// composed one. Its "auth" id is the composed api's own, which is what keys a
+// group's handler service.
 
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import { AccountGroup } from "./Account.ts";

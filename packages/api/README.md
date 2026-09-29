@@ -8,6 +8,8 @@ Contract stratum (1): the isomorphic HTTP contract — no server code, importabl
 - `SessionContract` (`Session.ts`, BEH-EA-031): the core `session` group (`/session`, `/session/list`, `/session/sign-out`, `/session/revoke*`).
 - `AccountContract`, `AuthCore` (the shared `"auth"` HttpApi id the core groups mount under) and `SubjectContract` (`SubjectDto`, the wire shape of qadi's `AuthSubject`).
 
-**Not yet**: `SessionView` as one combined struct (BEH-EA-026) and folding the core groups into `Auth.make`'s composed `api` (BEH-EA-032) — the core groups are served standalone via `AuthCore.AuthCoreApi` today.
+**Composition** (MW-002): `Auth.make(...).api` always carries `AuthCore.AuthCoreApi`'s `session`/`account` groups beside the plugins' (BEH-EA-032), so `AuthCoreApi` is the typed input `@awthaq/server`'s handlers are built against, not a second served document.
+
+**Not yet**: `SessionView` as one combined struct (BEH-EA-026).
 
 See [`spec/behaviors/04-contract-stratum.md`](../../spec/behaviors/04-contract-stratum.md) and [`spec/overview.md`](../../spec/overview.md).

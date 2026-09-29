@@ -16,6 +16,7 @@
 // runtime cycle detection and migration ordering (BEH-EA-016) — is real and
 // exercised by `test/Auth.test.ts`.
 
+import { AuthCore } from "@awthaq/api";
 import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -213,6 +214,18 @@ type GroupsOf<Plugin> = Plugin extends { readonly contract: HttpApi.HttpApi<stri
   : never;
 
 /**
+ * MW-002 (wayfinder ticket 26): core's own `session`/`account` groups, read off
+ * `AuthCore.AuthCoreApi` the way `GroupsOf` reads a plugin's.
+ */
+type CoreGroups = GroupsOf<{ readonly contract: typeof AuthCore.AuthCoreApi }>;
+
+/** MW-002: every group of the one served `api`: core's, the host's `extraGroups`, then each plugin's. */
+type AllGroups<P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint> =
+  | CoreGroups
+  | Extra
+  | GroupsOf<P[number]>;
+
+/**
  * `Layer.provideMerge(self, that)`'s own type, restated so `FoldLayer` can
  * apply it under `infer`. Bounded by `Layer.Layer<never, unknown, unknown>`,
  * matching `AuthPlugin.Any["layer"]`'s own declared type exactly (not a
@@ -273,22 +286,19 @@ type FoldLayerFrom<
  * required at each plugin's own definition site, BEH-EA-013), and handlers
  * cannot exist for a group no plugin's `contract` declares.
  */
-export interface Built<P extends ReadonlyArray<AuthPlugin.Any>> {
-  readonly api: HttpApi.HttpApi<"auth", GroupsOf<P[number]>>;
+export interface Built<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint = never,
+> {
+  readonly api: HttpApi.HttpApi<"auth", AllGroups<P, Extra>>;
   /**
    * AR-003: `api` minus the admin-tier groups (`AuthPlugin.isAdminTier`) — what a host
    * serves on its public listener when it firewalls the admin surface separately.
    * Handlers still come from the one composed `layer`; serving fewer groups needs no more.
    */
-  readonly publicApi: HttpApi.HttpApi<
-    "auth",
-    Exclude<GroupsOf<P[number]>, AuthPlugin.AdminTierGroup>
-  >;
+  readonly publicApi: HttpApi.HttpApi<"auth", Exclude<AllGroups<P, Extra>, AuthPlugin.AdminTierGroup>>;
   /** AR-003: only the admin-tier groups, for a separate listener/port (empty when no plugin has one). */
-  readonly adminApi: HttpApi.HttpApi<
-    "auth",
-    Extract<GroupsOf<P[number]>, AuthPlugin.AdminTierGroup>
-  >;
+  readonly adminApi: HttpApi.HttpApi<"auth", Extract<AllGroups<P, Extra>, AuthPlugin.AdminTierGroup>>;
   readonly layer: FoldLayer<P>;
   readonly migrations: Migrations;
   readonly manifest: Manifest;
@@ -413,8 +423,37 @@ const hasRoute = (endpoint: object): endpoint is { readonly method: string; read
   "path" in endpoint &&
   typeof endpoint.path === "string";
 
+/** MW-002: the pseudo-owner id core's own groups are attributed to in a conflict message. */
+const CORE_OWNER = "core";
+
+/** MW-002: the host's own non-plugin groups (qadi's subject group), attributed to this id. */
+const HOST_OWNER = "host";
+
+interface Contribution {
+  readonly ownerId: string;
+  readonly group: HttpApiGroup.Constraint;
+}
+
 /**
- * Every group of every plugin's own `contract`, added in one call —
+ * MW-002 (wayfinder ticket 26): every group `Auth.make` serves, in one list —
+ * core's own `session`/`account` groups first, then the host's `extraGroups`,
+ * then each plugin's from its own `contract`. One served document, so a plugin
+ * cannot shadow a core route: the duplicate-id and duplicate-route refusals
+ * below cover core exactly as they cover any two plugins.
+ */
+const contributionsOf = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+  extraGroups: ReadonlyArray<HttpApiGroup.Constraint>,
+): ReadonlyArray<Contribution> => [
+  ...Object.values(AuthCore.AuthCoreApi.groups).map((group) => ({ ownerId: CORE_OWNER, group })),
+  ...extraGroups.map((group) => ({ ownerId: HOST_OWNER, group })),
+  ...order.flatMap((plugin) =>
+    Object.values(plugin.contract.groups).map((group) => ({ ownerId: plugin.id, group })),
+  ),
+];
+
+/**
+ * Every contributed group, added in one call —
  * `HttpApiGroup.Constraint` values, read straight off each `HttpApi`, prove
  * `.add`'s non-empty-tuple parameter through the `firstGroup === undefined`
  * check below rather than an assertion. `HttpApi`'s `Groups` parameter is
@@ -426,30 +465,33 @@ const hasRoute = (endpoint: object): endpoint is { readonly method: string; read
  */
 const composeApi = (
   order: ReadonlyArray<AuthPlugin.Any>,
+  extraGroups: ReadonlyArray<HttpApiGroup.Constraint>,
 ): HttpApi.HttpApi<"auth", HttpApiGroup.Constraint> => {
-  const contributions = order.flatMap((plugin) =>
-    Object.values(plugin.contract.groups).map((group) => ({ plugin, group })),
-  );
+  // Core's groups are always present now, so the empty-tuple refusal is explicit.
+  if (order.length === 0) {
+    throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
+  }
+  const contributions = contributionsOf(order, extraGroups);
   // BEH-EA-032: refuse a duplicate group id ourselves — `HttpApi.add`'s own
   // last-wins semantics would otherwise silently drop the first
   // contributor's endpoints.
-  const ownerOf = new Map<string, AuthPlugin.Any>();
-  for (const { plugin, group } of contributions) {
+  const ownerOf = new Map<string, string>();
+  for (const { ownerId, group } of contributions) {
     const owner = ownerOf.get(group.identifier);
     if (owner !== undefined) {
       throw new GroupIdConflict({
         groupId: group.identifier,
-        firstPluginId: owner.id,
-        secondPluginId: plugin.id,
-        message: `awthaq: E_GROUP_CONFLICT: group "${group.identifier}" contributed by plugin "${owner.id}" and plugin "${plugin.id}"`,
+        firstPluginId: owner,
+        secondPluginId: ownerId,
+        message: `awthaq: E_GROUP_CONFLICT: group "${group.identifier}" contributed by plugin "${owner}" and plugin "${ownerId}"`,
       });
     }
-    ownerOf.set(group.identifier, plugin);
+    ownerOf.set(group.identifier, ownerId);
   }
   // AVS-004: a group id is not the only thing two plugins can collide on —
   // refuse a duplicate (method, path) across every contributed endpoint.
-  const routeOwner = new Map<string, AuthPlugin.Any>();
-  for (const { plugin, group } of contributions) {
+  const routeOwner = new Map<string, string>();
+  for (const { ownerId, group } of contributions) {
     for (const endpoint of Object.values(group.endpoints)) {
       // `HttpApiGroup.Constraint` widens each endpoint past its method/path.
       if (!hasRoute(endpoint)) continue;
@@ -459,16 +501,15 @@ const composeApi = (
         throw new RouteConflict({
           method: endpoint.method,
           path: endpoint.path,
-          firstPluginId: owner.id,
-          secondPluginId: plugin.id,
-          message: `awthaq: E_ROUTE_CONFLICT: ${route} contributed by plugin "${owner.id}" and plugin "${plugin.id}"`,
+          firstPluginId: owner,
+          secondPluginId: ownerId,
+          message: `awthaq: E_ROUTE_CONFLICT: ${route} contributed by plugin "${owner}" and plugin "${ownerId}"`,
         });
       }
-      routeOwner.set(route, plugin);
+      routeOwner.set(route, ownerId);
     }
   }
-  const groups = contributions.map((contribution) => contribution.group);
-  const [firstGroup, ...restGroups] = groups;
+  const [firstGroup, ...restGroups] = contributions.map((contribution) => contribution.group);
   if (firstGroup === undefined) {
     throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
   }
@@ -476,17 +517,19 @@ const composeApi = (
 };
 
 /**
- * AR-003: the groups of `order`'s contracts on one side of the admin tier, as its
+ * AR-003: the groups of the composed api on one side of the admin tier, as its
  * own `HttpApi`. Unlike `composeApi`, an empty side is legitimate (a composition
  * with no admin group has nothing to firewall), hence the union with the
  * no-groups `HttpApi`; the precise per-tier type is `Built<P>`'s, as for `api`.
+ * Core's and the host's own groups are public-tier (their ids carry no `admin`).
  */
 const composeTier = (
   order: ReadonlyArray<AuthPlugin.Any>,
+  extraGroups: ReadonlyArray<HttpApiGroup.Constraint>,
   admin: boolean,
 ): HttpApi.HttpApi<"auth", never> | HttpApi.HttpApi<"auth", HttpApiGroup.Constraint> => {
-  const groups = order
-    .flatMap((plugin) => Object.values(plugin.contract.groups))
+  const groups = contributionsOf(order, extraGroups)
+    .map((contribution) => contribution.group)
     .filter((group) => AuthPlugin.isAdminTier(group.identifier) === admin);
   const [firstGroup, ...restGroups] = groups;
   return firstGroup === undefined
@@ -542,6 +585,16 @@ const composeLayer = (
 export type NonEmptyPlugins = readonly [AuthPlugin.Any, ...ReadonlyArray<AuthPlugin.Any>];
 
 /**
+ * MW-002: groups the host serves in the same document that no plugin owns —
+ * `@awthaq/qadi`'s `SubjectApi.SubjectGroup` is the shipped case. Typed, so
+ * `Built<P, Extra>["api"]` names them (a client built over `api` sees them).
+ * Their handlers are the host's to provide, like a plugin's are its own.
+ */
+export interface MakeOptions<Extra extends HttpApiGroup.Constraint> {
+  readonly extraGroups?: ReadonlyArray<Extra>;
+}
+
+/**
  * BEH-EA-009: computes `api`, `layer`, `migrations`, and `manifest` from one
  * plugin tuple. `plugins` must already satisfy `Validate<P>` — a tuple with a
  * duplicate id, a missing dependency, or no plugins at all fails to
@@ -554,13 +607,20 @@ export type NonEmptyPlugins = readonly [AuthPlugin.Any, ...ReadonlyArray<AuthPlu
  * function body (P is abstract at that point), and bridging that gap with a
  * cast is exactly what this module does not do.
  */
-export function make<const P extends NonEmptyPlugins>(plugins: Validate<P>): Built<P>;
-export function make(plugins: ReadonlyArray<AuthPlugin.Any>) {
+export function make<
+  const P extends NonEmptyPlugins,
+  const Extra extends HttpApiGroup.Constraint = never,
+>(plugins: Validate<P>, options?: MakeOptions<Extra>): Built<P, Extra>;
+export function make(
+  plugins: ReadonlyArray<AuthPlugin.Any>,
+  options?: MakeOptions<HttpApiGroup.Constraint>,
+) {
   const order = linkPlugins(plugins);
+  const extraGroups = options?.extraGroups ?? [];
   return {
-    api: composeApi(order),
-    publicApi: composeTier(order, false),
-    adminApi: composeTier(order, true),
+    api: composeApi(order, extraGroups),
+    publicApi: composeTier(order, extraGroups, false),
+    adminApi: composeTier(order, extraGroups, true),
     layer: composeLayer(order),
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),

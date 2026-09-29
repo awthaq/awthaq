@@ -155,10 +155,9 @@ describe("UserClaims composition", () => {
     assert.strictEqual(UserClaims.UserClaims.id, "claims");
     assert.deepStrictEqual(UserClaims.UserClaims.tables, ["claims_user"]);
     assert.strictEqual(UserClaims.UserClaims.migrations.length, 1);
-    assert.throws(
-      () => Auth.make([UserClaims.UserClaims]),
-      /Auth.make requires at least one plugin/,
-    );
+    // MW-002: a plugin with no groups still composes now that core's own groups are always in the api.
+    const built = Auth.make([UserClaims.UserClaims]);
+    assert.deepStrictEqual(Object.keys(built.api.groups).sort(), ["account", "session"]);
   });
 
   it("registers in attributeResolverRegistry next to UserAttributes without shadowing it", () => {

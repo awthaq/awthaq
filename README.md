@@ -35,7 +35,7 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 This is a single, complete, copy-pasteable server — no separate example app. It composes:
 
 - the **Password** plugin (sign-up, sign-in) via `Auth.make`,
-- the core **Session**/**Account** HTTP surface (list/revoke sessions, update profile, delete account) wired directly, since `Auth.make` composes plugin contracts and doesn't yet prepend the fixed core surface (`spec/roadmap.md`'s M1 Core milestone — see the note at the bottom of this section),
+- the core **Session**/**Account** HTTP surface (list/revoke sessions, update profile, delete account), which `Auth.make(...).api` always carries beside the plugins' groups (its handlers are `AuthHttp.coreHandlers` — see the note at the bottom of this section),
 - a real, migrated **Postgres** backend via `@effect/sql-pg`,
 - and a real listening HTTP server via `@effect/platform-node`.
 
@@ -46,9 +46,8 @@ import { createServer } from "node:http";
 import { Auth, AuthEvents, RateLimits, Sessions, Users, Accounts, Verification } from "@awthaq/core";
 import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
 import { Encryption, KeyProvider, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
-import { AuthCore } from "@awthaq/api";
 import { Password } from "@awthaq/password";
-import { Account, Authentication, AuthHttp, BodyLimit, Session } from "@awthaq/server";
+import { Authentication, AuthHttp, BodyLimit } from "@awthaq/server";
 import { NodeCrypto, NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import * as Effect from "effect/Effect";
@@ -143,15 +142,14 @@ const consoleMailer = Layer.succeed(
   }),
 );
 
-// 6. Mount both the plugin's own contract and the core Session/Account
-//    contract onto the same router — `AuthHttp.routes` registers with
-//    whatever `HttpRouter` is ambient, so merging two calls to it is all
-//    that's needed to serve them together (no gateway/adapter layer).
+// 6. Mount the composed api onto the router — `AuthHttp.routes` registers
+//    with whatever `HttpRouter` is ambient (no gateway/adapter layer).
+//    `auth.api` is one document: the plugins' groups plus core's own
+//    Session/Account groups, whose handlers are `AuthHttp.coreHandlers`.
 const AppLayer = Layer.mergeAll(
-  AuthHttp.routes(auth.api, { openapiPath: "/openapi.json" }).pipe(Layer.provide(auth.layer)),
-  AuthHttp.routes(AuthCore.AuthCoreApi, {}).pipe(
-    Layer.provide(Session.SessionHandlers),
-    Layer.provide(Account.AccountHandlers),
+  AuthHttp.routes(auth.api, { openapiPath: "/openapi.json" }).pipe(
+    Layer.provide(AuthHttp.coreHandlers),
+    Layer.provide(auth.layer),
   ),
   AuthHttp.docs(auth.api),
 ).pipe(
@@ -187,7 +185,7 @@ const ServerLive = HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppL
 Layer.launch(ServerLive).pipe(NodeRuntime.runMain);
 ```
 
-> **Why `AuthHttp.routes(AuthCore.AuthCoreApi, {})` alongside `Auth.make`?** `Auth.make([Password])` folds Password's own `contract`/`layer` — the `/password/sign-up`, `/password/sign-in`, etc. routes — but awthaq's fixed, always-present core surface (`Session`: list/current/revoke/revokeOthers/signOut; `Account`: update profile, delete account) is not yet one of the things `Auth.make` prepends automatically (`packages/core/src/Auth.ts`'s own header comment: that lands with M1 Core, per `spec/roadmap.md`). Until then, wiring `AuthCore.AuthCoreApi` alongside a plugin's own `Auth.make(...)` output — exactly as this repository's own HTTP integration tests do — is the current, real way to get both.
+> **Where do the Session/Account routes come from?** `Auth.make` seeds `api` with core's own `session` and `account` groups (`AuthCore.AuthCoreApi`), then any `extraGroups` you pass (`Auth.make([...], { extraGroups: [SubjectApi.SubjectGroup] })` for `@awthaq/qadi`'s subject endpoint; you provide their handlers), then every plugin's groups: one served document, with a plugin that reuses a core group id or route refused at composition. Serving `auth.api` without `AuthHttp.coreHandlers` fails at layer build rather than answering 404.
 
 Run migrations and start it:
 
@@ -277,7 +275,7 @@ awthaq ships no CORS by default: a browser on another origin cannot read any res
 
 ```ts
 const AppLayer = Layer.mergeAll(
-  AuthHttp.routes(auth.api, {}).pipe(Layer.provide(auth.layer)),
+  AuthHttp.routes(auth.api, {}).pipe(Layer.provide(AuthHttp.coreHandlers), Layer.provide(auth.layer)),
   AuthHttp.cors(), // reads CsrfConfig.allowedOrigins, e.g. ["https://app.example.com"]
 );
 ```

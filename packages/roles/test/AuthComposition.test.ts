@@ -42,8 +42,9 @@ class Ping extends AuthPlugin.Service<Ping, Record<string, never>>()("ping", {
 }
 
 describe("Auth.make([Roles])", () => {
-  it("a Roles-only tuple fails — it contributes zero HTTP groups", () => {
-    assert.throws(() => Auth.make([Roles.Roles]), /Auth.make requires at least one plugin/);
+  it("a Roles-only tuple composes — it contributes no HTTP group, but core's own are always served (MW-002)", () => {
+    const auth = Auth.make([Roles.Roles]);
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["account", "session"]);
   });
 
   it("Roles + RolesAdmin compose: the admin plugin depends on Roles and contributes the one group (YL-009)", () => {

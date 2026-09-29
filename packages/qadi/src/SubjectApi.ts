@@ -21,10 +21,10 @@
 // and its handler, the one place both halves (a `@awthaq/server`
 // dependency, and qadi's own resolver machinery) are available together.
 //
-// Fixed and standalone, exactly like `AuthCoreApi` — not yet folded into
-// `Auth.make`'s plugin-composed `api` (that composition has no notion of a
-// non-plugin package contributing a group at all yet; `AuthCoreApi`'s own
-// header comment tracks the identical gap for the core `session` group).
+// MW-002: not a plugin, so it joins `Auth.make`'s composed `api` through the
+// host's `extraGroups` option (`Auth.make([...], { extraGroups: [SubjectGroup] })`)
+// and this module's `SubjectHandlers` serve it; `SubjectApi` below is the same
+// group standalone, for a host that does not compose it.
 // `OptionalAuthentication`, not `Authentication`: an anonymous caller has a
 // real, well-formed `AuthSubject` too (qadi's own `anonymous` value,
 // `SubjectResolver.ts`'s `resolveIdentityOnly`) — this endpoint should
@@ -53,7 +53,9 @@ export const SubjectGroup = SubjectContract.SubjectGroup
   .middleware(AuthorizedSubject)
   .middleware(Api.OptionalAuthentication);
 
-export const SubjectApi = HttpApi.make("auth-subject").add(SubjectGroup);
+// MW-002: id "auth", the composed api's own, so `SubjectHandlers` (keyed by api id + group) serve the
+// group whether it is mounted standalone or through `Auth.make(..., { extraGroups: [SubjectGroup] })`.
+export const SubjectApi = HttpApi.make("auth").add(SubjectGroup);
 
 /**
  * AAPS-008: which resolver-backed attributes `GET /subject` puts in the DTO,

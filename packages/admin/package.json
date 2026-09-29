@@ -33,6 +33,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/ports": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",

@@ -19,7 +19,9 @@
 // would never be visible to.
 import { Api } from "@awthaq/api";
 import { Auth, AuthPlugin } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Csrf } from "@awthaq/server";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Redacted from "effect/Redacted";
 import { assert, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -66,9 +68,24 @@ class WhoamiPlugin extends AuthPlugin.Service<WhoamiPlugin, Record<string, never
 
 const built = Auth.make([WhoamiPlugin]);
 
+// MW-002: the composed api always carries core's `session`/`account` groups, whose
+// handlers `TestAuth.layer` adds itself; their `CsrfProtection` middleware is the host's.
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make("test-auth-test-csrf-secret-padded-to-thirty-two-bytes"),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
 const TestLayer = TestAuth.layer(
   built,
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
+  Layer.mergeAll(
+    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
+    CsrfProtectionLive,
+  ),
 );
 
 const dispatch = (request: Request) =>
@@ -96,6 +113,18 @@ layer(TestLayer)("TestAuth.layer (BEH-EA-193)", (it) => {
       assert.strictEqual(response.status, 200);
       const body = (yield* Effect.promise(() => response.json())) as { userId: string };
       assert.strictEqual(body.userId, signedIn.userId);
+    }),
+  );
+
+  it.effect("MW-002: core's GET /session is served from the composed api with no extra wiring", () =>
+    Effect.gen(function* () {
+      const signedIn = yield* TestAuth.signInAs({ email: "session-reader@example.com" });
+      const response = yield* dispatch(
+        new Request("http://localhost/session", { headers: { cookie: signedIn.cookieHeader } }),
+      );
+      assert.strictEqual(response.status, 200);
+      const anonymous = yield* dispatch(new Request("http://localhost/session"));
+      assert.strictEqual(anonymous.status, 401);
     }),
   );
 

@@ -5,7 +5,7 @@
 // actually serve a decodable `SubjectDto`, not just that the underlying
 // `AuthorizedSubject` middleware chain resolves a subject in memory.
 import { SubjectContract } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { Auth, AuditLog, Hooks, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -24,6 +24,7 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as AuthorizedSubject from "../src/AuthorizedSubject.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import * as SubjectApi from "../src/SubjectApi.ts";
+import * as UserClaims from "../src/UserClaims.ts";
 
 // A separate, standalone tiny `HttpApi` (its own id, its own group) rather
 // than folding a `/login` endpoint into `SubjectApi.SubjectApi` itself —
@@ -198,4 +199,14 @@ describe("SubjectApi (real HTTP)", () => {
         assert.match(body.id, /^user:/);
       }),
   );
+});
+
+describe("SubjectApi through Auth.make extraGroups (MW-002)", () => {
+  it("the subject group joins the one composed api, and SubjectHandlers satisfy it", () => {
+    const built = Auth.make([UserClaims.UserClaims], { extraGroups: [SubjectApi.SubjectGroup] });
+    assert.deepStrictEqual(Object.keys(built.api.groups).sort(), ["account", "session", "subject"]);
+    // Typed, not just runtime: the group's handler service is keyed by the composed api's own id.
+    const routes = AuthHttp.routes(built.api, {}).pipe(Layer.provide(SubjectApi.SubjectHandlers));
+    assert.isDefined(routes);
+  });
 });

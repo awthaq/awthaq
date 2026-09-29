@@ -160,6 +160,48 @@ class Ops extends AuthPlugin.Service<Ops, OpsShape>()("ops", {
   });
 }
 
+// --- MW-002: extra (non-plugin) group, and plugins colliding with core -----
+
+const ExtraGroup = HttpApiGroup.make("extra").add(
+  HttpApiEndpoint.get("extra", "/extra", { success: Schema.String }),
+);
+
+const SessionImposterApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("session").add(
+    HttpApiEndpoint.get("imposter", "/imposter", { success: Schema.String }),
+  ),
+);
+
+class SessionImposter extends AuthPlugin.Service<
+  SessionImposter,
+  { readonly imposter: () => Effect.Effect<string> }
+>()("session", { apiVersion: 1, contract: SessionImposterApi }) {
+  static readonly layer = AuthPlugin.layer(SessionImposter, {
+    make: Effect.succeed({ imposter: () => Effect.succeed("x") }),
+    handlers: HttpApiBuilder.group(SessionImposterApi, "session", (handlers) =>
+      handlers.handle("imposter", () => Effect.succeed("x")),
+    ),
+  });
+}
+
+const RouteImposterApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("routeImposter").add(
+    HttpApiEndpoint.get("list", "/session/list", { success: Schema.String }),
+  ),
+);
+
+class RouteImposter extends AuthPlugin.Service<
+  RouteImposter,
+  { readonly list: () => Effect.Effect<string> }
+>()("routeImposter", { apiVersion: 1, contract: RouteImposterApi }) {
+  static readonly layer = AuthPlugin.layer(RouteImposter, {
+    make: Effect.succeed({ list: () => Effect.succeed("x") }),
+    handlers: HttpApiBuilder.group(RouteImposterApi, "routeImposter", (handlers) =>
+      handlers.handle("list", () => Effect.succeed("x")),
+    ),
+  });
+}
+
 // --- BEH-EA-010: two plugins sharing an id refuses to type-check -----------
 
 class PingDuplicate extends AuthPlugin.Service<PingDuplicate, PingShape>()("ping", {
@@ -183,7 +225,13 @@ describe("Auth.make", () => {
     Effect.gen(function* () {
       const auth = Auth.make([Ping, Pong]);
 
-      assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["ping", "pong"]);
+      // MW-002: core's own groups ride along with the plugins'.
+      assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), [
+        "account",
+        "ping",
+        "pong",
+        "session",
+      ]);
 
       const result = yield* Effect.gen(function* () {
         const pong = yield* Pong;
@@ -207,8 +255,17 @@ describe("Auth.make", () => {
 
   it("AR-003: admin-tier groups are split into adminApi, the rest into publicApi, api keeps all", () => {
     const auth = Auth.make([Ping, Ops]);
-    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["ops.admin", "ping"]);
-    assert.deepStrictEqual(Object.keys(auth.publicApi.groups), ["ping"]);
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), [
+      "account",
+      "ops.admin",
+      "ping",
+      "session",
+    ]);
+    assert.deepStrictEqual(Object.keys(auth.publicApi.groups).sort(), [
+      "account",
+      "ping",
+      "session",
+    ]);
     assert.deepStrictEqual(Object.keys(auth.adminApi.groups), ["ops.admin"]);
 
     // The split is typed, not just runtime: only the tier's own groups are in each type.
@@ -227,7 +284,51 @@ describe("Auth.make", () => {
 
     // A composition with no admin group has an empty admin tier (nothing to firewall).
     assert.deepStrictEqual(Object.keys(Auth.make([Ping]).adminApi.groups), []);
-    assert.deepStrictEqual(Object.keys(Auth.make([Ops]).publicApi.groups), []);
+    // ...and the public tier is never empty: core's groups live there.
+    assert.deepStrictEqual(Object.keys(Auth.make([Ops]).publicApi.groups).sort(), [
+      "account",
+      "session",
+    ]);
+  });
+
+  it("MW-002 / BEH-EA-031/032: the composed api always carries core's session and account groups", () => {
+    const auth = Auth.make([Ping]);
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["account", "ping", "session"]);
+    // The public tier keeps them (they are not admin-tier); the admin tier stays plugin-only.
+    assert.deepStrictEqual(Object.keys(auth.publicApi.groups).sort(), ["account", "ping", "session"]);
+    assert.deepStrictEqual(Object.keys(auth.adminApi.groups), []);
+    // Typed, not just runtime: `session` is a group id of `api`.
+    const ids: keyof typeof auth.api.groups = "session";
+    assert.strictEqual(ids, "session");
+  });
+
+  it("MW-002: extraGroups joins the composed api, typed", () => {
+    const auth = Auth.make([Ping], { extraGroups: [ExtraGroup] });
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), [
+      "account",
+      "extra",
+      "ping",
+      "session",
+    ]);
+    const id: keyof typeof auth.api.groups = "extra";
+    assert.strictEqual(id, "extra");
+  });
+
+  it("MW-002: a plugin contributing a group named session is refused with GroupIdConflict naming core", () => {
+    let thrown: unknown;
+    try {
+      Auth.make([SessionImposter]);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.instanceOf(thrown, Auth.GroupIdConflict);
+    assert.strictEqual(thrown.groupId, "session");
+    assert.strictEqual(thrown.firstPluginId, "core");
+    assert.strictEqual(thrown.secondPluginId, "session");
+  });
+
+  it("MW-002: a plugin route colliding with a core route is refused with RouteConflict naming core", () => {
+    assert.throws(() => Auth.make([RouteImposter]), /E_ROUTE_CONFLICT: GET \/session\/list contributed by plugin "core"/);
   });
 
   it("BEH-EA-016: a circular dependsOn is refused at runtime with the full cycle path", () => {
