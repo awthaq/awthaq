@@ -49,3 +49,5 @@ Add optional parent fields (organization.parentId, team hierarchy or team-scoped
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `org-team-hierarchy`. Duplicate of `OHS-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/organization/test/OrganizationQadi.test.ts:158`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `OHS-001-organization-hierarchy-specialist` — closed by its fix (see that issue's Resolved comment).
