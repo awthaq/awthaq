@@ -121,7 +121,7 @@ describe("Passkey", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  // HSK-005 (BEH-EA-231): the session records *what kind* of key proved it, so a policy can tell them apart.
+  // HSK-005 (BEH-EA-255): the session records *what kind* of key proved it, so a policy can tell them apart.
   const signInAmr = (email: string) =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;

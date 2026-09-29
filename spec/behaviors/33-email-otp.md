@@ -3,7 +3,7 @@
 >
 > | Property | Value |
 > |---|---|
-> | Document ID | EFAUTH-BEH-30 |
+> | Document ID | EFAUTH-BEH-33 |
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
@@ -14,7 +14,7 @@
 
 > Status: the `EmailOtp` plugin in `@awthaq/magic-link` and the `Verification` numeric-value and attempt-budget support it needs are implemented and tested (`packages/magic-link/test/EmailOtp.test.ts`, `packages/core/test/Verification.test.ts`). SMS is deferred ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
 
-## BEH-EA-244: A short numeric code is minted inside Verification and carries an attempt budget
+## BEH-EA-268: A short numeric code is minted inside Verification and carries an attempt budget
 
 ```ts
 verification.issue({
@@ -35,11 +35,11 @@ REQUIREMENT: `Verification.issue` MUST be able to mint a numeric value of 4 to
              no budget MUST behave exactly as before.
 ```
 
-A six-digit code is a million possibilities, so its safety is layered: hashed at rest like every verification value, single-use, a short TTL, one live code per identifier, this attempt budget, and the rate limits of BEH-EA-245/246. `layerMemory` spends the attempt inside its `Ref.modify`; `layerSql` in one `UPDATE ... SET attempts = attempts + 1, consumedAt = CASE WHEN attempts + 1 >= maxAttempts ...` (migration 26).
+A six-digit code is a million possibilities, so its safety is layered: hashed at rest like every verification value, single-use, a short TTL, one live code per identifier, this attempt budget, and the rate limits of BEH-EA-269/270. `layerMemory` spends the attempt inside its `Ref.modify`; `layerSql` in one `UPDATE ... SET attempts = attempts + 1, consumedAt = CASE WHEN attempts + 1 >= maxAttempts ...` (migration 26).
 
-_Next: [BEH-EA-245](30-email-otp.md#beh-ea-245-requesting-a-code-answers-202-for-every-address-inside-a-resend-window)_
+_Next: [BEH-EA-269](33-email-otp.md#beh-ea-269-requesting-a-code-answers-202-for-every-address-inside-a-resend-window)_
 
-## BEH-EA-245: Requesting a code answers 202 for every address, inside a resend window
+## BEH-EA-269: Requesting a code answers 202 for every address, inside a resend window
 
 ```ts
 EmailOtp.requestCode({ email, ip }): Effect<void, RateLimited>
@@ -59,9 +59,9 @@ REQUIREMENT: `request` MUST answer `202` identically for a known address, an
 
 The mail is the template `email-otp` with `{ code: Redacted, expiresAt }`. The window is what stops re-requesting from re-rolling the attempt budget or mail-bombing an inbox.
 
-_Previous: [BEH-EA-244](30-email-otp.md#beh-ea-244-a-short-numeric-code-is-minted-inside-verification-and-carries-an-attempt-budget) | Next: [BEH-EA-246](30-email-otp.md#beh-ea-246-a-correct-code-signs-in-once-and-every-failure-is-the-one-invalidemailotp)_
+_Previous: [BEH-EA-268](33-email-otp.md#beh-ea-268-a-short-numeric-code-is-minted-inside-verification-and-carries-an-attempt-budget) | Next: [BEH-EA-270](33-email-otp.md#beh-ea-270-a-correct-code-signs-in-once-and-every-failure-is-the-one-invalidemailotp)_
 
-## BEH-EA-246: A correct code signs in once, and every failure is the one InvalidEmailOtp
+## BEH-EA-270: A correct code signs in once, and every failure is the one InvalidEmailOtp
 
 ```ts
 EmailOtp.verify({ email, code, ip }, { userAgent }): Effect<IssuedSession, InvalidEmailOtp | RateLimited | HookAborted | TwoFactorRequired | UserSuspended>
@@ -74,18 +74,18 @@ REQUIREMENT: `verify` MUST be rate limited per source and per normalised
              `Verification.consume` under the per-code attempt budget. A
              wrong, expired, spent, burned or never-issued code MUST all be
              the one `InvalidEmailOtp` (401). A correct code MUST go through
-             the shared channel step (BEH-EA-242): find or create the user
+             the shared channel step (BEH-EA-266): find or create the user
              (only with `allowSignUp`), mark the mailbox verified, run the
              sign-in gate, veto and MFA divert, and record `amr ["otp",
              "email"]`. A user with a confirmed second factor MUST be
              diverted to `TwoFactorRequired`.
 ```
 
-The per-address limit (10 per 15 minutes) is the layer above the per-code budget: it bounds guesses at one address across many codes. `["otp", "email"]` is one factor's worth of assurance — both are possession of the mailbox — which `Assurance` (BEH-EA-231) reports as aal1.
+The per-address limit (10 per 15 minutes) is the layer above the per-code budget: it bounds guesses at one address across many codes. `["otp", "email"]` is one factor's worth of assurance — both are possession of the mailbox — which `Assurance` (BEH-EA-255) reports as aal1.
 
-_Previous: [BEH-EA-245](30-email-otp.md#beh-ea-245-requesting-a-code-answers-202-for-every-address-inside-a-resend-window) | Next: [BEH-EA-247](30-email-otp.md#beh-ea-247-the-code-is-a-verification-row-with-no-table-of-its-own-and-sms-is-a-later-restricted-plugin-over-it)_
+_Previous: [BEH-EA-269](33-email-otp.md#beh-ea-269-requesting-a-code-answers-202-for-every-address-inside-a-resend-window) | Next: [BEH-EA-271](33-email-otp.md#beh-ea-271-the-code-is-a-verification-row-with-no-table-of-its-own-and-sms-is-a-later-restricted-plugin-over-it)_
 
-## BEH-EA-247: The code is a Verification row with no table of its own, and SMS is a later restricted plugin over it
+## BEH-EA-271: The code is a Verification row with no table of its own, and SMS is a later restricted plugin over it
 
 ```text
 REQUIREMENT: The plugin MUST declare no table: the code is a `Verification`
@@ -97,4 +97,4 @@ REQUIREMENT: The plugin MUST declare no table: the code is a `Verification`
 
 `EmailOtp` is the channel-OTP substrate the SMS plugin would build on: the same code minting, budget, resend window and shared sign-in step, with the `Mailer` port replaced by an SMS gateway.
 
-_Previous: [BEH-EA-246](30-email-otp.md#beh-ea-246-a-correct-code-signs-in-once-and-every-failure-is-the-one-invalidemailotp)_
+_Previous: [BEH-EA-270](33-email-otp.md#beh-ea-270-a-correct-code-signs-in-once-and-every-failure-is-the-one-invalidemailotp)_

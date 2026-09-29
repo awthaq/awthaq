@@ -1,4 +1,4 @@
-// SOS-001, BCR-005, SOS-004, MLO-002, SAM-009 (BEH-EA-244 to BEH-EA-247): the EmailOtp plugin at the
+// SOS-001, BCR-005, SOS-004, MLO-002, SAM-009 (BEH-EA-268 to BEH-EA-271): the EmailOtp plugin at the
 // domain level — a six-digit code that is hashed, single-use, attempt-budgeted and resend-windowed.
 import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
@@ -30,7 +30,7 @@ const codeFor = (email: string) =>
 
 const wrongCodeFor = (code: string) => (code === "000000" ? "111111" : "000000");
 
-describe("EmailOtp.requestCode (BEH-EA-245)", () => {
+describe("EmailOtp.requestCode (BEH-EA-269)", () => {
   it.effect(
     "mails a six-digit code with its expiry; an unknown address answers 202 and mails nothing when sign-up is off",
     () =>
@@ -107,7 +107,7 @@ describe("EmailOtp.requestCode (BEH-EA-245)", () => {
   );
 });
 
-describe("EmailOtp.verify (BEH-EA-246)", () => {
+describe("EmailOtp.verify (BEH-EA-270)", () => {
   it.effect(
     "a correct code signs in exactly once, marks the mailbox verified and records amr [otp, email]",
     () =>

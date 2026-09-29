@@ -389,7 +389,7 @@ const subjectResolverMake = Effect.gen(function* () {
             : Effect.succeed([found]);
         }).pipe(Effect.map((groups) => groups.flat()));
         const subject = fromRoles({ id: `user:${userId}`, roles: matched });
-        // BEH-EA-142/BEH-EA-231: the same attributes the default resolver attaches (actingAs, amr, aal, ...).
+        // BEH-EA-142/BEH-EA-255: the same attributes the default resolver attaches (actingAs, amr, aal, ...).
         return withAttributes(subject, QadiSubjectResolver.principalAttributes(principal));
       });
     },
@@ -429,7 +429,7 @@ export const rolesErasure = Erasure.contribute({
 
 export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   apiVersion: 1,
-  // BEH-EA-018/roadmap M3: no HTTP contract of its own — this plugin's whole
+  // BEH-EA-18/roadmap M3: no HTTP contract of its own — this plugin's whole
   // job is the `SubjectResolver` override, per this module's own header
   // comment. Role administration over HTTP is the separate, opt-in `RolesAdmin`
   // plugin (YL-009), so `Auth.make([Roles])` stays contract-less. `HttpApi.make("auth")` with no `.add()` call is a real,
@@ -466,7 +466,7 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
    *
    * `Layer.provideMerge(subjectResolverOverride, ownLayer)` — `ownLayer`
    * (`AuthPlugin.layer(Roles, {make: rolesMake})`) provides `Roles` itself;
-   * `subjectResolverOverride` (built via `Slots.override`, BEH-EA-021)
+   * `subjectResolverOverride` (built via `Slots.override`, BEH-EA-21)
    * requires exactly that `Roles` to resolve role assignments, so folding
    * it underneath satisfies that requirement and the composed result
    * exposes both `Roles` and the overridden `SubjectResolver` in its

@@ -1,4 +1,4 @@
-// THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-232 to BEH-EA-239): the plugin
+// THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-256 to BEH-EA-263): the plugin
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
 import { AuditLog, Users, VerificationLink } from "@awthaq/core";
@@ -70,7 +70,7 @@ const freshChallenge = (userId: Users.UserId) =>
 /** The next TOTP step (a code is single-use, and the enrolment code spent the current step). */
 const nextStep = TestClock.adjust(Duration.seconds(30));
 
-describe("TwoFactor: enrolment and the divert (BEH-EA-233/234/236)", () => {
+describe("TwoFactor: enrolment and the divert (BEH-EA-257/258/260)", () => {
   it.effect(
     "enable + confirm, then a password sign-in diverts and /verify with a valid TOTP issues the session",
     () =>
@@ -178,7 +178,7 @@ describe("TwoFactor: secret at rest (THS-004, ADR-EA-020)", () => {
   );
 });
 
-describe("TwoFactor: the challenge (BEH-EA-235, THS-007)", () => {
+describe("TwoFactor: the challenge (BEH-EA-259, THS-007)", () => {
   it.effect("a code can be used once: the same step's code is refused on a second sign-in", () =>
     Effect.gen(function* () {
       const twoFactor = yield* TwoFactor.TwoFactor;
@@ -346,7 +346,7 @@ describe("TwoFactor: the challenge (BEH-EA-235, THS-007)", () => {
   );
 });
 
-describe("TwoFactor: recovery codes (BEH-EA-237, BCR-002)", () => {
+describe("TwoFactor: recovery codes (BEH-EA-261, BCR-002)", () => {
   it.effect("a recovery code signs in exactly once and is counted down", () =>
     Effect.gen(function* () {
       const twoFactor = yield* TwoFactor.TwoFactor;
@@ -423,7 +423,7 @@ describe("TwoFactor: recovery codes (BEH-EA-237, BCR-002)", () => {
   );
 });
 
-describe("TwoFactor: disabling (BEH-EA-236)", () => {
+describe("TwoFactor: disabling (BEH-EA-260)", () => {
   it.effect(
     "disable needs a valid code, removes the factor and every recovery code, and stops the divert",
     () =>
@@ -526,7 +526,7 @@ describe("TwoFactor: the shared failure budget (BCR-006, ADR-EA-020)", () => {
   );
 });
 
-describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-232)", () => {
+describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-256)", () => {
   const requestResetToken = (email: string) =>
     Effect.gen(function* () {
       const password = yield* Password.Password;

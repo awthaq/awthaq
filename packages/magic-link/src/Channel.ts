@@ -1,6 +1,6 @@
 // @awthaq/magic-link — Channel
 //
-// BAM-007, SOS-001 (BEH-EA-240 to BEH-EA-247): what `MagicLink` and `EmailOtp` share — proof that a
+// BAM-007, SOS-001 (BEH-EA-264 to BEH-EA-271): what `MagicLink` and `EmailOtp` share — proof that a
 // person controls a mailbox turned into a session. Both plugins are a *channel credential* over the
 // `Verification` substrate: they differ in what the emailed artifact is (a long single-use link, a
 // short attempt-budgeted code) and in how it is presented, never in what a proven mailbox means.
@@ -30,7 +30,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type * as Redacted from "effect/Redacted";
 
-/** The address exactly as compared and stored: trimmed and lower-cased (`Users` lower-cases too, BEH-EA-041). */
+/** The address exactly as compared and stored: trimmed and lower-cased (`Users` lower-cases too, BEH-EA-41). */
 export const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
 /**

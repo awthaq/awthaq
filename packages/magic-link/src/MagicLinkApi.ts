@@ -1,6 +1,6 @@
 // @awthaq/magic-link — MagicLinkApi
 //
-// BAM-007, MLO-005 (BEH-EA-240 to BEH-EA-243): the magic-link contract — one public group, `magicLink`,
+// BAM-007, MLO-005 (BEH-EA-264 to BEH-EA-267): the magic-link contract — one public group, `magicLink`,
 // two endpoints, **both POST**. There is deliberately no GET route: a mail scanner, a link
 // previewer or a browser prefetch dereferences every URL in a message, and a link that signs a
 // person in on GET is consumed (and a session minted) by the scanner before the person clicks.
@@ -10,9 +10,9 @@
 // interstitial pattern).
 //
 // `request` answers `202` identically for a known address, an unknown one and a rate-limited-away
-// one's mail — the response never says whether an account exists (BEH-EA-064). `verify` answers with
+// one's mail — the response never says whether an account exists (BEH-EA-64). `verify` answers with
 // the same `SessionDto` a password sign-in does; every failure of the token itself is the one
-// `MagicLinkConsumed` (410, BEH-EA-059's shape): unknown, expired, replayed and foreign tokens are
+// `MagicLinkConsumed` (410, BEH-EA-59's shape): unknown, expired, replayed and foreign tokens are
 // indistinguishable.
 
 import { Api, EmailContract, SessionContract } from "@awthaq/api";
@@ -23,7 +23,7 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
-/** BEH-EA-059: the link is unknown, expired, already used, or not a magic link at all — one error for all of them. */
+/** BEH-EA-59: the link is unknown, expired, already used, or not a magic link at all — one error for all of them. */
 export class MagicLinkConsumed extends Schema.TaggedError<MagicLinkConsumed>()(
   "MagicLinkConsumed",
   {},

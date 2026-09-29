@@ -1,7 +1,7 @@
 // @awthaq/password — PasswordApi
 //
 // spec/behaviors/15-password.md, BEH-EA-113, BEH-EA-114, BEH-EA-117, BEH-EA-120.
-// The plugin's own contract, groups named `password` (BEH-EA-004: a
+// The plugin's own contract, groups named `password` (BEH-EA-4: a
 // plugin's groups are confined to its own id or a dotted sub-id) — built the
 // same way `@awthaq/api`'s core `session` group is (`packages/api/src/Session.ts`),
 // since a plugin's contract is stratum-1-shaped even though it lives in the
@@ -26,7 +26,7 @@ export class WeakPassword extends Schema.TaggedError<WeakPassword>()(
 /**
  * Not part of BEH-EA-113's own illustrative error union (`Effect<SessionView,
  * WeakPassword>`) — that sketch simply doesn't address what happens when the
- * email is already registered. `Users.create` (BEH-EA-041) already returns a
+ * email is already registered. `Users.create` (BEH-EA-41) already returns a
  * real, distinct `EmailAlreadyExists` for exactly this case; leaving it
  * unmapped here would mean every duplicate sign-up dies as an unhandled
  * defect instead of a request-level failure, which is worse than filling the
@@ -40,8 +40,8 @@ export class EmailAlreadyExists extends Schema.TaggedError<EmailAlreadyExists>()
 ) {}
 
 /**
- * BEH-EA-059/117: `confirmReset`'s failure mode is a bad/expired/replayed
- * reset token, not a wrong password — the wire shape BEH-EA-059 itself
+ * BEH-EA-59/117: `confirmReset`'s failure mode is a bad/expired/replayed
+ * reset token, not a wrong password — the wire shape BEH-EA-59 itself
  * fixes (`410 TokenConsumed`), reproduced here as this plugin's own schema
  * error since no shared `verification` contract group exists yet for it to
  * come from instead (see `@awthaq/api`'s own header comment on what is
@@ -69,7 +69,7 @@ export class EmailNotVerified extends Schema.TaggedError<EmailNotVerified>()(
 ) {}
 
 /**
- * ARF-005 (BEH-EA-232): the account has a second factor and the reset request carried none — the
+ * ARF-005 (BEH-EA-256): the account has a second factor and the reset request carried none — the
  * `Hooks.BeforeCredentialReset` veto refused with code `TWO_FACTOR_REQUIRED`. `401`, like
  * `Hooks.TwoFactorRequired` at sign-in: the emailed link was valid, but that alone no longer
  * suffices; clients branch on `_tag` and resubmit with `secondFactorCode`. Any other veto code
@@ -103,7 +103,7 @@ export const SignInPayload = Schema.Struct({
 });
 export type SignInPayload = typeof SignInPayload.Type;
 
-/** BEH-EA-064/117: answered identically whether or not `email` resolves to an account. */
+/** BEH-EA-64/117: answered identically whether or not `email` resolves to an account. */
 export const RequestResetPayload = Schema.Struct({
   email: EmailContract.Email,
 });
@@ -166,7 +166,7 @@ export class WrongPassword extends Schema.TaggedError<WrongPassword>()(
  * BEH-EA-113: `signUp`/`signIn`'s success shape reuses `@awthaq/api`'s
  * `SessionContract.SessionDto` rather than inventing a second, competing
  * "who is signed in" wire shape — `SessionView`/`SubjectDto` proper
- * (BEH-EA-026) is its own, still-deferred piece of work; `SessionDto` is
+ * (BEH-EA-26) is its own, still-deferred piece of work; `SessionDto` is
  * the one that already exists and is already what the `session` group
  * itself returns for the identical "here is your session" moment.
  * `confirmReset` declares no `success` schema (defaults to `204`, the same
@@ -292,7 +292,7 @@ export const PasswordAccountGroup = HttpApiGroup.make("password.account")
     // route, matching `verifyEmail`'s own convention.
     HttpApiEndpoint.post("changePassword", "/change-password", {
       payload: ChangePasswordPayload,
-      // PIL-002/RRS-001/SMS-001: BEH-EA-053 requires every privilege-change
+      // PIL-002/RRS-001/SMS-001: BEH-EA-53 requires every privilege-change
       // to mint a fresh session and revoke every other one — the caller's
       // own session is rotated (superseded), not merely kept, so the
       // response carries the new session the same way signUp/signIn's do.

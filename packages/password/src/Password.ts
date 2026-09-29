@@ -141,13 +141,13 @@ const defaultPasswordConfig: PasswordConfigShape = {
   identifierDigestKey: Option.none(),
 };
 
-/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
+/** BEH-EA-17's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
 export const PasswordConfig: Context.Reference<PasswordConfigShape> = Context.Reference(
   "awthaq/password/Config",
   { defaultValue: () => defaultPasswordConfig },
 );
 
-/** BEH-EA-018/120: a partial override, type-checked against `PasswordConfigShape`, never runtime-validated. */
+/** BEH-EA-18/120: a partial override, type-checked against `PasswordConfigShape`, never runtime-validated. */
 export const config = (partial: Partial<PasswordConfigShape>): Layer.Layer<never> =>
   Layer.succeed(PasswordConfig, { ...defaultPasswordConfig, ...partial });
 
@@ -227,7 +227,7 @@ export interface PasswordShape {
     | Hooks.TwoFactorRequired
     | Errors.StoreUnavailable
   >;
-  /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
+  /** BEH-EA-64/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
   readonly requestReset: (input: {
     readonly email: string;
     /** AGA-001/NHS-003: same per-source dimension as `signIn`'s own `ip`. */
@@ -277,7 +277,7 @@ export interface PasswordShape {
    * this ticket.
    */
   /**
-   * PIL-002/RRS-001/SMS-001: BEH-EA-053 — every privilege-changing
+   * PIL-002/RRS-001/SMS-001: BEH-EA-53 — every privilege-changing
    * operation mints a fresh session and tombstones the row it supersedes
    * (atomically with the insert — ESR-002/RRS-004).
    * `currentSessionId` names the caller's own session so it can be
@@ -602,7 +602,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
 export class Password extends AuthPlugin.Service<Password, PasswordShape>()("password", {
   apiVersion: 1,
   contract: PasswordApi.PasswordApi,
-  // BEH-EA-044: a password credential is an ordinary `accounts` row — this
+  // BEH-EA-44: a password credential is an ordinary `accounts` row — this
   // plugin owns no table of its own, so there is nothing to declare here.
   tables: [],
   // ECS-008/BEH-EA-229: the policy knobs `doctor` audits and `config list` prints.
@@ -641,7 +641,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
   ],
 }) {
   /**
-   * BEH-EA-001/008 (`AuthPlugin.ts`'s own doc comment): a plugin's `layer`
+   * BEH-EA-1/008 (`AuthPlugin.ts`'s own doc comment): a plugin's `layer`
    * static is added by the plugin author, not by `AuthPlugin.Service`
    * itself — `Auth.make` reads it directly off the class
    * (`AuthPlugin.Any["layer"]`), so it must live here rather than as a
@@ -663,7 +663,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
-      // ERS-002: mail is dispatched in the background (BEH-EA-064/113) by a
+      // ERS-002: mail is dispatched in the background (BEH-EA-64/113) by a
       // dispatcher this layer owns — supervised, retried, bounded, observable
       // and drained on shutdown — in place of unowned `forkDetach` fibers.
       const mailDispatcher = yield* MailDispatch.make;
@@ -858,7 +858,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
         }
         // BEH-EA-113's own sketch has no `name` input at all — a `User`
-        // record requires one (BEH-EA-041), so the email's local part is
+        // record requires one (BEH-EA-41), so the email's local part is
         // used as a placeholder the user can change later via
         // `updateProfile`.
         const name = input.email.split("@")[0] ?? input.email;
@@ -1097,7 +1097,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* rateLimit(rules.requestResetByIp, input);
         yield* rateLimit(rules.requestReset, input);
         const userOpt = yield* users.findByEmail(input.email);
-        // TSS-001/EEM-001/MLO-001: BEH-EA-064 requires the response to be
+        // TSS-001/EEM-001/MLO-001: BEH-EA-64 requires the response to be
         // uniform whether or not `email` resolves to an account — status
         // and body alone aren't enough, since an inline-awaited
         // `verification.issue` + real `mailer.send` (network I/O) only
@@ -1123,7 +1123,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // ARF-004: an OAuth-/passkey-only account has no password to
               // reset — a token would only lead to a dead link. Looked up
               // here, inside the dispatched work, so both branches still cost
-              // the same on the response path (BEH-EA-064).
+              // the same on the response path (BEH-EA-64).
               const to = Users.emailOf(user);
               if (Option.isNone(to)) return;
               const account = yield* accounts.findByProviderSubject(
@@ -1193,7 +1193,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
         }
 
-        // ARF-001: BEH-EA-058/117 require consuming the token, setting the
+        // ARF-001: BEH-EA-58/117 require consuming the token, setting the
         // new password, and revoking every other session to commit as one
         // unit — three independent commits previously left a crash-window
         // where the token was burned but the old password still live, or
@@ -1215,7 +1215,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               }
               const userId = consumed.userId.value;
 
-              // ARF-005 (BEH-EA-232): mailbox possession alone must not rewrite the credential of
+              // ARF-005 (BEH-EA-256): mailbox possession alone must not rewrite the credential of
               // an account a second factor protects. The veto runs inside this transaction, after
               // the token is consumed and before anything is changed, so a refusal rolls the
               // consume back (SQL) and nothing is written. `TWO_FACTOR_REQUIRED` gets its own typed
@@ -1393,7 +1393,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* accounts.updateCredentialHash(account.id, Redacted.make(hash)).pipe(Effect.orDie);
         yield* events.publish({ _tag: "auth.password.changed", userId: input.userId });
 
-        // BEH-EA-053: revoke every *other* session first, while
+        // BEH-EA-53: revoke every *other* session first, while
         // `currentSessionId` still names a live row — then supersede that
         // row with a freshly minted one. Reversing this order would leave
         // `revokeOthers` nothing to `keep` (the superseded id no longer

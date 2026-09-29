@@ -9,7 +9,7 @@
 // default and would make every application that installs no roles plugin
 // fail to resolve it at all), plus a literal, introspectable key.
 //
-// **BEH-EA-012's compile-time `SlotConflict<P>` check (INV-EA-004: two
+// **BEH-EA-12's compile-time `SlotConflict<P>` check (INV-EA-004: two
 // plugins overriding the same slot is a type error at `Auth.make`) does not
 // exist, for a confirmed structural reason, not a gap left open for later**:
 // `Slots.ts`'s own header comment records the finding — `Context.Reference`'s
@@ -45,7 +45,7 @@ const isPermissionKey = (scope: string): scope is PermissionKey => {
 };
 
 /**
- * AAPS-006/SOS-005/HSK-005 (BEH-EA-231): the attributes every `User` subject carries, from the
+ * AAPS-006/SOS-005/HSK-005 (BEH-EA-255): the attributes every `User` subject carries, from the
  * resolved principal — `actingAs` (BEH-EA-142) when impersonating, plus how the session was
  * authenticated: `amr` (RFC 8176 method references, `[]` when the issuing path recorded none —
  * the floor, never a guess), `authenticatedAt` (epoch seconds, absent when unknown), `aal` (the

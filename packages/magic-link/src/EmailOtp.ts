@@ -1,6 +1,6 @@
 // @awthaq/magic-link — EmailOtp
 //
-// SOS-001, BCR-005, SOS-004, MLO-002 (BEH-EA-244 to BEH-EA-247, wayfinder ticket 05 §3): the shared
+// SOS-001, BCR-005, SOS-004, MLO-002 (BEH-EA-268 to BEH-EA-271, wayfinder ticket 05 §3): the shared
 // channel-OTP substrate — a short numeric code mailed to an address, traded for a session. It is
 // the same channel credential as `MagicLink` (see `Channel.ts`) with a different artifact: where a
 // link is 256 bits nobody can guess, a six-digit code is a million possibilities, so everything
@@ -19,7 +19,7 @@
 //   bounds how many codes an attacker can ask for, and so how many total guesses.
 //
 // `request` is uniform (`202` for every address, nothing that varies by account existence happens
-// on the response path, BEH-EA-064). `verify`'s every failure is the one `InvalidEmailOtp`. A proven
+// on the response path, BEH-EA-64). `verify`'s every failure is the one `InvalidEmailOtp`. A proven
 // mailbox goes through `Channel.complete`, so a 2FA-enrolled user is diverted to `TwoFactorRequired`
 // and the session records `["otp", "email"]` — one factor's worth of assurance (see `Assurance`).
 //
@@ -148,12 +148,12 @@ export interface IssuedSession {
 }
 
 export interface EmailOtpShape {
-  /** BEH-EA-245: always resolves (or is rate limited) — never says whether an account exists or a code was mailed. */
+  /** BEH-EA-269: always resolves (or is rate limited) — never says whether an account exists or a code was mailed. */
   readonly requestCode: (input: {
     readonly email: string;
     readonly ip?: string | undefined;
   }) => Effect.Effect<void, Api.RateLimited>;
-  /** BEH-EA-246: trades a code for a session. */
+  /** BEH-EA-270: trades a code for a session. */
   readonly verify: (
     input: {
       readonly email: string;
@@ -229,7 +229,7 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
 export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("emailOtp", {
   apiVersion: 1,
   contract: EmailOtpApi.EmailOtpApi,
-  // BEH-EA-247: no table — the codes are `Verification` rows (`verification_tokens`, core's).
+  // BEH-EA-271: no table — the codes are `Verification` rows (`verification_tokens`, core's).
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(EmailOtp, {

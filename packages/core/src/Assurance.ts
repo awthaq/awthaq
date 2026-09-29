@@ -1,6 +1,6 @@
 // @awthaq/core — Assurance
 //
-// SOS-005/AAPS-006 (BEH-EA-231): the vocabulary a policy uses to ask "how strongly was this
+// SOS-005/AAPS-006 (BEH-EA-255): the vocabulary a policy uses to ask "how strongly was this
 // session authenticated" without re-deriving it from `amr` at every check. A session records the
 // RFC 8176 method references that created it (`Sessions.AuthMethod`, THS-003); this module maps
 // that list onto NIST SP 800-63B authenticator assurance levels, in one pure function, so

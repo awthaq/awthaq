@@ -1,7 +1,7 @@
 // @awthaq/two-factor — TwoFactorApi
 //
-// THS-001 step 10 (BEH-EA-233 to BEH-EA-239): this plugin's own HTTP contract — two groups, both
-// named `two_factor` or a dotted sub-id of it (BEH-EA-004):
+// THS-001 step 10 (BEH-EA-257 to BEH-EA-263): this plugin's own HTTP contract — two groups, both
+// named `two_factor` or a dotted sub-id of it (BEH-EA-4):
 //
 // - `two_factor` — public and anonymous by construction: `verify` / `verify-recovery` are how a
 //   caller who has passed a first factor and holds a `challengeId` (the `TwoFactorRequired` a
@@ -26,7 +26,7 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 /**
- * BEH-EA-235: the presented code (TOTP or recovery), the challenge, or the challenge's attempt
+ * BEH-EA-259: the presented code (TOTP or recovery), the challenge, or the challenge's attempt
  * budget did not check out — deliberately one error for a wrong code, an unknown, expired,
  * replayed or foreign challenge, and a factor that was disabled meanwhile, so the response says
  * nothing about which. When the challenge still has attempts left, `challengeId` is the *fresh*
@@ -54,7 +54,7 @@ export class TwoFactorNotEnabled extends Schema.TaggedError<TwoFactorNotEnabled>
 ) {}
 
 /**
- * BEH-EA-236: enrolling, disabling or regenerating needs a session that proved a credential
+ * BEH-EA-260: enrolling, disabling or regenerating needs a session that proved a credential
  * recently — otherwise a hijacked cookie could quietly swap the victim's second factor for the
  * attacker's. `403`, like `PasskeyReauthRequired`: the session is live, its freshness forbids
  * this action; step up (`/password/reauthenticate`, `/passkey/reauthenticate/*`) and retry.
@@ -95,13 +95,13 @@ export type ConfirmPayload = typeof ConfirmPayload.Type;
 export const CodePayload = Schema.Struct({ code: Code });
 export type CodePayload = typeof CodePayload.Type;
 
-/** BEH-EA-236: what `enable` returns, once — the secret for manual entry and the `otpauth://` link a QR code carries. */
+/** BEH-EA-260: what `enable` returns, once — the secret for manual entry and the `otpauth://` link a QR code carries. */
 export class EnrollmentDto extends Schema.Class<EnrollmentDto>("TwoFactorEnrollmentDto")({
   secret: Schema.String,
   otpauthUri: Schema.String,
 }) {}
 
-/** BEH-EA-237: the fresh recovery codes, shown once. Only their hashes are stored. */
+/** BEH-EA-261: the fresh recovery codes, shown once. Only their hashes are stored. */
 export class RecoveryCodesDto extends Schema.Class<RecoveryCodesDto>("TwoFactorRecoveryCodesDto")({
   recoveryCodes: Schema.Array(Schema.String),
 }) {}

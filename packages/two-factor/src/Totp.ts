@@ -1,6 +1,6 @@
 // @awthaq/two-factor — Totp
 //
-// THS-001 step 1 (BEH-EA-233): the pure algorithm, with no plugin, store or clock in sight —
+// THS-001 step 1 (BEH-EA-257): the pure algorithm, with no plugin, store or clock in sight —
 // RFC 4226 HOTP, RFC 6238 TOTP (HMAC-SHA-1, the algorithm every authenticator app implements),
 // RFC 4648 base32 (the alphabet an authenticator's manual-entry field takes) and the Key Uri
 // Format `otpauth://` link a QR code carries. It is sequenced first because the rest of the

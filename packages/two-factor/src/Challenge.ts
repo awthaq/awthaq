@@ -1,13 +1,13 @@
 // @awthaq/two-factor — Challenge
 //
-// THS-001 step 5, TTE-008, THS-007 (BEH-EA-235; ADR-EA-020 decision 2): the pre-session state of a
+// THS-001 step 5, TTE-008, THS-007 (BEH-EA-259; ADR-EA-020 decision 2): the pre-session state of a
 // sign-in that passed its first factor and now owes a second, as a small state machine the type
 // system enforces.
 //
 // The state lives in `Verification` (not a cookie): `verification.issue` under the identifier
 // `two-factor-challenge:<userId>`. Issuing supersedes any earlier live challenge for that identifier
 // (one live challenge per account), the value is single-use, and every failed or replayed consume
-// publishes `auth.token.replay` (BEH-EA-059). The `challengeId` the client holds is
+// publishes `auth.token.replay` (BEH-EA-59). The `challengeId` the client holds is
 // `two-factor-challenge:<userId>.<value>` — the user id is not a secret here (`TwoFactorRequired`
 // already tells the client whose second factor is owed), and because the identifier is derived from
 // the claimed user, a challenge minted for user A cannot be consumed as user B's.

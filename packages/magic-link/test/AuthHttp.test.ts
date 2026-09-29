@@ -1,4 +1,4 @@
-// BAM-007, MLO-005, SOS-001 (BEH-EA-240/242/244/246): the wire contract of both plugins over a real
+// BAM-007, MLO-005, SOS-001 (BEH-EA-264/266/268/270): the wire contract of both plugins over a real
 // `HttpRouter`, and the property that matters most for a link: nothing under `/magic-link` (or
 // `/email-otp`) is a GET, so a mail scanner or a browser prefetch cannot consume a link.
 import { Api } from "@awthaq/api";

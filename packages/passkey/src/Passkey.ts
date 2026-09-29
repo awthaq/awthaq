@@ -63,7 +63,7 @@ import * as PasskeyCredentials from "./PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
 
 /**
- * HSK-005/THS-003 (BEH-EA-231): how a verified assertion authenticated the user, as RFC 8176
+ * HSK-005/THS-003 (BEH-EA-255): how a verified assertion authenticated the user, as RFC 8176
  * method references — `hwk` for a device-bound (`singleDevice`) credential, `swk` for a synced
  * (`multiDevice`) one, plus `user` when the authenticator performed user verification. This is
  * what lets a policy require a hardware-bound key (`amr contains "hwk"`) or user verification,
@@ -77,7 +77,7 @@ const passkeyAmr = (verified: {
   return verified.userVerified ? [key, "user"] : [key];
 };
 
-/** BEH-EA-044-style reserved provider id, this plugin's own concern (BEH-EA-004: confined to its own scope). */
+/** BEH-EA-44-style reserved provider id, this plugin's own concern (BEH-EA-4: confined to its own scope). */
 const PASSKEY_PROVIDER_ID = "passkey";
 
 /**
@@ -199,7 +199,7 @@ const defaultPasskeyConfig: PasskeyConfigShape = {
   counterAnomalyPolicy: "flag",
 };
 
-/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
+/** BEH-EA-17's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
 export const PasskeyConfig: Context.Reference<PasskeyConfigShape> = Context.Reference(
   "awthaq/passkey/Config",
   { defaultValue: () => defaultPasskeyConfig },
@@ -1632,7 +1632,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           if (Option.isNone(accountOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyCredentialNotFound());
           }
-          // BEH-EA-045/134: the existing cross-plugin invariant, not a
+          // BEH-EA-45/134: the existing cross-plugin invariant, not a
           // passkey-specific reimplementation of "don't strand the account".
           // Unlink MUST run first — it's the only place the last-credential
           // guard is enforced, so deleting the credential row before this

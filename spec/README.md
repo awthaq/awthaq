@@ -34,7 +34,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The planned delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
 | [spec/decisions/](decisions/) | `ADR-EA-001`–`015` | Fifteen architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). |
-| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`208` | Twenty-six files, eight behaviors each, grouped by subsystem — the catalog a future BDD/acceptance-test suite is meant to trace to (see table below). |
+| [spec/behaviors/](behaviors/) | `BEH-EA-1`–`208` | Twenty-six files, eight behaviors each, grouped by subsystem — the catalog a future BDD/acceptance-test suite is meant to trace to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Three files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -124,9 +124,9 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `25-testing-harness.md` | 193–200 | Testing Harness |
 | `26-cli.md` | 201–208, 225–229 | CLI |
 | `27-admin-impersonation.md` | 209–224 | Admin and Impersonation |
-| `28-two-factor.md` | 233–239 | Two-Factor Authentication |
-| `29-magic-link.md` | 240–243 | Magic Link |
-| `30-email-otp.md` | 244–247 | Email OTP |
+| `31-two-factor.md` | 257–263 | Two-Factor Authentication |
+| `32-magic-link.md` | 264–267 | Magic Link |
+| `33-email-otp.md` | 268–271 | Email OTP |
 
 ### `spec/process/`
 

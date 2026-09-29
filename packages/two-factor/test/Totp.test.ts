@@ -1,4 +1,4 @@
-// THS-001 step 1 (BEH-EA-233): the pure RFC 4226 / RFC 6238 module, against the published vectors.
+// THS-001 step 1 (BEH-EA-257): the pure RFC 4226 / RFC 6238 module, against the published vectors.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
