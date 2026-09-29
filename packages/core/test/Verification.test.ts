@@ -390,7 +390,9 @@ describe("Verification (layerMemory) pruning (TMS-004)", () => {
       assert.isTrue(
         yield* verification.reserve({ identifier: "spray:0", ttl: Duration.seconds(1) }),
       );
-      assert.isFalse(yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) }));
+      assert.isFalse(
+        yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) }),
+      );
     }).pipe(Effect.provide(MemoryLayer)),
   );
 });

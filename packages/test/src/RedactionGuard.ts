@@ -38,7 +38,13 @@ import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import { AuthEvents } from "@awthaq/core";
 
-export type Channel = "span attribute" | "span event" | "log message" | "log annotation" | "log cause" | "event";
+export type Channel =
+  | "span attribute"
+  | "span event"
+  | "log message"
+  | "log annotation"
+  | "log cause"
+  | "event";
 
 export interface Leak {
   readonly channel: Channel;
@@ -216,7 +222,12 @@ export const layer = Layer.unwrap(
     const logger = Logger.make((options) => {
       const level = options.logLevel;
       scan(recorder, "log message", level, options.message);
-      scan(recorder, "log annotation", level, options.fiber.getRef(References.CurrentLogAnnotations));
+      scan(
+        recorder,
+        "log annotation",
+        level,
+        options.fiber.getRef(References.CurrentLogAnnotations),
+      );
       scan(recorder, "log cause", level, options.cause);
     });
     return Layer.mergeAll(

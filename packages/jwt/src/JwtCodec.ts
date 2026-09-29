@@ -124,8 +124,14 @@ export const peekTyp = (token: string): Option.Option<string> => {
 interface AlgorithmSpec {
   /** `kty` a JWK for this algorithm must carry. */
   readonly kty: "OKP" | "EC" | "RSA";
-  readonly importParams: webcrypto.AlgorithmIdentifier | webcrypto.RsaHashedImportParams | webcrypto.EcKeyImportParams;
-  readonly signParams: webcrypto.AlgorithmIdentifier | webcrypto.RsaPssParams | webcrypto.EcdsaParams;
+  readonly importParams:
+    | webcrypto.AlgorithmIdentifier
+    | webcrypto.RsaHashedImportParams
+    | webcrypto.EcKeyImportParams;
+  readonly signParams:
+    | webcrypto.AlgorithmIdentifier
+    | webcrypto.RsaPssParams
+    | webcrypto.EcdsaParams;
   readonly generateParams: (
     rsaModulusLength: number,
   ) => webcrypto.AlgorithmIdentifier | webcrypto.RsaHashedKeyGenParams | webcrypto.EcKeyGenParams;

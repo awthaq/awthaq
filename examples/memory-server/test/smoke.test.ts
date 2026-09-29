@@ -131,11 +131,19 @@ describe("examples/memory-server (TS-007)", () => {
 
     const blocked = await signIn(email, PASSWORD);
     assert.strictEqual(blocked.status, 403);
-    assert.strictEqual(((await blocked.json()) as { readonly _tag: string })._tag, "EmailNotVerified");
+    assert.strictEqual(
+      ((await blocked.json()) as { readonly _tag: string })._tag,
+      "EmailNotVerified",
+    );
 
-    const mail = printedMail.find((line) => line["to"] === email && line["template"] === "verify-email");
+    const mail = printedMail.find(
+      (line) => line["to"] === email && line["template"] === "verify-email",
+    );
     assert.isString(mail?.["token"]);
-    assert.strictEqual((await call("POST", "/verify-email", { body: { token: mail?.["token"] } })).status, 204);
+    assert.strictEqual(
+      (await call("POST", "/verify-email", { body: { token: mail?.["token"] } })).status,
+      204,
+    );
 
     const signedIn = await signIn(email, PASSWORD);
     assert.strictEqual(signedIn.status, 200);

@@ -290,11 +290,7 @@ export interface UsersShape {
     identity: PromotedIdentity,
   ) => Effect.Effect<
     UserRecord,
-    | UserNotFound
-    | IdentityMismatch
-    | EmailAlreadyExists
-    | PhoneAlreadyExists
-    | StoreUnavailable
+    UserNotFound | IdentityMismatch | EmailAlreadyExists | PhoneAlreadyExists | StoreUnavailable
   >;
   /**
    * BAM-009: replaces the email of an Email-identity user and resets
@@ -390,8 +386,7 @@ const identityAlreadyExists = (
       )
     : Effect.fail(alreadyExists(identity));
 
-const userNotFound = (id: UserId) =>
-  new UserNotFound({ message: "awthaq: no such user", id });
+const userNotFound = (id: UserId) => new UserNotFound({ message: "awthaq: no such user", id });
 
 const identityMismatch = (
   id: UserId,
@@ -933,7 +928,9 @@ export const layerSql: Layer.Layer<
     const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
       const identity = normalizeIdentity(input.identity);
       const insert = yield* buildInsert(input, identity);
-      const inserted = yield* repo.insertIfAbsent(insert).pipe(orStoreUnavailable("Users.createOrGet"));
+      const inserted = yield* repo
+        .insertIfAbsent(insert)
+        .pipe(orStoreUnavailable("Users.createOrGet"));
       if (Option.isSome(inserted)) {
         return { user: yield* toUserRecord(inserted.value), created: true };
       }

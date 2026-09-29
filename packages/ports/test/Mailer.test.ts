@@ -101,37 +101,42 @@ describe("Mailer.MailDeliveryFailed", () => {
 });
 
 describe("Mailer.layerConsole (DESS-002)", () => {
-  it.effect("logs the recipient, template and data (a Redacted token unwrapped) and records the message for `sent`", () =>
-    Effect.gen(function* () {
-      const logged: Array<{ readonly message: string; readonly annotations: Record<string, unknown> }> = [];
-      const capture = Logger.make<unknown, void>((options) => {
-        logged.push({
-          message: JSON.stringify(options.message),
-          annotations: { ...options.fiber.getRef(References.CurrentLogAnnotations) },
+  it.effect(
+    "logs the recipient, template and data (a Redacted token unwrapped) and records the message for `sent`",
+    () =>
+      Effect.gen(function* () {
+        const logged: Array<{
+          readonly message: string;
+          readonly annotations: Record<string, unknown>;
+        }> = [];
+        const capture = Logger.make<unknown, void>((options) => {
+          logged.push({
+            message: JSON.stringify(options.message),
+            annotations: { ...options.fiber.getRef(References.CurrentLogAnnotations) },
+          });
         });
-      });
-      const mailer = yield* Mailer.Mailer;
-      yield* mailer
-        .send({
+        const mailer = yield* Mailer.Mailer;
+        yield* mailer
+          .send({
+            to: "ada@example.com",
+            template: "verify-email",
+            data: { token: Redacted.make("tok-123"), locale: "en" },
+          })
+          .pipe(Effect.provide(Logger.layer([capture])));
+        assert.strictEqual(logged.length, 1);
+        assert.include(logged[0]?.message, "awthaq mail");
+        assert.deepStrictEqual(logged[0]?.annotations, {
           to: "ada@example.com",
           template: "verify-email",
-          data: { token: Redacted.make("tok-123"), locale: "en" },
-        })
-        .pipe(Effect.provide(Logger.layer([capture])));
-      assert.strictEqual(logged.length, 1);
-      assert.include(logged[0]?.message, "awthaq mail");
-      assert.deepStrictEqual(logged[0]?.annotations, {
-        to: "ada@example.com",
-        template: "verify-email",
-        token: "tok-123",
-        locale: "en",
-      });
-      const sent = yield* mailer.sent;
-      assert.deepStrictEqual(
-        sent.map((message) => [message.to, message.template]),
-        [["ada@example.com", "verify-email"]],
-      );
-      assert.isTrue(mailer.development);
-    }).pipe(Effect.provide(Mailer.layerConsole)),
+          token: "tok-123",
+          locale: "en",
+        });
+        const sent = yield* mailer.sent;
+        assert.deepStrictEqual(
+          sent.map((message) => [message.to, message.template]),
+          [["ada@example.com", "verify-email"]],
+        );
+        assert.isTrue(mailer.development);
+      }).pipe(Effect.provide(Mailer.layerConsole)),
   );
 });

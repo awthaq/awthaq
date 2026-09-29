@@ -24,7 +24,9 @@ const trace = (name: string, transform: (value: string) => string) => (value: st
   });
 
 const AlphaApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("alpha").add(HttpApiEndpoint.get("alpha", "/alpha", { success: Schema.String })),
+  HttpApiGroup.make("alpha").add(
+    HttpApiEndpoint.get("alpha", "/alpha", { success: Schema.String }),
+  ),
 );
 const BetaApi = HttpApi.make("auth").add(
   HttpApiGroup.make("beta").add(HttpApiEndpoint.get("beta", "/beta", { success: Schema.String })),
@@ -36,7 +38,12 @@ class Alpha extends AuthPlugin.Service<Alpha, {}>()("alpha", {
 }) {
   static readonly layer = AuthPlugin.layer(Alpha, {
     make: Effect.succeed({}),
-    taps: [Normalize.declareTap(trace("alpha", (value) => value.toLowerCase()), { order: 5 })],
+    taps: [
+      Normalize.declareTap(
+        trace("alpha", (value) => value.toLowerCase()),
+        { order: 5 },
+      ),
+    ],
     handlers: HttpApiBuilder.group(AlphaApi, "alpha", (handlers) =>
       handlers.handle("alpha", () => Effect.succeed("alpha")),
     ),
@@ -52,7 +59,12 @@ class Beta extends AuthPlugin.Service<Beta, {}>()("beta", {
   static readonly layer = AuthPlugin.layer(Beta, {
     dependsOn: [Alpha],
     make: Effect.succeed({}),
-    taps: [Normalize.declareTap(trace("beta", (value) => `${value}!`), { order: 0 })],
+    taps: [
+      Normalize.declareTap(
+        trace("beta", (value) => `${value}!`),
+        { order: 0 },
+      ),
+    ],
     handlers: HttpApiBuilder.group(BetaApi, "beta", (handlers) =>
       handlers.handle("beta", () => Effect.succeed("beta")),
     ),
@@ -71,21 +83,23 @@ describe("Auth.make manifest.hooks (BEH-EA-096)", () => {
     assert.deepStrictEqual(Beta.taps, [{ point: "awthaq/hook/auth.test.normalize", order: 0 }]);
   });
 
-  it.effect("the executed chain agrees with the manifest, and taps carry their plugin as owner", () =>
-    Effect.gen(function* () {
-      seen.length = 0;
-      const point = yield* Normalize;
-      const resolved = yield* point.resolved;
-      assert.deepStrictEqual(resolved, [
-        { owner: "alpha", order: 5 },
-        { owner: "beta", order: 0 },
-      ]);
-      assert.strictEqual(yield* point.run("ABC"), "abc!");
-      assert.deepStrictEqual(seen, ["alpha", "beta"]);
-    }).pipe(
-      // The plugins' layers require the hook point (a tap requires its point), so the
-      // composed layer's RIn names it and the host provides it once.
-      Effect.provide(Auth.make([Alpha, Beta]).layer.pipe(Layer.provideMerge(Normalize.layer))),
-    ),
+  it.effect(
+    "the executed chain agrees with the manifest, and taps carry their plugin as owner",
+    () =>
+      Effect.gen(function* () {
+        seen.length = 0;
+        const point = yield* Normalize;
+        const resolved = yield* point.resolved;
+        assert.deepStrictEqual(resolved, [
+          { owner: "alpha", order: 5 },
+          { owner: "beta", order: 0 },
+        ]);
+        assert.strictEqual(yield* point.run("ABC"), "abc!");
+        assert.deepStrictEqual(seen, ["alpha", "beta"]);
+      }).pipe(
+        // The plugins' layers require the hook point (a tap requires its point), so the
+        // composed layer's RIn names it and the host provides it once.
+        Effect.provide(Auth.make([Alpha, Beta]).layer.pipe(Layer.provideMerge(Normalize.layer))),
+      ),
   );
 });

@@ -22,7 +22,12 @@ await runMigrations();
 
 // A password user (credential account), signed up through better-auth's own API.
 await auth.api.signUpEmail({
-  body: { name: "Ada Lovelace", email: "ada@example.com", password: "ExistingUser123!", plan: "pro" },
+  body: {
+    name: "Ada Lovelace",
+    email: "ada@example.com",
+    password: "ExistingUser123!",
+    plan: "pro",
+  },
 });
 db.prepare("UPDATE user SET emailVerified = 1 WHERE email = ?").run("ada@example.com");
 

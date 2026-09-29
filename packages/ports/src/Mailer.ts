@@ -92,9 +92,11 @@ export const layerNoop: Layer.Layer<Mailer> = Layer.succeed(
   Mailer,
   Mailer.of({
     send: (message) =>
-      Defects.invalidConfiguration("Mailer", // EOTS-010: the template only — never the recipient.
-          `awthaq: no Mailer configured — dropped a "${message.template}" message. ` +
-            "Provide a real Mailer layer (or Mailer.layerMemory for tests)."),
+      Defects.invalidConfiguration(
+        "Mailer", // EOTS-010: the template only — never the recipient.
+        `awthaq: no Mailer configured — dropped a "${message.template}" message. ` +
+          "Provide a real Mailer layer (or Mailer.layerMemory for tests).",
+      ),
     sent: Effect.succeed([]),
     development: true,
   }),

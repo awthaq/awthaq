@@ -42,46 +42,52 @@ const code = <A, E>(exit: Exit.Exit<A, E>) => {
 const yes = { yes: true, dryRun: false, allowEmpty: false };
 
 describe.skipIf(postgresUrl === undefined)("migration status|apply on Postgres", () => {
-  it.effect("apply, then status and a second apply on the already-migrated database (regclass codec)", () =>
-    Effect.gen(function* () {
-      const url = postgresUrl ?? "";
-      // A scratch schema, dropped and recreated so the run starts from nothing.
-      yield* Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-        yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
-      }).pipe(Effect.provide(Database.layerFor(url)));
+  it.effect(
+    "apply, then status and a second apply on the already-migrated database (regclass codec)",
+    () =>
+      Effect.gen(function* () {
+        const url = postgresUrl ?? "";
+        // A scratch schema, dropped and recreated so the run starts from nothing.
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+          yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
+        }).pipe(Effect.provide(Database.layerFor(url)));
 
-      const first = yield* run(Migration.apply(passwordAndRoles, yes), url);
-      assert.strictEqual(code(first.exit), 0);
-      const core = (yield* CoreMigrations.coreMigrations).length;
-      assert.isTrue(first.stdout.some((line) => line.startsWith(`applied ${core + 2} migration(s)`)));
+        const first = yield* run(Migration.apply(passwordAndRoles, yes), url);
+        assert.strictEqual(code(first.exit), 0);
+        const core = (yield* CoreMigrations.coreMigrations).length;
+        assert.isTrue(
+          first.stdout.some((line) => line.startsWith(`applied ${core + 2} migration(s)`)),
+        );
 
-      // The ledgers now exist. This is the call that used to fail: status reads them...
-      const status = yield* run(Migration.status(passwordAndRoles), url);
-      assert.strictEqual(code(status.exit), 0);
-      assert.include(status.stdout[0] ?? "", `${core} applied, 0 pending`);
+        // The ledgers now exist. This is the call that used to fail: status reads them...
+        const status = yield* run(Migration.status(passwordAndRoles), url);
+        assert.strictEqual(code(status.exit), 0);
+        assert.include(status.stdout[0] ?? "", `${core} applied, 0 pending`);
 
-      // ... and a later apply runs the migrator again over the *existing* ledgers. Leave one plugin
-      // migration pending (as if a newer release added it), so the migrator really does run
-      // `select 'ledger'::regclass` against a ledger that exists — the call that wrecked the connection.
-      yield* Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql.unsafe(`DROP INDEX ${schema}.role_assignments_user_id`);
-        yield* sql.unsafe(`DELETE FROM ${schema}.awthaq_plugin_migrations WHERE migration_id = 2`);
-      }).pipe(Effect.provide(Database.layerFor(url)));
-      const again = yield* run(Migration.apply(passwordAndRoles, yes), url);
-      assert.strictEqual(code(again.exit), 0);
-      assert.isTrue(again.stdout.some((line) => line.startsWith("applied 1 migration(s)")));
+        // ... and a later apply runs the migrator again over the *existing* ledgers. Leave one plugin
+        // migration pending (as if a newer release added it), so the migrator really does run
+        // `select 'ledger'::regclass` against a ledger that exists — the call that wrecked the connection.
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql.unsafe(`DROP INDEX ${schema}.role_assignments_user_id`);
+          yield* sql.unsafe(
+            `DELETE FROM ${schema}.awthaq_plugin_migrations WHERE migration_id = 2`,
+          );
+        }).pipe(Effect.provide(Database.layerFor(url)));
+        const again = yield* run(Migration.apply(passwordAndRoles, yes), url);
+        assert.strictEqual(code(again.exit), 0);
+        assert.isTrue(again.stdout.some((line) => line.startsWith("applied 1 migration(s)")));
 
-      // Nothing pending now: exit 4, or 0 with --allow-empty.
-      const nothing = yield* run(Migration.apply(passwordAndRoles, yes), url);
-      assert.strictEqual(code(nothing.exit), 4);
-      const allowed = yield* run(
-        Migration.apply(passwordAndRoles, { ...yes, allowEmpty: true }),
-        url,
-      );
-      assert.strictEqual(code(allowed.exit), 0);
-    }),
+        // Nothing pending now: exit 4, or 0 with --allow-empty.
+        const nothing = yield* run(Migration.apply(passwordAndRoles, yes), url);
+        assert.strictEqual(code(nothing.exit), 4);
+        const allowed = yield* run(
+          Migration.apply(passwordAndRoles, { ...yes, allowEmpty: true }),
+          url,
+        );
+        assert.strictEqual(code(allowed.exit), 0);
+      }),
   );
 });

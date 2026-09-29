@@ -23,14 +23,20 @@ const packages = globSync(["packages/*/package.json"], { cwd: rootDir, absolute:
   .map((file) => ({ dir: path.dirname(file), manifest: JSON.parse(readFileSync(file, "utf8")) }));
 
 const run = (command, args, cwd) => {
-  const result = spawnSync(command, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
+  const result = spawnSync(command, args, {
+    cwd,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
   return result.status ?? 1;
 };
 
 // The changeset status is about the whole release, so it is skipped when narrowed to one package.
-let failed = only === undefined && run("pnpm", ["exec", "changeset", "status", "--verbose"], rootDir) !== 0;
+let failed =
+  only === undefined && run("pnpm", ["exec", "changeset", "status", "--verbose"], rootDir) !== 0;
 
-const selected = only === undefined ? packages : packages.filter(({ manifest }) => manifest.name === only);
+const selected =
+  only === undefined ? packages : packages.filter(({ manifest }) => manifest.name === only);
 if (only !== undefined && selected.length === 0) {
   console.error(`release:dry-run: no package named ${only}`);
   process.exit(1);
@@ -41,7 +47,7 @@ if (only !== undefined && publishable.length === 0) {
   console.error(
     `release:dry-run: ${only} is still "private": true, so it cannot be published yet.\n` +
       "  Prerequisites (MW-005, all manual): a git remote, the @awthaq npm organisation, a trusted publisher\n" +
-      "  for the package naming the release workflow, then drop \"private\": true from its manifest.",
+      '  for the package naming the release workflow, then drop "private": true from its manifest.',
   );
   process.exit(1);
 }
@@ -51,7 +57,8 @@ if (publishable.length === 0) {
 
 for (const { dir, manifest } of publishable) {
   console.log(`release:dry-run: ${manifest.name}`);
-  if (run("pnpm", ["publish", "--dry-run", "--no-git-checks", "--access", "public"], dir) !== 0) failed = true;
+  if (run("pnpm", ["publish", "--dry-run", "--no-git-checks", "--access", "public"], dir) !== 0)
+    failed = true;
 }
 
 process.exit(failed ? 1 : 0);

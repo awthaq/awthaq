@@ -388,7 +388,11 @@ describe("Auth.make", () => {
     const auth = Auth.make([Ping]);
     assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["account", "ping", "session"]);
     // The public tier keeps them (they are not admin-tier); the admin tier stays plugin-only.
-    assert.deepStrictEqual(Object.keys(auth.publicApi.groups).sort(), ["account", "ping", "session"]);
+    assert.deepStrictEqual(Object.keys(auth.publicApi.groups).sort(), [
+      "account",
+      "ping",
+      "session",
+    ]);
     assert.deepStrictEqual(Object.keys(auth.adminApi.groups), []);
     // Typed, not just runtime: `session` is a group id of `api`.
     const ids: keyof typeof auth.api.groups = "session";
@@ -421,7 +425,10 @@ describe("Auth.make", () => {
   });
 
   it("MW-002: a plugin route colliding with a core route is refused with RouteConflict naming core", () => {
-    assert.throws(() => Auth.make([RouteImposter]), /E_ROUTE_CONFLICT: GET \/session\/list contributed by plugin "core"/);
+    assert.throws(
+      () => Auth.make([RouteImposter]),
+      /E_ROUTE_CONFLICT: GET \/session\/list contributed by plugin "core"/,
+    );
   });
 
   it("BEH-EA-016: a circular dependsOn is refused at runtime with the full cycle path", () => {
@@ -512,31 +519,37 @@ describe("Auth.make", () => {
       contract: HttpApi.make("auth"),
     }) {}
     AuthPlugin.layer(Twin2, { dependsOn: [Ping], make: Effect.succeed({}) });
-    assert.doesNotThrow(() => AuthPlugin.layer(Twin2, { dependsOn: [Ping], make: Effect.succeed({}) }));
+    assert.doesNotThrow(() =>
+      AuthPlugin.layer(Twin2, { dependsOn: [Ping], make: Effect.succeed({}) }),
+    );
     assert.deepStrictEqual(
       Twin2.dependsOn.map((dep) => dep.id),
       ["ping"],
     );
   });
 
-  it.effect("INV-EA-004/MA-005: Auth.make of two plugins overriding one slot fails layer build with SlotConflict, with no Slots.layer provided", () =>
-    Effect.gen(function* () {
-      const auth = Auth.make([SlotA, SlotB]);
-      const failure = yield* Effect.scoped(Layer.build(auth.layer)).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "SlotConflict");
-      assert.strictEqual(failure.firstOwner, "slotA");
-      assert.strictEqual(failure.secondOwner, "slotB");
-    }),
+  it.effect(
+    "INV-EA-004/MA-005: Auth.make of two plugins overriding one slot fails layer build with SlotConflict, with no Slots.layer provided",
+    () =>
+      Effect.gen(function* () {
+        const auth = Auth.make([SlotA, SlotB]);
+        const failure = yield* Effect.scoped(Layer.build(auth.layer)).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SlotConflict");
+        assert.strictEqual(failure.firstOwner, "slotA");
+        assert.strictEqual(failure.secondOwner, "slotB");
+      }),
   );
 
-  it.effect("MA-005: a single overrider composes through Auth.make with no Slots.layer, and its override resolves", () =>
-    Effect.gen(function* () {
-      const auth = Auth.make([SlotA]);
-      const resolved = yield* Effect.gen(function* () {
-        return yield* TestResolver;
-      }).pipe(Effect.provide(auth.layer));
-      assert.strictEqual(resolved.who, "slotA");
-    }),
+  it.effect(
+    "MA-005: a single overrider composes through Auth.make with no Slots.layer, and its override resolves",
+    () =>
+      Effect.gen(function* () {
+        const auth = Auth.make([SlotA]);
+        const resolved = yield* Effect.gen(function* () {
+          return yield* TestResolver;
+        }).pipe(Effect.provide(auth.layer));
+        assert.strictEqual(resolved.who, "slotA");
+      }),
   );
 
   it("BEH-EA-032: two plugins contributing the same group id refuses at runtime with a typed GroupIdConflict, naming both plugins", () => {

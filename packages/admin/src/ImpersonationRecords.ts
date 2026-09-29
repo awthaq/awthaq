@@ -726,7 +726,13 @@ export const layerSql = Layer.effect(
         const anyTenant = scope?.anyTenant === true;
         const updated = yield* inTransaction(
           Effect.gen(function* () {
-            const row = yield* endEpisodeQuery({ sessionId, endedAt: now, endedBy, tenantId, anyTenant });
+            const row = yield* endEpisodeQuery({
+              sessionId,
+              endedAt: now,
+              endedBy,
+              tenantId,
+              anyTenant,
+            });
             const record = Option.map(row, toRecord);
             if (Option.isSome(record)) yield* appendEnded(record.value);
             return record;

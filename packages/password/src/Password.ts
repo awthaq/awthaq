@@ -174,7 +174,8 @@ export interface PasswordShape {
     | PasswordApi.WeakPassword
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
-    | HookPoint.HookAborted | Errors.StoreUnavailable
+    | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /**
    * TMS-005: the `signUpEnumeration: "conceal"` flavour of `signUp` — the same
@@ -450,7 +451,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         }
         const issued = yield* password.signUp(signUpInput);
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
       }),
 
@@ -473,7 +477,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...requestUserAgent(request),
         });
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
       }),
 
@@ -556,7 +563,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
         // reaching it is a wiring defect, mirroring `Session.ts`'s own
         // `currentUserPrincipal` guard.
         if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: change-password reached with a non-User principal: ${principal._tag}`);
+          return yield* Defects.invariantViolation(
+            "NonUserPrincipal",
+            `awthaq: change-password reached with a non-User principal: ${principal._tag}`,
+          );
         }
         const delivery = yield* SessionDelivery.mode(request);
         const resolvedAddress = yield* clientAddress.resolve(request);
@@ -569,7 +579,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
           ...requestUserAgent(request),
         });
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
       }),
 
@@ -580,7 +593,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }) {
         const principal = yield* Api.CurrentPrincipal;
         if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`);
+          return yield* Defects.invariantViolation(
+            "NonUserPrincipal",
+            `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`,
+          );
         }
         yield* password.reauthenticate({
           userId: Users.UserId(principal.ref.id),
@@ -679,13 +695,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
        * password, the hash or the identifier.
        */
       const verifyPassword = (candidate: Redacted.Redacted<string>, hash: PasswordHasher.PhcHash) =>
-        hasher
-          .verify(candidate, hash)
-          .pipe(
-            Observability.authSpan(Observability.Span.passwordVerify, {
-              [Observability.Field.strategy]: "password",
-            }),
-          );
+        hasher.verify(candidate, hash).pipe(
+          Observability.authSpan(Observability.Span.passwordVerify, {
+            [Observability.Field.strategy]: "password",
+          }),
+        );
       /**
        * EOTS-001: every operation is one `awthaq.password.<operation>` span
        * (`awthaq.plugin`, `auth.strategy`); the handlers annotate `user.id` once the
@@ -887,7 +901,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   name: vetoedSignUp.name,
                 })
                 .pipe(
-                  Effect.catchTag("Users/EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                  Effect.catchTag(
+                    "Users/EmailAlreadyExists",
+                    () => new PasswordApi.EmailAlreadyExists(),
+                  ),
                   // FAMS-002: `create` is Email-identity here, so a phone conflict is unreachable.
                   Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
                 );
@@ -907,7 +924,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
-        yield* afterSignUp.run({ userId: user.id, email: vetoedSignUp.email, strategy: "password" });
+        yield* afterSignUp.run({
+          userId: user.id,
+          email: vetoedSignUp.email,
+          strategy: "password",
+        });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
@@ -1207,9 +1228,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const userId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              const consumed = yield* verification.consume(identifier, value).pipe(
-                Effect.catchTag("Verification/TokenConsumed", () => new PasswordApi.TokenConsumed()),
-              );
+              const consumed = yield* verification
+                .consume(identifier, value)
+                .pipe(
+                  Effect.catchTag(
+                    "Verification/TokenConsumed",
+                    () => new PasswordApi.TokenConsumed(),
+                  ),
+                );
               // ARF-009: the user comes from the consumed row, never from the
               // token; a row with none is no reset token this plugin issued.
               if (Option.isNone(consumed.userId)) {
@@ -1295,9 +1321,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const verifiedUserId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              const consumed = yield* verification.consume(identifier, value).pipe(
-                Effect.catchTag("Verification/TokenConsumed", () => new PasswordApi.TokenConsumed()),
-              );
+              const consumed = yield* verification
+                .consume(identifier, value)
+                .pipe(
+                  Effect.catchTag(
+                    "Verification/TokenConsumed",
+                    () => new PasswordApi.TokenConsumed(),
+                  ),
+                );
               // ARF-009: the user comes from the consumed row, not the token.
               if (Option.isNone(consumed.userId)) {
                 return yield* Effect.fail(new PasswordApi.TokenConsumed());
@@ -1419,7 +1450,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             // `SessionNotFound` here would mean it was revoked in the
             // narrow window since, a race this endpoint has no
             // request-level recovery for.
-            Defects.invariantViolation("RowVanished", "awthaq: reauthenticate's own current session vanished"),
+            Defects.invariantViolation(
+              "RowVanished",
+              "awthaq: reauthenticate's own current session vanished",
+            ),
           ),
         );
       });

@@ -119,16 +119,18 @@ layer(TestLayer)("TestAuth.layer (BEH-EA-193)", (it) => {
     }),
   );
 
-  it.effect("MW-002: core's GET /session is served from the composed api with no extra wiring", () =>
-    Effect.gen(function* () {
-      const signedIn = yield* TestAuth.signInAs({ email: "session-reader@example.com" });
-      const response = yield* dispatch(
-        new Request("http://localhost/session", { headers: { cookie: signedIn.cookieHeader } }),
-      );
-      assert.strictEqual(response.status, 200);
-      const anonymous = yield* dispatch(new Request("http://localhost/session"));
-      assert.strictEqual(anonymous.status, 401);
-    }),
+  it.effect(
+    "MW-002: core's GET /session is served from the composed api with no extra wiring",
+    () =>
+      Effect.gen(function* () {
+        const signedIn = yield* TestAuth.signInAs({ email: "session-reader@example.com" });
+        const response = yield* dispatch(
+          new Request("http://localhost/session", { headers: { cookie: signedIn.cookieHeader } }),
+        );
+        assert.strictEqual(response.status, 200);
+        const anonymous = yield* dispatch(new Request("http://localhost/session"));
+        assert.strictEqual(anonymous.status, 401);
+      }),
   );
 
   it.effect("with no credential, the same endpoint answers 401 Unauthenticated", () =>
@@ -177,16 +179,21 @@ const PasswordLayer = TestAuth.layer(
   ),
 );
 
-layer(PasswordLayer)("TestAuth.layer — the memory bundle serves Password with no extra layers", (it) => {
-  it.effect("signUp then signIn work with only Authentication, CSRF and an HttpClient supplied", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const users = yield* Users.Users;
-      const secret = Redacted.make("a sufficiently long test password");
-      const issued = yield* password.signUp({ email: "bundle@example.com", password: secret });
-      yield* users.verifyEmail(issued.session.userId);
-      const again = yield* password.signIn({ email: "bundle@example.com", password: secret });
-      assert.strictEqual(again.session.userId, issued.session.userId);
-    }),
-  );
-});
+layer(PasswordLayer)(
+  "TestAuth.layer — the memory bundle serves Password with no extra layers",
+  (it) => {
+    it.effect(
+      "signUp then signIn work with only Authentication, CSRF and an HttpClient supplied",
+      () =>
+        Effect.gen(function* () {
+          const password = yield* Password.Password;
+          const users = yield* Users.Users;
+          const secret = Redacted.make("a sufficiently long test password");
+          const issued = yield* password.signUp({ email: "bundle@example.com", password: secret });
+          yield* users.verifyEmail(issued.session.userId);
+          const again = yield* password.signIn({ email: "bundle@example.com", password: secret });
+          assert.strictEqual(again.session.userId, issued.session.userId);
+        }),
+    );
+  },
+);

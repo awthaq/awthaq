@@ -1,21 +1,13 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignore": [
-    ".scratch/**"
-  ],
+  "ignore": [".scratch/**"],
   "workspaces": {
     ".": {
-      "entry": [
-        "scripts/*.mjs"
-      ],
-      "ignoreDependencies": [
-        "@arethetypeswrong/cli"
-      ]
+      "entry": ["scripts/*.mjs"],
+      "ignoreDependencies": ["@arethetypeswrong/cli"]
     },
     "packages/ports": {
-      "entry": [
-        "src/passwordHasherWorker.ts"
-      ]
+      "entry": ["src/passwordHasherWorker.ts"]
     },
     "packages/two-factor": {
       "ignoreDependencies": [
@@ -40,15 +32,11 @@
       ]
     },
     "packages/cli": {
-      "entry": [
-        "test/fixtures/*.config.ts"
-      ],
+      "entry": ["test/fixtures/*.config.ts"],
       "ignoreExportsUsedInFile": true
     },
     "packages/migrate-better-auth": {
-      "ignore": [
-        "test/fixtures/generate-better-auth-export.mjs"
-      ]
+      "ignore": ["test/fixtures/generate-better-auth-export.mjs"]
     }
   }
 }

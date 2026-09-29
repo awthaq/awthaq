@@ -36,14 +36,19 @@ try {
   const runtime = await cyclesOf(true);
   const typeInclusive = await cyclesOf(false);
   const typeOnly = typeInclusive.filter(
-    (cycle) => !runtime.some((known) => known.length === cycle.length && known.every((f) => cycle.includes(f))),
+    (cycle) =>
+      !runtime.some(
+        (known) => known.length === cycle.length && known.every((f) => cycle.includes(f)),
+      ),
   );
   if (runtime.length > 0) {
     console.error("Circular dependencies found (runtime import cycles)");
     console.error(runtime);
   }
   if (typeOnly.length > 0) {
-    console.error("Circular dependencies found (type-level cycles: only `import type` closes them)");
+    console.error(
+      "Circular dependencies found (type-level cycles: only `import type` closes them)",
+    );
     console.error(typeOnly);
   }
   if (runtime.length > 0 || typeOnly.length > 0) process.exit(1);

@@ -122,7 +122,10 @@ export const config = (
       const ttl = options.ttl ?? Duration.minutes(15);
       const keyGracePeriod = options.keyGracePeriod ?? Duration.days(30);
       if (Duration.toMillis(keyGracePeriod) < Duration.toMillis(ttl)) {
-        return yield* Defects.invalidConfiguration("keyGracePeriod", "awthaq/jwt: keyGracePeriod must be at least ttl, or rotating a key would invalidate tokens it signed that have not expired yet");
+        return yield* Defects.invalidConfiguration(
+          "keyGracePeriod",
+          "awthaq/jwt: keyGracePeriod must be at least ttl, or rotating a key would invalidate tokens it signed that have not expired yet",
+        );
       }
       const sessionCookie = options.sessionCookie ?? false;
       const mirror =
@@ -135,10 +138,16 @@ export const config = (
               ttl: (sessionCookie === true ? undefined : sessionCookie.ttl) ?? Duration.minutes(5),
             };
       if (mirror !== false && !mirror.name.startsWith("__Host-")) {
-        return yield* Defects.invalidConfiguration("sessionCookie.name", "awthaq/jwt: sessionCookie.name must start with __Host- (Secure, Path=/, no Domain)");
+        return yield* Defects.invalidConfiguration(
+          "sessionCookie.name",
+          "awthaq/jwt: sessionCookie.name must start with __Host- (Secure, Path=/, no Domain)",
+        );
       }
       if (mirror !== false && Duration.toMillis(mirror.ttl) <= 0) {
-        return yield* Defects.invalidConfiguration("sessionCookie.ttl", "awthaq/jwt: sessionCookie.ttl must be positive");
+        return yield* Defects.invalidConfiguration(
+          "sessionCookie.ttl",
+          "awthaq/jwt: sessionCookie.ttl must be positive",
+        );
       }
       return {
         issuer: options.issuer,

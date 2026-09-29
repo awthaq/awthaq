@@ -177,7 +177,10 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
           subject: userId,
           credentialHash: Redacted.make(PasswordHasher.PhcHash("old-hash")),
         });
-        yield* accounts.updateCredentialHash(account.id, Redacted.make(PasswordHasher.PhcHash("new-hash")));
+        yield* accounts.updateCredentialHash(
+          account.id,
+          Redacted.make(PasswordHasher.PhcHash("new-hash")),
+        );
         const stored = yield* accounts.findCredentialHash(account.id);
         assert.strictEqual(Redacted.value(Option.getOrThrow(stored)), "new-hash");
       }).pipe(Effect.provide(layer)),
@@ -315,41 +318,46 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("BAM-008: updateCredentialHash and updateProviderTokens treat the id_token correctly", () =>
-      Effect.gen(function* () {
-        const accounts = yield* Accounts.Accounts;
-        const account = yield* accounts.link({
-          userId,
-          providerId: "google",
-          subject: "sub-id-token-2",
-          credentialHash: Redacted.make(PasswordHasher.PhcHash("hash-1")),
-          tokens: {
-            accessToken: Redacted.make("access-id-2"),
+    it.effect(
+      "BAM-008: updateCredentialHash and updateProviderTokens treat the id_token correctly",
+      () =>
+        Effect.gen(function* () {
+          const accounts = yield* Accounts.Accounts;
+          const account = yield* accounts.link({
+            userId,
+            providerId: "google",
+            subject: "sub-id-token-2",
+            credentialHash: Redacted.make(PasswordHasher.PhcHash("hash-1")),
+            tokens: {
+              accessToken: Redacted.make("access-id-2"),
+              refreshToken: Option.none(),
+              idToken: Option.some(Redacted.make("kept.id.token")),
+              accessTokenExpiresAt: Option.none(),
+              refreshTokenExpiresAt: Option.none(),
+              scope: Option.none(),
+              tokenType: Option.none(),
+            },
+          });
+          // Rewriting the credential hash must not null the id_token.
+          yield* accounts.updateCredentialHash(
+            account.id,
+            Redacted.make(PasswordHasher.PhcHash("hash-2")),
+          );
+          const afterHash = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+          assert.strictEqual(Redacted.value(Option.getOrThrow(afterHash.idToken)), "kept.id.token");
+          // A whole-set token update replaces it (here with none).
+          yield* accounts.updateProviderTokens(account.id, {
+            accessToken: Redacted.make("access-id-3"),
             refreshToken: Option.none(),
-            idToken: Option.some(Redacted.make("kept.id.token")),
+            idToken: Option.none(),
             accessTokenExpiresAt: Option.none(),
             refreshTokenExpiresAt: Option.none(),
             scope: Option.none(),
             tokenType: Option.none(),
-          },
-        });
-        // Rewriting the credential hash must not null the id_token.
-        yield* accounts.updateCredentialHash(account.id, Redacted.make(PasswordHasher.PhcHash("hash-2")));
-        const afterHash = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
-        assert.strictEqual(Redacted.value(Option.getOrThrow(afterHash.idToken)), "kept.id.token");
-        // A whole-set token update replaces it (here with none).
-        yield* accounts.updateProviderTokens(account.id, {
-          accessToken: Redacted.make("access-id-3"),
-          refreshToken: Option.none(),
-          idToken: Option.none(),
-          accessTokenExpiresAt: Option.none(),
-          refreshTokenExpiresAt: Option.none(),
-          scope: Option.none(),
-          tokenType: Option.none(),
-        });
-        const replaced = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
-        assert.isTrue(Option.isNone(replaced.idToken));
-      }).pipe(Effect.provide(layer)),
+          });
+          const replaced = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+          assert.isTrue(Option.isNone(replaced.idToken));
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("BE-002: a linked account with no tokens given has none stored", () =>
@@ -428,7 +436,10 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
               tokenType: Option.some("stays-type"),
             },
           });
-          yield* accounts.updateCredentialHash(account.id, Redacted.make(PasswordHasher.PhcHash("hash-2")));
+          yield* accounts.updateCredentialHash(
+            account.id,
+            Redacted.make(PasswordHasher.PhcHash("hash-2")),
+          );
           const stored = yield* accounts.findProviderTokens(account.id);
           const tokens = Option.getOrThrow(stored);
           assert.strictEqual(Redacted.value(tokens.accessToken), "access-stays");

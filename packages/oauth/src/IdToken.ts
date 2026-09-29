@@ -219,7 +219,12 @@ export const verify = (
         CallbackFailure.callbackFailed("kid", error.reason),
       ),
     );
-    const verified = yield* Jwt.verifySignature(alg, jwk, decoded.signingInput, decoded.signature).pipe(
+    const verified = yield* Jwt.verifySignature(
+      alg,
+      jwk,
+      decoded.signingInput,
+      decoded.signature,
+    ).pipe(
       Effect.catchTag("JwtVerificationError", (error) =>
         CallbackFailure.callbackFailed("signature", error.reason),
       ),

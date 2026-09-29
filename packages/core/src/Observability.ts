@@ -129,10 +129,8 @@ export const securityIncidents = Metric.counter("awthaq_security_incident_total"
  * object does not type-check as an attribute, so a secret cannot reach a span
  * through this helper by accident (BEH-EA-199).
  */
-export const authSpan = (
-  name: string,
-  attributes: Readonly<Record<string, string | number | boolean>>,
-) =>
+export const authSpan =
+  (name: string, attributes: Readonly<Record<string, string | number | boolean>>) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.withSpan(name, { attributes }));
 

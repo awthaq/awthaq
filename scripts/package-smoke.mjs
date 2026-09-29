@@ -31,8 +31,10 @@ if (packageJsonPaths.length === 0) {
 
 /** Every relative file an `exports` map points at (wildcard targets are skipped). */
 const exportTargets = (value) => {
-  if (typeof value === "string") return value.startsWith("./") && !value.includes("*") ? [value] : [];
-  if (value !== null && typeof value === "object") return Object.values(value).flatMap(exportTargets);
+  if (typeof value === "string")
+    return value.startsWith("./") && !value.includes("*") ? [value] : [];
+  if (value !== null && typeof value === "object")
+    return Object.values(value).flatMap(exportTargets);
   return [];
 };
 
@@ -45,7 +47,9 @@ const missingBuildOutputs = packageJsonPaths.flatMap((packageJsonPath) => {
 });
 
 if (missingBuildOutputs.length > 0) {
-  console.error("package:smoke: built output is missing, run `pnpm typecheck` (or `pnpm build`) first:");
+  console.error(
+    "package:smoke: built output is missing, run `pnpm typecheck` (or `pnpm build`) first:",
+  );
   for (const missing of missingBuildOutputs) console.error(`  - ${missing}`);
   process.exit(1);
 }

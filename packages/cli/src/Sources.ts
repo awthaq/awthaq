@@ -106,37 +106,33 @@ const betterAuth: SourceAdapter = {
       );
       const tables = BetterAuthSource.counts.pipe(
         Effect.provide(context),
-        Effect.map(
-          (counts): Readonly<Record<string, TableCount>> => ({
-            user: { rows: counts.user, imported: true },
-            account: { rows: counts.account, imported: true },
-            session: {
-              rows: counts.session,
-              imported: false,
-              note: "live sessions are bridged on their next request by LegacySessionBridgeLive (BAM-003)",
-            },
-            verification: {
-              rows: counts.verification,
-              imported: false,
-              note: "short-lived verification tokens are not carried over",
-            },
-          }),
-        ),
+        Effect.map((counts): Readonly<Record<string, TableCount>> => ({
+          user: { rows: counts.user, imported: true },
+          account: { rows: counts.account, imported: true },
+          session: {
+            rows: counts.session,
+            imported: false,
+            note: "live sessions are bridged on their next request by LegacySessionBridgeLive (BAM-003)",
+          },
+          verification: {
+            rows: counts.verification,
+            imported: false,
+            note: "short-lived verification tokens are not carried over",
+          },
+        })),
         Effect.mapError(unavailable("could not read the better-auth source database")),
       );
       const rows = BetterAuthSource.read({ batchSize: source.batchSize }).pipe(
         Stream.provide(context),
         Stream.mapError(unavailable("could not read the better-auth source database")),
-        Stream.map(
-          (raw): SourceRow => ({
-            id: typeof raw.user["id"] === "string" ? raw.user["id"] : "(no id)",
-            map: BetterAuthSource.mapUser(raw, { issuers: source.issuers }).pipe(
-              Effect.mapError(
-                (error) => new Unmappable({ sourceRowId: error.sourceRowId, reason: error.reason }),
-              ),
+        Stream.map((raw): SourceRow => ({
+          id: typeof raw.user["id"] === "string" ? raw.user["id"] : "(no id)",
+          map: BetterAuthSource.mapUser(raw, { issuers: source.issuers }).pipe(
+            Effect.mapError(
+              (error) => new Unmappable({ sourceRowId: error.sourceRowId, reason: error.reason }),
             ),
-          }),
-        ),
+          ),
+        })),
       );
       const open: OpenSource = { tables, rows };
       return open;
@@ -156,7 +152,9 @@ const firebase: SourceAdapter = {
           : yield* ImportFirebaseUser.readHashConfig(hashConfigPath).pipe(
               Effect.provideService(FileSystem.FileSystem, fs),
               Effect.mapError(
-                unavailable("could not read the Firebase hash config (--source-option hash-config=<file>)"),
+                unavailable(
+                  "could not read the Firebase hash config (--source-option hash-config=<file>)",
+                ),
               ),
             );
       const users = ImportFirebaseUser.readUsers(source.location).pipe(
@@ -164,24 +162,25 @@ const firebase: SourceAdapter = {
         Stream.mapError(unavailable("could not read the Firebase users export")),
       );
       const tables = Stream.runCount(users).pipe(
-        Effect.map(
-          (rows): Readonly<Record<string, TableCount>> => ({ users: { rows, imported: true } }),
-        ),
+        Effect.map((rows): Readonly<Record<string, TableCount>> => ({
+          users: { rows, imported: true },
+        })),
       );
       const rows = users.pipe(
-        Stream.map(
-          (raw): SourceRow => ({
-            id:
-              typeof raw === "object" && raw !== null && "localId" in raw && typeof raw.localId === "string"
-                ? raw.localId
-                : "(no localId)",
-            map: ImportFirebaseUser.mapUser(raw, { config, issuers: source.issuers }).pipe(
-              Effect.mapError(
-                (error) => new Unmappable({ sourceRowId: error.sourceRowId, reason: error.reason }),
-              ),
+        Stream.map((raw): SourceRow => ({
+          id:
+            typeof raw === "object" &&
+            raw !== null &&
+            "localId" in raw &&
+            typeof raw.localId === "string"
+              ? raw.localId
+              : "(no localId)",
+          map: ImportFirebaseUser.mapUser(raw, { config, issuers: source.issuers }).pipe(
+            Effect.mapError(
+              (error) => new Unmappable({ sourceRowId: error.sourceRowId, reason: error.reason }),
             ),
-          }),
-        ),
+          ),
+        })),
       );
       const open: OpenSource = { tables, rows };
       return open;
@@ -219,4 +218,3 @@ export const sourceNames: ReadonlyArray<string> = adapterList.map((adapter) => a
 function validatedNames() {
   return adapterList.filter((adapter) => adapter.validated).map((adapter) => adapter.name);
 }
-

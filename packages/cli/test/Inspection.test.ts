@@ -23,7 +23,9 @@ describe("routes", () => {
   it.effect("lists every endpoint of the composition with its owning plugin", () =>
     Effect.gen(function* () {
       const routes = yield* Routes.routesOf(passwordAndRoles);
-      const signUp = routes.find((route) => route.method === "POST" && route.path.endsWith("/sign-up"));
+      const signUp = routes.find(
+        (route) => route.method === "POST" && route.path.endsWith("/sign-up"),
+      );
       assert.strictEqual(signUp?.group, "password");
       assert.strictEqual(signUp?.plugin, "password");
       // The contract's endpoint count is what the listing carries — none omitted.
@@ -67,22 +69,30 @@ describe("plugin list --graph", () => {
         nodes.map((node) => [node.order, node.id]),
         passwordAndRoles.manifest.plugins.map((plugin, index) => [index + 1, plugin.id]),
       );
-      const text = yield* captureStdout(Plugin.show(passwordAndRoles, { graph: true, format: "text" }));
+      const text = yield* captureStdout(
+        Plugin.show(passwordAndRoles, { graph: true, format: "text" }),
+      );
       assert.isTrue(text.some((line) => line.includes("password")));
       assert.isTrue(text.some((line) => line.includes("groups:     password, password.account")));
     }),
   );
 
-  it.effect("--format dot emits one edge per dependsOn and --format json the same graph as data", () =>
-    Effect.gen(function* () {
-      const dot = yield* captureStdout(Plugin.show(passwordAndRoles, { graph: true, format: "dot" }));
-      assert.strictEqual(dot[0], "digraph awthaq {");
-      assert.strictEqual(dot[dot.length - 1], "}");
-      const { captured, layer } = yield* Output.capture(false);
-      yield* Plugin.show(passwordAndRoles, { graph: true, format: "json" }).pipe(Effect.provide(layer));
-      const [doc] = yield* Ref.get(captured.documents);
-      assert.deepStrictEqual(doc, Plugin.graph(passwordAndRoles));
-    }),
+  it.effect(
+    "--format dot emits one edge per dependsOn and --format json the same graph as data",
+    () =>
+      Effect.gen(function* () {
+        const dot = yield* captureStdout(
+          Plugin.show(passwordAndRoles, { graph: true, format: "dot" }),
+        );
+        assert.strictEqual(dot[0], "digraph awthaq {");
+        assert.strictEqual(dot[dot.length - 1], "}");
+        const { captured, layer } = yield* Output.capture(false);
+        yield* Plugin.show(passwordAndRoles, { graph: true, format: "json" }).pipe(
+          Effect.provide(layer),
+        );
+        const [doc] = yield* Ref.get(captured.documents);
+        assert.deepStrictEqual(doc, Plugin.graph(passwordAndRoles));
+      }),
   );
 });
 
@@ -90,12 +100,18 @@ describe("openapi", () => {
   it.effect("emits one document covering every installed plugin's contract", () =>
     Effect.gen(function* () {
       const [text] = yield* captureStdout(
-        Openapi.emit(passwordAndRoles, { out: undefined }).pipe(Effect.provide(NodeFileSystem.layer)),
+        Openapi.emit(passwordAndRoles, { out: undefined }).pipe(
+          Effect.provide(NodeFileSystem.layer),
+        ),
       );
       const spec: unknown = JSON.parse(text ?? "null");
       assert.isTrue(typeof spec === "object" && spec !== null && "paths" in spec);
       const paths =
-        typeof spec === "object" && spec !== null && "paths" in spec && typeof spec.paths === "object" && spec.paths !== null
+        typeof spec === "object" &&
+        spec !== null &&
+        "paths" in spec &&
+        typeof spec.paths === "object" &&
+        spec.paths !== null
           ? Object.keys(spec.paths)
           : [];
       assert.isTrue(paths.some((path) => path.endsWith("/sign-up")));

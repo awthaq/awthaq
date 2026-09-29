@@ -137,7 +137,11 @@ const ipv6ToGroups = (ip: string): ReadonlyArray<number> | undefined => {
   if (tail === undefined && headParts.length !== 8) return undefined;
   const missing = 8 - headParts.length - tailParts.length;
   if (missing < 0) return undefined;
-  const groups = [...headParts, ...Array<string>(tail !== undefined ? missing : 0).fill("0"), ...tailParts];
+  const groups = [
+    ...headParts,
+    ...Array<string>(tail !== undefined ? missing : 0).fill("0"),
+    ...tailParts,
+  ];
   if (groups.length !== 8) return undefined;
   const values: Array<number> = [];
   for (const group of groups) {
@@ -182,7 +186,7 @@ const isInCidr = (address: string, cidr: string): boolean => {
     return false;
   }
   const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
-  return ((addressBits & mask) >>> 0) === ((networkBits & mask) >>> 0);
+  return (addressBits & mask) >>> 0 === (networkBits & mask) >>> 0;
 };
 
 const resolveFromHops = (

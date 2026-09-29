@@ -6,11 +6,20 @@ import { rootDir, runTsc } from "./_root.mjs";
 
 const status = runTsc(["-b", "--clean"]);
 
-for (const dir of globSync(["packages/*/lib", "examples/*/lib", "features/lib", "{packages,examples}/*/.tsbuildinfo", "features/.tsbuildinfo"], {
-  cwd: rootDir,
-  absolute: true,
-  dot: true,
-})) {
+for (const dir of globSync(
+  [
+    "packages/*/lib",
+    "examples/*/lib",
+    "features/lib",
+    "{packages,examples}/*/.tsbuildinfo",
+    "features/.tsbuildinfo",
+  ],
+  {
+    cwd: rootDir,
+    absolute: true,
+    dot: true,
+  },
+)) {
   rmSync(dir, { recursive: true, force: true });
 }
 

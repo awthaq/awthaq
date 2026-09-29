@@ -44,7 +44,9 @@ import * as Sources from "./Sources.ts";
 export const ledgerTable = "awthaq_import_runs";
 
 /** BEH-EA-226: `--batch-size` decodes as a positive integer (one transaction per batch, so it is also the rollback unit). */
-export const BatchSize = Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 10_000 })));
+export const BatchSize = Schema.Number.pipe(
+  Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 10_000 })),
+);
 
 export interface ImportOptions {
   readonly from: string;
@@ -348,7 +350,12 @@ export const importUsers = (config: CliConfig, options: ImportOptions) =>
         return yield* withApplication(config, (context) =>
           Effect.gen(function* () {
             const users = yield* requireService(context, Users.Users, "Users", "import");
-            const accounts = yield* requireService(context, Accounts.Accounts, "Accounts", "import");
+            const accounts = yield* requireService(
+              context,
+              Accounts.Accounts,
+              "Accounts",
+              "import",
+            );
             const sqlTransaction = yield* requireService(
               context,
               SqlTransaction.SqlTransaction,
@@ -378,7 +385,11 @@ export const importUsers = (config: CliConfig, options: ImportOptions) =>
                 Stream.grouped(Math.max(1, options.source.batchSize)),
                 Stream.runForEachWhile((batch) => processBatch(tally, env, batch)),
                 Effect.mapError(
-                  () => new ImportFailed({ runId: runId ?? "", message: "the import source stopped answering mid-run" }),
+                  () =>
+                    new ImportFailed({
+                      runId: runId ?? "",
+                      message: "the import source stopped answering mid-run",
+                    }),
                 ),
               );
               return tally;
@@ -411,7 +422,11 @@ export const importUsers = (config: CliConfig, options: ImportOptions) =>
       const fs = yield* FileSystem.FileSystem;
       yield* fs
         .writeFileString(options.report, `${JSON.stringify(summary, null, 2)}\n`)
-        .pipe(Effect.mapError(() => new UsageError({ message: `could not write the report to ${options.report}` })));
+        .pipe(
+          Effect.mapError(
+            () => new UsageError({ message: `could not write the report to ${options.report}` }),
+          ),
+        );
     }
     if (summary.users.failed > 0) {
       return yield* new ImportFailed({

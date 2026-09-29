@@ -734,7 +734,9 @@ function stalenessOf(file, raw) {
   const dir = typeof raw.path === "string" ? join(ROOT, raw.path) : undefined;
   const manifest = dir === undefined ? undefined : join(dir, "package.json");
   if (manifest === undefined || !existsSync(manifest)) {
-    return [...problems, "names a package that is not in the workspace: " + raw.path].map((p) => file + ": " + p);
+    return [...problems, "names a package that is not in the workspace: " + raw.path].map(
+      (p) => file + ": " + p,
+    );
   }
   const manifestName = JSON.parse(readFileSync(manifest, "utf8")).name;
   if (manifestName !== raw.package && !manifestName.endsWith("/" + raw.package)) {
@@ -745,11 +747,16 @@ function stalenessOf(file, raw) {
     problems.push("has no sourceSha, so its age is unknown");
   } else {
     try {
-      const changed = execFileSync("git", ["diff", "--name-only", raw.sourceSha, "HEAD", "--", raw.path + "/src"], {
-        cwd: ROOT,
-        encoding: "utf8",
-      }).trim();
-      if (changed !== "") problems.push("measured at " + raw.sourceSha.slice(0, 7) + "; src has changed since");
+      const changed = execFileSync(
+        "git",
+        ["diff", "--name-only", raw.sourceSha, "HEAD", "--", raw.path + "/src"],
+        {
+          cwd: ROOT,
+          encoding: "utf8",
+        },
+      ).trim();
+      if (changed !== "")
+        problems.push("measured at " + raw.sourceSha.slice(0, 7) + "; src has changed since");
     } catch {
       problems.push("sourceSha " + raw.sourceSha + " is not a commit in this repository");
     }
@@ -757,9 +764,14 @@ function stalenessOf(file, raw) {
   const sources = existsSync(srcDir)
     ? readdirSync(srcDir, { recursive: true }).filter((n) => /\.(ts|tsx)$/.test(n))
     : [];
-  const loc = sources.reduce((n, f) => n + readFileSync(join(srcDir, f), "utf8").split("\n").length, 0);
+  const loc = sources.reduce(
+    (n, f) => n + readFileSync(join(srcDir, f), "utf8").split("\n").length,
+    0,
+  );
   if (raw.kpis?.D?.fileCount !== sources.length) {
-    problems.push("fileCount " + raw.kpis?.D?.fileCount + " but src has " + sources.length + " files");
+    problems.push(
+      "fileCount " + raw.kpis?.D?.fileCount + " but src has " + sources.length + " files",
+    );
   }
   if (raw.kpis?.D?.totalLoc !== loc) {
     problems.push("totalLoc " + raw.kpis?.D?.totalLoc + " but src has " + loc + " lines");

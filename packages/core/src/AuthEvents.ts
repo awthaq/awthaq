@@ -117,7 +117,8 @@ const makeEventIds = Effect.gen(function* () {
         return [fresh, fresh];
       }
       const next = previous.counter + 1;
-      const state = next > 0xfff ? { ms: previous.ms + 1, counter: 0 } : { ms: previous.ms, counter: next };
+      const state =
+        next > 0xfff ? { ms: previous.ms + 1, counter: 0 } : { ms: previous.ms, counter: next };
       return [state, state];
     });
     const variant = yield* Random.nextIntBetween(0, 3);

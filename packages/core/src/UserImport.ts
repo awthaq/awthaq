@@ -97,13 +97,12 @@ export const importUser = (input: ImportUserInput) =>
     const sqlTransaction = yield* SqlTransaction.SqlTransaction;
 
     const importRow = Effect.gen(function* () {
-      const { user: found, created } = yield* users
-        .createOrGet({
-          identity: input.identity,
-          name: input.name,
-          ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
-          ...(input.image === undefined ? {} : { image: input.image }),
-        });
+      const { user: found, created } = yield* users.createOrGet({
+        identity: input.identity,
+        name: input.name,
+        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+        ...(input.image === undefined ? {} : { image: input.image }),
+      });
 
       const user =
         input.verified === true && found.identity._tag === "Email"

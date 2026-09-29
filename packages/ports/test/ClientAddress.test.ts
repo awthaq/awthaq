@@ -43,18 +43,20 @@ describe("ClientAddress.layerDirect", () => {
 describe("ClientAddress.layerTrustedProxy — X-Forwarded-For, hopCount", () => {
   const layer = ClientAddress.layerTrustedProxy({ strategy: { _tag: "hopCount", count: 1 } });
 
-  it.effect("strips exactly hopCount trusted hops from the right, returns the next one inward", () =>
-    Effect.gen(function* () {
-      const clientAddress = yield* ClientAddress.ClientAddress;
-      // client, then our one trusted edge proxy.
-      const resolved = yield* clientAddress.resolve(
-        requestWith({
-          remoteAddress: "10.0.0.1",
-          headers: { "x-forwarded-for": "198.51.100.7, 10.0.0.1" },
-        }),
-      );
-      assert.deepStrictEqual(resolved, Option.some("198.51.100.7"));
-    }).pipe(Effect.provide(layer)),
+  it.effect(
+    "strips exactly hopCount trusted hops from the right, returns the next one inward",
+    () =>
+      Effect.gen(function* () {
+        const clientAddress = yield* ClientAddress.ClientAddress;
+        // client, then our one trusted edge proxy.
+        const resolved = yield* clientAddress.resolve(
+          requestWith({
+            remoteAddress: "10.0.0.1",
+            headers: { "x-forwarded-for": "198.51.100.7, 10.0.0.1" },
+          }),
+        );
+        assert.deepStrictEqual(resolved, Option.some("198.51.100.7"));
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect("falls back to remoteAddress when the header is absent", () =>
@@ -138,7 +140,9 @@ describe("ClientAddress.layerTrustedProxy — X-Forwarded-For, CIDR allowlist", 
       assert.deepStrictEqual(resolved, Option.some("2001:db8:2::9"));
     }).pipe(
       Effect.provide(
-        ClientAddress.layerTrustedProxy({ strategy: { _tag: "cidr", trusted: ["2001:db8:1::/48"] } }),
+        ClientAddress.layerTrustedProxy({
+          strategy: { _tag: "cidr", trusted: ["2001:db8:1::/48"] },
+        }),
       ),
     ),
   );
@@ -157,7 +161,9 @@ describe("ClientAddress.layerTrustedProxy — X-Forwarded-For, CIDR allowlist", 
       );
       assert.deepStrictEqual(resolved, Option.some("2001:db8:8000::1"));
     }).pipe(
-      Effect.provide(ClientAddress.layerTrustedProxy({ strategy: { _tag: "cidr", trusted: ["2001:db8::/33"] } })),
+      Effect.provide(
+        ClientAddress.layerTrustedProxy({ strategy: { _tag: "cidr", trusted: ["2001:db8::/33"] } }),
+      ),
     ),
   );
 });

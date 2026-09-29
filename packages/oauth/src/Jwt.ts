@@ -81,7 +81,13 @@ export type Jwk = typeof JwkSchema.Type;
  * here is a claim that it is verified against a real signature in `test/Jwt.test.ts`.
  */
 export type SigningAlg = "RS256" | "PS256" | "ES256" | "ES384" | "EdDSA";
-export const SIGNING_ALGS: ReadonlyArray<SigningAlg> = ["RS256", "PS256", "ES256", "ES384", "EdDSA"];
+export const SIGNING_ALGS: ReadonlyArray<SigningAlg> = [
+  "RS256",
+  "PS256",
+  "ES256",
+  "ES384",
+  "EdDSA",
+];
 export const isSigningAlg = (value: unknown): value is SigningAlg =>
   SIGNING_ALGS.some((alg) => alg === value);
 
@@ -198,8 +204,14 @@ const publicMembers = (jwk: Jwk): webcrypto.JsonWebKey => {
 const parameters = (
   alg: SigningAlg,
 ): {
-  readonly importAlgorithm: webcrypto.AlgorithmIdentifier | webcrypto.RsaHashedImportParams | webcrypto.EcKeyImportParams;
-  readonly verifyAlgorithm: webcrypto.AlgorithmIdentifier | webcrypto.RsaPssParams | webcrypto.EcdsaParams;
+  readonly importAlgorithm:
+    | webcrypto.AlgorithmIdentifier
+    | webcrypto.RsaHashedImportParams
+    | webcrypto.EcKeyImportParams;
+  readonly verifyAlgorithm:
+    | webcrypto.AlgorithmIdentifier
+    | webcrypto.RsaPssParams
+    | webcrypto.EcdsaParams;
 } => {
   switch (alg) {
     case "RS256":
