@@ -52,12 +52,26 @@ export const defaultStatements: Readonly<Record<"owner" | "admin" | "member", St
 export const isBuiltInRole = (name: string): boolean =>
   Object.prototype.hasOwnProperty.call(defaultStatements, name);
 
+/**
+ * PV-310: a resource name is caller-supplied (a dynamic role's `permission` payload), so it can
+ * be `constructor`/`toString`/`__proto__` — a plain index would return an inherited value and
+ * every `.includes`/spread below would throw (a 500 instead of a typed denial).
+ */
+const actionsOn = (statements: Statements, resource: string): ReadonlyArray<string> =>
+  Object.hasOwn(statements, resource) ? (statements[resource] ?? []) : [];
+
 /** OHS-004: the union of two statement sets — org-level authority plus team-scoped authority. */
 export const mergeStatements = (a: Statements, b: Statements): Statements => {
   const merged: Record<string, ReadonlyArray<string>> = { ...a };
   for (const [resource, actions] of Object.entries(b)) {
-    const existing = merged[resource] ?? [];
-    merged[resource] = Array.from(new Set([...existing, ...actions]));
+    const existing = actionsOn(merged, resource);
+    // `defineProperty`, not assignment: `merged["__proto__"] = ...` would set the prototype.
+    Object.defineProperty(merged, resource, {
+      value: Array.from(new Set([...existing, ...actions])),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return merged;
 };
@@ -81,7 +95,7 @@ export const effectivePermissions = (
 
 /** Whether an already-computed effective permission set includes a specific resource/action. */
 export const hasPermission = (permissions: Statements, resource: string, action: string): boolean =>
-  (permissions[resource] ?? []).includes(action);
+  actionsOn(permissions, resource).includes(action);
 
 /**
  * ticket 15's self-escalation guard: `requested` (the statements a caller
@@ -91,7 +105,7 @@ export const hasPermission = (permissions: Statements, resource: string, action:
  */
 export const canGrant = (requested: Statements, granterPermissions: Statements): boolean =>
   Object.entries(requested).every(([resource, actions]) => {
-    const held = granterPermissions[resource] ?? [];
+    const held = actionsOn(granterPermissions, resource);
     return actions.every((action) => held.includes(action));
   });
 
