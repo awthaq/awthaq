@@ -76,6 +76,29 @@ export const SubjectExtractorLive: Layer.Layer<
     return {
       extract: (request) =>
         Effect.gen(function* () {
+          // APS-006: `Authentication` prefers a live impersonation cookie over
+          // the caller's own session, so authorization must evaluate the same
+          // identity the request is being served as — not the admin behind it.
+          const impersonation = request.cookies[Sessions.IMPERSONATION_COOKIE_NAME];
+          if (impersonation !== undefined && impersonation.length > 0) {
+            const impersonated = yield* Authentication.resolvePrincipal(
+              sessions,
+              principalResolver,
+              Redacted.make(impersonation),
+            ).pipe(
+              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+              Effect.option,
+            );
+            // Only a session carrying `actingAs` counts from that cookie (mirrors
+            // `Authentication`'s `impersonation` scheme); anything else falls through.
+            if (
+              Option.isSome(impersonated) &&
+              impersonated.value._tag === "User" &&
+              impersonated.value.actingAs !== undefined
+            ) {
+              return yield* subjectResolver.resolve(impersonated.value);
+            }
+          }
           const credential = extractCredential(request);
           const principal = yield* Authentication.resolvePrincipal(
             sessions,

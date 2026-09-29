@@ -162,6 +162,13 @@ export class SessionExpired extends Data.TaggedError("SessionExpired")<{
 
 /** BEH-EA-055: the one session cookie's fixed, non-configurable attribute set. */
 export const SESSION_COOKIE_NAME = "__Host-session";
+/**
+ * APS-006: impersonation sessions travel under their own cookie, with the
+ * identical attributes, so `impersonate` never overwrites the admin's own
+ * `__Host-session` and `stopImpersonating` can hand the browser back to it.
+ * `Authentication` only accepts a session carrying `actingAs` from this name.
+ */
+export const IMPERSONATION_COOKIE_NAME = "__Host-impersonation";
 export const SESSION_COOKIE_ATTRIBUTES = {
   secure: true,
   httpOnly: true,

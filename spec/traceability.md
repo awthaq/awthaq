@@ -50,7 +50,7 @@ One row per `spec/behaviors/NN-*.md` file. The planned module column names a pla
 | [24 Next.js Server Rendering](behaviors/24-nextjs-ssr.md) | 185-192 | `@awthaq/next/src/index.ts` |
 | [25 Testing Harness](behaviors/25-testing-harness.md) | 193-200 | `@awthaq/test/src/TestAuth.ts` |
 | [26 CLI](behaviors/26-cli.md) | 201-208 | `@awthaq/cli/src/cli.ts` |
-| [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) | 209-220 | `@awthaq/admin/src/Admin.ts` (BEH-EA-209/210/211 also extend `@awthaq/core/src/Sessions.ts` and `@awthaq/server/src/Authentication.ts`) |
+| [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) | 209-224 | `@awthaq/admin/src/Admin.ts` (BEH-EA-209/210/211 also extend `@awthaq/core/src/Sessions.ts` and `@awthaq/server/src/Authentication.ts`) |
 
 ---
 
@@ -213,11 +213,11 @@ Every other planned test file below is listed for structural completeness only. 
 
 ## 6. Acceptance scenarios (REQ-EA)
 
-A Gherkin acceptance suite now exists at [`features/features/`](../features/features/) (see [`features/README.md`](../features/README.md) for its structure and [`features/STYLE.md`](../features/STYLE.md) for its authoring conventions), and `REQ-EA-001` through `REQ-EA-627` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario, in one contiguous pass across the suite in the file order below. Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
+A Gherkin acceptance suite now exists at [`features/features/`](../features/features/) (see [`features/README.md`](../features/README.md) for its structure and [`features/STYLE.md`](../features/STYLE.md) for its authoring conventions), and `REQ-EA-001` through `REQ-EA-632` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario, in one contiguous pass across the suite in the file order below. Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
 
 **This allocation does not mean the suite runs.** awthaq is still pre-implementation: there is no `package.json`, no Cucumber configuration, and no step-definition layer, so no `.feature` file here currently passes or fails anything — see [`behaviors/25-testing-harness.md`](behaviors/25-testing-harness.md) (`BEH-EA-193`–`200`) for the still-not-yet-built testing harness that will eventually execute them. What exists today is the Gherkin restatement of the behavior catalog, not a running test suite.
 
-The table below is a file-level summary, at the same granularity as §1's behavior→module table; the full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 627 rows) lives in [`features/traceability.md`](../features/traceability.md) and is regenerated mechanically by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py) whenever the suite grows.
+The table below is a file-level summary, at the same granularity as §1's behavior→module table; the full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 632 rows) lives in [`features/traceability.md`](../features/traceability.md) and is regenerated mechanically by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py) whenever the suite grows.
 
 | Feature file | `BEH-EA` range | `REQ-EA` range |
 |---|---|---|
@@ -247,7 +247,7 @@ The table below is a file-level summary, at the same granularity as §1's behavi
 | [07-client-integration/24-nextjs-ssr.feature](../features/features/07-client-integration/24-nextjs-ssr.feature) | 185–192 | 522–544 |
 | [08-tooling/25-testing-harness.feature](../features/features/08-tooling/25-testing-harness.feature) | 193–200 | 545–572 |
 | [08-tooling/26-cli.feature](../features/features/08-tooling/26-cli.feature) | 201–208 | 573–602 |
-| [09-admin-and-impersonation/27-admin-impersonation.feature](../features/features/09-admin-and-impersonation/27-admin-impersonation.feature) | 209–220 | 603–627 |
+| [09-admin-and-impersonation/27-admin-impersonation.feature](../features/features/09-admin-and-impersonation/27-admin-impersonation.feature) | 209–224 | 603–632 |
 
 Authorization-decision content is deliberately out of scope for this suite: scenarios touching an authorization outcome (chiefly `06-roles-and-authorization-bridge/`) treat qadi's own policy evaluation as a black box and assert only on awthaq's own bridge responsibilities, per `ADR-EA-009`. qadi's own `features/features/*.feature` (in the sibling `qadi` repository) is the suite that covers role/permission/policy-combination behavior; this suite does not duplicate it.
 

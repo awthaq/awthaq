@@ -146,6 +146,38 @@ export interface AdminImpersonationDeniedEvent {
   readonly adminUserId: UserId;
 }
 
+/**
+ * BAM-005: published by `@awthaq/admin` when an admin capability other than
+ * impersonation (`AdminConfig.canManageUsers`) resolves `false` — the same
+ * "genuine authorization rejection, never input-validation noise" signal
+ * `auth.admin.impersonationDenied` is for impersonation. `action` names the
+ * endpoint (`"listUsers"`, `"updateUser"`, ...).
+ */
+export interface AdminActionDeniedEvent {
+  readonly _tag: "auth.admin.actionDenied";
+  readonly adminUserId: UserId;
+  readonly action: string;
+}
+
+/** BAM-005: published by `@awthaq/admin`'s `updateUser`, after the profile change is persisted. */
+export interface AdminUserUpdatedEvent {
+  readonly _tag: "auth.admin.userUpdated";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+}
+
+/**
+ * BAM-005: published by `@awthaq/admin`'s `revokeUserSession`/`revokeUserSessions`.
+ * `sessionId` is the one revoked session, or `null` when every non-impersonation
+ * session of `userId` was revoked in one call.
+ */
+export interface AdminSessionRevokedEvent {
+  readonly _tag: "auth.admin.sessionRevoked";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+  readonly sessionId: string | null;
+}
+
 /** Published by `@awthaq/organization`'s `create`. */
 export interface OrganizationCreatedEvent {
   readonly _tag: "auth.organization.created";
@@ -306,6 +338,9 @@ export type AuthEvent =
   | AdminImpersonationStartedEvent
   | AdminImpersonationStoppedEvent
   | AdminImpersonationDeniedEvent
+  | AdminActionDeniedEvent
+  | AdminUserUpdatedEvent
+  | AdminSessionRevokedEvent
   | OrganizationCreatedEvent
   | OrganizationUpdatedEvent
   | OrganizationDeletedEvent

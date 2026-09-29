@@ -68,6 +68,16 @@ export interface UsersRepositoryShape {
     id: UserId,
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
   readonly delete: (id: UserId) => Effect.Effect<void, RepositoryError>;
+  /**
+   * BAM-005/BEH-EA-036: keyset page over every user, oldest first —
+   * `cursor` is opaque and derived from `(createdAt, id)`; at most `limit`
+   * rows are returned (`nextCursor` present iff a full page came back and
+   * more may follow).
+   */
+  readonly listPage: (
+    cursor?: Cursor,
+    limit?: number,
+  ) => Effect.Effect<Page<User>, RepositoryError>;
 }
 
 export class UsersRepository extends Context.Service<UsersRepository, UsersRepositoryShape>()(
@@ -90,6 +100,45 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
         Result: User,
         execute: (email) => sql`SELECT * FROM users WHERE lower(email) = lower(${email})`,
       });
+
+      const usersPage = SqlSchema.findAll({
+        Request: Schema.Struct({
+          cursorCreatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+          cursorId: Schema.NullOr(Schema.String),
+          limit: Schema.Int,
+        }),
+        Result: User,
+        execute: (request) =>
+          request.cursorCreatedAt === null || request.cursorId === null
+            ? sql`SELECT * FROM users ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit + 1}`
+            : sql`SELECT * FROM users
+                  WHERE "createdAt" > ${request.cursorCreatedAt}
+                     OR ("createdAt" = ${request.cursorCreatedAt} AND id > ${request.cursorId})
+                  ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit + 1}`,
+      });
+
+      // Reads `limit + 1` rows: the extra one only proves a next page exists, so an
+      // exactly-full final page never invents a cursor.
+      const listPage: UsersRepositoryShape["listPage"] = (cursor, limit) => {
+        const effectiveLimit = limit ?? DEFAULT_PAGE_SIZE;
+        return usersPage({
+          cursorCreatedAt: cursor?.createdAt ?? null,
+          cursorId: cursor?.id ?? null,
+          limit: effectiveLimit,
+        }).pipe(
+          Effect.map((rows): Page<User> => {
+            const items = rows.slice(0, effectiveLimit);
+            const last = items.at(-1);
+            return {
+              items,
+              nextCursor:
+                rows.length > effectiveLimit && last !== undefined
+                  ? Option.some({ createdAt: last.createdAt, id: last.id })
+                  : Option.none(),
+            };
+          }),
+        );
+      };
 
       const verifyEmail: UsersRepositoryShape["verifyEmail"] = Effect.fnUntraced(function* (id) {
         const encodedNow = yield* Schema.encodeEffect(Schema.DateTimeUtcFromString)(
@@ -118,6 +167,7 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
         delete: repo.delete,
         findByEmail,
         verifyEmail,
+        listPage,
       };
     }),
   );
