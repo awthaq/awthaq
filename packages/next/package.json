@@ -17,6 +17,12 @@
       "bun": "./src/index.ts",
       "import": "./lib/index.js",
       "default": "./lib/index.js"
+    },
+    "./edge": {
+      "types": "./lib/edge.d.ts",
+      "bun": "./src/edge.ts",
+      "import": "./lib/edge.js",
+      "default": "./lib/edge.js"
     }
   },
   "scripts": {
@@ -28,10 +34,12 @@
     "@awthaq/api": "workspace:*",
     "@awthaq/client": "workspace:*",
     "@awthaq/core": "workspace:*",
+    "@awthaq/jwt": "workspace:*",
     "@awthaq/server": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/ports": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/react": "catalog:",

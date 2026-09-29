@@ -45,6 +45,13 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import * as JwtCodec from "./JwtCodec.ts";
 
+/**
+ * BO-006: the default name of the opt-in, short-lived JWT session-mirror
+ * cookie (`JwtConfig.sessionCookie`). Lives in this edge-safe module so
+ * `@awthaq/next/edge` can read it without importing the plugin proper.
+ */
+export const SESSION_MIRROR_COOKIE_NAME = "__Host-session-jwt";
+
 export interface VerifierOptions {
   readonly jwksUrl: string;
   readonly issuer: string;

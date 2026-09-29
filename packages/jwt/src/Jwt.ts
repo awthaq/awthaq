@@ -85,7 +85,11 @@ export type IntrospectionResult =
   | { readonly active: false };
 
 export interface JwtShape {
-  readonly sign: (principal: Api.Principal) => Effect.Effect<string, JwtCodec.JwtInvalidError>;
+  /** `options.ttl` overrides `JwtConfig.ttl` for this token (BO-006: the session-mirror cookie's JWT expires with the cookie). */
+  readonly sign: (
+    principal: Api.Principal,
+    options?: { readonly ttl?: Duration.Duration },
+  ) => Effect.Effect<string, JwtCodec.JwtInvalidError>;
   readonly verify: (
     token: string,
   ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError>;
@@ -273,10 +277,10 @@ const PostAuthResponseHookLive = Layer.effect(
   Effect.gen(function* () {
     const jwt = yield* Jwt;
     const config = yield* JwtConfig;
-    const decorate: Authentication.PostAuthResponseHookShape["decorate"] = (
-      principal,
-      response,
-      context,
+    const mirrorHeader = (
+      principal: Api.Principal,
+      response: HttpServerResponse.HttpServerResponse,
+      context: { readonly scheme: "cookie" | "bearer" },
     ) =>
       config.mirrorResponses === "off" ||
       (config.mirrorResponses === "bearer" && context.scheme !== "bearer")
@@ -289,6 +293,43 @@ const PostAuthResponseHookLive = Layer.effect(
               ),
             ),
           );
+    // BO-006: the opt-in session-mirror cookie — a short-lived JWT copy of a
+    // *cookie*-authenticated session (a bearer client has no browser edge to
+    // serve). Like the header mirror, a failure to mint never fails the
+    // response. It rides every authenticated response, so any API call keeps it
+    // fresh; a response that revoked the session (sign-out) still gets one,
+    // valid for at most `ttl` — the bounded lag the edge tier documents.
+    const mirrorCookie = (
+      principal: Api.Principal,
+      response: HttpServerResponse.HttpServerResponse,
+      context: { readonly scheme: "cookie" | "bearer" },
+    ) => {
+      const mirror = config.sessionCookie;
+      return mirror === false || context.scheme !== "cookie"
+        ? Effect.succeed(response)
+        : jwt.sign(principal, { ttl: mirror.ttl }).pipe(
+            Effect.flatMap((token) =>
+              HttpServerResponse.setCookie(response, mirror.name, token, {
+                ...Sessions.SESSION_COOKIE_ATTRIBUTES,
+                maxAge: mirror.ttl,
+              }),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning(
+                "awthaq/jwt: session-mirror cookie failed",
+                "reason" in error ? error.reason : error,
+              ).pipe(Effect.as(response)),
+            ),
+          );
+    };
+    const decorate: Authentication.PostAuthResponseHookShape["decorate"] = (
+      principal,
+      response,
+      context,
+    ) =>
+      mirrorHeader(principal, response, context).pipe(
+        Effect.flatMap((decorated) => mirrorCookie(principal, decorated, context)),
+      );
     return { decorate };
   }),
 );
@@ -497,7 +538,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             });
           });
 
-        const sign: JwtShape["sign"] = (principal) =>
+        const sign: JwtShape["sign"] = (principal, options) =>
           Effect.gen(function* () {
             const extra = yield* config.definePayload(principal);
             // `principalClaims` wins over `definePayload`'s extras — a
@@ -505,7 +546,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             // override the ones this plugin itself is responsible for.
             return yield* signClaims(
               { ...extra, ...principalClaims(principal) },
-              { typ: PRINCIPAL_TYP },
+              { typ: PRINCIPAL_TYP, ttl: options?.ttl },
             );
           });
 

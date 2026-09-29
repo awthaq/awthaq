@@ -12,7 +12,9 @@ import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -327,7 +329,10 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
   // per request, inside `Authentication.ts`'s own `handle` closures — see
   // that file's comment) sees `Jwt`'s override regardless of which
   // branch's endpoint is actually being called.
-  const crossPluginAppLayer = (mirrorResponses?: JwtConfig.JwtConfigShape["mirrorResponses"]) =>
+  const crossPluginAppLayer = (
+    mirrorResponses?: JwtConfig.JwtConfigShape["mirrorResponses"],
+    sessionCookie?: Parameters<typeof JwtConfig.config>[0]["sessionCookie"],
+  ) =>
     Layer.mergeAll(
       AuthHttp.routes(AuthCore.AuthCoreApi, {}).pipe(
         Layer.provide(Session.SessionHandlers),
@@ -360,14 +365,18 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
         JwtConfig.config({
           issuer: "https://issuer.test",
           ...(mirrorResponses === undefined ? {} : { mirrorResponses }),
+          ...(sessionCookie === undefined ? {} : { sessionCookie }),
         }),
       ),
     );
 
   // A live app for one `mirrorResponses` setting, plus a way to run effects
   // against its context (to issue a real session).
-  const buildApp = (mirrorResponses?: JwtConfig.JwtConfigShape["mirrorResponses"]) => {
-    const layer = crossPluginAppLayer(mirrorResponses);
+  const buildApp = (
+    mirrorResponses?: JwtConfig.JwtConfigShape["mirrorResponses"],
+    sessionCookie?: Parameters<typeof JwtConfig.config>[0]["sessionCookie"],
+  ) => {
+    const layer = crossPluginAppLayer(mirrorResponses, sessionCookie);
     const memoMap = Layer.makeMemoMapUnsafe();
     const { handler } = HttpRouter.toWebHandler(layer, { memoMap });
     const withAppContext = <A, E>(
@@ -467,6 +476,76 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
       throw new Error("expected x-jwt-token header");
     }
     assert.strictEqual((await verifyMirrored(handler, mirrored))["sub"], "user-1");
+  });
+
+  // BO-006 (ADR D1 option C): the opt-in, short-lived JWT session-mirror
+  // cookie an edge proxy can verify statelessly (`@awthaq/next/edge`).
+  describe("session-mirror cookie (BO-006)", () => {
+    const MIRROR = "__Host-session-jwt";
+
+    const sessionRequest = (token: string) =>
+      new Request(`${ORIGIN}/session`, {
+        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
+      });
+
+    it("default config mints no mirror cookie", async () => {
+      const { handler, issueSessionToken } = buildApp();
+      const response = await handler(sessionRequest(await issueSessionToken()));
+      assert.strictEqual(response.status, 200);
+      assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
+    });
+
+    it("sessionCookie: true sets an HttpOnly/Secure/SameSite=Strict __Host- cookie holding a verifiable JWT that expires with the cookie", async () => {
+      const { handler, issueSessionToken } = buildApp(undefined, true);
+      const response = await handler(sessionRequest(await issueSessionToken()));
+      assert.strictEqual(response.status, 200);
+      const cookie = response.headers
+        .getSetCookie()
+        .find((header) => header.startsWith(`${MIRROR}=`));
+      assert.isDefined(cookie);
+      if (cookie === undefined) return;
+      assert.include(cookie, "HttpOnly");
+      assert.include(cookie, "Secure");
+      assert.include(cookie, "SameSite=Strict");
+      assert.include(cookie, "Path=/");
+      assert.include(cookie, "Max-Age=300");
+      const token = decodeURIComponent(cookie.slice(MIRROR.length + 1).split(";")[0] ?? "");
+      const claims = await verifyMirrored(handler, token);
+      assert.strictEqual(claims["sub"], "user-1");
+      assert.strictEqual(Number(claims["exp"]) - Number(claims["iat"]), 300);
+    });
+
+    it("honours a custom name and ttl", async () => {
+      const { handler, issueSessionToken } = buildApp(undefined, {
+        name: "__Host-edge",
+        ttl: Duration.minutes(1),
+      });
+      const response = await handler(sessionRequest(await issueSessionToken()));
+      const cookie = response.headers
+        .getSetCookie()
+        .find((header) => header.startsWith("__Host-edge="));
+      assert.isDefined(cookie);
+      assert.include(cookie ?? "", "Max-Age=60");
+    });
+
+    it("a bearer-authenticated request gets no mirror cookie", async () => {
+      const { handler, issueSessionToken } = buildApp(undefined, true);
+      const token = await issueSessionToken();
+      const response = await handler(
+        new Request(`${ORIGIN}/session`, { headers: { authorization: `Bearer ${token}` } }),
+      );
+      assert.strictEqual(response.status, 200);
+      assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
+    });
+
+    it("a name without the __Host- prefix fails the layer build", async () => {
+      const exit = await Effect.runPromiseExit(
+        Layer.build(
+          JwtConfig.config({ issuer: "https://issuer.test", sessionCookie: { name: "session-jwt" } }),
+        ).pipe(Effect.scoped),
+      );
+      assert.isTrue(Exit.isFailure(exit));
+    });
   });
 });
 

@@ -20,10 +20,18 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { Algorithm } from "./JwtCodec.ts";
+import { SESSION_MIRROR_COOKIE_NAME } from "./verify.ts";
 
 // JJS-003: one `Algorithm` type, owned by `JwtCodec` (which also owns the
 // algorithm table); re-exported here for `JwtConfig` consumers.
 export type { Algorithm };
+
+export interface SessionMirrorCookie {
+  /** Must carry the `__Host-` prefix (`Secure`, `Path=/`, no `Domain`, so a sibling subdomain cannot toss one). */
+  readonly name: string;
+  /** How long the cookie — and the JWT inside it — stays valid: the revocation lag the edge tier accepts. */
+  readonly ttl: Duration.Duration;
+}
 
 export interface JwtConfigShape {
   readonly issuer: string;
@@ -59,6 +67,18 @@ export interface JwtConfigShape {
    * `GET /jwt/token` endpoint is the recommended delivery.
    */
   readonly mirrorResponses: "off" | "bearer" | "always";
+  /**
+   * BO-006/ADR D1 option C: an opt-in, short-lived JWT copy of the session
+   * (`false`, the default, mints nothing). When on, every cookie-authenticated
+   * response also carries this `__Host-` cookie — `HttpOnly`, `Secure`,
+   * `SameSite=Strict`, its JWT expiring with the cookie — so an edge
+   * `proxy.ts`/middleware can verify it statelessly (`@awthaq/next/edge`)
+   * instead of only checking that the opaque session cookie exists. It is a
+   * better *redirect signal*, never the authorization boundary: a revoked
+   * session's copy keeps verifying for at most `ttl`, and only a
+   * database-verified `getSession` decides access (BEH-EA-188).
+   */
+  readonly sessionCookie: false | SessionMirrorCookie;
   readonly definePayload: (principal: Api.Principal) => Effect.Effect<Record<string, unknown>>;
 }
 
@@ -75,7 +95,12 @@ const emptyPayload: JwtConfigShape["definePayload"] = () => Effect.succeed({});
  * that is not this setting.)
  */
 export const config = (
-  options: { readonly issuer: string } & Partial<Omit<JwtConfigShape, "issuer">>,
+  options: { readonly issuer: string } & Partial<
+    Omit<JwtConfigShape, "issuer" | "sessionCookie">
+  > & {
+      /** BO-006: `true` for the defaults (`SESSION_MIRROR_COOKIE_NAME`, 5 minutes), or override either. */
+      readonly sessionCookie?: boolean | Partial<SessionMirrorCookie>;
+    },
 ) =>
   Layer.effect(
     JwtConfig,
@@ -89,6 +114,26 @@ export const config = (
           ),
         );
       }
+      const sessionCookie = options.sessionCookie ?? false;
+      const mirror =
+        sessionCookie === false
+          ? false
+          : {
+              name:
+                (sessionCookie === true ? undefined : sessionCookie.name) ??
+                SESSION_MIRROR_COOKIE_NAME,
+              ttl: (sessionCookie === true ? undefined : sessionCookie.ttl) ?? Duration.minutes(5),
+            };
+      if (mirror !== false && !mirror.name.startsWith("__Host-")) {
+        return yield* Effect.die(
+          new Error(
+            "awthaq/jwt: sessionCookie.name must start with __Host- (Secure, Path=/, no Domain)",
+          ),
+        );
+      }
+      if (mirror !== false && Duration.toMillis(mirror.ttl) <= 0) {
+        return yield* Effect.die(new Error("awthaq/jwt: sessionCookie.ttl must be positive"));
+      }
       return {
         issuer: options.issuer,
         audience: options.audience ?? options.issuer,
@@ -101,6 +146,7 @@ export const config = (
         keyCacheMaxAge: options.keyCacheMaxAge ?? Duration.minutes(5),
         keyMinRefreshInterval: options.keyMinRefreshInterval ?? Duration.seconds(30),
         mirrorResponses: options.mirrorResponses ?? "off",
+        sessionCookie: mirror,
         definePayload: options.definePayload ?? emptyPayload,
       };
     }),

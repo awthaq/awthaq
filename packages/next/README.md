@@ -85,6 +85,60 @@ README assume Next.js 15 or newer (`headers()`/`cookies()` are async there).
 This exists purely to skip rendering a page the real boundary below would
 reject anyway; it is never itself the boundary.
 
+### A stateless edge check: `@awthaq/next/edge`
+
+Presence lets a forged or long-expired cookie through. If you also run
+`@awthaq/jwt`, turn on its opt-in session-mirror cookie —
+`JwtConfig.config({ issuer, sessionCookie: true })` — and every
+cookie-authenticated response additionally carries a short-lived (default 5
+minutes), `__Host-`-prefixed, `HttpOnly`, `SameSite=Strict` JWT copy of the
+session. `verifySessionJwt` checks its signature and expiry with no database:
+
+```ts
+// proxy.ts
+import { makeSessionVerifier, verifySessionJwt } from "@awthaq/next/edge";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+const verifier = await makeSessionVerifier({
+  jwksUrl: "https://auth.example.com/jwt/jwks",
+  issuer: "https://auth.example.com",
+  audience: "https://auth.example.com",
+  algorithms: ["EdDSA"], // JwtConfig.algorithm
+});
+
+export async function proxy(request: NextRequest) {
+  if (
+    request.nextUrl.pathname.startsWith("/app") &&
+    (await verifySessionJwt(request, verifier)) === undefined
+  ) {
+    return NextResponse.redirect(new URL("/sign-in", request.url));
+  }
+}
+```
+
+The mirror rides on authenticated *API* responses, so it exists once the
+browser has made one — the first `GET /session` from `@awthaq/react`'s
+`Providers` (and every window-focus revalidation) mints and refreshes it; a
+server action that signs in can call `client.session.current()` on the same
+`serverActionClient` to mint it before redirecting. Where a missing mirror
+must not bounce a signed-in user, fall back to `hasSessionCookie`.
+
+Keep the guarantee straight: this is a *better redirect signal*, still not the
+boundary. The mirror is a copy — a session revoked server-side keeps verifying
+at the edge for at most the cookie's `ttl` (sign-out does not clear it) — and
+only `getSession` decides access to anything that matters.
+
+#### Edge deployment
+
+`@awthaq/next/edge` and `hasSessionCookie` are the edge-safe entries: the edge
+entry imports only `effect`, the lite verifier and cookie parsing (an import-graph
+test pins that it never reaches `@awthaq/core` or `@awthaq/server`), and there are
+no separate `edge`/`worker` export conditions — the plain `import` build runs
+on WebCrypto runtimes as it is. `getSession`, `serverActionClient` and the seed
+helpers need the origin (Sessions, Users, SQL); keep them out of any file your
+`proxy.ts` imports. `@awthaq/api` and `@awthaq/client` are runtime-neutral.
+
 ## The real boundary: `getSession`
 
 ```ts

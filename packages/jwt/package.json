@@ -17,6 +17,12 @@
       "bun": "./src/index.ts",
       "import": "./lib/index.js",
       "default": "./lib/index.js"
+    },
+    "./verify": {
+      "types": "./lib/verify.d.ts",
+      "bun": "./src/verify.ts",
+      "import": "./lib/verify.js",
+      "default": "./lib/verify.js"
     }
   },
   "scripts": {

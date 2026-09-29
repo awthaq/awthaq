@@ -81,13 +81,17 @@ export function proxy(request: NextRequest) {
 ```
 
 ```text
-REQUIREMENT: `proxy.ts` MUST perform only a cookie-presence check for
-             redirect purposes; a page or server action reached past `proxy.ts`
-             MUST independently verify the session and MUST NOT treat having
-             passed `proxy.ts` as proof of authentication or authorization.
+REQUIREMENT: `proxy.ts` MUST perform only a database-free check for redirect
+             purposes — cookie presence, or (opt-in, BO-006) the signature and
+             expiry check of a short-lived JWT session-mirror cookie; a page or
+             server action reached past `proxy.ts` MUST independently verify
+             the session against the database and MUST NOT treat having passed
+             `proxy.ts` as proof of authentication or authorization.
 ```
 
 `usage-examples-v4.md` §13 labels this explicitly: "optimistic redirect only, never the boundary." research/11-client-frontend.md's Q84 gives the platform reason this is not merely a stylistic choice: Next.js's own guidance says Proxy "runs on every route... only read the session from the cookie... and avoid database checks," so a database-backed verification cannot live there without a real performance cost on every request — the real check belongs in the page's data-access layer, where `getSession` (BEH-EA-185) runs it once per request that actually needs it.
+
+**Stateless edge tier (BO-006, decision D1 option C).** Presence alone lets a forged or long-expired opaque cookie through the edge. `@awthaq/jwt`'s `JwtConfig.sessionCookie` (default off) makes every cookie-authenticated response also carry a `__Host-`-prefixed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie holding a JWT of the same principal that expires with the cookie (default 5 minutes); `@awthaq/next/edge`'s `verifySessionJwt` verifies it against the JWKS through the lite verifier (`@awthaq/jwt/verify`, free of `@awthaq/core`/`@awthaq/server` — pinned by an import-graph test) and yields the claims or `undefined`. It is still a redirect signal: the mirror is a copy, a revoked session's mirror keeps verifying for at most its `ttl` (sign-out does not clear it), and the boundary stays `getSession`. Edge deployments: `hasSessionCookie` and `@awthaq/next/edge` are the edge-safe entries; `getSession`/`serverActionClient` need the origin (Sessions/Users/SQL).
 
 _Previous: [BEH-EA-187](24-nextjs-ssr.md#beh-ea-187-decide-against-attributes-project-content-separately) | Next: [BEH-EA-189](24-nextjs-ssr.md#beh-ea-189-withnextcookies-bridges-set-cookie-from-server-actions)_
 
