@@ -3,7 +3,7 @@ ID: "EHA-005"
 Title: "toPromiseFacade types away the shared error taxonomy at the Promise boundary"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "client"
 Source: "packages/client/src/AuthClient.ts:189"
 Auditor: "effect-http-api-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `client` · reported by **Effect HTTP API Specialist** (`effect-http-api-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Return a discriminated result (e.g. Promise<Result<Success, SerializedError>> or
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `client-promise-facade-errors`. Evidence at HEAD ec065a7: `packages/client/src/AuthClient.ts:188`. Fix: Keep the rejecting facade (documented) and add an error-honest `mode: "result"` variant whose methods resolve `Result<A, E>` with E the endpoint's contract error union. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AuthClient.toPromiseFacade(client, { mode: 'result' }) / ResultFacade<A>: methods resolve Result<A, E> (E = the method's own error union) via Effect.result; default mode unchanged (rejects). Overload-vs-implementation split kept, no casts. Tests: AuthClient.test.ts result-mode success/failure, exhaustive switch on failure._tag, type-level equality of the failure type with BoomFailure|OtherFailure (red = compile errors before the overload), default mode still rejects. BEH-EA-176 note + traceability row.

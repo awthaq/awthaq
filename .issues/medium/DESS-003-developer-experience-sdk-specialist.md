@@ -55,3 +55,5 @@ Offer an error-honest facade variant backed by Effect.runPromiseExit — e.g. Pr
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `client-promise-facade-errors`. Duplicate of `EHA-005` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/client/src/AuthClient.ts:218`. Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `EHA-005-effect-http-api-specialist` — closed by its fix (see that issue's Resolved comment).
