@@ -1,4 +1,4 @@
-// CSG-003/ALF-010 (wayfinder ticket 30, ADR-EA-031): the retention sweep.
+// CSG-003/ALF-010 (wayfinder ticket 30, ADR-EA-033): the retention sweep.
 //
 // One suite, run over memory and over SQLite (migrated by `@awthaq/sql`'s own
 // `CoreMigrations`). Time is `TestClock`'s: rows are created at the epoch and the clock is

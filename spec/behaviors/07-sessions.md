@@ -67,7 +67,7 @@ REQUIREMENT: A session's absolute expiry MUST be fixed at issuance and MUST
 
 `archive/PRD.md` §13 names both deadlines as reading from `SessionConfig` together: "absolute plus idle expiry." Without the absolute ceiling, a session touched frequently enough — by a legitimate but forgotten background tab, or by an attacker automating activity — could remain valid indefinitely, which is precisely what an absolute expiry exists to rule out regardless of how the idle window behaves.
 
-**As shipped (CSG-003, ADR-EA-031):** expiry is a read-time rejection; the row stays until `Retention.sweep` (opt-in) physically deletes it. `Sessions.purgeExpired(before)` removes every session whose absolute or idle expiry is before the cutoff, tombstoned refresh-rotation rows included, in bounded batches in both layers; the sweep passes `now - sessionGrace` (default 7 days), so reuse detection (BEH-EA-053) outlives the session's own life by the grace. `packages/core/test/Retention.test.ts` proves a live session and one still inside the grace survive.
+**As shipped (CSG-003, ADR-EA-033):** expiry is a read-time rejection; the row stays until `Retention.sweep` (opt-in) physically deletes it. `Sessions.purgeExpired(before)` removes every session whose absolute or idle expiry is before the cutoff, tombstoned refresh-rotation rows included, in bounded batches in both layers; the sweep passes `now - sessionGrace` (default 7 days), so reuse detection (BEH-EA-053) outlives the session's own life by the grace. `packages/core/test/Retention.test.ts` proves a live session and one still inside the grace survive.
 
 ## BEH-EA-052: Idle-window refresh is throttled to at most one write per `touchEvery`
 
@@ -164,3 +164,34 @@ REQUIREMENT: Verifying a presented session secret MUST compare
 
 _Previous: [BEH-EA-048](06-domain-users-accounts.md#beh-ea-048-a-plugin-contributed-field-on-user-or-account-defaults-to-client-writable-unless-the-plugin-declares-otherwise)_
 _Next: [BEH-EA-057](08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose)_
+
+## BEH-EA-258: A session's authentication facts reach the policy layer as attributes
+
+> **See:** [ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md), [ADR-EA-012](../decisions/012-slots-exclusive-registries-aggregate.md)
+
+```ts
+Assurance.assuranceLevel(amr): "aal1" | "aal2" | "aal3"
+Assurance.assurance(amr): { level, restricted }
+Assurance.satisfies(amr, required, { allowRestricted? }): boolean
+// AuthSubject.attributes: { amr, authenticatedAt, aal, restrictedFactor, actingAs? }
+// UserPrincipal.authenticatedAt: epoch seconds; JWT claims: amr, auth_time
+```
+
+```text
+REQUIREMENT: How a session was authenticated MUST reach an authorization
+             policy without the policy re-deriving it. The resolved
+             `UserPrincipal` MUST carry the session's `amr` and
+             `authenticatedAt` (epoch seconds, the OIDC `auth_time`
+             convention); the default `SubjectResolver` — and any overriding
+             resolver, through the shared `principalAttributes` — MUST place
+             `amr` (empty when nothing was recorded), `authenticatedAt`, the
+             derived `aal` and `restrictedFactor` on `AuthSubject.attributes`;
+             and a principal JWT MUST carry `amr` and `auth_time` when the
+             session recorded them. `aal` MUST be derived by one pure
+             function that never guesses a stronger level than the recorded
+             methods prove, MUST count factors by class (two possession
+             methods are one factor), MUST NOT raise a session above aal1 on
+             `sms` alone, and MUST flag a restricted factor.
+```
+
+The mapping (NIST SP 800-63B): knowledge (`pwd`) and possession (`hwk`, `swk`, `otp`, `sms`, `email`) are different classes; a key method with user verification (`user`) is a multi-factor authenticator; `mfa` states multiple factors outright; `fed` counts for nothing (a federated sign-in is as strong as the identity provider says, which awthaq cannot see). aal3 needs a hardware-bound key with user verification (`hwk` + `user`). A passkey session records `hwk` for a device-bound credential and `swk` for a synced one, plus `user` when the authenticator verified the user (HSK-005), so a policy can require `amr contains "hwk"`. A password plus SMS reaches aal2 nominally but `Assurance.satisfies` ignores a restricted factor unless the caller opts in. A policy states `hasAttribute("aal", oneOf("aal2", "aal3"))` instead of enumerating method combinations.

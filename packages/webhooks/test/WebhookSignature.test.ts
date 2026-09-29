@@ -1,4 +1,4 @@
-// BEH-EA-258 (spec/behaviors/31-webhooks.md): the Standard-Webhooks-style signature — an independent
+// BEH-EA-275 (spec/behaviors/34-webhooks.md): the Standard-Webhooks-style signature — an independent
 // oracle (`node:crypto`), the replay window, rotation overlap and tamper refusals.
 import { createHmac } from "node:crypto";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";

@@ -30,7 +30,7 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
-import { Hmac } from "@awthaq/ports";
+import { Defects, Hmac } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -42,6 +42,7 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
@@ -92,16 +93,44 @@ export interface VerificationTokenView {
   readonly userId: Option.Option<UserId>;
 }
 
+/**
+ * BCR-005: the shape of the value `issue` mints. Absent means today's 256-bit
+ * random hex. `Numeric` is a short decimal code a person types (an email OTP);
+ * it is drawn inside this module (rejection sampling over `Crypto.randomBytes`,
+ * no modulo bias) — a caller never supplies the value itself, so the hashing
+ * and single-use guarantees cannot be bypassed with a chosen string.
+ */
+export type ValueFormat = { readonly _tag: "Numeric"; readonly digits: number };
+
+export type IssueInput = {
+  readonly identifier: string;
+  readonly ttl: Duration.Duration;
+  /** ESS-010: `undefined` and an explicit `null` both mean "no payload". */
+  readonly payload?: unknown;
+  /** BCR-003: attached when the caller already knows the real user this token concerns — lets a later account deletion sweep it. */
+  readonly userId?: UserId;
+} & (
+  | {
+      readonly format?: undefined;
+      /**
+       * SOS-004: optional for a 256-bit value (unguessable within any TTL), so a wrong
+       * presentation never touches the row unless asked to. Each failed `consume` against
+       * the live row counts; the row is burned at `maxAttempts` (the right value no longer works).
+       */
+      readonly maxAttempts?: number;
+    }
+  | {
+      /** BCR-005: a low-entropy value MUST carry an attempt budget — enforced by the type, not by convention. */
+      readonly format: ValueFormat;
+      readonly maxAttempts: number;
+    }
+);
+
 export interface VerificationShape {
   /** BEH-EA-057/060/061: mints a token scoped to `identifier`, hashed at rest. */
-  readonly issue: (input: {
-    readonly identifier: string;
-    readonly ttl: Duration.Duration;
-    /** ESS-010: `undefined` and an explicit `null` both mean "no payload". */
-    readonly payload?: unknown;
-    /** BCR-003: attached when the caller already knows the real user this token concerns — lets a later account deletion sweep it. */
-    readonly userId?: UserId;
-  }) => Effect.Effect<
+  readonly issue: (
+    input: IssueInput,
+  ) => Effect.Effect<
     { readonly token: VerificationTokenView; readonly value: Redacted.Redacted<string> },
     StoreUnavailable
   >;
@@ -121,6 +150,11 @@ export interface VerificationShape {
    * BEH-EA-063: `true` only for the first reservation of `identifier` while
    * unexpired, `false` for every later one — independent of `consume`, used
    * to serialize an operation rather than to gate a token a caller presents.
+   *
+   * MLO-002: the resend-window primitive. `@awthaq/magic-link`'s `MagicLink` and
+   * `EmailOtp` reserve `<purpose>-resend:<normalized address>` for the configured
+   * window before minting a second mail, so two concurrent requests (or a client
+   * hammering "resend") send one message — below, and independent of, the rate limiter.
    */
   readonly reserve: (input: {
     readonly identifier: string;
@@ -150,10 +184,55 @@ interface TokenRow {
   readonly createdAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
   readonly payload: unknown;
+  /** SOS-004: `None` = no budget (the default 256-bit token). */
+  readonly maxAttempts: Option.Option<number>;
+  readonly attempts: number;
 }
 
 const isExpired = (row: TokenRow, now: DateTime.Utc): boolean =>
   DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.expiresAt);
+
+/** BCR-005: bytes at or above this are rejected, so `byte % 10` is uniform (250 = 25 * 10). */
+const DIGIT_REJECTION_BOUND = 250;
+
+/** SOS-004: a budget below 1 would burn the token before its first presentation. */
+const validBudget = (maxAttempts: number | undefined): Effect.Effect<Option.Option<number>> =>
+  maxAttempts === undefined
+    ? Effect.succeed(Option.none())
+    : Number.isInteger(maxAttempts) && maxAttempts >= 1
+      ? Effect.succeed(Option.some(maxAttempts))
+      : Defects.invalidConfiguration(
+          "Verification.issue.maxAttempts",
+          `awthaq: maxAttempts must be a positive integer, got ${maxAttempts}`,
+        );
+
+/**
+ * BCR-005: mints the value a token is hashed from — 256-bit hex by default, or
+ * `digits` uniformly random decimal digits. A digit count outside 4..10 is a
+ * caller bug (too short to be worth a budget; too long to type), so it dies.
+ */
+const mintValue = (
+  crypto: Crypto.Crypto,
+  format: ValueFormat | undefined,
+): Effect.Effect<string, PlatformError.PlatformError> =>
+  Effect.gen(function* () {
+    if (format === undefined) return toHex(yield* crypto.randomBytes(32));
+    if (!Number.isInteger(format.digits) || format.digits < 4 || format.digits > 10) {
+      return yield* Defects.invalidConfiguration(
+        "Verification.issue.format",
+        `awthaq: a numeric value must have 4 to 10 digits, got ${format.digits}`,
+      );
+    }
+    let digits = "";
+    while (digits.length < format.digits) {
+      const bytes = yield* crypto.randomBytes(format.digits * 2);
+      for (const byte of bytes) {
+        if (digits.length < format.digits && byte < DIGIT_REJECTION_BOUND)
+          digits += String(byte % 10);
+      }
+    }
+    return digits;
+  });
 
 /**
  * TRBS-005: single-process, test-grade storage. State is one per-process
@@ -178,7 +257,8 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
       const issue: VerificationShape["issue"] = Effect.fnUntraced(
         function* (input) {
           const id = VerificationTokenId(yield* crypto.randomUUIDv7);
-          const value = toHex(yield* crypto.randomBytes(32));
+          const maxAttempts = yield* validBudget(input.maxAttempts);
+          const value = yield* mintValue(crypto, input.format);
           const valueHash = yield* hash(value);
           const now = yield* DateTime.now;
           const row: TokenRow = {
@@ -186,6 +266,8 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
             identifier: input.identifier,
             userId: Option.fromNullishOr(input.userId),
             valueHash,
+            maxAttempts,
+            attempts: 0,
             createdAt: now,
             expiresAt: DateTime.addDuration(now, input.ttl),
             // ESS-010: an explicit `null` is treated as absent, exactly as
@@ -233,13 +315,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
               HashMap.HashMap<string, TokenRow>,
             ] => {
               const row = HashMap.get(s, identifier);
-              if (
-                Option.isNone(row) ||
-                isExpired(row.value, now) ||
-                // ACS-002: the digest is compared in constant time, like
-                // `Sessions`' secret hash; `layerSql` does it in the DB predicate.
-                !Hmac.constantTimeEqualString(row.value.valueHash, presentedHash)
-              ) {
+              if (Option.isNone(row) || isExpired(row.value, now)) {
                 return [
                   Result.fail(
                     new TokenConsumed({
@@ -248,6 +324,30 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
                     }),
                   ),
                   s,
+                ] as const;
+              }
+              // ACS-002: the digest is compared in constant time, like
+              // `Sessions`' secret hash; `layerSql` does it in the DB predicate.
+              if (!Hmac.constantTimeEqualString(row.value.valueHash, presentedHash)) {
+                // SOS-004: a wrong presentation against a live budgeted row spends one
+                // attempt, and the row is burned when the budget is gone — in the same
+                // atomic step, so concurrent guesses cannot exceed it.
+                const spent = row.value.attempts + 1;
+                const burned =
+                  Option.isSome(row.value.maxAttempts) && spent >= row.value.maxAttempts.value;
+                const next = Option.isNone(row.value.maxAttempts)
+                  ? s
+                  : burned
+                    ? HashMap.remove(s, identifier)
+                    : HashMap.set(s, identifier, { ...row.value, attempts: spent });
+                return [
+                  Result.fail(
+                    new TokenConsumed({
+                      message: "awthaq: token replay or unknown token",
+                      identifier,
+                    }),
+                  ),
+                  next,
                 ] as const;
               }
               return [
@@ -346,7 +446,8 @@ export const layerSql = Layer.effect(
 
     const issue: VerificationShape["issue"] = Effect.fnUntraced(
       function* (input) {
-        const value = toHex(yield* crypto.randomBytes(32));
+        const maxAttempts = yield* validBudget(input.maxAttempts);
+        const value = yield* mintValue(crypto, input.format);
         const valueHash = yield* hash(value);
         const now = yield* DateTime.now;
         const insert = yield* repo.models.VerificationToken.insert
@@ -354,6 +455,7 @@ export const layerSql = Layer.effect(
             identifier: input.identifier,
             userId: input.userId ?? null,
             valueHash,
+            maxAttempts: Option.getOrNull(maxAttempts),
             expiresAt: DateTime.addDuration(now, input.ttl),
             consumedAt: null,
             payload: input.payload ?? null,
@@ -395,6 +497,9 @@ export const layerSql = Layer.effect(
             ),
           onSome: (row) => Result.succeed(toTokenView(row)),
         });
+        // SOS-004: a miss against a live budgeted row spends one attempt (one atomic
+        // statement; a row with no budget, an unknown or an expired one is untouched).
+        if (Option.isNone(claimed)) yield* repo.recordFailedAttempt({ identifier, now });
         // BEH-EA-059: every failed consumption publishes the same
         // `auth.token.replay` event, uniformly, before the caller ever sees
         // `TokenConsumed`.

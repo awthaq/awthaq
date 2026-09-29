@@ -2,7 +2,7 @@
   "name": "@awthaq/two-factor",
   "version": "0.1.0",
   "private": true,
-  "description": "TOTP-based two-factor authentication with a divert hook and hashed recovery codes.",
+  "description": "TOTP two-factor authentication: encrypted secrets, hashed recovery codes, a challenge over Verification and opt-in hook gates.",
   "license": "MIT",
   "files": [
     "lib",
@@ -33,6 +33,9 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/password": "workspace:*",
+    "@awthaq/test": "workspace:*",
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

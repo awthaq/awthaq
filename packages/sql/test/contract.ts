@@ -1321,6 +1321,8 @@ export const contractCases = (
           expiresAt: future,
           createdAt: now,
           payload: null,
+          maxAttempts: null,
+          attempts: 0,
         });
         yield* reservations.claim({ identifier: `signup:${label}`, expiresAt: future, now });
         yield* auditLog.insert({

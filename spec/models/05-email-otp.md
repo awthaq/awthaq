@@ -36,7 +36,7 @@ share infrastructure with Magic Link rather than be designed independently.
 
 | Property | Value |
 |---|---|
-| Status | Planned-Phase2 |
+| Status | Shipped (`EmailOtp` in `@awthaq/magic-link`, email only; normative behaviors in [behaviors/33-email-otp.md](../behaviors/33-email-otp.md); SMS deferred per [ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)) |
 | Priority | P2 |
 | Enabler(s) | E1 — Verification-token infrastructure |
 | Breaking? | Purely additive — it would reuse the same shared verification-token table as Magic Link and Password reset/verify; no existing MVP plugin needs to change. |

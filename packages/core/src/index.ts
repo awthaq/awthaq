@@ -27,6 +27,7 @@
 export * as Accounts from "./Accounts.ts";
 export * as Auth from "./Auth.ts";
 export * as AuditChain from "./AuditChain.ts";
+export * as Assurance from "./Assurance.ts";
 export * as AuditLog from "./AuditLog.ts";
 export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";

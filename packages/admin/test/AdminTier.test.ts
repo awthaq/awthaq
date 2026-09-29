@@ -121,6 +121,9 @@ describe("AR-003: the admin tier", () => {
           ),
           Layer.provide(AuthenticationLive),
           Layer.provide(CsrfProtectionLive),
+          // The account group's erasure cascade and data export (CSG-001/CSG-005), and its limiter.
+          Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
+          Layer.provideMerge(RateLimiter.layerPermissive),
           Layer.provideMerge(SqlTransaction.layerNoop),
           Layer.provideMerge(Accounts.layerMemory),
           Layer.provideMerge(Verification.layerMemory),

@@ -3,7 +3,7 @@ ID: "THS-004"
 Title: "TOTP secret encryption-at-rest left undecided despite a proven Encryption port"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/06-two-factor-totp.md:103"
 Auditor: "totp-hotp-mfa-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `—` · reported by **TOTP/HOTP MFA Specialist** (`totp-hotp-mfa-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Decide now, before any schema exists: TOTP secrets are stored only as Encryption
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mfa-two-factor-hardening`. Evidence at HEAD ec065a7: `spec/models/06-two-factor-totp.md:103`. Fix: Record in a new ADR (with THS-007/BCR-006) that TOTP secrets are stored only as Encryption-port envelopes with AAD bound to the user, reusing packages/ports/src/Encryption.ts instead of the SecretBox port ticket 05 proposed (same intent, already shipped). (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ADR-EA-020 (spec/decisions/020-two-factor-state.md): TOTP secrets stored only as Encryption-port envelopes (AAD two_factor_secret:<userId>), no new SecretBox port; implemented in TwoFactorStore/SecondFactor and tested (ciphertext at rest, lazy re-encryption). Model MOD-EA-06 status updated.

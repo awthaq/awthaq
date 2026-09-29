@@ -106,6 +106,8 @@ export const AdminAccountsGroup = HttpApiGroup.make("admin.accounts")
         AdminSelfActionRefused,
         AdminNoEmailIdentity,
         AdminWeakPassword,
+        // ARF-005: a `BeforeCredentialReset` tap (the two-factor plugin) refused.
+        HookPoint.HookAborted,
       ],
     }),
   )

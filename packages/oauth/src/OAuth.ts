@@ -1304,6 +1304,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const point = yield* beforeSessionIssue.run({
           userId: targetUserId,
           strategy: providerId,
+          amr: ["fed"],
         });
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);

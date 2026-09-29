@@ -1,4 +1,4 @@
-// BEH-EA-258/259/262/263/264 (spec/behaviors/31-webhooks.md): the delivery machinery over the event relay —
+// BEH-EA-275/276/279/280/281 (spec/behaviors/34-webhooks.md): the delivery machinery over the event relay —
 // enqueue idempotence, signed requests a receiver can verify, retry/backoff/dead-letter, no redirects,
 // SSRF refusal at attempt time, rate deferral, secret rotation overlap and endpoint auto-disable.
 import { AuthEvents, EventRelay, Users } from "@awthaq/core";

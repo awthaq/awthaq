@@ -3,7 +3,7 @@ ID: "MLO-002"
 Title: "Verification.reserve - the domain-level resend/serialization primitive - has zero production callers"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Verification.ts:116"
 Auditor: "magic-link-email-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `core` · reported by **Magic Link / Email OTP Specialist** (`magic-link-email-otp-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Either wire reserve into requestReset/resendVerification (e.g. guard 'one live r
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `verification-otp-substrate`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:121`. Fix: Make reserve's status a decision: document it as the resend-window primitive for MagicLink/EmailOtp (ticket 05) and use it there; until then note it in the Shape doc. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted the dossier's option: Verification.reserve is the resend-window primitive; MagicLink and EmailOtp use it (<purpose>-resend:<address>, resendWindow default 60s). Documented in BEH-EA-063 As-shipped note. Tests: MagicLink.test.ts, EmailOtp.test.ts.

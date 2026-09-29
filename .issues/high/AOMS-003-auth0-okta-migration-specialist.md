@@ -3,7 +3,7 @@ ID: "AOMS-003"
 Title: "MFA is absent at runtime: two-factor placeholder plus unconditional session issue"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "two-factor"
 Source: "packages/two-factor/src/index.ts:8"
 Auditor: "auth0-okta-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `two-factor` · reported by **Auth0/Okta Migration Specialist** (`auth0-okta-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [MFA/two-factor subsystem build-out](../../.scratch/resolve-ready-for-human-findings/issues/05-mfa-two-factor-subsystem.md) — ship a real `TwoFactor` plugin (RFC 6238 TOTP + hashed recovery codes) tapping ticket 3's `Hooks.BeforeSessionIssue` divert point, with a new `SecretBox` port for at-rest secret encryption and the challenge state reusing `Verification.issue`/`consume`. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `mfa-two-factor`. Already fixed by commit 3e298c8. Evidence at HEAD ec065a7: `packages/two-factor/src/index.ts:8`. Fix: Close the residual after THS-001 lands: MFA events in the audit trail, `amr` recorded on sessions minted after a second factor, and the Auth0 migration doc stating enrolments are not importable. (effort S). Full dossier: `.plan/slices/07-password-mfa.md`.
+
+**Resolved (2026-09-29):** Residual closed: MFA events (auth.twoFactor.*: enabled/disabled/verified/challengeFailed/recoveryCodeUsed/recoveryCodesRegenerated/locked) reach the audit trail via AuthEvents; sessions minted after a second factor record amr (e.g. [pwd, otp] / [pwd, recovery]) via BeforeSessionIssue/Sessions amr; packages/migrate-auth0/README.md now has 'MFA enrolments are not importable'. Tests: packages/two-factor/test/TwoFactor.test.ts, packages/core/test/Assurance.test.ts.

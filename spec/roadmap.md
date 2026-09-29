@@ -86,10 +86,10 @@ This document restates the milestone roadmap of `archive/PRD.md` §23 as this sp
 
 ## M7 Phase-2 plugins
 
-**Status: partly implemented. Shipped: Organization, ApiKey, Admin, Jwt and the Bearer seam. Not built: TwoFactor, MagicLink, EmailOtp.**
+**Status: implemented. Shipped: TwoFactor, MagicLink, EmailOtp (email only), Organization, ApiKey, Admin, Jwt and the Bearer seam.**
 
-- `TwoFactor` (divert hook, hashed recovery codes).
-- `MagicLink`, `EmailOtp`.
+- `TwoFactor` (divert hook, hashed recovery codes) — shipped in `@awthaq/two-factor`.
+- `MagicLink`, `EmailOtp` — shipped in `@awthaq/magic-link` (email only; SMS is a later restricted plugin, ADR-EA-021).
 - `Organization` (membership, invitations, relationship resolver).
 - `ApiKey` (service principals): long-lived API keys plus `client_credentials` clients minting short-lived service JWTs through `Jwt`. Scope note (wayfinder ticket 10): this pulls a slice of Phase 3's authorization-server capability — the `client_credentials` grant, a pure back-channel POST needing none of the browser, consent or discovery machinery of the `OidcProvider` plugin — into M7 ahead of schedule. It lives in `@awthaq/api-key`; `@awthaq/oauth` stays a client of external IdPs.
 - `Admin` (impersonation with hard expiry and `actingAs`).

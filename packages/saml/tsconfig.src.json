@@ -10,33 +10,15 @@
     "rootDir": "./src",
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
-      "@/*": [
-        "./src/*"
-      ],
-      "@awthaq/server": [
-        "../server/src/index.ts"
-      ],
-      "@awthaq/core": [
-        "../core/src/index.ts"
-      ],
-      "@awthaq/sql": [
-        "../sql/src/index.ts"
-      ],
-      "@awthaq/ports": [
-        "../ports/src/index.ts"
-      ],
-      "@awthaq/api": [
-        "../api/src/index.ts"
-      ],
-      "@awthaq/organization": [
-        "../organization/src/index.ts"
-      ]
+      "@/*": ["./src/*"],
+      "@awthaq/core": ["../core/src/index.ts"],
+      "@awthaq/sql": ["../sql/src/index.ts"],
+      "@awthaq/ports": ["../ports/src/index.ts"],
+      "@awthaq/api": ["../api/src/index.ts"],
+      "@awthaq/organization": ["../organization/src/index.ts"]
     }
   },
   "references": [
-    {
-      "path": "../server/tsconfig.src.json"
-    },
     {
       "path": "../core/tsconfig.src.json"
     },

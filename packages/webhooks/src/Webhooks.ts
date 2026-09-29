@@ -1,6 +1,6 @@
 // @awthaq/webhooks — Webhooks
 //
-// CWM-004/MAPS-010 (decision D2, ADR-EA-030 Decision 7; spec/behaviors/31-webhooks.md): the first-party,
+// CWM-004/MAPS-010 (decision D2, ADR-EA-030 Decision 7; spec/behaviors/34-webhooks.md): the first-party,
 // opt-in outbound webhooks plugin. `Auth.make([..., Webhooks])` adds the administrator's endpoint and
 // delivery-log API; `Webhooks.background()` (or its two halves, `WebhookDelivery.relayLayer` and
 // `workerLayer`) starts the delivery machinery over the event relay. Nothing here runs unless composed.

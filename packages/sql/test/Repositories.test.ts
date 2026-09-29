@@ -264,6 +264,8 @@ describe("Repositories (SQLite specifics)", () => {
           expiresAt: DateTime.add(now, { minutes: 5 }),
           createdAt: now,
           payload: null,
+          maxAttempts: null,
+          attempts: 0,
         });
         yield* verification.tryConsume({
           identifier: "verify-email:sea005",

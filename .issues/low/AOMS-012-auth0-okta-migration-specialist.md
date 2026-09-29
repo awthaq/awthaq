@@ -3,7 +3,7 @@ ID: "AOMS-012"
 Title: "Sessions and JWTs carry no authentication-method record (no amr/acr equivalent)"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/Jwt.ts:96"
 Auditor: "auth0-okta-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `jwt` · reported by **Auth0/Okta Migration Specialist** (`auth0-okta-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add an amr-style claim path: issue() and the OAuth callback record the strategy 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-authentication-methods`. Evidence at HEAD ec065a7: `packages/jwt/src/Jwt.ts:133`. Fix: Record RFC 8176-style authentication methods on the session, carry them on the UserPrincipal, and emit `amr` + `auth_time` in principal JWTs. (effort L). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** RFC 8176 amr recorded on the session and carried on the UserPrincipal (with authenticatedAt); packages/jwt emits amr and auth_time in principal JWTs and decodes them. Tests: packages/jwt/test (claims round trip), Assurance.test.ts.

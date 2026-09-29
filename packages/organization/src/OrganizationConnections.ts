@@ -27,7 +27,7 @@
 // entitlement mapping derived from a connection stays out of this table, in qadi
 // (ADR-EA-009).
 //
-// SSRF: an organization administrator supplies URLs this server will call. Only
+// SSRF: an organization administrator supplies URLs this server will call (`OutboundUrl`). Only
 // absolute `https:` URLs without credentials are accepted, and `localhost`,
 // `.local`/`.internal` names and private/loopback/link-local IP literals are
 // refused. That is a floor, not a defence against DNS rebinding — egress
@@ -35,7 +35,7 @@
 
 import { OAuthConnections, OAuthProvider } from "@awthaq/oauth";
 import { Claims } from "@awthaq/oauth/presets";
-import { Encryption } from "@awthaq/ports";
+import { Encryption, OutboundUrl } from "@awthaq/ports";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -311,45 +311,13 @@ export class OrganizationConnectionStore extends Context.Service<
   OrganizationConnectionStoreShape
 >()("awthaq/organization/OrganizationConnectionStore") {}
 
-const PRIVATE_HOSTNAME = /(^|\.)(localhost|local|internal|localdomain)$/i;
-
-const isPrivateIpv4 = (host: string): boolean => {
-  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (match === null) return false;
-  const [a, b] = [Number(match[1]), Number(match[2])];
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127)
-  );
-};
-
-/** `Some(reason)` when `value` is not an acceptable outbound endpoint. */
-const endpointProblem = (field: string, value: string): Option.Option<string> => {
-  if (!URL.canParse(value)) return Option.some(`${field} is not an absolute URL`);
-  const url = new URL(value);
-  if (url.protocol !== "https:") return Option.some(`${field} must be https`);
-  if (url.username !== "" || url.password !== "") {
-    return Option.some(`${field} must not carry credentials`);
-  }
-  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (
-    PRIVATE_HOSTNAME.test(host) ||
-    isPrivateIpv4(host) ||
-    host === "::1" ||
-    host === "::" ||
-    host.startsWith("fc") ||
-    host.startsWith("fd") ||
-    host.startsWith("fe80")
-  ) {
-    return Option.some(`${field} must not point at a private or loopback address`);
-  }
-  return Option.none();
-};
+/**
+ * `Some(reason)` when `value` is not an acceptable outbound endpoint: the shared SSRF floor
+ * (`OutboundUrl` in `@awthaq/ports`), which parses IPv6 literals instead of prefix-matching host
+ * names (a host such as `fcm.example.com` is not a unique-local address).
+ */
+const endpointProblem = (field: string, value: string): Option.Option<string> =>
+  OutboundUrl.problem(field, value);
 
 const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 

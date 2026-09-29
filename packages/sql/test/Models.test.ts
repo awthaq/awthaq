@@ -138,6 +138,8 @@ describe("Models.makeModels (TS-001)", () => {
         consumedAt: null,
         createdAt: date,
         payload: "null",
+        maxAttempts: null,
+        attempts: 0,
       });
       assert.strictEqual(token.consumedAt, null);
       const reservation = yield* Schema.decodeUnknownEffect(pg.VerificationReservation)({

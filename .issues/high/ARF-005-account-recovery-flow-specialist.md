@@ -3,7 +3,7 @@ ID: "ARF-005"
 Title: "The emailed reset link is the only recovery channel; recovery codes and magic-link are unimplemented, so email defeats every strong factor"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "two-factor"
 Source: "packages/two-factor/src/index.ts:8"
 Auditor: "account-recovery-flow-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `two-factor` · reported by **Account Recovery Flow Specialist** (`account-recovery-flow-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [MFA/two-factor subsystem build-out](../../.scratch/resolve-ready-for-human-findings/issues/05-mfa-two-factor-subsystem.md) — ship `TwoFactor`'s recovery codes; ship `magic-link` now and add it to `BeforeSessionIssue`'s call sites; add a new `BeforeCredentialReset` veto hook so `Password.reset` requires the second factor when one is enrolled. Passkey-only zero-factor lockout is flagged as an open product-scope question, with owner-notification on admin impersonation as the one concrete mitigation shipped now. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mfa-two-factor`. Evidence at HEAD ec065a7: `packages/two-factor/src/index.ts:8`. Fix: Add `Hooks.BeforeCredentialReset` (veto), consult it inside confirmReset's transaction, tap it from `TwoFactor.credentialResetGate`, and notify owners on impersonation start. (effort L). Full dossier: `.plan/slices/07-password-mfa.md`.
+
+**Resolved (2026-09-29):** Added Hooks.BeforeCredentialReset (veto, {userId, secondFactorCode?: Redacted}); Password.confirmReset consults it inside its transaction (SecondFactorRequired 401, secondFactorCode in the payload); TwoFactor.credentialResetGate taps it; MagicLink/EmailOtp/first-factor sign-ins consult BeforeSessionIssue divert (Fix A); admin ImpersonationOwnerNotice opt-in layer notifies the owner when impersonation starts. Tests: packages/password (reset asks for the factor), packages/two-factor/test/AuthHttp.test.ts, packages/admin/test/ImpersonationOwnerNotice.test.ts. BEH-EA-259, BEH-EA-261.

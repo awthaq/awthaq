@@ -140,9 +140,9 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `Users` | `Context.Service` | `Users.ts` |
 | `Accounts` | `Context.Service` | `Accounts.ts` |
 | `Verification` | `Context.Service` | `Verification.ts` |
-| `AuthEvents` | `Context.Service` (bounded `PubSub`; in-process, at-most-once — `AuditLog` is the durable record and `EventRelay` the cross-process outbox, ADR-EA-030) | `AuthEvents.ts` |
+| `AuthEvents` | `Context.Service` (bounded `PubSub`; in-process, at-most-once — `AuditLog` is the durable record and `EventRelay` the cross-process outbox, ADR-EA-032) | `AuthEvents.ts` |
 | `EventRelay`, `EventTransport`, `RelayCursorStore` | opt-in outbox relay over the audit log, transport port, persisted position | `EventRelay.ts` |
-| `Erasure`, `DataExport` | account erasure and data-subject export over aggregating registries plugins contribute to (ADR-EA-031) | `Erasure.ts`, `DataExport.ts` |
+| `Erasure`, `DataExport` | account erasure and data-subject export over aggregating registries plugins contribute to (ADR-EA-033) | `Erasure.ts`, `DataExport.ts` |
 | `Retention`, `SecuritySignals` | opt-in retention sweep and breach-signal detector | `Retention.ts`, `SecuritySignals.ts` |
 | `BeforeSignUp`, `BeforeSignIn`, `BeforeSessionIssue`, `AfterSignUp`, `AfterSignIn`, `BeforeUserDelete`, `AfterUserAttributesChanged` | hook points (`HookPoint.veto`/`observe`/`divert`), aggregated by the composition's `Hooks.HooksLive` ([ADR-EA-033](decisions/033-hook-registries-per-composition.md)) | `Hooks.ts` |
 

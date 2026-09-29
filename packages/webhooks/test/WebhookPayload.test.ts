@@ -1,4 +1,4 @@
-// BEH-EA-260/258 (spec/behaviors/31-webhooks.md): what leaves the process — identifiers only, free text
+// BEH-EA-277/278 (spec/behaviors/34-webhooks.md): what leaves the process — identifiers only, free text
 // and client context withheld — and the per-endpoint event filters.
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";

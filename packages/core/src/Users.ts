@@ -137,6 +137,12 @@ export interface UserRecord {
 export const emailOf = (user: UserRecord): Option.Option<string> =>
   user.identity._tag === "Email" ? Option.some(user.identity.email) : Option.none();
 
+/** FAMS-002: `{ email }` for an email-identity user, `{}` otherwise — for hook inputs whose `email` is optional. */
+export const emailField = (user: UserRecord): { readonly email?: string } => {
+  const email = emailOf(user);
+  return Option.isSome(email) ? { email: email.value } : {};
+};
+
 /** FAMS-002: the user's E.164 phone, if their identity is a phone one. */
 export const phoneOf = (user: UserRecord): Option.Option<Phone.E164> =>
   user.identity._tag === "Phone" ? Option.some(user.identity.phone) : Option.none();

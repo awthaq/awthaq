@@ -1,4 +1,4 @@
-// BEH-EA-262 (spec/behaviors/31-webhooks.md): `Webhooks.background()` end to end, running for real —
+// BEH-EA-279 (spec/behaviors/34-webhooks.md): `Webhooks.background()` end to end, running for real —
 // the relay tailing the audit log into the queue and the worker sending it, driven by the test clock,
 // with an endpoint that fails once (retry).
 import { AuthEvents, EventRelay, Users } from "@awthaq/core";

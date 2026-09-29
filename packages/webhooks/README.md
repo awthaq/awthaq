@@ -1,6 +1,6 @@
 # @awthaq/webhooks
 
-Opt-in **signed outbound webhooks** over the event relay: an administrator registers HTTPS endpoints, and every matching auth event is queued per endpoint and POSTed with [Standard Webhooks](https://www.standardwebhooks.com/)-style headers (the scheme Clerk's svix libraries verify), with retry, backoff, a dead-letter state and a delivery log. Specified in [`spec/behaviors/31-webhooks.md`](../../spec/behaviors/31-webhooks.md) (BEH-EA-258 through 265); the design is [ADR-EA-030](../../spec/decisions/030-event-delivery-outbox-relay.md) Decision 7. It is a consumer of `EventRelay` (`@awthaq/core`): the in-process bus is unchanged and no network call sits on any operation's path.
+Opt-in **signed outbound webhooks** over the event relay: an administrator registers HTTPS endpoints, and every matching auth event is queued per endpoint and POSTed with [Standard Webhooks](https://www.standardwebhooks.com/)-style headers (the scheme Clerk's svix libraries verify), with retry, backoff, a dead-letter state and a delivery log. Specified in [`spec/behaviors/34-webhooks.md`](../../spec/behaviors/34-webhooks.md) (BEH-EA-275 through 265); the design is [ADR-EA-030](../../spec/decisions/030-event-delivery-outbox-relay.md) Decision 7. It is a consumer of `EventRelay` (`@awthaq/core`): the in-process bus is unchanged and no network call sits on any operation's path.
 
 ```ts
 const auth = Auth.make([Webhooks.Webhooks]); // the admin API: group `webhooks.admin` (admin tier)

@@ -792,6 +792,76 @@ export const ApiKeyClientSecretRotatedEvent = Schema.TaggedStruct(
 );
 export type ApiKeyClientSecretRotatedEvent = typeof ApiKeyClientSecretRotatedEvent.Type;
 
+/**
+ * THS-001/AOMS-003/BCR-006 (`@awthaq/two-factor`): the second factor's lifecycle and every
+ * failed or successful presentation, so a defender can see enrolment, use of a recovery code
+ * (the sign that a device was lost), and lockouts. Identifiers only: no code, secret or hash.
+ * `method` names which factor was presented; `purpose` what it was presented for.
+ */
+export const TwoFactorMethod = Schema.Literals(["totp", "recovery"]);
+export type TwoFactorMethod = typeof TwoFactorMethod.Type;
+
+export const TwoFactorPurpose = Schema.Literals([
+  "enroll",
+  "signIn",
+  "credentialReset",
+  "disable",
+  "regenerate",
+]);
+export type TwoFactorPurpose = typeof TwoFactorPurpose.Type;
+
+/** Published when a pending secret is confirmed with a first valid code — the factor is now active. */
+export const TwoFactorEnabledEvent = Schema.TaggedStruct("auth.twoFactor.enabled", {
+  userId: UserIdSchema,
+});
+export type TwoFactorEnabledEvent = typeof TwoFactorEnabledEvent.Type;
+
+/** Published when the factor is removed (secret and recovery codes deleted). */
+export const TwoFactorDisabledEvent = Schema.TaggedStruct("auth.twoFactor.disabled", {
+  userId: UserIdSchema,
+});
+export type TwoFactorDisabledEvent = typeof TwoFactorDisabledEvent.Type;
+
+/** Published on every successful presentation of a second factor, with the method used. */
+export const TwoFactorVerifiedEvent = Schema.TaggedStruct("auth.twoFactor.verified", {
+  userId: UserIdSchema,
+  method: TwoFactorMethod,
+  purpose: TwoFactorPurpose,
+});
+export type TwoFactorVerifiedEvent = typeof TwoFactorVerifiedEvent.Type;
+
+/** Published on every failed presentation (wrong code, replayed step, unknown recovery code). */
+export const TwoFactorChallengeFailedEvent = Schema.TaggedStruct("auth.twoFactor.challengeFailed", {
+  userId: UserIdSchema,
+  method: TwoFactorMethod,
+  purpose: TwoFactorPurpose,
+});
+export type TwoFactorChallengeFailedEvent = typeof TwoFactorChallengeFailedEvent.Type;
+
+/** Published when a recovery code is spent; `remaining` is what is left, for a low-supply warning. */
+export const TwoFactorRecoveryCodeUsedEvent = Schema.TaggedStruct(
+  "auth.twoFactor.recoveryCodeUsed",
+  {
+    userId: UserIdSchema,
+    remaining: Schema.Number,
+  },
+);
+export type TwoFactorRecoveryCodeUsedEvent = typeof TwoFactorRecoveryCodeUsedEvent.Type;
+
+/** Published when the recovery codes are replaced by a fresh set (the old set is invalid). */
+export const TwoFactorRecoveryCodesRegeneratedEvent = Schema.TaggedStruct(
+  "auth.twoFactor.recoveryCodesRegenerated",
+  { userId: UserIdSchema },
+);
+export type TwoFactorRecoveryCodesRegeneratedEvent =
+  typeof TwoFactorRecoveryCodesRegeneratedEvent.Type;
+
+/** BCR-006: the shared per-account failure budget was exhausted; the second factor is locked for the window. */
+export const TwoFactorLockedEvent = Schema.TaggedStruct("auth.twoFactor.locked", {
+  userId: UserIdSchema,
+});
+export type TwoFactorLockedEvent = typeof TwoFactorLockedEvent.Type;
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries. */
 export const AuthEventSchema = Schema.Union([
   TokenReplayEvent,
@@ -867,6 +937,13 @@ export const AuthEventSchema = Schema.Union([
   ApiKeyClientRegisteredEvent,
   ApiKeyClientRevokedEvent,
   ApiKeyClientSecretRotatedEvent,
+  TwoFactorEnabledEvent,
+  TwoFactorDisabledEvent,
+  TwoFactorVerifiedEvent,
+  TwoFactorChallengeFailedEvent,
+  TwoFactorRecoveryCodeUsedEvent,
+  TwoFactorRecoveryCodesRegeneratedEvent,
+  TwoFactorLockedEvent,
 ]);
 
 export type AuthEvent = typeof AuthEventSchema.Type;

@@ -82,6 +82,8 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `017-*.md` | ADR-EA-017 | JWT Signing Keys Rotate on a Grace Period Sized to Token Lifetime, With an Emergency Retire-Now Path |
 | `018-*.md` | ADR-EA-018 | A Tenant Is an Organization Row; Core Carries an Opaque, Ambient Tenant Column |
 | `019-*.md` | ADR-EA-019 | Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption |
+| `020-*.md` | ADR-EA-020 | Two-Factor State — Encrypted Secrets, a Verification Challenge, One Failure Budget per Account |
+| `021-*.md` | ADR-EA-021 | SMS OTP Is a Separate, Explicitly Restricted Plugin over the Email-OTP Substrate, Deferred |
 | `022-*.md` | ADR-EA-022 | API Keys and Client Secrets Rotate With a Bounded Dual-Validity Window; Keys Travel in `x-api-key`, `Authorization: Bearer` Is Reserved for JWTs |
 | `023-*.md` | ADR-EA-023 | Enterprise Federation Ships as Two First-Party Packages (`saml` SP-only, `scim` inbound) Behind a Thin `Sso` Dispatcher |
 | `024-*.md` | ADR-EA-024 | Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token |
@@ -131,6 +133,9 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `28-tenancy.md` | 230–237 | Tenancy |
 | `29-saml-sp.md` | 238–245 | SAML Service Provider (specified, not built) |
 | `30-scim.md` | 246–253 | SCIM (inbound provisioning) |
+| `31-two-factor.md` | 260–266 | Two-Factor Authentication |
+| `32-magic-link.md` | 267–270 | Magic Link |
+| `33-email-otp.md` | 271–274 | Email OTP |
 
 ### `spec/process/`
 

@@ -134,9 +134,11 @@ export interface ActingAs {
  * so a typo cannot silently fail a policy check: `pwd` password, `hwk`
  * hardware-bound key (passkey), `swk` software key, `user` user verification,
  * `otp` one-time password, `mfa` multiple factors, `fed` federated identity
- * (OAuth), `email` proof of mailbox control.
+ * (OAuth), `email` proof of mailbox control, `sms` an SMS-delivered code — a *restricted*
+ * authenticator (NIST SP 800-63B-4), kept apart from `otp` so a policy can rank it lower
+ * (`Assurance`, SOS-005); no plugin records it yet (ADR-EA-021).
  */
-export type AuthMethod = "pwd" | "hwk" | "swk" | "user" | "otp" | "mfa" | "fed" | "email";
+export type AuthMethod = "pwd" | "hwk" | "swk" | "user" | "otp" | "mfa" | "fed" | "email" | "sms";
 
 const AUTH_METHODS: ReadonlySet<string> = new Set([
   "pwd",
@@ -147,9 +149,11 @@ const AUTH_METHODS: ReadonlySet<string> = new Set([
   "mfa",
   "fed",
   "email",
+  "sms",
 ]);
 
-const isAuthMethod = (value: unknown): value is AuthMethod =>
+/** Narrows a plain string to a known method — how a consumer of a principal's `amr` (a `string[]` on the wire) gets `AuthMethod`s. */
+export const isAuthMethod = (value: unknown): value is AuthMethod =>
   typeof value === "string" && AUTH_METHODS.has(value);
 
 /** Order-preserving union — `amr` only ever grows within a session. */

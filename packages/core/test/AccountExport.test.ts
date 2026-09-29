@@ -1,5 +1,5 @@
 // CSG-005 (GDPR Art. 15/20): `AccountExport.exportAccount` and the `DataExportRegistry`
-// plugins contribute a section to (ADR-EA-031).
+// plugins contribute a section to (ADR-EA-033).
 import { PasswordHasher } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";

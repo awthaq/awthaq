@@ -3,7 +3,7 @@ ID: "BCR-006"
 Title: "Shared per-account lockout counter for code brute-force is undecided and unowned"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/06-two-factor-totp.md:104"
 Auditor: "backup-codes-recovery-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `—` · reported by **Backup Codes & Account Recovery Specialist** (`backup-codes-recovery-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Decide and document before implementation: a per-account counter keyed like '2fa
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mfa-two-factor-hardening`. Evidence at HEAD ec065a7: `spec/models/06-two-factor-totp.md:104`. Fix: Add to ADR-EA-020 a shared per-account second-factor failure budget through the RateLimiter port (research/07 Q58 recommendation 3), layered on top of ticket 05's per-challenge limit. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ADR-EA-020 Decision: shared per-account failure budget through the RateLimiter port (5 in 15 min, any method/challenge, success does not reset), pre-evaluation check via the new read-only RateLimiter.check plus consume on failure; typed SecondFactorLocked 429 and an audited event. Implemented in SecondFactor.ts and tested (TwoFactor.test.ts lockout). BEH-EA-266.
