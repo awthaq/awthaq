@@ -131,6 +131,13 @@ export class OrgRoleNotFound extends Schema.TaggedError<OrgRoleNotFound>()(
   { httpApiStatus: 404 },
 ) {}
 
+/** RRM-001/RRM-002: a role name that is not built-in, static-custom, or a live dynamic role of this organization. */
+export class UnknownOrgRole extends Schema.TaggedError<UnknownOrgRole>()(
+  "UnknownOrgRole",
+  {},
+  { httpApiStatus: 422 },
+) {}
+
 export class OrgRoleNameTaken extends Schema.TaggedError<OrgRoleNameTaken>()(
   "OrgRoleNameTaken",
   {},
@@ -505,6 +512,8 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         MembershipNotFound,
         OrganizationPermissionDenied,
         OwnerInvariantViolation,
+        RolePermissionEscalation,
+        UnknownOrgRole,
         HookPoint.HookAborted,
       ],
     }),
@@ -528,6 +537,8 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         MembershipLimitReached,
         TeamsDisabled,
         TeamNotFound,
+        RolePermissionEscalation,
+        UnknownOrgRole,
         HookPoint.HookAborted,
       ],
     }),

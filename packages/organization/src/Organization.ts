@@ -187,6 +187,8 @@ export interface OrganizationShape {
     | OrganizationApi.MembershipNotFound
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OwnerInvariantViolation
+    | OrganizationApi.RolePermissionEscalation
+    | OrganizationApi.UnknownOrgRole
     | HookPoint.HookAborted
   >;
   readonly leave: (
@@ -207,6 +209,7 @@ export interface OrganizationShape {
     MembershipRecords.MembershipRecord,
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.MembershipLimitReached
+    | OrganizationApi.UnknownOrgRole
     | HookPoint.HookAborted
   >;
   readonly getActiveMember: (
@@ -240,6 +243,8 @@ export interface OrganizationShape {
     | OrganizationApi.MembershipLimitReached
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.TeamNotFound
+    | OrganizationApi.RolePermissionEscalation
+    | OrganizationApi.UnknownOrgRole
     | HookPoint.HookAborted
   >;
   readonly acceptInvitation: (
@@ -1359,6 +1364,53 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           return membership.value;
         });
 
+      /**
+       * RRM-001/RRM-002: every role-assignment path stores only role names this
+       * organization recognizes (built-in, static custom, or a live dynamic role).
+       */
+      const requireKnownRoles = (
+        byRole: ReadonlyMap<string, PermissionEngine.Statements>,
+        roleNames: ReadonlyArray<string>,
+      ) =>
+        roleNames.some((name) => !byRole.has(name))
+          ? Effect.fail(new OrganizationApi.UnknownOrgRole())
+          : Effect.void;
+
+      /**
+       * RRM-001/RRM-002: the same self-escalation guard `createRole`/`updateRole`
+       * already apply — a granter can only confer statements it itself holds
+       * (`PermissionEngine.canGrant`), over role names that actually exist.
+       */
+      const requireGrantable = (
+        organizationId: string,
+        granter: MembershipRecords.MembershipRecord,
+        roleNames: ReadonlyArray<string>,
+      ) =>
+        Effect.gen(function* () {
+          const byRole = yield* statementsByRole(organizationId);
+          yield* requireKnownRoles(byRole, roleNames);
+          const held = PermissionEngine.effectivePermissions(granter.role, byRole);
+          const requested = PermissionEngine.effectivePermissions(roleNames, byRole);
+          if (!PermissionEngine.canGrant(requested, held)) {
+            return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
+          }
+        });
+
+      /** RRM-001: a lower tier cannot alter (demote/reshape) a member who out-privileges it. */
+      const requireOutranks = (
+        organizationId: string,
+        granter: MembershipRecords.MembershipRecord,
+        target: MembershipRecords.MembershipRecord,
+      ) =>
+        Effect.gen(function* () {
+          const byRole = yield* statementsByRole(organizationId);
+          const held = PermissionEngine.effectivePermissions(granter.role, byRole);
+          const targetHeld = PermissionEngine.effectivePermissions(target.role, byRole);
+          if (!PermissionEngine.canGrant(targetHeld, held)) {
+            return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
+          }
+        });
+
       /** Fails `OrganizationPermissionDenied` if the caller isn't a member — no statement check, for read endpoints any member may use. */
       const requireMembership = (callerId: Users.UserId, organizationId: string) =>
         members.findByUserAndOrg(callerId, organizationId).pipe(
@@ -1595,11 +1647,21 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           if (violates) return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
 
-          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "member", "update");
+          const granter = yield* requirePermission(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "member",
+            "update",
+          );
           const vetoed = yield* veto(
             "organization.member.updateRole.before",
             beforeUpdateRole.run({ organizationId, userId: targetUserId, role }),
           );
+          // RRM-001: after the veto hook (a tap may rewrite the role), the
+          // caller must hold every statement it is conferring, and must not
+          // out-privilege-lose against the member it is changing.
+          yield* requireOutranks(organizationId, granter, target);
+          yield* requireGrantable(organizationId, granter, vetoed.role);
           const updated = yield* members
             .updateRole(targetUserId, organizationId, vetoed.role)
             .pipe(
@@ -1666,6 +1728,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           "organization.member.add.before",
           beforeAdd.run({ organizationId, userId, role }),
         );
+        // RRM-001: a trusted, caller-less server-side primitive (SCIM/import) —
+        // it bypasses the grant guard by design, but still only stores role
+        // names the organization recognizes.
+        yield* requireKnownRoles(yield* statementsByRole(organizationId), vetoed.role);
         const membership = yield* members.create({ userId, organizationId, role: vetoed.role });
         yield* events.publish({
           _tag: "auth.organization.memberAdded",
@@ -1737,7 +1803,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, input) {
           yield* requireOrganization(organizationId);
           const callerId = Users.UserId(caller.ref.id);
-          yield* requirePermission(callerId, organizationId, "invitation", "create");
+          const inviter = yield* requirePermission(callerId, organizationId, "invitation", "create");
 
           const pendingCount = yield* invitations.countPendingByInviter(callerId);
           if (pendingCount >= orgConfig.invitationLimit) {
@@ -1755,6 +1821,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization.invitation.create.before",
             beforeCreateInvitation.run({ organizationId, email: input.email, role: input.role }),
           );
+          // RRM-002: an invitation can only confer statements the inviter holds.
+          yield* requireGrantable(organizationId, inviter, vetoed.role);
 
           const alreadyMember = yield* users.findByEmail(vetoed.email).pipe(
             Effect.flatMap(

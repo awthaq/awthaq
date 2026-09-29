@@ -728,6 +728,116 @@ describe("Organization", () => {
     ),
   );
 
+  // RRM-001/RRM-002: every role-assignment path (updateMemberRole, invite,
+  // addMember) applies the same grant guard as createRole/updateRole — a
+  // caller can only confer statements it holds, only known role names are
+  // stored, and a lower tier cannot alter a higher one.
+  describe("RRM-001/RRM-002: role assignment respects canGrant", () => {
+    const hrConfig = {
+      permissionStatements: { hr: { member: ["update"], invitation: ["create"] } },
+    };
+
+    const setup = Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      yield* organization.addMember({
+        organizationId: org.id,
+        userId: Users.UserId("hr-1"),
+        role: ["hr"],
+      });
+      return { organization, owner, hr: asCaller("hr-1"), org };
+    });
+
+    it.effect("a custom role holding member:update cannot promote itself to owner", () =>
+      Effect.gen(function* () {
+        const { organization, hr, org } = yield* setup;
+        const failure = yield* organization
+          .updateMemberRole(hr, org.id, Users.UserId("hr-1"), ["owner"])
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RolePermissionEscalation");
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    );
+
+    it.effect("updateMemberRole with an undefined role name fails UnknownOrgRole", () =>
+      Effect.gen(function* () {
+        const { organization, owner, org } = yield* setup;
+        const failure = yield* organization
+          .updateMemberRole(owner, org.id, Users.UserId("hr-1"), ["no-such-role"])
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "UnknownOrgRole");
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    );
+
+    it.effect("a lower tier cannot change the role of a member who out-privileges it", () =>
+      Effect.gen(function* () {
+        const { organization, hr, org } = yield* setup;
+        yield* organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId("owner-2"),
+          role: ["owner"],
+        });
+        const failure = yield* organization
+          .updateMemberRole(hr, org.id, Users.UserId("owner-2"), ["member"])
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RolePermissionEscalation");
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    );
+
+    it.effect("a caller can still assign a role it fully covers (no over-blocking)", () =>
+      Effect.gen(function* () {
+        const { organization, hr, org } = yield* setup;
+        yield* organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId("plain-1"),
+          role: ["member"],
+        });
+        const updated = yield* organization.updateMemberRole(
+          hr,
+          org.id,
+          Users.UserId("plain-1"),
+          ["hr"],
+        );
+        assert.deepStrictEqual(updated.role, ["hr"]);
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    );
+
+    it.effect("an inviter holding invitation:create but not owner statements cannot invite an owner", () =>
+      Effect.gen(function* () {
+        const { organization, hr, org } = yield* setup;
+        const failure = yield* organization
+          .invite(hr, org.id, { email: "new@example.com", role: ["owner"] })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RolePermissionEscalation");
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    );
+
+    it.effect("an inviter can invite at or below its own privilege", () =>
+      Effect.gen(function* () {
+        const { organization, hr, org } = yield* setup;
+        const invitation = yield* organization.invite(hr, org.id, {
+          email: "new@example.com",
+          role: ["member"],
+        });
+        assert.deepStrictEqual(invitation.role, ["member"]);
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    );
+
+    it.effect("invite and addMember reject an undefined role name", () =>
+      Effect.gen(function* () {
+        const { organization, owner, org } = yield* setup;
+        const inviteFailure = yield* organization
+          .invite(owner, org.id, { email: "x@example.com", role: ["ghost"] })
+          .pipe(Effect.flip);
+        assert.strictEqual(inviteFailure._tag, "UnknownOrgRole");
+        const addFailure = yield* organization
+          .addMember({ organizationId: org.id, userId: Users.UserId("u-2"), role: ["ghost"] })
+          .pipe(Effect.flip);
+        assert.strictEqual(addFailure._tag, "UnknownOrgRole");
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    );
+  });
+
   it.effect("createRole rejects granting a permission the caller doesn't hold", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
@@ -759,14 +869,15 @@ describe("Organization", () => {
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      // RRM-001: a role must exist before a membership can name it.
+      yield* organization.createRole(owner, org.id, {
+        role: "custom-updater",
+        permission: { organization: ["update"] },
+      });
       yield* organization.addMember({
         organizationId: org.id,
         userId: Users.UserId("member-1"),
         role: ["custom-updater"],
-      });
-      yield* organization.createRole(owner, org.id, {
-        role: "custom-updater",
-        permission: { organization: ["update"] },
       });
 
       const updated = yield* organization.update(member, org.id, { name: "Acme Inc" });

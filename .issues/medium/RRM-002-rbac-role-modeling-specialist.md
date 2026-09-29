@@ -3,7 +3,7 @@ ID: "RRM-002"
 Title: "Invitations mint any role with only invitation:create"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1378"
 Auditor: "rbac-role-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `organization` · reported by **RBAC Role Modeling Specialist** (`rbac-role-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Apply the same canGrant(effectivePermissions(input.role), granterPermissions) ch
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-role-escalation-guards`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1740`. Fix: Run the same requireGrantable check (RRM-001) on the invitation's requested role before persisting it. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Fixed together with RRM-001: `invite` now captures the inviter's membership from `requirePermission(invitation, create)` and runs `requireGrantable` on the (post-veto) requested role before persisting — an invitation can only confer statements the inviter holds, over known role names (`RolePermissionEscalation` / `UnknownOrgRole` added to the endpoint's error union). Tests: 'an inviter holding invitation:create but not owner statements cannot invite an owner', 'an inviter can invite at or below its own privilege', 'invite and addMember reject an undefined role name'. Not done here: dossier step 3 (`acceptInvitation` dropping role names deleted since the invite was created) — tracked under org-write-atomicity/active-context follow-ups.

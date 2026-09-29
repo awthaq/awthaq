@@ -3,7 +3,7 @@ ID: "RRM-001"
 Title: "Role-assignment paths bypass the canGrant escalation guard"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1240"
 Auditor: "rbac-role-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `organization` · reported by **RBAC Role Modeling Specialist** (`rbac-role-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/organization/src/Organization.ts:1240` matches the evidence exactly; `updateMemberRole` gates only on `requirePermission(..., "member", "update")` with no `PermissionEngine.canGrant` check, while `createRole` (line 1641) and `updateRole` (line 1712) do call `canGrant`. `addMember` (line 1296-1316) indeed has no permission gate at all, though it is only reachable via `OrganizationShape` (no HTTP endpoint in `OrganizationApi.ts` calls it), so the practical exposure is narrower than `updateMemberRole`'s directly HTTP-reachable escalation. Fix reuses the existing `effectivePermissionsOf`/`canGrant` pattern already proven in the same file. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-role-escalation-guards`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1598`. Fix: Apply PermissionEngine.canGrant to every role-assignment path, reject unknown role names, and forbid modifying a member who out-privileges the caller. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`.
+
+**Resolved (2026-09-29):** Every role-assignment path now applies the same guard `createRole`/`updateRole` already had (`packages/organization/src/Organization.ts`: `requireGrantable`, `requireOutranks`, `requireKnownRoles`). `updateMemberRole` (after the veto hook, since a tap may rewrite the role) requires the caller to hold every statement it confers (`PermissionEngine.canGrant` → `RolePermissionEscalation`), to not out-lose against the member it is changing, and to name only known roles (new `UnknownOrgRole`, HTTP 422). `addMember` (trusted, caller-less: SCIM/import) still bypasses the grant guard by design but rejects unknown role names. `OrganizationApi` endpoint error unions and the `OrganizationShape` types updated. TDD: `packages/organization/test/Organization.test.ts` 'RRM-001/RRM-002: role assignment respects canGrant' (5 of 7 confirmed red before the fix; 2 are no-over-blocking guards). One pre-existing test added a member to a not-yet-created dynamic role and was reordered accordingly. Gates: typecheck, test (819), test:bdd (104), spec:verify:strict, oxlint on the package green. Deferred: the AuthHttp wire-level 403 test and `spec/models/14-organization.md` (still a 'Planned' stub — covered by the spec-status-banner-sweep workstream).
