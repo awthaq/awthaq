@@ -260,6 +260,24 @@ const RATE_LIMITS = {
 } as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
 
 /**
+ * EOTS-007: the fixed labels a breach of `rule` is reported under — the
+ * `RATE_LIMITS` entry's name, never the (email/IP-bearing) bucket key.
+ */
+const ruleMeta = (rule: {
+  readonly limit: number;
+  readonly window: Duration.Duration;
+}): RateLimits.EnforceMeta => {
+  const name =
+    Object.entries(RATE_LIMITS).find(([, candidate]) => candidate === rule)?.[0] ?? "unknown";
+  return {
+    group: "password",
+    endpoint: name.replace(/ByIp$/, ""),
+    rule: name,
+    dimension: name.endsWith("ByIp") ? "ip" : "identity",
+  };
+};
+
+/**
  * The mailed reset/verification link's token embeds `Verification`'s own
  * `identifier` alongside its secret value (`<identifier>.<secret>`) — the
  * domain service's `consume` needs `identifier` to look the row up at all,
@@ -676,14 +694,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         key: string,
         rule: { readonly limit: number; readonly window: Duration.Duration },
       ): Effect.Effect<void, Api.RateLimited> =>
-        limiter
-          .consume({ key, limit: rule.limit, window: rule.window })
-          .pipe(
-            Effect.catchTag(
-              "RateLimitExceeded",
-              (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-            ),
-          );
+        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
+        RateLimits.enforce({ key, limit: rule.limit, window: rule.window, meta: ruleMeta(rule) }).pipe(
+          Effect.provideService(RateLimiter.RateLimiter, limiter),
+          Effect.provideService(AuthEvents.AuthEvents, events),
+          Effect.catchTag(
+            "RateLimitExceeded",
+            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+          ),
+        );
 
       /**
        * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s

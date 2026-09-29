@@ -3,7 +3,7 @@ ID: "EOTS-007"
 Title: "Rate-limit breaches emit no event, log, or metric"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/RateLimiter.ts:45"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `ports` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Publish a `auth.ratelimit.exceeded` event (rule id + key bucket class, never the
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `ratelimit-signal-and-escalation`. Evidence at HEAD ec065a7: `packages/ports/src/RateLimiter.ts:45`. Fix: Emit an auth.rateLimit.exceeded event, a warning log and a counter on every breach, via one shared helper. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** core RateLimits.enforce (packages/core/src/RateLimits.ts): consume + on breach publish new auth.rateLimit.exceeded event (AuthEvents union + AuditLog actorOf case; fields group/endpoint/rule/dimension/retryAfterMillis, no key), logWarning annotated with meta, Metric counter awthaq.ratelimit.exceeded (exceededCounter) with meta attributes; re-raises RateLimitExceeded so callers still map to Api.RateLimited. Password.ts rateLimit helper (ruleMeta derives fixed labels from the RATE_LIMITS entry name) and OAuth.ts callback now use it (provideService of the already-resolved limiter/events). Tests: core RateLimits.test.ts enforce suite (red first: enforce undefined), Password.test.ts throttle test asserts audit event w/o email. BEH-EA-106 spec paragraph. Note: the '13-events.md event list' step had no list to update; documented in 14-rate-limiting.md. Gates: typecheck (only pre-existing react TS2883), test 838 pass, bdd 104, spec:verify 19/19.

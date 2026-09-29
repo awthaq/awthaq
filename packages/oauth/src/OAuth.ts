@@ -632,18 +632,20 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       });
 
       const callback: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
-        yield* limiter
-          .consume({
-            key: `oauth:callback:${input.ip ?? "unknown"}`,
-            limit: CALLBACK_RATE_LIMIT.limit,
-            window: CALLBACK_RATE_LIMIT.window,
-          })
-          .pipe(
-            Effect.catchTag(
-              "RateLimitExceeded",
-              (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-            ),
-          );
+        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
+        yield* RateLimits.enforce({
+          key: `oauth:callback:${input.ip ?? "unknown"}`,
+          limit: CALLBACK_RATE_LIMIT.limit,
+          window: CALLBACK_RATE_LIMIT.window,
+          meta: { group: "oauth", endpoint: "callback", rule: "callback", dimension: "ip" },
+        }).pipe(
+          Effect.provideService(RateLimiter.RateLimiter, limiter),
+          Effect.provideService(AuthEvents.AuthEvents, events),
+          Effect.catchTag(
+            "RateLimitExceeded",
+            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+          ),
+        );
         const provider = registry.get(providerId);
         if (provider === undefined) {
           return yield* Effect.fail(new OAuthApi.ProviderNotFound({ providerId }));

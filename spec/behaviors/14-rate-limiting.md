@@ -61,6 +61,8 @@ REQUIREMENT: Exceeding a configured limit MUST fail with `RateLimited` carrying
 
 `RateLimited` is the **wire** error (`@awthaq/api`'s `Api.RateLimited`, HTTP 429). The `RateLimiter` port's own failure is the distinct `RateLimitExceeded` (RBS-010), carrying only `retryAfterMillis`: it never carries the bucket key (keys embed emails and IPs), and the plugin that called `consume` maps it onto `RateLimited` at its endpoint boundary. Where this document says `consume` fails with `RateLimited`, the port-level failure is `RateLimitExceeded` and the caller-visible one is `RateLimited`.
 
+Every breach is observable (EOTS-007). A plugin enforces its rules through `RateLimits.enforce`, which on a refusal publishes the `auth.rateLimit.exceeded` event (`group`, `endpoint`, `rule`, `dimension`, `retryAfterMillis`), logs a warning annotated with the same fields, and increments the `awthaq.ratelimit.exceeded` counter tagged with them. None of the three carries the bucket key: it embeds an email or an IP, and a security signal must not double as an identifier leak (BEH-EA-108). The event is recorded by `AuditLog` with no actor.
+
 `retryAfterMillis` is the one piece of information a client needs to behave well: back off, then retry. Carrying it as a typed field (rather than folding it into a message string) lets `@awthaq/client` render a localized "try again in n seconds" without parsing text, matching the error-catalog design used across the rest of the contract (research/11-client-frontend.md Q86) and the `RateLimited` handling shown in `usage-examples-v4.md` §11.2.
 
 _Previous: [BEH-EA-105](14-rate-limiting.md#beh-ea-105-the-ratelimiter-port) | Next: [BEH-EA-107](14-rate-limiting.md#beh-ea-107-a-plugin-may-only-rate-limit-its-own-endpoints)_

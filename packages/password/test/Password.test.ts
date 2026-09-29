@@ -1017,6 +1017,17 @@ describe("Password", () => {
           .signIn({ email, password: Redacted.make("wrong password") })
           .pipe(Effect.flip);
         assert.strictEqual(throttled._tag, "RateLimited");
+
+        // EOTS-007: the breach is observable, and the audit payload carries
+        // the rule that fired but never the email the bucket was keyed on.
+        const auditLog = yield* AuditLog.AuditLog;
+        const breaches = yield* auditLog.list({ eventTag: "auth.rateLimit.exceeded" });
+        assert.strictEqual(breaches.length, 1);
+        assert.isFalse(JSON.stringify(breaches[0]?.payload).includes(email));
+        assert.strictEqual(
+          JSON.stringify(breaches[0]?.payload).includes('"rule":"signIn"'),
+          true,
+        );
       }).pipe(
         // A real, enforcing limiter for this one test — every other test
         // in this file uses `RateLimiter.layerPermissive` via `TestLayer`'s
