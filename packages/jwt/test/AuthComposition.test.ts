@@ -47,6 +47,7 @@ describe("Auth.make([Jwt])", () => {
         apiVersion: 1,
         tables: ["jwt_signing_key", "jwt_token_revocation"],
         dependsOn: [],
+        groups: ["jwt", "jwt.token"],
       },
     ]);
   });
@@ -55,12 +56,13 @@ describe("Auth.make([Jwt])", () => {
     const auth = Auth.make([Ping, Jwt.Jwt]);
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "ping", apiVersion: 1, tables: [], dependsOn: [] },
+      { id: "ping", apiVersion: 1, tables: [], dependsOn: [], groups: ["ping"] },
       {
         id: "jwt",
         apiVersion: 1,
         tables: ["jwt_signing_key", "jwt_token_revocation"],
         dependsOn: [],
+        groups: ["jwt", "jwt.token"],
       },
     ]);
   });

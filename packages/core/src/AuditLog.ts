@@ -114,6 +114,11 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.rateLimit.exceeded":
     case "auth.user.signInFailed":
     case "auth.admin.impersonationStopped":
+    // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
+    case "auth.admin.seeded":
+    case "auth.admin.seedRefused":
+    case "auth.import.completed":
+    case "auth.import.failed":
     case "auth.organization.updated":
     case "auth.organization.deleted":
     case "auth.organization.invitationCreated":

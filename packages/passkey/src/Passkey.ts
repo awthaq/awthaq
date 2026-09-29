@@ -27,6 +27,7 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  ConfigDescriptor,
   Hooks,
   Migrations,
   RateLimits,
@@ -890,6 +891,32 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   contract: PasskeyApi.PasskeyApi,
   tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
   migrations: passkeyMigrations,
+  // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
+  config: [
+    ConfigDescriptor.make(PasskeyConfig, {
+      sensitive: [],
+      audit: (value, environment) => [
+        ...(environment.production && value.rpId === "localhost"
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "passkey-rp-id-localhost",
+                "the relying-party id is still the development default `localhost`",
+              ),
+            ]
+          : []),
+        ...(environment.production && value.origins.some((origin) => origin.startsWith("http://"))
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "passkey-origin-not-https",
+                "an allowed origin uses plain http",
+              ),
+            ]
+          : []),
+      ],
+    }),
+  ],
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
     handlers: PasskeyHandlers,

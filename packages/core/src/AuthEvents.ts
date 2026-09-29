@@ -215,6 +215,49 @@ export interface AdminSessionRevokedEvent {
   readonly sessionId: string | null;
 }
 
+/**
+ * ECS-006: published by `awthaq seed admin` after it grants the administrative role
+ * (BEH-EA-206). `outcome` says whether the account was created or an existing one
+ * promoted; `forced` that the grant went past an existing administrator. Carries the
+ * user id and the role, never the address.
+ */
+export interface AdminSeededEvent {
+  readonly _tag: "auth.admin.seeded";
+  readonly targetUserId: UserId;
+  readonly outcome: "created" | "promoted";
+  readonly forced: boolean;
+  readonly role: string;
+  readonly via: "cli";
+}
+
+/** ECS-006: `awthaq seed admin` refused because an administrator already exists (and `--force` was not given). No address: the refusal names a reason, not a person. */
+export interface AdminSeedRefusedEvent {
+  readonly _tag: "auth.admin.seedRefused";
+  readonly reason: "adminExists";
+}
+
+/** ECS-002: one `awthaq import --yes` run finished — every source row was imported, skipped or failed. */
+export interface ImportCompletedEvent {
+  readonly _tag: "auth.import.completed";
+  readonly source: string;
+  readonly runId: string;
+  readonly imported: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly unmapped: number;
+}
+
+/** ECS-002: one `awthaq import --yes` run stopped on a failed batch (counts are those reached so far). */
+export interface ImportFailedEvent {
+  readonly _tag: "auth.import.failed";
+  readonly source: string;
+  readonly runId: string;
+  readonly imported: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly unmapped: number;
+}
+
 /** Published by `@awthaq/organization`'s `create`. */
 export interface OrganizationCreatedEvent {
   readonly _tag: "auth.organization.created";
@@ -476,6 +519,10 @@ export type AuthEvent =
   | AdminActionDeniedEvent
   | AdminUserUpdatedEvent
   | AdminSessionRevokedEvent
+  | AdminSeededEvent
+  | AdminSeedRefusedEvent
+  | ImportCompletedEvent
+  | ImportFailedEvent
   | OrganizationCreatedEvent
   | OrganizationUpdatedEvent
   | OrganizationDeletedEvent

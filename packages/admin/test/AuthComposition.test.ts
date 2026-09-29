@@ -15,6 +15,7 @@ describe("Auth.make([Admin])", () => {
         apiVersion: 1,
         tables: ["admin_impersonation", "admin_impersonation_chain"],
         dependsOn: [],
+        groups: ["admin"],
       },
     ]);
   });

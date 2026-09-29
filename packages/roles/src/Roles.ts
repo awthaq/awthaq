@@ -29,7 +29,7 @@
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
 import { Users } from "@awthaq/core";
-import { AuthEvents, AuthPlugin, Migrations, Slots } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, ConfigDescriptor, Migrations, Slots } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -75,6 +75,12 @@ export interface RolesShape {
     options?: RoleChangeOptions,
   ) => Effect.Effect<void>;
   readonly listRoleNames: (userId: Users.UserId) => Effect.Effect<ReadonlyArray<string>>;
+  /**
+   * ECS-006: the users currently holding `roleName`. `awthaq seed admin` must find an
+   * existing administrator before it grants another, and nothing else can answer "who has
+   * this role" (`listRoleNames` goes the other way).
+   */
+  readonly holders: (roleName: string) => Effect.Effect<ReadonlyArray<Users.UserId>>;
   /**
    * RRM-003: stored assignments whose role name is no longer in the catalog
    * (drift after a rename/removal) — for a startup/doctor check. Empty when
@@ -184,6 +190,14 @@ const rolesMake: Effect.Effect<RolesShape, never, AuthEvents.AuthEvents> = Effec
         }
       }),
     listRoleNames: (userId) => Ref.get(state).pipe(Effect.map((map) => namesOf(map, userId))),
+    holders: (roleName) =>
+      Ref.get(state).pipe(
+        Effect.map((map) =>
+          Array.from(HashMap.entries(map))
+            .filter(([, names]) => names.includes(roleName))
+            .map(([userId]) => userId),
+        ),
+      ),
     listUnknownAssignments: Ref.get(state).pipe(
       Effect.map((map) =>
         Array.from(HashMap.entries(map)).flatMap(([userId, names]) =>
@@ -238,6 +252,12 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
           : sql`SELECT "userId", role FROM role_assignments WHERE role NOT IN ${sql.in(names)}`,
     });
 
+    const holdersQuery = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Schema.Struct({ userId: Schema.String }),
+      execute: (roleName) => sql`SELECT "userId" FROM role_assignments WHERE role = ${roleName}`,
+    });
+
     const listQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: Schema.Struct({ role: Schema.String }),
@@ -273,6 +293,11 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       listRoleNames: (userId) =>
         listQuery(userId).pipe(
           Effect.map((rows) => rows.map((row) => row.role)),
+          Effect.orDie,
+        ),
+      holders: (roleName) =>
+        holdersQuery(roleName).pipe(
+          Effect.map((rows) => rows.map((row) => Users.UserId(row.userId))),
           Effect.orDie,
         ),
       listUnknownAssignments: listUnknownQuery(catalogNames).pipe(
@@ -391,6 +416,22 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   contract: HttpApi.make("auth"),
   tables: ["role_assignments"],
   migrations: rolesMigrations,
+  // The catalog is listed by role name (each `Role` carries its whole permission tree).
+  config: [
+    ConfigDescriptor.make(RolesConfig, {
+      project: (value) => ({ catalog: value.catalog.map((role) => role.name) }),
+      audit: (value) =>
+        value.catalog.length === 0
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "roles-empty-catalog",
+                "the Roles catalog is empty: every user resolves with no roles (provide Roles.config([...]))",
+              ),
+            ]
+          : [],
+    }),
+  ],
 }) {
   /**
    * Self-referential the same way `Password`'s own `static readonly layer`

@@ -12,6 +12,7 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  ConfigDescriptor,
   Hooks,
   HookPoint,
   MailDispatch,
@@ -586,6 +587,40 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
   // BEH-EA-044: a password credential is an ordinary `accounts` row — this
   // plugin owns no table of its own, so there is nothing to declare here.
   tables: [],
+  // ECS-008/BEH-EA-229: the policy knobs `doctor` audits and `config list` prints.
+  config: [
+    ConfigDescriptor.make(PasswordConfig, {
+      audit: (value, environment) => [
+        ...(value.minLength < 8
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-min-length",
+                `the minimum password length is ${value.minLength} (NIST SP 800-63B asks for at least 8)`,
+              ),
+            ]
+          : []),
+        ...(environment.production && value.breachCheck === false
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-breach-check-off",
+                "screening new passwords against the breached-password corpus is disabled",
+              ),
+            ]
+          : []),
+        ...(environment.production && !value.requireVerifiedEmail
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-unverified-sign-in",
+                "sign-in does not require a verified email address",
+              ),
+            ]
+          : []),
+      ],
+    }),
+  ],
 }) {
   /**
    * BEH-EA-001/008 (`AuthPlugin.ts`'s own doc comment): a plugin's `layer`

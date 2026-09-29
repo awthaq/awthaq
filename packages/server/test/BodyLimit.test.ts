@@ -176,3 +176,21 @@ describe("BodyLimit (toWebHandler, BEH-EA-085)", () => {
     }),
   );
 });
+
+// ECS-008/BEH-EA-201: the cap is a configuration descriptor `doctor` audits.
+describe("BodyLimit.descriptor", () => {
+  const context = (maxBytes: ByteSize.ByteSize) =>
+    Layer.build(BodyLimit.config({ maxBytes })).pipe(Effect.scoped);
+
+  it.effect("flags a cap above 10 MiB and stays quiet at the default", () =>
+    Effect.gen(function* () {
+      const large = yield* context(ByteSize.mebibytes(64));
+      const normal = yield* context(ByteSize.kibibytes(256));
+      assert.deepStrictEqual(
+        BodyLimit.descriptor.audit(large, { production: true }).map((found) => found.code),
+        ["body-limit-large"],
+      );
+      assert.deepStrictEqual(BodyLimit.descriptor.audit(normal, { production: true }), []);
+    }),
+  );
+});

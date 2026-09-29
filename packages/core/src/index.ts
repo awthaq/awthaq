@@ -30,7 +30,9 @@ export * as AuditChain from "./AuditChain.ts";
 export * as AuditLog from "./AuditLog.ts";
 export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
+export * as ConfigDescriptor from "./ConfigDescriptor.ts";
 export * as ConstantTime from "./ConstantTime.ts";
+export * as EffectiveConfig from "./EffectiveConfig.ts";
 export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";
 // MA-003: re-exported, not wrapped — see this file's own header comment

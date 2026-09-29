@@ -21,7 +21,15 @@
 // violation above.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Migrations, SessionCookie, Sessions, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  ConfigDescriptor,
+  Migrations,
+  SessionCookie,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Session } from "@awthaq/server";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
@@ -573,6 +581,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   contract: AdminApi.AdminApi,
   tables: ["admin_impersonation", "admin_impersonation_chain"],
   migrations: adminMigrations,
+  config: [ConfigDescriptor.make(AdminConfig)],
 }) {
   static readonly layer = AuthPlugin.layer(Admin, {
     handlers: AdminHandlers,
