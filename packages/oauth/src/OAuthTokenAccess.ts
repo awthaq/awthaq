@@ -141,7 +141,7 @@ const refresh = (
 export const layer: Layer.Layer<
   OAuthTokenAccess,
   never,
-  Accounts.Accounts | HttpClient.HttpClient
+  Accounts.Accounts | HttpClient.HttpClient | OAuthConfig.OAuthConfig
 > = Layer.effect(
   OAuthTokenAccess,
   Effect.gen(function* () {

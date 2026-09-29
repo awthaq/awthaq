@@ -70,6 +70,7 @@ export type {
 } from "./OAuthConfig.ts";
 
 const OAUTH_STATE_COOKIE = "__Host-oauth-state";
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
  * PDR-004: the authorize and callback URLs carry the provider's `code`/`state`
@@ -579,6 +580,44 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const crypto = yield* Crypto.Crypto;
       const httpClient = yield* HttpClient.HttpClient;
       const providers = yield* OAuthProviders.OAuthProviders;
+
+      // PDR-005/AGA-005: `baseUrl` is the redirect_uri's only derivation input
+      // (BEH-EA-128), so a malformed one is a deployment defect caught here
+      // at boot, not a provider-side `redirect_uri_mismatch` at the first
+      // sign-in. It must be the public scheme+host+port the provider redirects
+      // back to — no path, query or fragment — and Host/X-Forwarded-Host are
+      // never consulted. The origin is used (not the raw string) so a
+      // trailing slash can't double up in `redirect_uri`.
+      const parsedBase = URL.parse(config_.baseUrl);
+      if (
+        parsedBase === null ||
+        (parsedBase.protocol !== "https:" && parsedBase.protocol !== "http:") ||
+        parsedBase.pathname !== "/" ||
+        parsedBase.search !== "" ||
+        parsedBase.hash !== "" ||
+        parsedBase.username !== "" ||
+        parsedBase.password !== ""
+      ) {
+        return yield* Effect.die(
+          new Error(
+            `awthaq/oauth: baseUrl "${config_.baseUrl}" must be the public scheme+host ` +
+              '(e.g. "https://app.example.com") with no path, query, fragment or credentials',
+          ),
+        );
+      }
+      const baseOrigin = parsedBase.origin;
+      if (parsedBase.protocol === "http:" && !LOOPBACK_HOSTS.has(parsedBase.hostname)) {
+        yield* Effect.logWarning(
+          `awthaq/oauth: baseUrl "${config_.baseUrl}" is plain http on a non-loopback host — ` +
+            "most providers refuse such a redirect_uri, and the session cookie needs https",
+        );
+      }
+      // So an operator can diff each redirect_uri against the provider console.
+      for (const provider of config_.providers) {
+        yield* Effect.logInfo(
+          `awthaq/oauth: provider "${provider.id}" redirect_uri is ${baseOrigin}/oauth/${provider.id}/callback`,
+        );
+      }
       // ERS-003: the retrying client serves the idempotent GETs (JWKS,
       // userinfo); `httpClient` stays plain for the single-use code exchange.
       const readClient = ProviderHttp.retrying(httpClient, config_.retry);
@@ -707,7 +746,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           .issue({ identifier, ttl: FLOW_TTL, payload })
           .pipe(Effect.orDie);
         const state = encodeState(identifier, value);
-        const redirectUri = `${config_.baseUrl}/oauth/${providerId}/callback`;
+        const redirectUri = `${baseOrigin}/oauth/${providerId}/callback`;
         const location = buildAuthorizeUrl(provider, {
           state,
           redirectUri,
@@ -820,7 +859,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           });
         }
 
-        const redirectUri = `${config_.baseUrl}/oauth/${providerId}/callback`;
+        const redirectUri = `${baseOrigin}/oauth/${providerId}/callback`;
         const tokens = yield* exchangeCode(
           httpClient,
           provider,

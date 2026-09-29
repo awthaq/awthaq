@@ -29,6 +29,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -118,6 +119,7 @@ const buildLayer = (options: {
   readonly linking?: "explicit" | { readonly trustedProviders: ReadonlyArray<string> };
   readonly trustedOrigins?: ReadonlyArray<string>;
   readonly httpRoutes?: FakeRoutes;
+  readonly baseUrl?: string;
   readonly httpTimeouts?: OAuth.OAuthConfigInput["httpTimeouts"];
   readonly retry?: OAuth.OAuthConfigInput["retry"];
 }) =>
@@ -153,7 +155,7 @@ const buildLayer = (options: {
         providers: options.providers,
         linking: options.linking ?? "explicit",
         trustedOrigins: options.trustedOrigins ?? [],
-        baseUrl,
+        baseUrl: options.baseUrl ?? baseUrl,
         // Zero backoff by default: a retry never sleeps on the TestClock.
         retry: { base: Duration.zero, ...options.retry },
         ...(options.httpTimeouts === undefined ? {} : { httpTimeouts: options.httpTimeouts }),
@@ -1280,6 +1282,90 @@ describe("OAuth", () => {
         const endpoints = rules.filter((rule) => rule.group === "oauth").map((rule) => rule.endpoint);
         assert.sameMembers([...endpoints], ["authorize", "callback"]);
       }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+    );
+  });
+
+  describe("baseUrl is required config, validated at boot (PDR-005/AGA-005)", () => {
+    /** Boots `options` with a capturing logger and reports what it logged, or the defect it died with. */
+    const boot = (options: Parameters<typeof buildLayer>[0]) =>
+      Effect.gen(function* () {
+        const logs: Array<{ readonly level: string; readonly message: string }> = [];
+        const capture = Logger.make((entry) => {
+          logs.push({ level: entry.logLevel, message: JSON.stringify(entry.message) });
+        });
+        const exit = yield* Effect.void.pipe(
+          Effect.provide(Layer.provide(buildLayer(options), Logger.layer([capture]))),
+          Effect.exit,
+        );
+        return { exit, logs };
+      });
+
+    it("OAuth.config cannot be called without a baseUrl", () => {
+      // @ts-expect-error baseUrl is required: there is no default public origin.
+      const layer = OAuth.config({});
+      assert.isDefined(layer);
+    });
+
+    it.effect("a baseUrl with a path component fails at boot", () =>
+      Effect.gen(function* () {
+        const { exit } = yield* boot({
+          providers: [acme()],
+          baseUrl: "https://app.example.com/auth",
+        });
+        if (exit._tag === "Success") return assert.fail("expected boot to die");
+        assert.include(Cause.pretty(exit.cause), "baseUrl");
+      }),
+    );
+
+    it.effect("a baseUrl that does not parse fails at boot", () =>
+      Effect.gen(function* () {
+        const { exit } = yield* boot({ providers: [acme()], baseUrl: "not a url" });
+        assert.strictEqual(exit._tag, "Failure");
+      }),
+    );
+
+    it.effect("a plain-http non-localhost baseUrl boots but logs a warning", () =>
+      Effect.gen(function* () {
+        const { exit, logs } = yield* boot({
+          providers: [acme()],
+          baseUrl: "http://app.example.com",
+        });
+        assert.strictEqual(exit._tag, "Success");
+        assert.isTrue(logs.some((entry) => entry.level === "Warn" && entry.message.includes("plain http")));
+      }),
+    );
+
+    it.effect("a plain-http localhost baseUrl does not warn", () =>
+      Effect.gen(function* () {
+        const { exit, logs } = yield* boot({ providers: [acme()], baseUrl: "http://localhost:3000" });
+        assert.strictEqual(exit._tag, "Success");
+        assert.isFalse(logs.some((entry) => entry.level === "Warn"));
+      }),
+    );
+
+    it.effect("AGA-005: boot logs the effective redirect_uri for each provider", () =>
+      Effect.gen(function* () {
+        const { logs } = yield* boot({ providers: [acme()], baseUrl: "https://app.example.com/" });
+        // A trailing slash is normalized away, never doubled into the redirect_uri.
+        assert.isTrue(
+          logs.some((entry) =>
+            entry.message.includes("https://app.example.com/oauth/acme/callback"),
+          ),
+        );
+      }),
+    );
+
+    it.effect("a trailing slash on baseUrl does not double up in the authorize redirect_uri", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { location } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+        assert.strictEqual(
+          new URL(location).searchParams.get("redirect_uri"),
+          "https://app.example.com/oauth/acme/callback",
+        );
+      }).pipe(
+        Effect.provide(buildLayer({ providers: [acme()], baseUrl: "https://app.example.com/" })),
+      ),
     );
   });
 

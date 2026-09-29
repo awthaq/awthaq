@@ -4,6 +4,12 @@
 // registry (`OAuthProviders.ts`) and the token-access port can read them
 // without a module cycle. `OAuth.ts` re-exports everything here, so
 // `OAuth.config(...)`/`OAuth.OAuthConfig` keep working unchanged.
+//
+// PDR-005: `baseUrl` is deliberately a *required* field with no default —
+// `OAuthConfig` is a plain `Context.Service` (`JwtConfig`'s precedent, unlike
+// the `Context.Reference`-with-default configs elsewhere), so composing OAuth
+// without `config({ baseUrl })` fails to type-check instead of silently
+// shipping a `http://localhost:3000` redirect_uri.
 
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -69,19 +75,23 @@ export interface OAuthConfigShape {
   readonly rateLimits: OAuthRateLimits;
 }
 
-/** What `config(...)` accepts: the nested policy objects may be given partially. */
+/**
+ * What `config(...)` accepts: `baseUrl` is required (the public scheme+host
+ * the provider redirects back to — see `OAuth.ts`'s boot validation), and the
+ * nested policy objects may be given partially.
+ */
 export interface OAuthConfigInput
-  extends Partial<Omit<OAuthConfigShape, "httpTimeouts" | "retry" | "rateLimits">> {
+  extends Partial<Omit<OAuthConfigShape, "baseUrl" | "httpTimeouts" | "retry" | "rateLimits">> {
+  readonly baseUrl: string;
   readonly httpTimeouts?: Partial<OAuthHttpTimeouts>;
   readonly retry?: Partial<OAuthRetryPolicy>;
   readonly rateLimits?: Partial<OAuthRateLimits>;
 }
 
-const defaultOAuthConfig: OAuthConfigShape = {
+const defaults = {
   providers: [],
   linking: "explicit",
   trustedOrigins: [],
-  baseUrl: "http://localhost:3000",
   defaultCallbackURL: "/",
   httpTimeouts: {
     tokenExchange: Duration.seconds(10),
@@ -94,19 +104,17 @@ const defaultOAuthConfig: OAuthConfigShape = {
     authorize: { limit: 30, window: Duration.minutes(1) },
     callback: { limit: 20, window: Duration.minutes(1) },
   },
-};
+} satisfies Omit<OAuthConfigShape, "baseUrl">;
 
-/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
-export const OAuthConfig: Context.Reference<OAuthConfigShape> = Context.Reference(
+export class OAuthConfig extends Context.Service<OAuthConfig, OAuthConfigShape>()(
   "awthaq/oauth/Config",
-  { defaultValue: () => defaultOAuthConfig },
-);
+) {}
 
-export const config = (input: OAuthConfigInput): Layer.Layer<never> =>
+export const config = (input: OAuthConfigInput) =>
   Layer.succeed(OAuthConfig, {
-    ...defaultOAuthConfig,
+    ...defaults,
     ...input,
-    httpTimeouts: { ...defaultOAuthConfig.httpTimeouts, ...input.httpTimeouts },
-    retry: { ...defaultOAuthConfig.retry, ...input.retry },
-    rateLimits: { ...defaultOAuthConfig.rateLimits, ...input.rateLimits },
+    httpTimeouts: { ...defaults.httpTimeouts, ...input.httpTimeouts },
+    retry: { ...defaults.retry, ...input.retry },
+    rateLimits: { ...defaults.rateLimits, ...input.rateLimits },
   });
