@@ -122,6 +122,12 @@ importers:
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../../packages/ports
+      '@awthaq/qadi':
+        specifier: workspace:*
+        version: link:../../packages/qadi
+      '@awthaq/roles':
+        specifier: workspace:*
+        version: link:../../packages/roles
       '@awthaq/server':
         specifier: workspace:*
         version: link:../../packages/server
@@ -131,6 +137,12 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@qadi/core':
+        specifier: ^0.7.0
+        version: 0.7.0
+      '@qadi/http':
+        specifier: ^0.7.0
+        version: 0.7.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
