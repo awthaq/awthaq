@@ -122,12 +122,10 @@ const serviceOver = (store: ClaimsStore) =>
 
     const shape: UserClaimsShape = {
       get: store.read,
-      set: (userId, claims, options) =>
-        apply(userId, () => claims, options).pipe(Effect.asVoid),
+      set: (userId, claims, options) => apply(userId, () => claims, options).pipe(Effect.asVoid),
       merge: (userId, patch, options) =>
         apply(userId, (current) => applyPatch(current, patch), options),
-      delete: (userId, options) =>
-        apply(userId, () => emptyClaims, options).pipe(Effect.asVoid),
+      delete: (userId, options) => apply(userId, () => emptyClaims, options).pipe(Effect.asVoid),
     };
     return shape;
   });
@@ -136,7 +134,9 @@ const memoryMake = Effect.gen(function* () {
   const state = yield* Ref.make(HashMap.empty<Users.UserId, Claims>());
   return yield* serviceOver({
     read: (userId) =>
-      Ref.get(state).pipe(Effect.map((map) => Option.getOrElse(HashMap.get(map, userId), () => emptyClaims))),
+      Ref.get(state).pipe(
+        Effect.map((map) => Option.getOrElse(HashMap.get(map, userId), () => emptyClaims)),
+      ),
     modify: (userId, change) =>
       Ref.modify(state, (map) => {
         const before = Option.getOrElse(HashMap.get(map, userId), () => emptyClaims);
@@ -247,7 +247,9 @@ export const UserClaimsAttributeSchemas = { claims: Schema.JsonObject };
 export type UserClaimsAttributeName = keyof typeof UserClaimsAttributeSchemas;
 
 /** The registry's declared list — pass it as `names` next to `UserClaimsAttributes` in `attributeResolverRegistry`. */
-export const UserClaimsAttributeNames: ReadonlyArray<string> = Object.keys(UserClaimsAttributeSchemas);
+export const UserClaimsAttributeNames: ReadonlyArray<string> = Object.keys(
+  UserClaimsAttributeSchemas,
+);
 
 /** A policy author's typed attribute name: a typo is a compile error, not a silent "no value". */
 export const claimsAttr = <const N extends UserClaimsAttributeName>(name: N): N => name;

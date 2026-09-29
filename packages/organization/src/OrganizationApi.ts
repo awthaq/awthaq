@@ -670,7 +670,12 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
       params: InvitationIdParams,
       payload: InvitationTokenPayload,
       success: HttpApiSchema.Empty(204),
-      error: [InvitationNotFound, InvitationNotPending, InvitationEmailMismatch, HookPoint.HookAborted],
+      error: [
+        InvitationNotFound,
+        InvitationNotPending,
+        InvitationEmailMismatch,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -823,11 +828,15 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     }),
   )
   .add(
-    HttpApiEndpoint.get("listTeamAncestors", "/organization/:organizationId/teams/:teamId/ancestors", {
-      params: TeamIdParams,
-      success: Schema.Array(TeamDto),
-      error: [OrganizationNotFound, TeamsDisabled, TeamNotFound, OrganizationPermissionDenied],
-    }),
+    HttpApiEndpoint.get(
+      "listTeamAncestors",
+      "/organization/:organizationId/teams/:teamId/ancestors",
+      {
+        params: TeamIdParams,
+        success: Schema.Array(TeamDto),
+        error: [OrganizationNotFound, TeamsDisabled, TeamNotFound, OrganizationPermissionDenied],
+      },
+    ),
   )
   .add(
     HttpApiEndpoint.get(

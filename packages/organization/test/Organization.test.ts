@@ -1176,7 +1176,12 @@ describe("Organization", () => {
           ["Platform", "Infra"],
         );
 
-        const moved = yield* organization.moveTeam(owner, org.id, platform.id, Option.some(sales.id));
+        const moved = yield* organization.moveTeam(
+          owner,
+          org.id,
+          platform.id,
+          Option.some(sales.id),
+        );
         assert.deepStrictEqual(moved.parentId, Option.some(sales.id));
         assert.deepStrictEqual(
           names(yield* organization.listTeamAncestors(owner, org.id, infra.id)),
@@ -1198,7 +1203,9 @@ describe("Organization", () => {
           .pipe(Effect.flip);
         assert.strictEqual(cycle._tag, "TeamHierarchyCycle");
 
-        const blocked = yield* organization.removeTeam(owner, org.id, platform.id).pipe(Effect.flip);
+        const blocked = yield* organization
+          .removeTeam(owner, org.id, platform.id)
+          .pipe(Effect.flip);
         assert.strictEqual(blocked._tag, "TeamHasChildren");
         yield* organization.removeTeam(owner, org.id, infra.id);
         yield* organization.removeTeam(owner, org.id, platform.id);
@@ -1279,7 +1286,12 @@ describe("Organization", () => {
     it.effect("a team lead can manage their own team's roster but not another team's", () =>
       Effect.gen(function* () {
         const { organization, org, eng, sales, lead } = yield* setup;
-        const added = yield* organization.addTeamMember(lead, org.id, eng.id, Users.UserId("worker-1"));
+        const added = yield* organization.addTeamMember(
+          lead,
+          org.id,
+          eng.id,
+          Users.UserId("worker-1"),
+        );
         assert.deepStrictEqual(added.role, ["member"]);
         yield* organization.removeTeamMember(lead, org.id, eng.id, Users.UserId("worker-1"));
 
@@ -1302,12 +1314,20 @@ describe("Organization", () => {
         yield* organization.updateTeam(lead, org.id, platform.id, "Platform Eng");
         yield* organization.addTeamMember(lead, org.id, platform.id, Users.UserId("worker-1"));
         // Up/sideways: a lead of the child cannot touch the parent.
-        yield* organization.addTeamMember(asCaller("owner-1"), org.id, platform.id, Users.UserId("worker-2"), ["lead"]);
+        yield* organization.addTeamMember(
+          asCaller("owner-1"),
+          org.id,
+          platform.id,
+          Users.UserId("worker-2"),
+          ["lead"],
+        );
         const up = yield* organization
           .updateTeam(asCaller("worker-2"), org.id, eng.id, "Nope")
           .pipe(Effect.flip);
         assert.strictEqual(up._tag, "OrganizationPermissionDenied");
-        const sideways = yield* organization.updateTeam(lead, org.id, sales.id, "Nope").pipe(Effect.flip);
+        const sideways = yield* organization
+          .updateTeam(lead, org.id, sales.id, "Nope")
+          .pipe(Effect.flip);
         assert.strictEqual(sideways._tag, "OrganizationPermissionDenied");
       }).pipe(Effect.provide(layerWith())),
     );
@@ -1322,7 +1342,9 @@ describe("Organization", () => {
         });
         const admin = asCaller("admin-1");
         yield* organization.addTeamMember(admin, org.id, eng.id, Users.UserId("worker-1"));
-        yield* organization.addTeamMember(admin, org.id, sales.id, Users.UserId("worker-1"), ["lead"]);
+        yield* organization.addTeamMember(admin, org.id, sales.id, Users.UserId("worker-1"), [
+          "lead",
+        ]);
       }).pipe(Effect.provide(layerWith())),
     );
 
@@ -1340,7 +1362,13 @@ describe("Organization", () => {
           .pipe(Effect.flip);
         assert.strictEqual(unknown._tag, "UnknownTeamRole");
         // The org owner may confer the stronger role.
-        yield* organization.addTeamMember(asCaller("owner-1"), org.id, eng.id, Users.UserId("worker-2"), ["chief"]);
+        yield* organization.addTeamMember(
+          asCaller("owner-1"),
+          org.id,
+          eng.id,
+          Users.UserId("worker-2"),
+          ["chief"],
+        );
       }).pipe(
         Effect.provide(
           layerWith({ lead: { team: ["update"] }, chief: { team: ["update", "delete"] } }),
@@ -1351,7 +1379,9 @@ describe("Organization", () => {
     it.effect("updateTeamMemberRole changes the role under the same guards", () =>
       Effect.gen(function* () {
         const { organization, owner, org, eng, lead } = yield* setup;
-        yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("worker-1"), ["chief"]);
+        yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("worker-1"), [
+          "chief",
+        ]);
         // The lead cannot demote a member who out-privileges them.
         const outranked = yield* organization
           .updateTeamMemberRole(lead, org.id, eng.id, Users.UserId("worker-1"), ["member"])
@@ -1865,34 +1895,36 @@ describe("Organization", () => {
   // PERS-005: the plugin authorizes itself (no qadi round trip), so its denials
   // are published into the durable AuditLog.
   describe("permission denials are audited (PERS-005)", () => {
-    it.effect("a denied updateMemberRole publishes auth.organization.permissionDenied (missingStatement)", () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const auditLog = yield* AuditLog.AuditLog;
-        const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        yield* organization.addMember({
-          organizationId: org.id,
-          userId: Users.UserId("member-1"),
-          role: ["member"],
-        });
-        yield* organization.addMember({
-          organizationId: org.id,
-          userId: Users.UserId("member-2"),
-          role: ["member"],
-        });
-        const failure = yield* organization
-          .updateMemberRole(asCaller("member-1"), org.id, Users.UserId("member-2"), ["member"])
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "OrganizationPermissionDenied");
+    it.effect(
+      "a denied updateMemberRole publishes auth.organization.permissionDenied (missingStatement)",
+      () =>
+        Effect.gen(function* () {
+          const organization = yield* Organization.Organization;
+          const auditLog = yield* AuditLog.AuditLog;
+          const owner = asCaller("owner-1");
+          const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+          yield* organization.addMember({
+            organizationId: org.id,
+            userId: Users.UserId("member-1"),
+            role: ["member"],
+          });
+          yield* organization.addMember({
+            organizationId: org.id,
+            userId: Users.UserId("member-2"),
+            role: ["member"],
+          });
+          const failure = yield* organization
+            .updateMemberRole(asCaller("member-1"), org.id, Users.UserId("member-2"), ["member"])
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OrganizationPermissionDenied");
 
-        const recorded = yield* auditLog.list({ eventTag: "auth.organization.permissionDenied" });
-        assert.strictEqual(recorded.length, 1);
-        assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some("member-1"));
-        assert.strictEqual(payloadOf(recorded[0])["reason"], "missingStatement");
-        assert.strictEqual(payloadOf(recorded[0])["resource"], "member");
-        assert.strictEqual(payloadOf(recorded[0])["action"], "update");
-      }).pipe(Effect.provide(buildLayer())),
+          const recorded = yield* auditLog.list({ eventTag: "auth.organization.permissionDenied" });
+          assert.strictEqual(recorded.length, 1);
+          assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some("member-1"));
+          assert.strictEqual(payloadOf(recorded[0])["reason"], "missingStatement");
+          assert.strictEqual(payloadOf(recorded[0])["resource"], "member");
+          assert.strictEqual(payloadOf(recorded[0])["action"], "update");
+        }).pipe(Effect.provide(buildLayer())),
     );
 
     it.effect("a non-member's denied delete is recorded with reason notMember", () =>

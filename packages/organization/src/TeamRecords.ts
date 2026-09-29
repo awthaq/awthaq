@@ -265,7 +265,8 @@ export const layerMemory = Layer.effect(
 
     const descendantsIn = (teams: HashMap.HashMap<string, TeamRecord>, start: TeamRecord) => {
       const all = Array.from(HashMap.values(teams)).sort(
-        (a, b) => a.createdAt.epochMilliseconds - b.createdAt.epochMilliseconds || a.id.localeCompare(b.id),
+        (a, b) =>
+          a.createdAt.epochMilliseconds - b.createdAt.epochMilliseconds || a.id.localeCompare(b.id),
       );
       const out: Array<TeamRecord> = [];
       let level: ReadonlyArray<string> = [start.id];
@@ -317,7 +318,10 @@ export const layerMemory = Layer.effect(
           state,
           (
             s,
-          ): readonly [Result.Result<TeamRecord, TeamRecordNotFound | TeamHierarchyCycle>, State] => {
+          ): readonly [
+            Result.Result<TeamRecord, TeamRecordNotFound | TeamHierarchyCycle>,
+            State,
+          ] => {
             const team = HashMap.get(s.teams, input.id);
             if (Option.isNone(team) || team.value.organizationId !== input.organizationId) {
               return [Result.fail(teamNotFound(input.id)), s] as const;
@@ -392,24 +396,27 @@ export const layerMemory = Layer.effect(
       });
 
     const removeTeam: TeamRecordsShape["removeTeam"] = (organizationId, id) =>
-      Ref.modify(state, (s): readonly [Result.Result<void, TeamRecordNotFound | TeamHasChildren>, State] => {
-        const existing = HashMap.get(s.teams, id);
-        if (Option.isNone(existing) || existing.value.organizationId !== organizationId) {
-          return [Result.fail(teamNotFound(id)), s] as const;
-        }
-        const hasChildren = Array.from(HashMap.values(s.teams)).some(
-          (row) => Option.isSome(row.parentId) && row.parentId.value === id,
-        );
-        if (hasChildren) return [Result.fail(new TeamHasChildren({ id })), s] as const;
-        const memberships = Array.from(HashMap.entries(s.memberships)).reduce(
-          (acc, [key, row]) => (row.teamId === id ? HashMap.remove(acc, key) : acc),
-          s.memberships,
-        );
-        return [
-          Result.succeed(undefined),
-          { teams: HashMap.remove(s.teams, id), memberships },
-        ] as const;
-      }).pipe(Effect.flatMap(Effect.fromResult));
+      Ref.modify(
+        state,
+        (s): readonly [Result.Result<void, TeamRecordNotFound | TeamHasChildren>, State] => {
+          const existing = HashMap.get(s.teams, id);
+          if (Option.isNone(existing) || existing.value.organizationId !== organizationId) {
+            return [Result.fail(teamNotFound(id)), s] as const;
+          }
+          const hasChildren = Array.from(HashMap.values(s.teams)).some(
+            (row) => Option.isSome(row.parentId) && row.parentId.value === id,
+          );
+          if (hasChildren) return [Result.fail(new TeamHasChildren({ id })), s] as const;
+          const memberships = Array.from(HashMap.entries(s.memberships)).reduce(
+            (acc, [key, row]) => (row.teamId === id ? HashMap.remove(acc, key) : acc),
+            s.memberships,
+          );
+          return [
+            Result.succeed(undefined),
+            { teams: HashMap.remove(s.teams, id), memberships },
+          ] as const;
+        },
+      ).pipe(Effect.flatMap(Effect.fromResult));
 
     const removeAllTeamsForOrganization: TeamRecordsShape["removeAllTeamsForOrganization"] = (
       organizationId,
@@ -447,7 +454,10 @@ export const layerMemory = Layer.effect(
         state,
         (
           s,
-        ): readonly [Result.Result<TeamMembershipRecord, TeamMembershipRecordAlreadyExists>, State] => {
+        ): readonly [
+          Result.Result<TeamMembershipRecord, TeamMembershipRecordAlreadyExists>,
+          State,
+        ] => {
           if (HashMap.has(s.memberships, key)) {
             return [
               Result.fail(
@@ -528,10 +538,7 @@ export const layerMemory = Layer.effect(
         const removed = Array.from(HashMap.entries(s.memberships)).filter(
           ([, row]) => row.userId === userId && orgTeamIds.has(row.teamId),
         );
-        const memberships = removed.reduce(
-          (acc, [key]) => HashMap.remove(acc, key),
-          s.memberships,
-        );
+        const memberships = removed.reduce((acc, [key]) => HashMap.remove(acc, key), s.memberships);
         const teams = removed.reduce((acc, [, row]) => {
           const team = HashMap.get(acc, row.teamId);
           return Option.isSome(team)
@@ -896,7 +903,10 @@ export const layerSql = Layer.effect(
               });
               if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
               // The closure holds (id, id, 0), so this also covers "under itself".
-              const below = yield* isInSubtreeQuery({ ancestorId: input.id, descendantId: parentId });
+              const below = yield* isInSubtreeQuery({
+                ancestorId: input.id,
+                descendantId: parentId,
+              });
               if (below.count > 0) {
                 return yield* Effect.fail(new TeamHierarchyCycle({ id: input.id, parentId }));
               }
@@ -1083,9 +1093,7 @@ export const layerSql = Layer.effect(
             yield* adjustMemberCount(teamId, -1);
           }),
         )
-        .pipe(
-          Effect.catchTags({ SqlError: Effect.die, SchemaError: Effect.die }),
-        );
+        .pipe(Effect.catchTags({ SqlError: Effect.die, SchemaError: Effect.die }));
 
     const removeUserFromOrganizationTeams: TeamRecordsShape["removeUserFromOrganizationTeams"] = (
       organizationId,

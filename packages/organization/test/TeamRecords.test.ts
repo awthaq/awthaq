@@ -135,28 +135,38 @@ const suite = (name: string, layer: Layer.Layer<TeamRecords.TeamRecords, unknown
     );
 
     // OHS-004: a team membership carries role names, "member" by default.
-    it.effect("team memberships default to the member role and updateTeamMemberRole replaces it", () =>
-      Effect.gen(function* () {
-        const records = yield* TeamRecords.TeamRecords;
-        const team = yield* records.createTeam({ organizationId: orgId, name: "Eng" });
-        const plain = yield* records.addTeamMember({ teamId: team.id, userId: Users.UserId("u-1") });
-        assert.deepStrictEqual(plain.role, ["member"]);
-        const lead = yield* records.addTeamMember({
-          teamId: team.id,
-          userId: Users.UserId("u-2"),
-          role: ["lead", "auditor"],
-        });
-        assert.deepStrictEqual(lead.role, ["lead", "auditor"]);
+    it.effect(
+      "team memberships default to the member role and updateTeamMemberRole replaces it",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* TeamRecords.TeamRecords;
+          const team = yield* records.createTeam({ organizationId: orgId, name: "Eng" });
+          const plain = yield* records.addTeamMember({
+            teamId: team.id,
+            userId: Users.UserId("u-1"),
+          });
+          assert.deepStrictEqual(plain.role, ["member"]);
+          const lead = yield* records.addTeamMember({
+            teamId: team.id,
+            userId: Users.UserId("u-2"),
+            role: ["lead", "auditor"],
+          });
+          assert.deepStrictEqual(lead.role, ["lead", "auditor"]);
 
-        const updated = yield* records.updateTeamMemberRole(team.id, Users.UserId("u-1"), ["lead"]);
-        assert.deepStrictEqual(updated.role, ["lead"]);
-        const found = yield* records.findTeamMembership(team.id, Users.UserId("u-1"));
-        assert.deepStrictEqual(Option.map(found, (m) => m.role), Option.some(["lead"]));
-        const failure = yield* records
-          .updateTeamMemberRole(team.id, Users.UserId("nobody"), ["lead"])
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "TeamMembershipRecordNotFound");
-      }).pipe(Effect.provide(layer)),
+          const updated = yield* records.updateTeamMemberRole(team.id, Users.UserId("u-1"), [
+            "lead",
+          ]);
+          assert.deepStrictEqual(updated.role, ["lead"]);
+          const found = yield* records.findTeamMembership(team.id, Users.UserId("u-1"));
+          assert.deepStrictEqual(
+            Option.map(found, (m) => m.role),
+            Option.some(["lead"]),
+          );
+          const failure = yield* records
+            .updateTeamMemberRole(team.id, Users.UserId("nobody"), ["lead"])
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "TeamMembershipRecordNotFound");
+        }).pipe(Effect.provide(layer)),
     );
 
     // ---- OHS-001 (wayfinder ticket 34): parentId adjacency + closure read model ----
@@ -170,19 +180,21 @@ const suite = (name: string, layer: Layer.Layer<TeamRecords.TeamRecords, unknown
       return { records, a, b, c, d };
     });
 
-    it.effect("nested creates expose parentId and single-lookup ancestor/descendant/subtree reads", () =>
-      Effect.gen(function* () {
-        const { records, a, b, c } = yield* seedTree;
-        assert.deepStrictEqual(a.parentId, Option.none());
-        assert.deepStrictEqual(b.parentId, Option.some(a.id));
-        // Ancestors and descendants are nearest-first; neither includes the team itself.
-        assert.deepStrictEqual(names(yield* records.getAncestors(orgId, c.id)), ["B", "A"]);
-        assert.deepStrictEqual(names(yield* records.getDescendants(orgId, a.id)), ["B", "C"]);
-        assert.deepStrictEqual(names(yield* records.getAncestors(orgId, a.id)), []);
-        assert.deepStrictEqual(names(yield* records.getDescendants(orgId, c.id)), []);
-        // A subtree is the team itself, then its descendants.
-        assert.deepStrictEqual(names(yield* records.getSubtree(orgId, b.id)), ["B", "C"]);
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "nested creates expose parentId and single-lookup ancestor/descendant/subtree reads",
+      () =>
+        Effect.gen(function* () {
+          const { records, a, b, c } = yield* seedTree;
+          assert.deepStrictEqual(a.parentId, Option.none());
+          assert.deepStrictEqual(b.parentId, Option.some(a.id));
+          // Ancestors and descendants are nearest-first; neither includes the team itself.
+          assert.deepStrictEqual(names(yield* records.getAncestors(orgId, c.id)), ["B", "A"]);
+          assert.deepStrictEqual(names(yield* records.getDescendants(orgId, a.id)), ["B", "C"]);
+          assert.deepStrictEqual(names(yield* records.getAncestors(orgId, a.id)), []);
+          assert.deepStrictEqual(names(yield* records.getDescendants(orgId, c.id)), []);
+          // A subtree is the team itself, then its descendants.
+          assert.deepStrictEqual(names(yield* records.getSubtree(orgId, b.id)), ["B", "C"]);
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("a parent from another organization is refused (TeamRecordNotFound)", () =>
@@ -237,16 +249,18 @@ const suite = (name: string, layer: Layer.Layer<TeamRecords.TeamRecords, unknown
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("removeTeam refuses a team with children (TeamHasChildren); a leaf removes cleanly", () =>
-      Effect.gen(function* () {
-        const { records, a, b, c } = yield* seedTree;
-        const failure = yield* records.removeTeam(orgId, b.id).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "TeamHasChildren");
-        yield* records.removeTeam(orgId, c.id);
-        assert.deepStrictEqual(names(yield* records.getDescendants(orgId, a.id)), ["B"]);
-        yield* records.removeTeam(orgId, b.id);
-        assert.deepStrictEqual(names(yield* records.getDescendants(orgId, a.id)), []);
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "removeTeam refuses a team with children (TeamHasChildren); a leaf removes cleanly",
+      () =>
+        Effect.gen(function* () {
+          const { records, a, b, c } = yield* seedTree;
+          const failure = yield* records.removeTeam(orgId, b.id).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "TeamHasChildren");
+          yield* records.removeTeam(orgId, c.id);
+          assert.deepStrictEqual(names(yield* records.getDescendants(orgId, a.id)), ["B"]);
+          yield* records.removeTeam(orgId, b.id);
+          assert.deepStrictEqual(names(yield* records.getDescendants(orgId, a.id)), []);
+        }).pipe(Effect.provide(layer)),
     );
 
     // OHS-003: one membership per (teamId, userId); memberCount can never over-count.
@@ -351,14 +365,12 @@ describe("TeamRecords (layerSql) atomicity", () => {
 // OHS-001: the closure table itself — what makes the reads single indexed lookups.
 describe("TeamRecords (layerSql) closure table", () => {
   const closureCount = (sql: SqlClient.SqlClient) =>
-    sql
-      .unsafe("SELECT COUNT(*) AS n FROM organization_team_closure")
-      .pipe(
-        Effect.map((rows) => {
-          const first = rows[0];
-          return typeof first === "object" && first !== null && "n" in first ? Number(first.n) : -1;
-        }),
-      );
+    sql.unsafe("SELECT COUNT(*) AS n FROM organization_team_closure").pipe(
+      Effect.map((rows) => {
+        const first = rows[0];
+        return typeof first === "object" && first !== null && "n" in first ? Number(first.n) : -1;
+      }),
+    );
 
   it.effect("closure rows track nested creates, moves, removals and organization cascades", () =>
     Effect.gen(function* () {
@@ -382,29 +394,35 @@ describe("TeamRecords (layerSql) closure table", () => {
     }).pipe(Effect.provide(SqlLayer)),
   );
 
-  it.effect("the hierarchy migration backfills a closure self-row for every pre-existing team", () =>
-    Effect.gen(function* () {
-      const all = Organization.Organization.migrations;
-      const at = all.findIndex((m) => m.name === "organization_team_hierarchy");
-      assert.isTrue(at > 0);
-      const sql = yield* SqlClient.SqlClient;
-      // Schema as it stood before the hierarchy, with a team written under it.
-      yield* Migrations.run(all.slice(0, at));
-      yield* sql.unsafe(
-        `INSERT INTO organization_team (id, name, organizationId, memberCount, createdAt, updatedAt)
+  it.effect(
+    "the hierarchy migration backfills a closure self-row for every pre-existing team",
+    () =>
+      Effect.gen(function* () {
+        const all = Organization.Organization.migrations;
+        const at = all.findIndex((m) => m.name === "organization_team_hierarchy");
+        assert.isTrue(at > 0);
+        const sql = yield* SqlClient.SqlClient;
+        // Schema as it stood before the hierarchy, with a team written under it.
+        yield* Migrations.run(all.slice(0, at));
+        yield* sql.unsafe(
+          `INSERT INTO organization_team (id, name, organizationId, memberCount, createdAt, updatedAt)
          VALUES ('legacy-1', 'Legacy', 'org-1', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
-      );
-      yield* Migrations.run(all);
-      const records = yield* TeamRecords.TeamRecords;
-      const found = yield* records.findTeamById("org-1", "legacy-1");
-      assert.isTrue(Option.isSome(found) && Option.isNone(found.value.parentId));
-      assert.strictEqual(yield* closureCount(sql), 1);
-      // ... and it can be a parent straight away.
-      const child = yield* records.createTeam({ organizationId: "org-1", name: "Kid", parentId: "legacy-1" });
-      assert.deepStrictEqual(
-        (yield* records.getAncestors("org-1", child.id)).map((t) => t.name),
-        ["Legacy"],
-      );
-    }).pipe(Effect.provide(LegacySqlLayer)),
+        );
+        yield* Migrations.run(all);
+        const records = yield* TeamRecords.TeamRecords;
+        const found = yield* records.findTeamById("org-1", "legacy-1");
+        assert.isTrue(Option.isSome(found) && Option.isNone(found.value.parentId));
+        assert.strictEqual(yield* closureCount(sql), 1);
+        // ... and it can be a parent straight away.
+        const child = yield* records.createTeam({
+          organizationId: "org-1",
+          name: "Kid",
+          parentId: "legacy-1",
+        });
+        assert.deepStrictEqual(
+          (yield* records.getAncestors("org-1", child.id)).map((t) => t.name),
+          ["Legacy"],
+        );
+      }).pipe(Effect.provide(LegacySqlLayer)),
   );
 });

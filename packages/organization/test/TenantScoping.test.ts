@@ -84,7 +84,8 @@ const ALLOWLIST: ReadonlyArray<{ readonly match: RegExp; readonly why: string }>
     why: "findTeamByIdAnyOrg: existence-only lookup for the qadi team-member relation (RZS-005)",
   },
   {
-    match: /^SELECT CAST\(COUNT\(\*\) AS INTEGER\) AS count FROM organization_team_closure WHERE ancestorId = /,
+    match:
+      /^SELECT CAST\(COUNT\(\*\) AS INTEGER\) AS count FROM organization_team_closure WHERE ancestorId = /,
     why: "isInSubtree (OHS-001): keyed by two team ids that Organization.moveTeam has already tenant-checked",
   },
   {

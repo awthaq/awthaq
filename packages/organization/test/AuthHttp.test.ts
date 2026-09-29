@@ -264,21 +264,22 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     );
     const record = (await created.json()) as { id: string };
 
-    const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> = [
-      { method: "GET", path: (id) => `/organization/${id}` },
-      { method: "GET", path: (id) => `/organization/${id}/full` },
-      { method: "GET", path: (id) => `/organization/${id}/members` },
-      { method: "PATCH", path: (id) => `/organization/${id}`, body: { name: "x" } },
-      { method: "DELETE", path: (id) => `/organization/${id}` },
-      { method: "DELETE", path: (id) => `/organization/${id}/members/owner-1` },
-      { method: "GET", path: (id) => `/organization/${id}/invitations` },
-      {
-        method: "POST",
-        path: (id) => `/organization/${id}/invitations`,
-        body: { email: "x@example.com", role: ["member"] },
-      },
-      { method: "GET", path: (id) => `/organization/${id}/teams` },
-    ];
+    const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> =
+      [
+        { method: "GET", path: (id) => `/organization/${id}` },
+        { method: "GET", path: (id) => `/organization/${id}/full` },
+        { method: "GET", path: (id) => `/organization/${id}/members` },
+        { method: "PATCH", path: (id) => `/organization/${id}`, body: { name: "x" } },
+        { method: "DELETE", path: (id) => `/organization/${id}` },
+        { method: "DELETE", path: (id) => `/organization/${id}/members/owner-1` },
+        { method: "GET", path: (id) => `/organization/${id}/invitations` },
+        {
+          method: "POST",
+          path: (id) => `/organization/${id}/invitations`,
+          body: { email: "x@example.com", role: ["member"] },
+        },
+        { method: "GET", path: (id) => `/organization/${id}/teams` },
+      ];
     for (const probe of probes) {
       const existing = await request(handler, probe.method, probe.path(record.id), probe.body, {
         cookie: outsiderCookie,
@@ -343,7 +344,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       handler,
       "POST",
       "/organization",
-      { name: "Acme", slug: "acme", metadata: "{\"secret\":true}" },
+      { name: "Acme", slug: "acme", metadata: '{"secret":true}' },
       { cookie: ownerCookie },
     );
     const record = (await created.json()) as { id: string };
@@ -638,7 +639,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie: ownerCookie },
     );
     assert.strictEqual(promoted.status, 200);
-    assert.deepStrictEqual(((await promoted.json()) as { role: ReadonlyArray<string> }).role, ["lead"]);
+    assert.deepStrictEqual(((await promoted.json()) as { role: ReadonlyArray<string> }).role, [
+      "lead",
+    ]);
 
     // The lead staffs their own team ...
     const added = await request(
@@ -676,13 +679,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     );
     assert.strictEqual(unknown.status, 422);
     // The default lead holds only team:update, so deleting its team is still refused.
-    const escalate = await request(
-      handler,
-      "DELETE",
-      `${base}/${eng.id}`,
-      undefined,
-      { cookie: leadCookie },
-    );
+    const escalate = await request(handler, "DELETE", `${base}/${eng.id}`, undefined, {
+      cookie: leadCookie,
+    });
     assert.strictEqual(escalate.status, 403);
   });
 

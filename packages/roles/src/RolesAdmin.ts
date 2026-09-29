@@ -73,11 +73,7 @@ export const RolesAdminHandlers = HttpApiBuilder.group(
         const subject = yield* CurrentSubject;
         return yield* admin.assign(subject, Users.UserId(params.userId), payload.role);
       }),
-      revoke: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: RolesAdminApi.AssignmentParams;
-      }) {
+      revoke: Effect.fnUntraced(function* ({ params }: { params: RolesAdminApi.AssignmentParams }) {
         const subject = yield* CurrentSubject;
         yield* admin.revoke(subject, Users.UserId(params.userId), params.roleName);
       }),
@@ -97,11 +93,9 @@ export class RolesAdmin extends AuthPlugin.Service<RolesAdmin, RolesAdminShape>(
       const config = yield* Roles.RolesConfig;
 
       const userRoles: RolesAdminShape["userRoles"] = (userId) =>
-        roles.listRoleNames(userId).pipe(
-          Effect.map(
-            (names) => new RolesAdminApi.UserRolesDto({ userId, roles: names }),
-          ),
-        );
+        roles
+          .listRoleNames(userId)
+          .pipe(Effect.map((names) => new RolesAdminApi.UserRolesDto({ userId, roles: names })));
 
       const catalog = Effect.succeed(
         config.catalog.map(

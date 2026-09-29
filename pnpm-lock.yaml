@@ -163,9 +163,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/ports':
-        specifier: workspace:*
-        version: link:../../packages/ports
       '@awthaq/server':
         specifier: workspace:*
         version: link:../../packages/server

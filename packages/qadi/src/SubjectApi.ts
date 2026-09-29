@@ -66,9 +66,12 @@ export interface SubjectApiConfigShape {
   readonly exposedAttributes: ReadonlyArray<string>;
 }
 
-export const SubjectApiConfig = Context.Reference<SubjectApiConfigShape>("awthaq/qadi/SubjectApiConfig", {
-  defaultValue: () => ({ exposedAttributes: [] }),
-});
+export const SubjectApiConfig = Context.Reference<SubjectApiConfigShape>(
+  "awthaq/qadi/SubjectApiConfig",
+  {
+    defaultValue: () => ({ exposedAttributes: [] }),
+  },
+);
 
 /** Sugar for `Layer.succeed(SubjectApiConfig, { exposedAttributes })`. */
 export const config = (exposedAttributes: ReadonlyArray<string>) =>

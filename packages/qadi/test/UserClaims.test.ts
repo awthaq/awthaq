@@ -46,11 +46,7 @@ const admin = Users.UserId("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 
 const contract = (
   name: string,
-  layer: Layer.Layer<
-    UserClaims.UserClaims | AttributeResolver | AuditLog.AuditLog,
-    unknown,
-    never
-  >,
+  layer: Layer.Layer<UserClaims.UserClaims | AttributeResolver | AuditLog.AuditLog, unknown, never>,
 ) =>
   describe(name, () => {
     it.effect("a user with no claims reads as an empty record", () =>
@@ -88,21 +84,23 @@ const contract = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("a real change publishes auth.user.claimsUpdated with the keys and actor; a no-op publishes nothing", () =>
-      Effect.gen(function* () {
-        const claims = yield* UserClaims.UserClaims;
-        const auditLog = yield* AuditLog.AuditLog;
-        yield* claims.set(alice, { plan: "pro", seats: 3 }, { actorId: admin });
-        yield* claims.merge(alice, { seats: 3 }, { actorId: admin });
-        yield* claims.merge(alice, { seats: 4 }, { actorId: admin });
-        const recorded = yield* auditLog.list({ eventTag: "auth.user.claimsUpdated" });
-        assert.strictEqual(recorded.length, 2);
-        assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some(admin));
-        const payloads = recorded.map((row) => JSON.stringify(row.payload));
-        // Keys only: claim values never enter the audit trail.
-        assert.isTrue(payloads.every((p) => !p.includes("pro")));
-        assert.isTrue(payloads.some((p) => p.includes("seats")));
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "a real change publishes auth.user.claimsUpdated with the keys and actor; a no-op publishes nothing",
+      () =>
+        Effect.gen(function* () {
+          const claims = yield* UserClaims.UserClaims;
+          const auditLog = yield* AuditLog.AuditLog;
+          yield* claims.set(alice, { plan: "pro", seats: 3 }, { actorId: admin });
+          yield* claims.merge(alice, { seats: 3 }, { actorId: admin });
+          yield* claims.merge(alice, { seats: 4 }, { actorId: admin });
+          const recorded = yield* auditLog.list({ eventTag: "auth.user.claimsUpdated" });
+          assert.strictEqual(recorded.length, 2);
+          assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some(admin));
+          const payloads = recorded.map((row) => JSON.stringify(row.payload));
+          // Keys only: claim values never enter the audit trail.
+          assert.isTrue(payloads.every((p) => !p.includes("pro")));
+          assert.isTrue(payloads.some((p) => p.includes("seats")));
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("the resolver answers `claims` for a user: subject, and nothing else", () =>
@@ -110,41 +108,42 @@ const contract = (
         const claims = yield* UserClaims.UserClaims;
         const resolver = yield* AttributeResolver;
         yield* claims.set(alice, { plan: "pro" });
-        assert.deepStrictEqual(
-          yield* resolver.resolve(makeSubjectId(`user:${alice}`), "claims"),
-          { plan: "pro" },
-        );
+        assert.deepStrictEqual(yield* resolver.resolve(makeSubjectId(`user:${alice}`), "claims"), {
+          plan: "pro",
+        });
         assert.isUndefined(yield* resolver.resolve(makeSubjectId(`user:${alice}`), "email"));
         assert.isUndefined(yield* resolver.resolve(makeSubjectId("apikey:k"), "claims"));
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("a qadi policy on claims.plan allows or denies with the stored claim, no redeploy", () =>
-      Effect.gen(function* () {
-        const claims = yield* UserClaims.UserClaims;
-        const isPro = hasAttribute(
-          UserClaims.claimsAttr("claims"),
-          fieldMatch("plan", eq(literal("pro"))),
-        );
-        // The real resolver goes innermost, so it (not the fail-closed default) answers.
-        const resolver = yield* AttributeResolver;
-        const askWith = evaluate(isPro).pipe(
-          Effect.provideService(AttributeResolver, resolver),
-          Effect.provide(
-            Layer.mergeAll(
-              EvaluationServicesNone,
-              currentSubjectLayer(makeSubject({ id: `user:${alice}` })),
+    it.effect(
+      "a qadi policy on claims.plan allows or denies with the stored claim, no redeploy",
+      () =>
+        Effect.gen(function* () {
+          const claims = yield* UserClaims.UserClaims;
+          const isPro = hasAttribute(
+            UserClaims.claimsAttr("claims"),
+            fieldMatch("plan", eq(literal("pro"))),
+          );
+          // The real resolver goes innermost, so it (not the fail-closed default) answers.
+          const resolver = yield* AttributeResolver;
+          const askWith = evaluate(isPro).pipe(
+            Effect.provideService(AttributeResolver, resolver),
+            Effect.provide(
+              Layer.mergeAll(
+                EvaluationServicesNone,
+                currentSubjectLayer(makeSubject({ id: `user:${alice}` })),
+              ),
             ),
-          ),
-          Effect.map(isAllowed),
-        );
+            Effect.map(isAllowed),
+          );
 
-        assert.isFalse(yield* askWith);
-        yield* claims.set(alice, { plan: "pro" });
-        assert.isTrue(yield* askWith);
-        yield* claims.merge(alice, { plan: "free" });
-        assert.isFalse(yield* askWith);
-      }).pipe(Effect.provide(layer)),
+          assert.isFalse(yield* askWith);
+          yield* claims.set(alice, { plan: "pro" });
+          assert.isTrue(yield* askWith);
+          yield* claims.merge(alice, { plan: "free" });
+          assert.isFalse(yield* askWith);
+        }).pipe(Effect.provide(layer)),
     );
   });
 
@@ -156,7 +155,10 @@ describe("UserClaims composition", () => {
     assert.strictEqual(UserClaims.UserClaims.id, "claims");
     assert.deepStrictEqual(UserClaims.UserClaims.tables, ["claims_user"]);
     assert.strictEqual(UserClaims.UserClaims.migrations.length, 1);
-    assert.throws(() => Auth.make([UserClaims.UserClaims]), /Auth.make requires at least one plugin/);
+    assert.throws(
+      () => Auth.make([UserClaims.UserClaims]),
+      /Auth.make requires at least one plugin/,
+    );
   });
 
   it("registers in attributeResolverRegistry next to UserAttributes without shadowing it", () => {
@@ -172,29 +174,30 @@ describe("UserClaims composition", () => {
     assert.isFalse(Object.hasOwn(Resolvers.UserAttributeSchemas, "claims"));
   });
 
-  it.effect("changing claims announces AfterUserAttributesChanged so a cached decision is dropped", () =>
-    Effect.gen(function* () {
-      const announced: Array<ReadonlyArray<string>> = [];
-      yield* Effect.gen(function* () {
-        const claims = yield* UserClaims.UserClaims;
-        yield* claims.set(alice, { plan: "pro" });
-      }).pipe(
-        Effect.provide(
-          UserClaims.UserClaims.layer.pipe(
-            Layer.provideMerge(Hooks.AfterUserAttributesChanged.layer),
-            Layer.provideMerge(
-              Hooks.AfterUserAttributesChanged.tap((input) =>
-                Effect.sync(() => {
-                  announced.push(input.attributes);
-                }),
+  it.effect(
+    "changing claims announces AfterUserAttributesChanged so a cached decision is dropped",
+    () =>
+      Effect.gen(function* () {
+        const announced: Array<ReadonlyArray<string>> = [];
+        yield* Effect.gen(function* () {
+          const claims = yield* UserClaims.UserClaims;
+          yield* claims.set(alice, { plan: "pro" });
+        }).pipe(
+          Effect.provide(
+            UserClaims.UserClaims.layer.pipe(
+              Layer.provideMerge(Hooks.AfterUserAttributesChanged.layer),
+              Layer.provideMerge(
+                Hooks.AfterUserAttributesChanged.tap((input) =>
+                  Effect.sync(() => {
+                    announced.push(input.attributes);
+                  }),
+                ),
               ),
+              Layer.provideMerge(CoreLive),
             ),
-            Layer.provideMerge(CoreLive),
           ),
-        ),
-      );
-      assert.deepStrictEqual(announced, [["claims"]]);
-    }),
+        );
+        assert.deepStrictEqual(announced, [["claims"]]);
+      }),
   );
-
 });

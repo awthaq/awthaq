@@ -175,8 +175,8 @@ describe("RolesAdmin (YL-009)", () => {
         Effect.gen(function* () {
           const assignedRows = yield* log.list({ eventTag: "auth.roles.assigned" });
           const revokedRows = yield* log.list({ eventTag: "auth.roles.revoked" });
-          return [...assignedRows, ...revokedRows].filter(
-            (row) => JSON.stringify(row.payload).includes(target),
+          return [...assignedRows, ...revokedRows].filter((row) =>
+            JSON.stringify(row.payload).includes(target),
           );
         }),
       ),

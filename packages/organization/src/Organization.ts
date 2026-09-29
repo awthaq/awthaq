@@ -2318,7 +2318,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, input) {
           const organizationRecord = yield* requireOrganization(organizationId);
           const callerId = Users.UserId(caller.ref.id);
-          const inviter = yield* requirePermission(callerId, organizationId, "invitation", "create");
+          const inviter = yield* requirePermission(
+            callerId,
+            organizationId,
+            "invitation",
+            "create",
+          );
 
           const pendingCount = yield* invitations.countPendingByInviter(callerId);
           if (pendingCount >= orgConfig.invitationLimit) {
@@ -2550,12 +2555,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             const teamId = record.teamId.value;
             // OHS-003: the team half of accepting stays idempotent — a user who
             // is already on the team is not double-counted.
-            const added = yield* teams
-              .addTeamMember({ teamId, userId: callerId })
-              .pipe(
-                Effect.as(true),
-                Effect.catchTag("TeamMembershipRecordAlreadyExists", () => Effect.succeed(false)),
-              );
+            const added = yield* teams.addTeamMember({ teamId, userId: callerId }).pipe(
+              Effect.as(true),
+              Effect.catchTag("TeamMembershipRecordAlreadyExists", () => Effect.succeed(false)),
+            );
             if (added) {
               yield* events.publish({
                 _tag: "auth.organization.teamMemberAdded",
@@ -2635,11 +2638,17 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       );
 
       /** True iff `callerId` is the invitee (email match) or a member of the invitation's organization holding `invitation:create`. */
-      const mayReadInvitation = (callerId: Users.UserId, record: InvitationRecords.InvitationRecord) =>
+      const mayReadInvitation = (
+        callerId: Users.UserId,
+        record: InvitationRecords.InvitationRecord,
+      ) =>
         Effect.gen(function* () {
           const membership = yield* members.findByUserAndOrg(callerId, record.organizationId);
           if (Option.isSome(membership)) {
-            const effective = yield* effectivePermissionsOf(record.organizationId, membership.value);
+            const effective = yield* effectivePermissionsOf(
+              record.organizationId,
+              membership.value,
+            );
             if (PermissionEngine.hasPermission(effective, "invitation", "create")) return true;
           }
           const user = yield* users
@@ -2651,7 +2660,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const getInvitation: OrganizationShape["getInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId) {
           const found = yield* invitations.findById(invitationId);
-          if (Option.isNone(found)) return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          if (Option.isNone(found))
+            return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           const allowed = yield* mayReadInvitation(Users.UserId(caller.ref.id), found.value);
           if (!allowed) return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           return found.value;
@@ -2661,7 +2671,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const getInvitationByToken: OrganizationShape["getInvitationByToken"] = Effect.fnUntraced(
         function* (caller, token) {
           const found = yield* invitations.findByTokenHash(yield* hashInvitationToken(token));
-          if (Option.isNone(found)) return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          if (Option.isNone(found))
+            return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           const user = yield* users
             .findById(Users.UserId(caller.ref.id))
             .pipe(Effect.catchTag("UserNotFound", () => Effect.succeed(undefined)));
@@ -2876,7 +2887,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           const record = yield* teams
             .createTeam({ organizationId, name: vetoed.name, parentId: vetoed.parentId })
-            .pipe(Effect.catchTag("TeamRecordNotFound", () => Effect.fail(new OrganizationApi.TeamNotFound())));
+            .pipe(
+              Effect.catchTag("TeamRecordNotFound", () =>
+                Effect.fail(new OrganizationApi.TeamNotFound()),
+              ),
+            );
           yield* events.publish({
             _tag: "auth.organization.teamCreated",
             organizationId,
@@ -3029,15 +3044,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           yield* sqlTransaction
             .withTransaction(
               Effect.gen(function* () {
-                yield* teams
-                  .removeTeam(organizationId, teamId)
-                  .pipe(
-                    Effect.catchTags({
-                      TeamRecordNotFound: () =>
-                        Effect.die(new Error("awthaq: team vanished between check and write")),
-                      TeamHasChildren: () => Effect.fail(new OrganizationApi.TeamHasChildren()),
-                    }),
-                  );
+                yield* teams.removeTeam(organizationId, teamId).pipe(
+                  Effect.catchTags({
+                    TeamRecordNotFound: () =>
+                      Effect.die(new Error("awthaq: team vanished between check and write")),
+                    TeamHasChildren: () => Effect.fail(new OrganizationApi.TeamHasChildren()),
+                  }),
+                );
                 // CWM-003/OHS-007: no session may keep the deleted team active.
                 yield* activeContext.clearTeam(teamId);
               }),
@@ -3061,47 +3074,51 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const addTeamMember: OrganizationShape["addTeamMember"] = Effect.fnUntraced(
-        function* (caller, organizationId, teamId, targetUserId, role = ["member"]) {
-          yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
-          const callerId = Users.UserId(caller.ref.id);
-          yield* requirePermission(callerId, organizationId, "team", "update", teamId);
-          const team = yield* requireTeam(organizationId, teamId);
-          yield* requireGrantableTeamRole(callerId, organizationId, teamId, role);
-          const targetMembership = yield* members.findByUserAndOrg(targetUserId, organizationId);
-          if (Option.isNone(targetMembership)) {
-            return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
-          }
-          if (team.memberCount >= orgConfig.teams.maximumMembersPerTeam) {
-            return yield* Effect.fail(new OrganizationApi.TeamMemberLimitReached());
-          }
-          yield* veto(
-            "organization.team.member.add.before",
-            beforeAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role }),
+      const addTeamMember: OrganizationShape["addTeamMember"] = Effect.fnUntraced(function* (
+        caller,
+        organizationId,
+        teamId,
+        targetUserId,
+        role = ["member"],
+      ) {
+        yield* requireOrganization(organizationId);
+        yield* requireTeamsEnabled;
+        const callerId = Users.UserId(caller.ref.id);
+        yield* requirePermission(callerId, organizationId, "team", "update", teamId);
+        const team = yield* requireTeam(organizationId, teamId);
+        yield* requireGrantableTeamRole(callerId, organizationId, teamId, role);
+        const targetMembership = yield* members.findByUserAndOrg(targetUserId, organizationId);
+        if (Option.isNone(targetMembership)) {
+          return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
+        }
+        if (team.memberCount >= orgConfig.teams.maximumMembersPerTeam) {
+          return yield* Effect.fail(new OrganizationApi.TeamMemberLimitReached());
+        }
+        yield* veto(
+          "organization.team.member.add.before",
+          beforeAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role }),
+        );
+        // OHS-003: a second add is refused — it would over-count `memberCount`.
+        const onTeam = yield* teams.findTeamMembership(teamId, targetUserId);
+        if (Option.isSome(onTeam)) {
+          return yield* Effect.fail(new OrganizationApi.AlreadyTeamMember());
+        }
+        const record = yield* teams
+          .addTeamMember({ teamId, userId: targetUserId, role })
+          .pipe(
+            Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
+              Effect.fail(new OrganizationApi.AlreadyTeamMember()),
+            ),
           );
-          // OHS-003: a second add is refused — it would over-count `memberCount`.
-          const onTeam = yield* teams.findTeamMembership(teamId, targetUserId);
-          if (Option.isSome(onTeam)) {
-            return yield* Effect.fail(new OrganizationApi.AlreadyTeamMember());
-          }
-          const record = yield* teams
-            .addTeamMember({ teamId, userId: targetUserId, role })
-            .pipe(
-              Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
-                Effect.fail(new OrganizationApi.AlreadyTeamMember()),
-              ),
-            );
-          yield* events.publish({
-            _tag: "auth.organization.teamMemberAdded",
-            organizationId,
-            teamId,
-            userId: targetUserId,
-          });
-          yield* afterAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role });
-          return record;
-        },
-      );
+        yield* events.publish({
+          _tag: "auth.organization.teamMemberAdded",
+          organizationId,
+          teamId,
+          userId: targetUserId,
+        });
+        yield* afterAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role });
+        return record;
+      });
 
       const updateTeamMemberRole: OrganizationShape["updateTeamMemberRole"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, targetUserId, role) {
@@ -3114,7 +3131,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (Option.isNone(target)) {
             return yield* Effect.fail(new OrganizationApi.TeamMembershipNotFound());
           }
-          yield* requireGrantableTeamRole(callerId, organizationId, teamId, role, target.value.role);
+          yield* requireGrantableTeamRole(
+            callerId,
+            organizationId,
+            teamId,
+            role,
+            target.value.role,
+          );
           yield* veto(
             "organization.team.member.updateRole.before",
             beforeUpdateTeamMemberRole.run({ organizationId, teamId, userId: targetUserId, role }),
@@ -3294,10 +3317,9 @@ export const beforeUserDeleteErasure: Layer.Layer<
       const userId = Users.UserId(input.id);
       // DRS-008: the active-context rows are keyed by session but indexed by
       // user, so erasure reaches them too.
-      return membershipRecords.deleteAllByUser(userId).pipe(
-        Effect.andThen(activeContextRecords.deleteAllByUser(userId)),
-        Effect.as(input),
-      );
+      return membershipRecords
+        .deleteAllByUser(userId)
+        .pipe(Effect.andThen(activeContextRecords.deleteAllByUser(userId)), Effect.as(input));
     });
   }),
 );

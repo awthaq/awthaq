@@ -10,19 +10,19 @@ Multi-tenancy: organizations, memberships with built-in / static / dynamic per-o
 
 **Team hierarchy.** A team may sit under one parent in the same organization (a forest, not a graph). `organization_team.parentId` is the write side; `organization_team_closure` (ancestor, descendant, depth) is the read model, so ancestors and descendants are single indexed lookups on SQLite and Postgres alike, maintained in the same transaction as every create/move/remove. Moving a team moves its subtree; a move under itself or a descendant is `409 TeamHierarchyCycle`; removing a team that still has children is `409 TeamHasChildren`; a parent from another organization is `404 TeamNotFound`. Moves need `team:update`, reads are member-only, hooks are `BeforeMoveTeam`/`AfterMoveTeam`, the audit event is `auth.organization.teamMoved`. The hierarchy itself is structure; authority over it comes from team roles below.
 
-**Team roles (OHS-004).** A team membership carries role names (`["member"]` by default; `POST .../members` takes `role`, `PATCH .../members/:userId` changes it). `OrganizationConfig.teamStatements` maps each team role to the `team` statements it confers on *that team and its descendants* (default `lead` -> `team:update`; `team:create` = child teams under it, `team:delete` = remove it). Org-level statements stay the default and are never reduced: an org `admin` governs every team, a team role only adds. Assigning or changing a team role is `canGrant`-guarded (you cannot confer, or alter a member holding, statements beyond your own authority over that team), an undefined role is `422 UnknownTeamRole`, and moving a team needs authority over the team and its destination (root = org-level). qadi sees the same thing as `team-role:<name>` (held on the team or an ancestor).
+**Team roles (OHS-004).** A team membership carries role names (`["member"]` by default; `POST .../members` takes `role`, `PATCH .../members/:userId` changes it). `OrganizationConfig.teamStatements` maps each team role to the `team` statements it confers on _that team and its descendants_ (default `lead` -> `team:update`; `team:create` = child teams under it, `team:delete` = remove it). Org-level statements stay the default and are never reduced: an org `admin` governs every team, a team role only adds. Assigning or changing a team role is `canGrant`-guarded (you cannot confer, or alter a member holding, statements beyond your own authority over that team), an undefined role is `422 UnknownTeamRole`, and moving a team needs authority over the team and its destination (root = org-level). qadi sees the same thing as `team-role:<name>` (held on the team or an ancestor).
 
 **Persistence and atomicity.** `layerMemory` / `layerSql` records, plus `Organization.migrations` (`UNIQUE(userId, organizationId)`, `UNIQUE(teamId, userId)`, an indexed `userId` on `organization_active_context`, hashed invitation tokens). `Organization.layer` requires `SqlTransaction` (`layerNoop` in memory): organization/team deletion and member removal are one transaction, and removing a member also clears their active context and team memberships.
 
 **The qadi contribution** (`OrganizationQadi`, composed by hand into your `QadiLive`):
 
-| Relation | Meaning |
-|---|---|
-| `member` | a membership in the organization (`resourceId`; at `depth >= 1`, the organization your `ResourceOrganizationLookup` resolves it to) |
-| `has-role:<name>` (and `admin` / `owner`) | the membership holds that role, of any kind |
-| `<resource>:<action>` (e.g. `member:update`) | the membership's effective statements include it — the same computation the plugin's own gating uses |
-| `team-member` | the subject is on the team `resourceId` names |
-| `team-role:<name>` | the subject holds that team role on the team `resourceId` names or one of its ancestors |
+| Relation                                     | Meaning                                                                                                                             |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `member`                                     | a membership in the organization (`resourceId`; at `depth >= 1`, the organization your `ResourceOrganizationLookup` resolves it to) |
+| `has-role:<name>` (and `admin` / `owner`)    | the membership holds that role, of any kind                                                                                         |
+| `<resource>:<action>` (e.g. `member:update`) | the membership's effective statements include it — the same computation the plugin's own gating uses                                |
+| `team-member`                                | the subject is on the team `resourceId` names                                                                                       |
+| `team-role:<name>`                           | the subject holds that team role on the team `resourceId` names or one of its ancestors                                             |
 
 Anything else, or an id that names no organization/team, answers `"Unknown"`. `relationships` **requires** a `ResourceOrganizationLookup` — provide `ResourceOrganizationLookup.layerNone` if you never walk from non-organization resources. `attributes` answers `organizationCount` / `ownedOrganizationCount`. Denials of the plugin's own gating are published as `auth.organization.permissionDenied` into the `AuditLog`.
 

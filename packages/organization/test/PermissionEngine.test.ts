@@ -42,7 +42,10 @@ describe("PermissionEngine", () => {
     );
     assert.deepStrictEqual(statementsByRole.get("owner"), PermissionEngine.defaultStatements.owner);
     assert.deepStrictEqual(statementsByRole.get("admin"), PermissionEngine.defaultStatements.admin);
-    assert.deepStrictEqual(statementsByRole.get("member"), PermissionEngine.defaultStatements.member);
+    assert.deepStrictEqual(
+      statementsByRole.get("member"),
+      PermissionEngine.defaultStatements.member,
+    );
   });
 
   it("effectivePermissions unions every held role's statements", () => {

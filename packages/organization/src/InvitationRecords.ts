@@ -136,7 +136,10 @@ export const layerMemory = Layer.effect(
         (s): readonly [Result.Result<InvitationRecord, InvitationRecordNotFound>, State] => {
           const existing = HashMap.get(s, id);
           if (Option.isNone(existing)) return [Result.fail(notFound(id)), s] as const;
-          const updated: InvitationRecord = { ...existing.value, tokenHash: Option.some(tokenHash) };
+          const updated: InvitationRecord = {
+            ...existing.value,
+            tokenHash: Option.some(tokenHash),
+          };
           return [Result.succeed(updated), HashMap.set(s, id, updated)] as const;
         },
       ).pipe(Effect.flatMap(Effect.fromResult));

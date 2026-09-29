@@ -39,12 +39,16 @@ for (const name of readdirSync(packagesDir).sort()) {
   if (bannered && !placeholder) {
     problems.push(`packages/${name}/README.md claims the package is planned, but it ships source`);
   } else if (!bannered && placeholder) {
-    problems.push(`packages/${name}/README.md dropped the planned-package banner, but src/ is still a placeholder`);
+    problems.push(
+      `packages/${name}/README.md dropped the planned-package banner, but src/ is still a placeholder`,
+    );
   }
 }
 
 if (problems.length > 0) {
-  console.error(`readme-status: ${problems.length} drift(s)\n${problems.map((p) => `  ${p}`).join("\n")}`);
+  console.error(
+    `readme-status: ${problems.length} drift(s)\n${problems.map((p) => `  ${p}`).join("\n")}`,
+  );
   process.exit(1);
 }
 console.log("readme-status: every package README matches its package's shipped state");

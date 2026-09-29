@@ -4,7 +4,7 @@ Contract stratum (1): the isomorphic HTTP contract — no server code, importabl
 
 **Shipped**
 
-- `Api` (`Api.ts`, BEH-EA-025/027/028/029/030): the `Principal` variants (`UserPrincipal`, `ApiKeyPrincipal`, `ServicePrincipal`, `anonymousPrincipal`), the contract errors (`Unauthenticated`, `InvalidCredentials`, `CsrfRejected`, `ReauthRequired`, ...) and the `Authentication` / `OptionalAuthentication` / `CsrfProtection` middleware *declarations*.
+- `Api` (`Api.ts`, BEH-EA-025/027/028/029/030): the `Principal` variants (`UserPrincipal`, `ApiKeyPrincipal`, `ServicePrincipal`, `anonymousPrincipal`), the contract errors (`Unauthenticated`, `InvalidCredentials`, `CsrfRejected`, `ReauthRequired`, ...) and the `Authentication` / `OptionalAuthentication` / `CsrfProtection` middleware _declarations_.
 - `SessionContract` (`Session.ts`, BEH-EA-031): the core `session` group (`/session`, `/session/list`, `/session/sign-out`, `/session/revoke*`).
 - `AccountContract`, `AuthCore` (the shared `"auth"` HttpApi id the core groups mount under) and `SubjectContract` (`SubjectDto`, the wire shape of qadi's `AuthSubject`).
 

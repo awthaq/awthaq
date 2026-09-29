@@ -24,7 +24,6 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@awthaq/ports": "workspace:*",
     "@awthaq/server": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
