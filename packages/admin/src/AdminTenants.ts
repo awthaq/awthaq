@@ -15,7 +15,7 @@
 // `requireOrganization` gate and qadi relationships); this plugin only flips it.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, Defects, Users } from "@awthaq/core";
 import { Organization, OrganizationRecords } from "@awthaq/organization";
 import { makeSubject } from "@qadi/core";
 import * as DateTime from "effect/DateTime";
@@ -94,8 +94,9 @@ const toOrganizationDto = (
 const currentUserPrincipal = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
-    return yield* Effect.die(
-      new Error(`awthaq: admin.tenants group reached with a non-User principal: ${principal._tag}`),
+    return yield* Defects.invariantViolation(
+      "NonUserPrincipal",
+      `awthaq: admin.tenants group reached with a non-User principal: ${principal._tag}`,
     );
   }
   return principal;

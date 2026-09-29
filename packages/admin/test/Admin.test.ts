@@ -704,7 +704,7 @@ describe("Admin tenant scoping (IDS-002)", () => {
       );
       yield* admin.forceStop(superadmin, inB.session.id).pipe(Tenant.withTenant("org-a"));
       const revoked = yield* sessions.verify(inB.token).pipe(Effect.flip);
-      assert.strictEqual(revoked._tag, "SessionNotFound");
+      assert.strictEqual(revoked._tag, "Sessions/NotFound");
     }).pipe(
       Effect.provide(
         buildLayerWith({

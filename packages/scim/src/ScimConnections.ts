@@ -15,8 +15,8 @@
 // (`OrganizationRecords`, ADR-EA-018) all authenticate as the same generic 401 an
 // unknown token gets — nothing reveals which.
 
-import { ConstantTime } from "@awthaq/core";
 import { OrganizationRecords } from "@awthaq/organization";
+import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -131,7 +131,7 @@ export const ScimAuthenticationLive = Layer.effect(
         if (Option.isNone(found)) return yield* ScimApi.unauthorized();
         const connection = found.value;
         // Constant-time even though the lookup was an equality: no early exit on a partial match.
-        const equal = ConstantTime.constantTimeEqualString(hash, connection.tokenHash);
+        const equal = Hmac.constantTimeEqualString(hash, connection.tokenHash);
         if (!equal || Option.isSome(connection.revokedAt)) return yield* ScimApi.unauthorized();
         const organization = yield* orgs.findById(connection.organizationId);
         if (Option.isNone(organization) || Option.isSome(organization.value.suspendedAt)) {

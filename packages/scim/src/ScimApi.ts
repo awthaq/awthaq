@@ -80,6 +80,17 @@ export class ScimForbidden extends Schema.TaggedError<ScimForbidden>()(
   { httpApiStatus: 403 },
 ) {}
 
+/**
+ * 503: a backing store this request needed is unavailable (ADR-EA-028 `StoreUnavailable`, mapped
+ * at the handler so no internal detail reaches the wire). RFC 7644 has no `scimType` for it: the
+ * directory retries.
+ */
+export class ScimUnavailable extends Schema.TaggedError<ScimUnavailable>()(
+  "ScimUnavailable",
+  errorFields,
+  { httpApiStatus: 503 },
+) {}
+
 const errorBody = (status: number, detail: string, scimType?: string) => ({
   schemas: [ERROR_SCHEMA],
   status: String(status),
@@ -95,6 +106,8 @@ export const notFound = (detail = "Resource not found") =>
   new ScimNotFound(errorBody(404, detail));
 export const conflict = (detail: string) => new ScimConflict(errorBody(409, detail, "uniqueness"));
 export const forbidden = (detail: string) => new ScimForbidden(errorBody(403, detail));
+export const unavailable = () =>
+  new ScimUnavailable(errorBody(503, "The service is temporarily unavailable; retry later"));
 
 // ---- the authenticated connection --------------------------------------------------------
 
@@ -315,21 +328,21 @@ export const ScimGroup = HttpApiGroup.make("scim")
     HttpApiEndpoint.get("listUsers", "/scim/v2/Users", {
       query: ListQuery,
       success: scimResponse(UserListResponse),
-      error: ScimBadRequest,
+      error: [ScimBadRequest, ScimUnavailable],
     }),
   )
   .add(
     HttpApiEndpoint.post("createUser", "/scim/v2/Users", {
       payload: requestBody(UserInput),
       success: created(UserResource),
-      error: [ScimBadRequest, ScimConflict, ScimForbidden],
+      error: [ScimBadRequest, ScimConflict, ScimForbidden, ScimUnavailable],
     }),
   )
   .add(
     HttpApiEndpoint.get("getUser", "/scim/v2/Users/:id", {
       params: IdParams,
       success: scimResponse(UserResource),
-      error: ScimNotFound,
+      error: [ScimNotFound, ScimUnavailable],
     }),
   )
   .add(
@@ -337,7 +350,7 @@ export const ScimGroup = HttpApiGroup.make("scim")
       params: IdParams,
       payload: requestBody(UserInput),
       success: scimResponse(UserResource),
-      error: [ScimBadRequest, ScimNotFound, ScimConflict],
+      error: [ScimBadRequest, ScimNotFound, ScimConflict, ScimUnavailable],
     }),
   )
   .add(
@@ -345,14 +358,14 @@ export const ScimGroup = HttpApiGroup.make("scim")
       params: IdParams,
       payload: requestBody(PatchRequest),
       success: scimResponse(UserResource),
-      error: [ScimBadRequest, ScimNotFound, ScimConflict],
+      error: [ScimBadRequest, ScimNotFound, ScimConflict, ScimUnavailable],
     }),
   )
   .add(
     HttpApiEndpoint.delete("deleteUser", "/scim/v2/Users/:id", {
       params: IdParams,
       success: HttpApiSchema.Empty(204),
-      error: ScimNotFound,
+      error: [ScimNotFound, ScimForbidden, ScimUnavailable],
     }),
   )
   // ---- Groups (organization teams)
@@ -360,21 +373,21 @@ export const ScimGroup = HttpApiGroup.make("scim")
     HttpApiEndpoint.get("listGroups", "/scim/v2/Groups", {
       query: ListQuery,
       success: scimResponse(GroupListResponse),
-      error: ScimBadRequest,
+      error: [ScimBadRequest, ScimUnavailable],
     }),
   )
   .add(
     HttpApiEndpoint.post("createGroup", "/scim/v2/Groups", {
       payload: requestBody(GroupInput),
       success: created(GroupResource),
-      error: [ScimBadRequest, ScimConflict, ScimForbidden],
+      error: [ScimBadRequest, ScimConflict, ScimForbidden, ScimUnavailable],
     }),
   )
   .add(
     HttpApiEndpoint.get("getGroup", "/scim/v2/Groups/:id", {
       params: IdParams,
       success: scimResponse(GroupResource),
-      error: ScimNotFound,
+      error: [ScimNotFound, ScimUnavailable],
     }),
   )
   .add(
@@ -382,7 +395,7 @@ export const ScimGroup = HttpApiGroup.make("scim")
       params: IdParams,
       payload: requestBody(GroupInput),
       success: scimResponse(GroupResource),
-      error: [ScimBadRequest, ScimNotFound, ScimConflict, ScimForbidden],
+      error: [ScimBadRequest, ScimNotFound, ScimConflict, ScimForbidden, ScimUnavailable],
     }),
   )
   .add(
@@ -390,14 +403,14 @@ export const ScimGroup = HttpApiGroup.make("scim")
       params: IdParams,
       payload: requestBody(PatchRequest),
       success: scimResponse(GroupResource),
-      error: [ScimBadRequest, ScimNotFound, ScimConflict, ScimForbidden],
+      error: [ScimBadRequest, ScimNotFound, ScimConflict, ScimForbidden, ScimUnavailable],
     }),
   )
   .add(
     HttpApiEndpoint.delete("deleteGroup", "/scim/v2/Groups/:id", {
       params: IdParams,
       success: HttpApiSchema.Empty(204),
-      error: [ScimNotFound, ScimConflict],
+      error: [ScimNotFound, ScimConflict, ScimUnavailable],
     }),
   )
   .middleware(ScimAuthentication);

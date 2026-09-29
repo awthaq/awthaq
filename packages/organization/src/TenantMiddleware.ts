@@ -51,6 +51,20 @@ const unknownTenant = () =>
     { status: 404 },
   );
 
+/**
+ * ADR-EA-028: the tenant transaction (`set_config`, begin, commit) could not run. The cause is
+ * logged here and never reaches the body, which is the wire shape of `StoreUnavailable`.
+ */
+const unavailableResponse = (cause: unknown) =>
+  Effect.logWarning("awthaq: store unavailable", "Tenant.withTenant", cause).pipe(
+    Effect.as(
+      HttpServerResponse.jsonUnsafe(
+        { _tag: "StoreUnavailable", operation: "Tenant.withTenant" },
+        { status: 503 },
+      ),
+    ),
+  );
+
 /** Resolves the request's organization; fails `"unknown-tenant"` when the resolver names none that exists. */
 const resolveTenant = Effect.gen(function* () {
   const resolver = yield* TenantResolver.TenantResolver;
@@ -94,11 +108,11 @@ export const layerWithRls = HttpRouter.middleware(
         const tenant = yield* resolveFor(request);
         return yield* Option.match(tenant, {
           onNone: () => app,
-          // An infrastructure failure of the tenant transaction is a defect, not a typed API error.
+          // An infrastructure failure of the tenant transaction is a 503 (ADR-EA-028), never a defect.
           onSome: (id) =>
             TenantScope.withTenant(id)(app).pipe(
               Effect.provideService(SqlClient.SqlClient, sql),
-              Effect.catchTag("SqlError", Effect.die),
+              Effect.catchTag("SqlError", unavailableResponse),
             ),
         });
       }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
@@ -142,7 +156,7 @@ export const layerWithConfigAndRls = <Self>(tenantConfig: TenantConfigTag<Self>)
               TenantScope.withTenant(id)(app).pipe(
                 Effect.provide(configs.get(id)),
                 Effect.provideService(SqlClient.SqlClient, sql),
-                Effect.catchTag("SqlError", Effect.die),
+                Effect.catchTag("SqlError", unavailableResponse),
               ),
           });
         }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));

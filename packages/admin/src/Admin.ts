@@ -768,7 +768,7 @@ const addTenantIdMigration: Migrations.Migrations[number] = {
               OR OLD."endedAt" IS NOT NULL
             BEGIN SELECT RAISE(ABORT, 'awthaq: admin_impersonation is append-only: this UPDATE is rejected'); END`;
         }),
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     });
   }),
 };

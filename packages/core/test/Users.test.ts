@@ -568,7 +568,7 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
         const clash = yield* users
           .create({ identity: { _tag: "Email", email: "dir@example.com" }, name: "Dir 2" })
           .pipe(Tenant.withTenant("tenant-b"), Effect.flip);
-        assert.strictEqual(clash._tag, "EmailAlreadyExists");
+        assert.strictEqual(clash._tag, "Users/EmailAlreadyExists");
       }).pipe(Effect.provide(layer)),
     );
   });
