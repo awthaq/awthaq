@@ -51,9 +51,9 @@ One row per `spec/behaviors/NN-*.md` file. The planned module column names a pla
 | [25 Testing Harness](behaviors/25-testing-harness.md) | 193-200 | `@awthaq/test/src/TestAuth.ts` |
 | [26 CLI](behaviors/26-cli.md) | 201-208, 225-229 | `@awthaq/cli/src/Cli.ts` (and one module per command) |
 | [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) | 209-224 | `@awthaq/admin/src/Admin.ts` (BEH-EA-209/210/211 also extend `@awthaq/core/src/Sessions.ts` and `@awthaq/server/src/Authentication.ts`) |
-| [28 Multi-Tenancy](behaviors/28-tenancy.md) | 225-232 | `@awthaq/ports/src/Tenant.ts`, `@awthaq/sql/src/TenantScope.ts`, `@awthaq/organization/src/Organization.ts` (`tenantMiddleware`) |
-| [29 SAML Service Provider](behaviors/29-saml-sp.md) | 233-240 | `@awthaq/saml/src/Saml.ts` (planned), `@awthaq/ports/src/SamlSigner.ts` (planned port) |
-| [30 SCIM Provisioning](behaviors/30-scim.md) | 241-248 | `@awthaq/scim/src/Scim.ts` |
+| [28 Multi-Tenancy](behaviors/28-tenancy.md) | 230-237 | `@awthaq/ports/src/Tenant.ts`, `@awthaq/sql/src/TenantScope.ts`, `@awthaq/organization/src/Organization.ts` (`tenantMiddleware`) |
+| [29 SAML Service Provider](behaviors/29-saml-sp.md) | 238-245 | `@awthaq/saml/src/Saml.ts` (planned), `@awthaq/ports/src/SamlSigner.ts` (planned port) |
+| [30 SCIM Provisioning](behaviors/30-scim.md) | 246-253 | `@awthaq/scim/src/Scim.ts` |
 | [31 Organization](behaviors/31-organization.md) | 255-262 | `@awthaq/organization/src/Organization.ts` |
 | [32 JWT](behaviors/32-jwt.md) | 263-270 | `@awthaq/jwt/src/Jwt.ts` |
 
@@ -261,11 +261,11 @@ Every other planned test file below is listed for structural completeness only. 
 
 ## 6. Acceptance scenarios (REQ-EA)
 
-The Gherkin acceptance suite at [`features/features/`](../features/features/) is executable: `pnpm run test:bdd` runs it through `@effect-cucumber/vitest` against real code (see [`features/README.md`](../features/README.md) for the operating model and [`features/STYLE.md`](../features/STYLE.md) for the authoring conventions). `REQ-EA-001` through `REQ-EA-813` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py). Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
+The Gherkin acceptance suite at [`features/features/`](../features/features/) is executable: `pnpm run test:bdd` runs it through `@effect-cucumber/vitest` against real code (see [`features/README.md`](../features/README.md) for the operating model and [`features/STYLE.md`](../features/STYLE.md) for the authoring conventions). `REQ-EA-001` through `REQ-EA-983` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py). Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
 
 **What "wired" means here.** A scenario that is not `@skip` is executed by a step definition against the real services or HTTP groups (memory or in-memory SQLite ports) and passes or fails CI. A pruned scenario carries a scenario-level `@skip` and a `# @skip:` comment naming the covering test or the blocking issue; a Feature tagged `@skip @unwired` has no implementation to run against yet (today only device authorization). Wiring order followed `.scratch/resolve-ready-for-human-findings/issues/36-bdd-feature-wiring-prioritization.md`: request-admission and credential-security boundary first (Tier 1), the qadi bridge (Tier 2), cross-cutting infrastructure (Tier 3), the compiler-enforced foundational strata (Tier 4; compile-time Rules are proven by type-gate modules under `features/step-definitions/` that the typecheck compiles), client and tooling ergonomics (Tier 5).
 
-The table below is the per-file wiring status. The counts are executed nodes (a `Scenario Outline` counts once per `Examples` row): **782 of 912** scenario nodes run today; the rest are pruned or unwired. The full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 813 rows) lives in [`features/traceability.md`](../features/traceability.md); `pnpm run spec:verify:strict` fails if a tag and a manifest row disagree.
+The table below is the per-file wiring status. The counts are executed nodes (a `Scenario Outline` counts once per `Examples` row): **937 of 1122** scenario nodes run today; the rest are pruned or unwired. The full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 983 rows) lives in [`features/traceability.md`](../features/traceability.md); `pnpm run spec:verify:strict` fails if a tag and a manifest row disagree.
 
 | Feature file | `BEH-EA` range | `REQ-EA` ids | Tier (decision 36) | Wiring status | Running / total nodes |
 |---|---|---|---|---|---|
@@ -298,6 +298,9 @@ The table below is the per-file wiring status. The counts are executed nodes (a 
 | [09-admin-and-impersonation/27-admin-impersonation.feature](../features/features/09-admin-and-impersonation/27-admin-impersonation.feature) | 209–224 | 603–632, 702–707 | wired before decision 36 | full | 36 / 36 |
 | [10-organization/31-organization.feature](../features/features/10-organization/31-organization.feature) | 255–262 | 708–769 | new (MTI-011) | wired, 1 pruned | 78 / 79 |
 | [11-jwt/32-jwt.feature](../features/features/11-jwt/32-jwt.feature) | 263–270 | 770–813 | new (BDD-005) | full | 50 / 50 |
+| [12-multi-tenancy/28-tenancy.feature](../features/features/12-multi-tenancy/28-tenancy.feature) | 230–237 | 814–860 | new (P18 behavior) | wired, 3 pruned | 54 / 57 |
+| [13-enterprise-federation/30-scim.feature](../features/features/13-enterprise-federation/30-scim.feature) | 246–253 | 911–983 | new (P18 behavior) | full | 101 / 101 |
+| [13-enterprise-federation/29-saml-sp.feature](../features/features/13-enterprise-federation/29-saml-sp.feature) | 238–245 | 861–910 | unwired (no plugin) | unwired | 0 / 52 |
 | [05-authentication-methods/28-device-authorization.feature](../features/features/05-authentication-methods/28-device-authorization.feature) | none yet — traces to [MOD-EA-013](models/13-device-authorization.md) | 634–646 | unwired (no plugin) | unwired | 0 / 13 |
 
 Authorization-decision content is deliberately out of scope for this suite: scenarios touching an authorization outcome (chiefly `06-roles-and-authorization-bridge/`) treat qadi's own policy evaluation as a black box and assert only on awthaq's own bridge responsibilities, per `ADR-EA-009`. qadi's own `features/features/*.feature` (in the sibling `qadi` repository) is the suite that covers role/permission/policy-combination behavior; this suite does not duplicate it.

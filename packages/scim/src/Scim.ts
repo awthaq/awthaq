@@ -407,8 +407,14 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       "scim",
       Effect.fnUntraced(function* (handlers) {
         const scim = yield* Scim;
+        const settings = yield* ScimConfig;
         return handlers.handleAll({
-          serviceProviderConfig: () => Effect.succeed(serviceProviderConfig),
+          // P20a: the page-size ceiling the document advertises is the one the list handlers enforce.
+          serviceProviderConfig: () =>
+            Effect.succeed({
+              ...serviceProviderConfig,
+              filter: { ...serviceProviderConfig.filter, maxResults: settings.maxResults },
+            }),
           resourceTypes: () => Effect.succeed(resourceTypes),
           schemas: () => Effect.succeed(schemaDescriptions),
           listUsers: Effect.fnUntraced(function* ({ query }: { query: ScimApi.ListQuery }) {
@@ -814,8 +820,9 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       const deleteUser: ScimShape["deleteUser"] = Effect.fnUntraced(function* (connection, id) {
         const owned = yield* ownedUser(connection, id);
         if (cfg.deleteBehavior === "erase") {
-          yield* sessions.revokeAll(owned.user.id, "userDeleted");
-          yield* records.unlink(connection.id, "User", owned.user.id);
+          // P20a (BEH-EA-250): the veto hooks run inside `users.delete`, so ask first. Revoking
+          // the sessions and dropping the mapping beforehand meant a refused erasure (a legal
+          // hold) still logged the user out and hid it from its own directory.
           yield* users.delete(owned.user.id).pipe(
             Effect.catchTags({
               UserNotFound: () => Effect.void,
@@ -823,6 +830,8 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
               HookAborted: (aborted) => Effect.fail(ScimApi.forbidden(aborted.message)),
             }),
           );
+          yield* sessions.revokeAll(owned.user.id, "userDeleted");
+          yield* records.unlink(connection.id, "User", owned.user.id);
           yield* events.publish({
             _tag: "auth.scim.userDeleted",
             connectionId: connection.id,

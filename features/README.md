@@ -29,7 +29,7 @@ Every scenario is exactly one of:
 
 ## How this maps to `spec/behaviors/`
 
-One `.feature` file per `spec/behaviors/NN-*.md` file that has been scenario-ised (the numbered files 01–27, 31 and 32, plus the device-authorization exception below; `28-tenancy`, `29-saml-sp` and `30-scim` have behaviors but no feature files yet), grouped into 12 directories under `features/features/` that mirror the same stratification `spec/README.md` uses (foundations → contract/persistence → domain → HTTP → cross-cutting → authentication methods → authorization bridge → client integration → tooling → admin/impersonation):
+One `.feature` file per `spec/behaviors/NN-*.md` file that has been scenario-ised (the numbered files 01–32, plus the device-authorization exception below), grouped into 14 directories under `features/features/` that mirror the same stratification `spec/README.md` uses (foundations → contract/persistence → domain → HTTP → cross-cutting → authentication methods → authorization bridge → client integration → tooling → admin/impersonation → organization → jwt → multi-tenancy → enterprise federation):
 
 | Directory                            | Feature files                                                                              | `BEH-EA` range |
 | ------------------------------------ | ------------------------------------------------------------------------------------------ | -------------- |
@@ -45,6 +45,8 @@ One `.feature` file per `spec/behaviors/NN-*.md` file that has been scenario-ise
 | `09-admin-and-impersonation/`        | admin-impersonation                                                                        | 209–220        |
 | `10-organization/`                   | organization                                                                               | 255–262        |
 | `11-jwt/`                            | jwt                                                                                        | 263–270        |
+| `12-multi-tenancy/`                  | tenancy                                                                                    | 230–237        |
+| `13-enterprise-federation/`          | saml-sp (unwired), scim                                                                    | 238–245, 246–253 |
 
 One exception: `05-authentication-methods/28-device-authorization.feature` (`@skip @unwired`, DAG-007) specifies a plugin that has no behavior file or `BEH-EA` range yet, so its `Rule:`s are tagged `@MOD-EA-013` and trace to [`spec/models/13-device-authorization.md`](../spec/models/13-device-authorization.md); it gets `BEH-EA` ids when a milestone schedules the plugin.
 

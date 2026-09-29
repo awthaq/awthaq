@@ -49,6 +49,12 @@
       "ignore": [
         "test/fixtures/generate-better-auth-export.mjs"
       ]
+    },
+    "features": {
+      "entry": [
+        "step-definitions/**/*.ts",
+        "features/**/*.steps.test.ts"
+      ]
     }
   }
 }

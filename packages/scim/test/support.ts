@@ -24,11 +24,11 @@ import * as ScimApi from "../src/ScimApi.ts";
 import * as ScimConnections from "../src/ScimConnections.ts";
 import * as ScimRecords from "../src/ScimRecords.ts";
 
-const CoreLive = (users: typeof Users.layerMemory) =>
+const CoreLive = (users: typeof Users.layerMemory, hooks: typeof Hooks.HooksLive) =>
   Layer.mergeAll(Sessions.layerMemory, users).pipe(
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(Hooks.HooksLive),
+    Layer.provideMerge(hooks),
     Layer.provideMerge(NodeCrypto.layer),
   );
 
@@ -63,6 +63,9 @@ export const ScimLive = (
   scimConfig: Partial<Scim.ScimConfigShape> = {},
   organizationConfig: Partial<Organization.OrganizationConfigShape> = {},
   users: typeof Users.layerMemory = Users.layerMemory,
+  // P20a: a composition with a tap installed on a hook point (e.g. a `beforeDelete` veto) passes
+  // `Tap.pipe(Layer.provideMerge(Hooks.HooksLive))` here.
+  hooks: typeof Hooks.HooksLive = Hooks.HooksLive,
 ) =>
   Scim.Scim.layer.pipe(
     Layer.provide(Scim.config(scimConfig)),
@@ -70,7 +73,7 @@ export const ScimLive = (
     Layer.provideMerge(ScimConnections.layerStore),
     Layer.provideMerge(OrganizationLive(organizationConfig)),
     Layer.provideMerge(ScimRecords.layerMemory),
-    Layer.provideMerge(CoreLive(users)),
+    Layer.provideMerge(CoreLive(users, hooks)),
     Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(ActiveContextRecords.layerMemory),

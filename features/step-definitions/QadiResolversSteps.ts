@@ -395,6 +395,7 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Given("a policy using hasRelationship", function* () {
+    // Narrative Given: the policy is built inside the When, next to the resolver under test.
     yield* Effect.void;
   });
 
@@ -448,6 +449,7 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a plugin {string} and a hypothetical plugin {string}, each providing a Layer.effect\\(AttributeResolver, ...) for the {string} attribute",
     function* (_a: string, _b: string, _attribute: string) {
+      // Narrative Given: the two plugins are constructed in the When that composes them.
       yield* Effect.void;
     },
   );

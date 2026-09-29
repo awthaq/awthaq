@@ -53,6 +53,9 @@ ORDER = [
     "05-authentication-methods/28-device-authorization.feature",
     "10-organization/31-organization.feature",
     "11-jwt/32-jwt.feature",
+    "12-multi-tenancy/28-tenancy.feature",
+    "13-enterprise-federation/29-saml-sp.feature",
+    "13-enterprise-federation/30-scim.feature",
 ]
 
 # Explicit feature-file -> source-behavior-md map (most basenames match
@@ -87,6 +90,9 @@ SOURCE_MD = {
     "27-admin-impersonation.feature": "27-admin-impersonation.md",
     "31-organization.feature": "31-organization.md",
     "32-jwt.feature": "32-jwt.md",
+    "28-tenancy.feature": "28-tenancy.md",
+    "29-saml-sp.feature": "29-saml-sp.md",
+    "30-scim.feature": "30-scim.md",
 }
 
 # DAG-007: a feature for a plugin that has no BEH-EA range yet traces to its model
