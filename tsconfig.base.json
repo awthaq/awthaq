@@ -90,8 +90,6 @@
           "duplicatePackage": "error",
           "genericEffectServices": "error",
           "outdatedApi": "error",
-          "outdatedEffectCodegen": "error",
-          "unsupportedServiceAccessors": "error",
           "effectFnIife": "error",
           "effectGenUsesAdapter": "error",
           "effectInFailure": "error",
