@@ -189,6 +189,8 @@ REQUIREMENT: A broken or unreachable audit `DecisionSink` MUST trip its own
 
 `usage-qadi.md` §10 states this as a design property, not an incidental behavior: "A sink cannot change a decision; a broken audit trail trips the breaker and logs, and the request still gets its answer." Audit is downstream of authorization, never upstream of it — `AuditDecisionSinkLive`'s `failureThreshold` breaker exists so a durable-storage outage degrades to "this decision went unaudited" (itself logged) rather than to "this request now fails because auditing failed."
 
+**As shipped:** awthaq's `DecisionSinkAudit` (`packages/qadi/src/DecisionLogging.ts`) records decisions into `AuditLog`; qadi awaits `DecisionSink.record` and contains its failure, so a failing durable write is logged and dropped and never changes the outcome of the request that produced the decision (REQ-EA-697). Two things the requirement above names are not shipped: a non-awaiting, detached send and an "audit trail is degraded" marker (REQ-EA-470/471 described them and were removed from the suite; REQ-EA-697 asserts the unchanged decision), and the failure-threshold breaker (`AuditDecisionSinkLive`), which belongs to `@qadi/audit`, a package this workspace does not install (REQ-EA-469 stays skipped for that reason).
+
 _Previous: [BEH-EA-166](21-qadi-resolvers-obligations.md#beh-ea-166-sql-pushdown-and-its-limit) | Next: [BEH-EA-168](21-qadi-resolvers-obligations.md#beh-ea-168-the-guarded-devtools-decision-stream)_
 
 ## BEH-EA-168: The guarded devtools decision stream

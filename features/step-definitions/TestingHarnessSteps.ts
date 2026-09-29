@@ -709,8 +709,11 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     const { outcomes } = yield* World;
     assert.equal(tag, "Forbidden");
     assert.equal(yield* outcomes.getAs("gatedStatus", isNumber), 403);
-    // qadi maps a Deny to an empty 403 body (BEH-EA-157): nothing about the policy leaks.
-    assert.equal(yield* outcomes.getAs("gatedBody", isString), "");
+    // qadi 0.8's typed denial (BEH-EA-157): the public view of the refusal, never the evaluation trace.
+    const body = JSON.parse(yield* outcomes.getAs("gatedBody", isString));
+    assert.equal(body._tag, "AccessDenied");
+    assert.equal(body.subjectId.startsWith("user:"), true);
+    assert.equal("trace" in body, false);
   });
 
   Given(

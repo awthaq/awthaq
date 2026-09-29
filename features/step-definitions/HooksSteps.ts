@@ -135,6 +135,7 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-089: a point's failure semantics are its own definition's ----
 
   Given("a {string} hook point {string} defined by core", function* (kind: string, name: string) {
+    yield* Effect.void;
     assert.equal(pointNamed(name).kind, kindOf(kind));
   });
 
@@ -333,6 +334,7 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "three taps registered on {string} by plugins {string}, {string}, and {string}",
     function* (name: string, a: string, b: string, c: string) {
+      yield* Effect.void;
       assert.equal(name, "BeforeSignUp");
       const declared = (fixtureManifest()[SIGN_UP_POINT] ?? []).map((entry) => entry.plugin).sort();
       assert.deepEqual(declared, [a, b, c].sort());
@@ -341,6 +343,7 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Given("{string} depends on {string}", function* (dependent: string, dependency: string) {
+    yield* Effect.void;
     assert.deepEqual(
       pluginNamed(dependent).dependsOn.map((plugin) => plugin.id),
       [dependency],
@@ -348,6 +351,7 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Given("{string} declares order {string}", function* (plugin: string, order: string) {
+    yield* Effect.void;
     const declared = pluginNamed(plugin).taps.find((tap) => tap.point === SIGN_UP_POINT);
     assert.equal(declared?.order, orderOf(order));
   });
@@ -396,6 +400,7 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Then("any remaining tie is broken by plugin id", function* () {
+    yield* Effect.void;
     const a = { id: "acme.a", dependsOn: [] };
     const b = { id: "acme.b", dependsOn: [] };
     assert.ok(HookPoint.compareTaps({ owner: a, order: 0 }, { owner: b, order: 0 }) < 0);
@@ -590,6 +595,7 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "{string} needs to purge its own invitations when a user is deleted",
     function* (plugin: string) {
+      yield* Effect.void;
       assert.equal(plugin, "Invite");
       // The sanctioned mechanism exists: core exposes a veto point on user deletion.
       assert.equal(Hooks.BeforeUserDelete.kind, "veto");
@@ -662,6 +668,7 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "{string}'s migration attempts to alter the {string} table directly instead of tapping {string}",
     function* (plugin: string, table: string, name: string) {
+      yield* Effect.void;
       assert.equal(plugin, "Invite");
       assert.equal(name, "BeforeUserDelete");
       assert.deepEqual(InviteClaimingUsersTable.tables, [table]);
@@ -708,12 +715,14 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "an application composed from a plugin tuple with taps registered on multiple hook points",
     function* () {
+      yield* Effect.void;
       fixtureTapRuns.count = 0;
       assert.ok(Object.keys(fixtureManifest()).length >= 2);
     },
   );
 
   Given("the same composed application", function* () {
+    yield* Effect.void;
     fixtureTapRuns.count = 0;
     assert.ok(Object.keys(fixtureManifest()).length >= 2);
   });
@@ -739,6 +748,7 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Then("no tap is executed to produce that report", function* () {
+    yield* Effect.void;
     assert.equal(fixtureTapRuns.count, 0);
   });
 

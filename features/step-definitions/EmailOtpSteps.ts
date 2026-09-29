@@ -442,6 +442,7 @@ export const emailOtpSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the {string} contract exposes only {string} and {string}",
     function* (plugin: string, first: string, second: string) {
+      yield* Effect.void;
       assert.equal(plugin, "emailOtp");
       const endpoints = Object.values(EmailOtpApi.EmailOtpGroup.endpoints).map(
         (endpoint) => `${endpoint.method} ${endpoint.path}`,

@@ -550,6 +550,7 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a consumer that wants to alert on {string} using a custom predicate over the raw stream",
     function* (tag: string) {
+      yield* Effect.void;
       tagNamed(tag);
     },
   );
@@ -603,6 +604,7 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-103: on(tag, handler) is sugar over a subscription Layer ----
 
   Given("a plugin author writes {string}", function* (expression: string) {
+    yield* Effect.void;
     const tag = /^AuthEvents\.on\("([^"]+)", handler\)$/.exec(expression)?.[1];
     assert.ok(tag !== undefined, `not an AuthEvents.on(tag, handler) expression: ${expression}`);
     tagNamed(tag);
@@ -641,6 +643,7 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Given("a plugin author using {string}", function* (expression: string) {
+    yield* Effect.void;
     assert.equal(expression, "AuthEvents.on(tag, handler)");
   });
 
