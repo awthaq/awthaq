@@ -332,7 +332,7 @@ describe("Authentication", () => {
       decorate: (
         _principal: Api.Principal,
         response: HttpServerResponse.HttpServerResponse,
-        context: { readonly scheme: "cookie" | "bearer" },
+        context: { readonly scheme: "cookie" | "bearer" | "impersonation" },
       ) => Ref.update(schemes, (seen) => [...seen, context.scheme]).pipe(Effect.as(response)),
     });
     return Effect.gen(function* () {

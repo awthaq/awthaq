@@ -185,6 +185,7 @@ describe("AccountsRepository token read path (SMS-002)", () => {
         {
           accessToken: "fresh-access",
           refreshToken: "fresh-refresh",
+          idToken: null,
           accessTokenExpiresAt: null,
           refreshTokenExpiresAt: null,
           scope: "read",

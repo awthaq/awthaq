@@ -488,6 +488,7 @@ describe("Accounts (layerSql) undecryptable provider tokens (SMS-002)", () => {
   const tokens = {
     accessToken: Redacted.make("access"),
     refreshToken: Option.none<Redacted.Redacted<string>>(),
+    idToken: Option.none<Redacted.Redacted<string>>(),
     accessTokenExpiresAt: Option.none<DateTime.Utc>(),
     refreshTokenExpiresAt: Option.none<DateTime.Utc>(),
     scope: Option.none<string>(),

@@ -257,6 +257,7 @@ export interface AccountsRepositoryShape {
 export interface AccountTokenColumns {
   readonly accessToken: string | null;
   readonly refreshToken: string | null;
+  readonly idToken: string | null;
   readonly accessTokenExpiresAt: DateTime.Utc | null;
   readonly refreshTokenExpiresAt: DateTime.Utc | null;
   readonly scope: string | null;
@@ -522,6 +523,7 @@ export const AccountsRepositoryLive: Layer.Layer<
         id: AccountId,
         accessToken: Schema.NullOr(Schema.String),
         refreshToken: Schema.NullOr(Schema.String),
+        idToken: Schema.NullOr(Schema.String),
         accessTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
         refreshTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
         scope: Schema.NullOr(Schema.String),
@@ -533,6 +535,7 @@ export const AccountsRepositoryLive: Layer.Layer<
         UPDATE accounts
         SET "accessToken" = ${request.accessToken},
             "refreshToken" = ${request.refreshToken},
+            "idToken" = ${request.idToken},
             "accessTokenExpiresAt" = ${request.accessTokenExpiresAt},
             "refreshTokenExpiresAt" = ${request.refreshTokenExpiresAt},
             scope = ${request.scope},
@@ -561,12 +564,14 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           tokens.refreshToken,
         );
+        const idToken = yield* encryptToken(aad.providerId, aad.userId, "idToken", tokens.idToken);
         const updatedAt = yield* DateTime.now;
         const row = yield* updateProviderTokensQuery({
           ...tokens,
           id,
           accessToken,
           refreshToken,
+          idToken,
           updatedAt,
         });
         return yield* decryptRow(row);
