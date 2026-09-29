@@ -1,4 +1,4 @@
-// BEH-EA-310, spec/models/13-device-authorization.md "Security parameters": the user code is 8
+// BEH-EA-299, spec/models/13-device-authorization.md "Security parameters": the user code is 8
 // symbols drawn uniformly from a 20-symbol consonant alphabet, shown as `XXXX-XXXX`, normalised
 // and matched exactly, and stored only as a hash. The device code is 32 CSPRNG bytes.
 import { assert, describe, it } from "@effect/vitest";

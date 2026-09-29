@@ -1,4 +1,4 @@
-// BEH-EA-310 to BEH-EA-315 on the wire: the real handlers behind the real CSRF and authentication middleware.
+// BEH-EA-299 to BEH-EA-304 on the wire: the real handlers behind the real CSRF and authentication middleware.
 // A device speaks plain RFC 8628 (form-encoded, no cookie, no CSRF token); the person's browser speaks JSON with
 // its session cookie and the double-submit CSRF token.
 import { HookPoint, Sessions } from "@awthaq/core";

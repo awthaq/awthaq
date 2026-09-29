@@ -6,6 +6,8 @@
 // handler runs, and no Layer is evaluated. The owning plugin is looked up in the manifest by the
 // group identifier (`manifest.plugins[].groups`).
 
+import { Api } from "@awthaq/api";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import type { LoadedAuth } from "./Config.ts";
@@ -20,6 +22,8 @@ export interface Route {
   readonly plugin: string | undefined;
   /** The middleware keys applied to this endpoint (group and endpoint middleware, merged). */
   readonly middleware: ReadonlyArray<string>;
+  /** `Api.BackChannel`: a credential-in-the-request endpoint for non-browser clients, deliberately without CSRF protection. */
+  readonly backChannel: boolean;
 }
 
 /** Every endpoint of the composed contract, in declaration order (group by group). */
@@ -44,6 +48,7 @@ export const routesOf = Effect.fnUntraced(function* (auth: LoadedAuth) {
         group: group.identifier,
         plugin: ownerOf.get(group.identifier),
         middleware: Array.from(middleware, (service) => service.key),
+        backChannel: Context.get(group.annotations, Api.BackChannel),
       });
     },
   });

@@ -1,7 +1,15 @@
-// BEH-EA-009 (composition), docs/plugin-authoring.md's checklist, and BEH-EA-315: how the redemption composes
+// BEH-EA-009 (composition), docs/plugin-authoring.md's checklist, and BEH-EA-304: how the redemption composes
 // with the other sign-in machinery — the real `@awthaq/two-factor` gate (the divert), a `BeforeSignIn` veto, and
 // the plugin contract's own mechanical checks (`TestAuth.runPluginContractTests`).
-import { Auth, ConfigDescriptor, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
+import {
+  Auth,
+  ConfigDescriptor,
+  HookPoint,
+  Hooks,
+  RateLimits,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
@@ -118,6 +126,26 @@ describe("DeviceAuthorization composition", () => {
     assert.isTrue(ConfigDescriptor.REDACTED === "<redacted>");
   });
 
+  it.effect("the static rateLimits declaration and the registered rules agree (PV-241)", () =>
+    Effect.gen(function* () {
+      const registry = yield* RateLimits.RateLimitsRegistry;
+      const drift = RateLimits.declarationDrift(
+        DeviceAuthorization.DeviceAuthorization,
+        yield* registry.registered,
+      );
+      assert.deepStrictEqual(drift, { undeclared: [], unregistered: [], mismatched: [] });
+      assert.strictEqual(DeviceAuthorization.DeviceAuthorization.rateLimits.length, 9);
+    }).pipe(Effect.provide(buildLayer({ store: "memory" }))),
+  );
+
+  it("declares the ports it requires, which the manifest lists", () => {
+    const auth = Auth.make([DeviceAuthorization.DeviceAuthorization]);
+    assert.deepStrictEqual(auth.manifest.ports.map((port) => port.key).toSorted(), [
+      "awthaq/ports/ClientAddress",
+      "awthaq/ports/RateLimiter",
+    ]);
+  });
+
   TestAuth.runPluginContractTests(
     { describe, it, fail: (message) => assert.fail(message) },
     () => DeviceAuthorization.DeviceAuthorization,
@@ -125,7 +153,7 @@ describe("DeviceAuthorization composition", () => {
   );
 });
 
-describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-315)", () => {
+describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-304)", () => {
   it.effect(
     "a second factor applies: a session that never proved one is diverted, and the grant ends as access_denied",
     () =>

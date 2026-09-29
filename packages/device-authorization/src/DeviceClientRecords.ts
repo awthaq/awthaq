@@ -1,6 +1,6 @@
 // @awthaq/device-authorization — DeviceClientRecords
 //
-// BEH-EA-316. Persistence for `device_authorization_client`: the public clients an operator registers at
+// BEH-EA-305. Persistence for `device_authorization_client`: the public clients an operator registers at
 // runtime (`DeviceAuthorization.registerClient`), beside the static ones `DeviceAuthorizationConfig.clients`
 // lists. A device client is *public* by RFC 8628's own model — it has no secret, the device code is the
 // credential — so this row holds only what the approval page shows the user (`name`) and the scopes the

@@ -1,6 +1,6 @@
 // @awthaq/device-authorization — DeviceAuthorization
 //
-// BEH-EA-310 to BEH-EA-317, spec/models/13-device-authorization.md, RFC 8628 (DAG-004/005/007, wayfinder tickets
+// BEH-EA-299 to BEH-EA-306, spec/models/13-device-authorization.md, RFC 8628 (DAG-004/005/007, wayfinder tickets
 // 06 and 10). The device authorization grant: an input-constrained client — the `awthaq` CLI, a TV, a set-top box —
 // shows a short code, the person approves it on a second, signed-in device, and the first device's poll receives an
 // ordinary bearer session. Everything the numbers and the state machine must be is written in the model; this file
@@ -256,7 +256,8 @@ const deviceAuthorizationMigrations: Migrations.Migrations = [
 interface Budget<Input> {
   readonly group: string;
   readonly endpoint: string;
-  readonly rule: string;
+  /** The rule's own name, as `EnforceMeta.rule` and the static `rateLimits` declaration report it. */
+  readonly name: string;
   readonly dimension: RateLimits.EnforceMeta["dimension"];
   readonly limit: number;
   readonly window: Duration.Duration;
@@ -269,7 +270,7 @@ const ipKey = (prefix: string) => (input: { readonly ip?: string | undefined }) 
 const metaOf = (budget: Budget<never>): RateLimits.EnforceMeta => ({
   group: budget.group,
   endpoint: budget.endpoint,
-  rule: budget.rule,
+  rule: budget.name,
   dimension: budget.dimension,
 });
 
@@ -278,7 +279,7 @@ const makeBudgets = (settings: DeviceAuthorizationConfigShape) => {
     byIp: {
       group,
       endpoint,
-      rule: `${endpoint}-ip`,
+      name: `${endpoint}-ip`,
       dimension: "ip",
       ...settings.userCodeRateLimit.ip,
       // One budget for all three endpoints that look a code up: a guesser cannot spread attempts across them.
@@ -287,7 +288,7 @@ const makeBudgets = (settings: DeviceAuthorizationConfigShape) => {
     bySession: {
       group,
       endpoint,
-      rule: `${endpoint}-session`,
+      name: `${endpoint}-session`,
       dimension: "principal",
       ...settings.userCodeRateLimit.session,
       keyOf: (input: { readonly sessionId: string }) =>
@@ -298,7 +299,7 @@ const makeBudgets = (settings: DeviceAuthorizationConfigShape) => {
     codeByIp: {
       group: "device_authorization",
       endpoint: "code",
-      rule: "code-ip",
+      name: "code-ip",
       dimension: "ip",
       ...settings.codeRateLimit.ip,
       keyOf: ipKey("device:code"),
@@ -306,7 +307,7 @@ const makeBudgets = (settings: DeviceAuthorizationConfigShape) => {
     codeByClient: {
       group: "device_authorization",
       endpoint: "code",
-      rule: "code-client",
+      name: "code-client",
       dimension: "custom",
       ...settings.codeRateLimit.client,
       keyOf: (input: { readonly clientId: string }) => `device:code:client:${input.clientId}`,
@@ -314,7 +315,7 @@ const makeBudgets = (settings: DeviceAuthorizationConfigShape) => {
     invalidGrantByIp: {
       group: "device_authorization",
       endpoint: "token",
-      rule: "token-invalid-ip",
+      name: "token-invalid-ip",
       dimension: "ip",
       ...settings.invalidGrantRateLimit,
       keyOf: ipKey("device:token-invalid"),
@@ -324,6 +325,19 @@ const makeBudgets = (settings: DeviceAuthorizationConfigShape) => {
     deny: lookup("device_authorization.decision", "deny"),
   };
 };
+
+/** Every budget, in registration order: what the static `rateLimits` declaration lists and the registry registers. */
+const allBudgets = (budgets: ReturnType<typeof makeBudgets>): ReadonlyArray<Budget<never>> => [
+  budgets.codeByIp,
+  budgets.codeByClient,
+  budgets.invalidGrantByIp,
+  budgets.verify.byIp,
+  budgets.verify.bySession,
+  budgets.approve.byIp,
+  budgets.approve.bySession,
+  budgets.deny.byIp,
+  budgets.deny.bySession,
+];
 
 // ---- the service ---------------------------------------------------------------------------------------------------------------------------------------
 
@@ -389,7 +403,7 @@ export type PollError =
   | Errors.StoreUnavailable;
 
 export interface DeviceAuthorizationShape {
-  /** BEH-EA-310: a fresh grant for a registered client. */
+  /** BEH-EA-299: a fresh grant for a registered client. */
   readonly requestCode: (
     input: Source & { readonly clientId: string; readonly scope: ReadonlyArray<string> },
     context: { readonly verificationBase: string },
@@ -397,17 +411,17 @@ export interface DeviceAuthorizationShape {
     CodeIssued,
     DeviceAuthorizationApi.InvalidClient | DeviceAuthorizationApi.InvalidScope | Api.RateLimited
   >;
-  /** BEH-EA-311/315: one poll. Resolves only for the poll that wins the redemption claim. */
+  /** BEH-EA-300/315: one poll. Resolves only for the poll that wins the redemption claim. */
   readonly poll: (
     input: Source & { readonly deviceCode: Redacted.Redacted<string>; readonly clientId: string },
     context?: { readonly userAgent?: string | undefined },
   ) => Effect.Effect<RedeemedGrant, PollError>;
-  /** BEH-EA-312: the verification page — claims an unclaimed pending code for `caller`, when there is one. */
+  /** BEH-EA-301: the verification page — claims an unclaimed pending code for `caller`, when there is one. */
   readonly verify: (
     input: Source & { readonly userCode: string },
     caller: Option.Option<Caller>,
   ) => Effect.Effect<VerificationView, DeviceAuthorizationApi.InvalidUserCode | Api.RateLimited>;
-  /** BEH-EA-313: approves a code the caller has claimed; a `BeforeDeviceApproval` tap can refuse it. */
+  /** BEH-EA-302: approves a code the caller has claimed; a `BeforeDeviceApproval` tap can refuse it. */
   readonly approve: (
     input: Source & { readonly userCode: string },
     caller: Caller,
@@ -419,7 +433,7 @@ export interface DeviceAuthorizationShape {
     | Api.RateLimited
     | HookPoint.HookAborted
   >;
-  /** BEH-EA-313: denies a code the caller has claimed. */
+  /** BEH-EA-302: denies a code the caller has claimed. */
   readonly deny: (
     input: Source & { readonly userCode: string },
     caller: Caller,
@@ -430,7 +444,7 @@ export interface DeviceAuthorizationShape {
     | DeviceAuthorizationApi.DeviceApprovalRefused
     | Api.RateLimited
   >;
-  /** BEH-EA-316: registers a public client at runtime (an operator or seed script, never an end user). */
+  /** BEH-EA-305: registers a public client at runtime (an operator or seed script, never an end user). */
   readonly registerClient: (input: {
     readonly name: string;
     readonly clientId?: string | undefined;
@@ -439,7 +453,7 @@ export interface DeviceAuthorizationShape {
   /** Revokes a registered client: it can no longer ask for a code (grants it already holds run out). `false` when there was none to revoke. */
   readonly revokeClient: (clientId: string) => Effect.Effect<boolean>;
   readonly listClients: Effect.Effect<ReadonlyArray<DeviceClientView>>;
-  /** BEH-EA-317: physically deletes grants that expired before `before` (default: now); an operator's retention job calls it. */
+  /** BEH-EA-306: physically deletes grants that expired before `before` (default: now); an operator's retention job calls it. */
   readonly purgeExpired: (before?: DateTime.Utc) => Effect.Effect<number>;
 }
 
@@ -697,6 +711,11 @@ export class DeviceAuthorization extends AuthPlugin.Service<
   contract: DeviceAuthorizationApi.DeviceAuthorizationApi,
   tables: ["device_authorization_grant", "device_authorization_client"],
   migrations: deviceAuthorizationMigrations,
+  // PV-241: the default budgets (`DeviceAuthorizationConfig` tunes them), from the same table the layer enforces.
+  rateLimits: AuthPlugin.declareRateLimits(
+    ["device_authorization", "device_authorization.verification", "device_authorization.decision"],
+    allBudgets(makeBudgets(defaultConfig)),
+  ),
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
   config: [
     ConfigDescriptor.make(DeviceAuthorizationConfig, {
@@ -714,6 +733,8 @@ export class DeviceAuthorization extends AuthPlugin.Service<
   ],
 }) {
   static readonly layer = AuthPlugin.layer(DeviceAuthorization, {
+    // PV-241: the handlers and `make` throttle and attribute by address.
+    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
     handlers: DeviceAuthorizationHandlers,
     contributes: Layer.mergeAll(deviceAuthorizationErasure, deviceAuthorizationExport),
     make: Effect.gen(function* () {
@@ -724,7 +745,6 @@ export class DeviceAuthorization extends AuthPlugin.Service<
       const events = yield* AuthEvents.AuthEvents;
       const crypto = yield* Crypto.Crypto;
       const limiter = yield* RateLimiter.RateLimiter;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
       const settings = yield* DeviceAuthorizationConfig;
       const beforeApproval = yield* BeforeDeviceApproval;
       const afterApproval = yield* AfterDeviceApproval;
@@ -734,31 +754,20 @@ export class DeviceAuthorization extends AuthPlugin.Service<
 
       const budgets = makeBudgets(settings);
 
-      // Every budget is introspectable through the registry (BEH-EA-111). The callback's return type is annotated
-      // to break the inference cycle through `DeviceAuthorization.layer` (its own initializer names the class) —
-      // the narrow exception `MagicLink`/`Password` document too.
-      const registered: ReadonlyArray<Budget<never>> = [
-        budgets.codeByIp,
-        budgets.codeByClient,
-        budgets.invalidGrantByIp,
-        budgets.verify.byIp,
-        budgets.verify.bySession,
-        budgets.approve.byIp,
-        budgets.approve.bySession,
-        budgets.deny.byIp,
-        budgets.deny.bySession,
-      ];
-      yield* Effect.all(
-        registered.map((budget): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-          rateLimitsRegistry.register(DeviceAuthorization, {
-            group: budget.group,
-            endpoint: budget.endpoint,
-            key: budget.dimension === "ip" ? "ip" : () => `device:${budget.rule}`,
-            limit: budget.limit,
-            window: budget.window,
-          }),
-        ),
-      ).pipe(Effect.orDie);
+      // Every budget is introspectable through the registry (BEH-EA-111): the static declaration registers
+      // them, and the config tunes each default (`RateLimits.registerDeclared`, PV-241).
+      const enforced = allBudgets(budgets);
+      // The explicit type breaks the inference cycle through `DeviceAuthorization.layer` (its own initializer
+      // names the class) — the narrow exception `MagicLink`/`Password` document too.
+      const registerRules: Effect.Effect<
+        void,
+        RateLimits.RateLimitScopeViolation,
+        RateLimits.RateLimitsRegistry
+      > = RateLimits.registerDeclared(DeviceAuthorization, {
+        key: (rule) => (rule.dimension === "ip" ? "ip" : () => `device:${rule.name}`),
+        tune: (rule) => enforced.find((budget) => budget.name === rule.name),
+      });
+      yield* registerRules.pipe(Effect.orDie);
 
       /** Consumes one unit of a budget; a breach is published, logged and counted (EOTS-007), and answers 429. */
       const spend = <I>(budget: Budget<I>, input: I): Effect.Effect<void, Api.RateLimited> =>

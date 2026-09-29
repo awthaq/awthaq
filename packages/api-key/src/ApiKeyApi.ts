@@ -254,13 +254,16 @@ export const ApiKeyClientGroup = HttpApiGroup.make("apikey.client")
   .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);
 
-export const ApiKeyTokenGroup = HttpApiGroup.make("apikey.token").add(
-  HttpApiEndpoint.post("token", "/api-key/token", {
-    payload: TokenPayload,
-    success: TokenResponse,
-    error: [InvalidClient, InvalidScope, UnsupportedGrantType, InvalidRequest, Api.RateLimited],
-  }),
-);
+export const ApiKeyTokenGroup = HttpApiGroup.make("apikey.token")
+  .add(
+    HttpApiEndpoint.post("token", "/api-key/token", {
+      payload: TokenPayload,
+      success: TokenResponse,
+      error: [InvalidClient, InvalidScope, UnsupportedGrantType, InvalidRequest, Api.RateLimited],
+    }),
+  )
+  // BEH-EA-201: a back-channel POST authorized by the client secret in the request, no CSRF (see `Api.BackChannel`).
+  .annotate(Api.BackChannel, true);
 
 export const ApiKeyApi = HttpApi.make("auth")
   .add(ApiKeyGroup)

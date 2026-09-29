@@ -863,7 +863,7 @@ export const TwoFactorLockedEvent = Schema.TaggedStruct("auth.twoFactor.locked",
 export type TwoFactorLockedEvent = typeof TwoFactorLockedEvent.Type;
 
 /**
- * BEH-EA-317 (`@awthaq/device-authorization`): a person's decision on a device grant. `userId` is
+ * BEH-EA-306 (`@awthaq/device-authorization`): a person's decision on a device grant. `userId` is
  * the approver, `clientId` the registered client that asked. The user code, the device code, their
  * hashes and the scope are never carried: identifiers only (ADR-EA-029). The session the approved
  * grant later becomes is announced by the ordinary `auth.session.issued` / `auth.user.signedIn`

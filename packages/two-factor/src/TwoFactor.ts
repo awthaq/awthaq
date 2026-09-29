@@ -179,7 +179,7 @@ export const sessionGate = Layer.unwrap(
       (input) =>
         Effect.gen(function* () {
           if (config.bypassStrategies.includes(input.strategy)) return Option.none();
-          // BEH-EA-315: an `amr` that already says `mfa` was recorded by this very gate's own completion
+          // BEH-EA-304: an `amr` that already says `mfa` was recorded by this very gate's own completion
           // (`finalizeSignIn`), so a flow that inherits it (a device grant approved from such a session)
           // has nothing left to prove. No first-factor flow ever presents `mfa` here.
           if ((input.amr ?? []).includes("mfa")) return Option.none();

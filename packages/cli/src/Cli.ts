@@ -16,7 +16,8 @@
 //     seed admin --email <email> [--name] [--role] [--force] [--prompt-password]
 //     import --from <source> --source <export> [--yes] [--dry-run] [--continue-on-error]
 //            [--batch-size] [--report <file>] [--issuer p=i] [--source-option k=v]
-//     login [--token <t>] [--base-url <url>] | logout | whoami                    (AWTHAQ_TOKEN, AWTHAQ_BASE_URL)
+//     login [--token <t>] [--base-url <url>] [--no-browser] [--client-id <id>] | logout | whoami
+//                                                                                  (AWTHAQ_TOKEN, AWTHAQ_BASE_URL)
 //
 // Every flag decodes through a Schema (BEH-EA-226): the email through the sign-up payload's own
 // Schema, `--database-url` through `Database.DatabaseUrl`, `--format` through a literal union.
@@ -365,11 +366,31 @@ const loginCommand = Command.make(
       Flag.withFallbackConfig(Config.String("AWTHAQ_BASE_URL")),
       Flag.optional,
     ),
+    noBrowser: Flag.Boolean("no-browser").pipe(
+      Flag.withDescription(
+        "Interactive login: print the verification URL and code instead of opening a browser",
+      ),
+      Flag.withDefault(false),
+    ),
+    clientId: Flag.String("client-id").pipe(
+      Flag.withDescription(
+        "Interactive login: the device-flow client the server registered for this CLI",
+      ),
+      Flag.withDefault("awthaq-cli"),
+    ),
   },
-  (args) => withOutput(Session.login({ token: args.token, baseUrl: args.baseUrl })),
+  (args) =>
+    withOutput(
+      Session.login({
+        token: args.token,
+        baseUrl: args.baseUrl,
+        noBrowser: args.noBrowser,
+        clientId: args.clientId,
+      }),
+    ),
 ).pipe(
   Command.withDescription(
-    "Validate a token against the server and store it (OS keychain first, else a 0600 file); the interactive device flow needs the DeviceAuthorization plugin",
+    "Sign in: with --token (or AWTHAQ_TOKEN) validate a token and store it; without one, run the device authorization flow (a code to approve in a browser) — stored in the OS keychain first, else a 0600 file",
   ),
 );
 

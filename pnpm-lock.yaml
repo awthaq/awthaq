@@ -260,6 +260,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@awthaq/device-authorization':
+        specifier: workspace:*
+        version: link:../packages/device-authorization
       '@awthaq/jwt':
         specifier: workspace:*
         version: link:../packages/jwt
@@ -455,6 +458,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
+      '@awthaq/device-authorization':
+        specifier: workspace:*
+        version: link:../device-authorization
       '@awthaq/migrate-better-auth':
         specifier: workspace:*
         version: link:../migrate-better-auth

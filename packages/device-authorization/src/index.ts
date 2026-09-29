@@ -4,7 +4,7 @@
 // TV, a set-top box) asks `POST /device/code` for a short user code, the person approves it on a second,
 // signed-in device, and the client's `POST /device/token` poll receives an ordinary bearer session.
 //
-// Implemented: DeviceAuthorization.ts (spec/models/13-device-authorization.md, BEH-EA-310 to BEH-EA-317),
+// Implemented: DeviceAuthorization.ts (spec/models/13-device-authorization.md, BEH-EA-299 to BEH-EA-306),
 // DeviceAuthorizationApi.ts (the contract), UserCode.ts (the codes), DeviceGrantRecords.ts and
 // DeviceClientRecords.ts (persistence). See spec/overview.md for the full package map.
 

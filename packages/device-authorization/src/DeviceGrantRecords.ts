@@ -1,6 +1,6 @@
 // @awthaq/device-authorization — DeviceGrantRecords
 //
-// BEH-EA-311/312/313, spec/models/13-device-authorization.md "Design constraints". Persistence for
+// BEH-EA-300/312/313, spec/models/13-device-authorization.md "Design constraints". Persistence for
 // `device_authorization_grant`, one row per pending, decided or unredeemed grant, built the way
 // `@awthaq/api-key`'s records are: a records service with an in-memory and a SQL layer (SQLite and
 // Postgres, ADR-EA-004), the row codecs following the client's dialect (`Models.dialectFields`).

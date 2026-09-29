@@ -1,8 +1,8 @@
 # @awthaq/device-authorization
 
-The OAuth 2.0 **Device Authorization Grant** ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)) for awthaq: an input-constrained client (the `awthaq` CLI, a TV, a set-top box) shows the person a short code, the person approves it on a second, signed-in device, and the client's poll receives an ordinary **bearer session**. It is the login backend of `awthaq login` ([BEH-EA-318](../../spec/behaviors/26-cli.md)). Mounted under the shared `"auth"` id: groups `device_authorization`, `device_authorization.verification` and `device_authorization.decision`.
+The OAuth 2.0 **Device Authorization Grant** ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)) for awthaq: an input-constrained client (the `awthaq` CLI, a TV, a set-top box) shows the person a short code, the person approves it on a second, signed-in device, and the client's poll receives an ordinary **bearer session**. It is the login backend of `awthaq login` ([BEH-EA-307](../../spec/behaviors/26-cli.md)). Mounted under the shared `"auth"` id: groups `device_authorization`, `device_authorization.verification` and `device_authorization.decision`.
 
-See [`spec/models/13-device-authorization.md`](../../spec/models/13-device-authorization.md) (the security parameters and the polling state machine this implements) and [`spec/behaviors/37-device-authorization.md`](../../spec/behaviors/37-device-authorization.md) (BEH-EA-310 to BEH-EA-317).
+See [`spec/models/13-device-authorization.md`](../../spec/models/13-device-authorization.md) (the security parameters and the polling state machine this implements) and [`spec/behaviors/37-device-authorization.md`](../../spec/behaviors/37-device-authorization.md) (BEH-EA-299 to BEH-EA-306).
 
 ## Composition
 

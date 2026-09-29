@@ -1,6 +1,6 @@
 // @awthaq/device-authorization — DeviceAuthorizationApi
 //
-// BEH-EA-310 to BEH-EA-315, spec/models/13-device-authorization.md, RFC 8628. The plugin's contract:
+// BEH-EA-299 to BEH-EA-304, spec/models/13-device-authorization.md, RFC 8628. The plugin's contract:
 //
 // - `device_authorization` — the **device-facing back channel**: `POST /device/code` (§3.1/§3.2) and
 //   `POST /device/token` (§3.4/§3.5). Form-encoded like every OAuth endpoint, anonymous, and with no CSRF
@@ -157,7 +157,7 @@ export type TokenPayload = typeof TokenPayload.Type;
 /**
  * RFC 8628 §3.5 / RFC 6749 §5.1: the approved poll's answer. `access_token` is the session's bearer token
  * (a normal session: it authenticates `Authorization: Bearer <token>` and is revoked, listed and expired
- * like any other, BEH-EA-315).
+ * like any other, BEH-EA-304).
  */
 export class TokenResponse extends Schema.Class<TokenResponse>("DeviceTokenResponse")({
   access_token: Schema.String,
@@ -229,7 +229,9 @@ export const DeviceGroup = HttpApiGroup.make("device_authorization")
         Api.StoreUnavailable,
       ],
     }),
-  );
+  )
+  // BEH-EA-201: no cookie in, none out, and a device has none to double-submit: `awthaq doctor` skips its CSRF check.
+  .annotate(Api.BackChannel, true);
 
 export const VerificationGroup = HttpApiGroup.make("device_authorization.verification")
   .add(

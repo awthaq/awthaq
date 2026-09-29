@@ -142,7 +142,7 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
   );
 
   it.effect(
-    "an amr that already proves a second factor is not asked for one again (a device grant approved by an mfa session, BEH-EA-315)",
+    "an amr that already proves a second factor is not asked for one again (a device grant approved by an mfa session, BEH-EA-304)",
     () =>
       Effect.gen(function* () {
         const gate = yield* Hooks.BeforeSessionIssue;

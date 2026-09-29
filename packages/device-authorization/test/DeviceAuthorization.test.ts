@@ -1,4 +1,4 @@
-// BEH-EA-310 to BEH-EA-317, spec/models/13-device-authorization.md "Design constraints": the plugin at the
+// BEH-EA-299 to BEH-EA-306, spec/models/13-device-authorization.md "Design constraints": the plugin at the
 // service level, over both record stores (memory, and a real migrated database), under `TestClock` so an expiry
 // or an interval is a `TestClock.adjust`, never a sleep.
 import { AuditLog, DataExport, Erasure, RateLimits, Sessions, Users } from "@awthaq/core";
@@ -128,7 +128,7 @@ for (const options of suites) {
   const layer = (overrides?: Partial<HarnessOptions>) => buildLayer({ ...options, ...overrides });
 
   describe(`DeviceAuthorization (${options.store})`, () => {
-    describe("requesting a code (BEH-EA-310)", () => {
+    describe("requesting a code (BEH-EA-299)", () => {
       it.effect("answers the RFC 8628 §3.2 fields, with the user code in XXXX-XXXX form", () =>
         Effect.gen(function* () {
           const issued = yield* requestCode();
@@ -234,7 +234,7 @@ for (const options of suites) {
       );
     });
 
-    describe("polling (BEH-EA-311)", () => {
+    describe("polling (BEH-EA-300)", () => {
       it.effect(
         "answers authorization_pending, then issues a session exactly once after approval",
         () =>
@@ -402,7 +402,7 @@ for (const options of suites) {
       );
     });
 
-    describe("claim, then decide (BEH-EA-312/313)", () => {
+    describe("claim, then decide (BEH-EA-301/313)", () => {
       it.effect(
         "opening the page claims an unclaimed code exactly once; a different user cannot claim it",
         () =>
@@ -538,7 +538,7 @@ for (const options of suites) {
       );
     });
 
-    describe("rate limits (BEH-EA-314)", () => {
+    describe("rate limits (BEH-EA-303)", () => {
       it.effect("POST /device/code is 5 per window per source; a sixth is rate limited", () =>
         Effect.gen(function* () {
           for (let i = 0; i < 5; i++) yield* requestCode();
@@ -641,7 +641,7 @@ for (const options of suites) {
       );
     });
 
-    describe("issuing the session (BEH-EA-315)", () => {
+    describe("issuing the session (BEH-EA-304)", () => {
       it.effect("a suspended user gets no session, and the grant is kept", () =>
         Effect.gen(function* () {
           const { issued, caller } = yield* approvedGrant("suspended@example.com");
@@ -667,7 +667,7 @@ for (const options of suites) {
       );
     });
 
-    describe("events, audit, erasure, export and retention (BEH-EA-317)", () => {
+    describe("events, audit, erasure, export and retention (BEH-EA-306)", () => {
       it.effect(
         "an approval and a denial are audited with the approver and the client, and no code",
         () =>

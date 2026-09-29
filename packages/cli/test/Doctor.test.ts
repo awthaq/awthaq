@@ -1,7 +1,8 @@
 // BEH-EA-201 (ECS-005, ECS-008, NHS-005): `doctor` over real compositions. Each finding here is
 // produced by the real thing — a real `Auth.make`, a real configuration Layer, a real application
 // Layer — and every output is checked for the canary secrets the fixtures carry.
-import { SessionCookie } from "@awthaq/core";
+import { Auth, SessionCookie } from "@awthaq/core";
+import { DeviceAuthorization } from "@awthaq/device-authorization";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
 import { BodyLimit } from "@awthaq/server";
@@ -100,6 +101,24 @@ describe("doctor: graph", () => {
         ["POST /widget has no CsrfProtection middleware"],
       );
     }),
+  );
+});
+
+describe("doctor: back channels (Api.BackChannel, BEH-EA-201)", () => {
+  it.effect(
+    "does not flag the device authorization code and token endpoints for lacking CSRF, but still checks the rest",
+    () =>
+      Effect.gen(function* () {
+        const auth = Auth.make([DeviceAuthorization.DeviceAuthorization]);
+        const report = yield* Doctor.diagnose(configOf(auth), development);
+        const csrf = report.findings.filter((found) => found.code === "csrf-missing");
+        // A device is not a browser and has no cookie to double-submit: the back channel is exempt; the
+        // verification and decision endpoints a browser reaches carry `CsrfProtection` anyway.
+        assert.deepStrictEqual(
+          csrf.map((found) => found.message),
+          [],
+        );
+      }),
   );
 });
 

@@ -1,6 +1,6 @@
 // @awthaq/device-authorization — UserCode
 //
-// BEH-EA-310, spec/models/13-device-authorization.md "Security parameters" (DAG-004, RFC 8628 §6.1).
+// BEH-EA-299, spec/models/13-device-authorization.md "Security parameters" (DAG-004, RFC 8628 §6.1).
 // The two secrets of the grant:
 //
 // - the **user code**, typed by a person on a second device: 8 symbols drawn uniformly from the
