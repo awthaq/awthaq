@@ -3,7 +3,7 @@ ID: "AOMS-007"
 Title: "Federated users are created with emailVerified=false even when the IdP verified the email"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:686"
 Auditor: "auth0-okta-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `oauth` · reported by **Auth0/Okta Migration Specialist** (`auth0-okta-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Either accept a trusted-provider emailVerified input on create for federation (s
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-account-linking-policy`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:798`. Fix: When a trusted provider asserts email_verified at first (JIT) creation, mark the new local user verified inside the same transaction. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** JIT creation branch: inside the same withTransaction, after users.create, users.verifyEmail(user.id) when profile.email is present AND profile.emailVerified === true AND the provider is in trustedProviders (orDie: UserNotFound is impossible inside the transaction). Not called on auto-link/explicit-link paths and never for untrusted providers. Tests: trusted+verified -> verified user (red before), untrusted+verified -> unverified, trusted but unasserted -> unverified. BEH-EA-124 and BEH-EA-042 (06-domain-users-accounts.md, sanctioned caller note) amended. Gates as TMS-007.

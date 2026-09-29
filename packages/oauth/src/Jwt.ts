@@ -12,6 +12,15 @@
 // implemented — a real gap, documented here rather than silently assumed
 // away, the same way `Verification.layerSql`/`WebAuthn` are documented as
 // deferred elsewhere in this codebase rather than pretended not to exist.
+//
+// OIT-007 — also deliberately not implemented, and compliant as it stands:
+//   - `at_hash` is not validated. Only `response_type=code` exists (pinned
+//     structurally in `OAuth.ts`'s `buildAuthorizeUrl`), and OIDC Core 3.1.3.7
+//     makes `at_hash` optional for the code flow. It becomes REQUIRED the day
+//     a hybrid or implicit `response_type` is added — that change must add
+//     the check.
+//   - `auth_time` / `max_age` (authentication freshness, step-up) are
+//     unsupported here; they belong to wayfinder ticket 15 (step-up).
 
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -23,16 +32,30 @@ import * as Schema from "effect/Schema";
  * input — decoded via `Schema`, never a cast. Each entry is a bare
  * `Record<string, unknown>` (mirroring `@awthaq/jwt/verify.ts`'s own
  * `JwksDocumentSchema`, this codebase's established idiom for the identical
- * shape): a JWK's full field set (`kty`/`n`/`e`/`crv`/`x`/`y`/... per RFC
- * 7517) isn't narrowed here since `findKey` only ever reads `kty`/`kid` by
- * plain property access, and `verifyRs256` passes a matched entry to
- * `crypto.subtle.importKey` wholesale, needing no narrower type either.
+ * shape) so one entry of an algorithm this verifier doesn't speak (an EC or
+ * OKP key beside the RSA one) doesn't invalidate the whole document;
+ * `findKey` narrows each entry with `RsaJwkSchema` (ACS-004) before it can
+ * become key material.
  */
 export const JwksDocumentSchema = Schema.Struct({
   keys: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
 });
 export type Jwks = typeof JwksDocumentSchema.Type;
-export type Jwk = Jwks["keys"][number];
+
+/**
+ * ACS-004: the structural RSA JWK `findKey` admits. A JWKS entry is only
+ * ever a candidate once it decodes as this — a `kty`-less or `n`/`e`-less
+ * entry can no longer reach `crypto.subtle.importKey` as key material.
+ */
+export const RsaJwkSchema = Schema.Struct({
+  kty: Schema.Literal("RSA"),
+  n: Schema.String,
+  e: Schema.String,
+  kid: Schema.optional(Schema.String),
+  alg: Schema.optional(Schema.String),
+  use: Schema.optional(Schema.String),
+});
+export type Jwk = typeof RsaJwkSchema.Type;
 
 export class JwtVerificationError extends Data.TaggedError("JwtVerificationError")<{
   readonly reason: string;
@@ -85,9 +108,15 @@ export const decode = (token: string): Effect.Effect<DecodedJwt, JwtVerification
   Effect.gen(function* () {
     const decoded = yield* Effect.try({
       try: () => {
-        const parts = token.split(".");
-        if (parts.length !== 3) throw new Error("not a compact JWS");
-        const [headerSegment, payloadSegment, signatureSegment] = parts as [string, string, string];
+        const [headerSegment, payloadSegment, signatureSegment, ...extra] = token.split(".");
+        if (
+          headerSegment === undefined ||
+          payloadSegment === undefined ||
+          signatureSegment === undefined ||
+          extra.length > 0
+        ) {
+          throw new Error("not a compact JWS");
+        }
         return {
           header: decodeJson(headerSegment),
           payload: decodeJson(payloadSegment),
@@ -120,7 +149,9 @@ export const verifyRs256 = (
     try: async () => {
       const key = await globalThis.crypto.subtle.importKey(
         "jwk",
-        jwk,
+        // Only the public-key members: `kid`/`alg`/`use` were already
+        // checked by `findKey` and mean nothing to WebCrypto's import.
+        { kty: jwk.kty, n: jwk.n, e: jwk.e },
         { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
         false,
         ["verify"],
@@ -149,7 +180,17 @@ export const findKey = (
   jwks: Jwks,
   kid: string | undefined,
 ): Effect.Effect<Jwk, JwtVerificationError> => {
-  const candidates = jwks.keys.filter((key) => key.kty === "RSA" || key.kty === undefined);
+  // ACS-004: only structurally valid RSA signing keys are candidates — a
+  // `use` other than `sig`, or an `alg` other than RS256, marks a key this
+  // verifier must not select even when its `kid` matches.
+  const candidates = jwks.keys.flatMap((entry) => {
+    const key = Schema.decodeUnknownOption(RsaJwkSchema)(entry);
+    return Option.isSome(key) &&
+      (key.value.use === undefined || key.value.use === "sig") &&
+      (key.value.alg === undefined || key.value.alg === "RS256")
+      ? [key.value]
+      : [];
+  });
   const matched = kid === undefined ? candidates[0] : candidates.find((key) => key.kid === kid);
   return matched === undefined
     ? Effect.fail(new JwtVerificationError({ reason: "no matching JWKS key" }))

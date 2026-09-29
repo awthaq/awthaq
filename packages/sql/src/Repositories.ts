@@ -263,7 +263,7 @@ export interface AccountTokenColumns {
   readonly tokenType: string | null;
 }
 
-type TokenField = "accessToken" | "refreshToken";
+type TokenField = "accessToken" | "refreshToken" | "idToken";
 
 /**
  * SMS-002: a stored token ciphertext that `Encryption` could not open — the
@@ -401,7 +401,9 @@ export const AccountsRepositoryLive: Layer.Layer<
     const persistRefreshed = (row: Account, field: TokenField, old: string, fresh: string) =>
       (field === "accessToken"
         ? sql`UPDATE accounts SET "accessToken" = ${fresh} WHERE id = ${row.id} AND "accessToken" = ${old}`
-        : sql`UPDATE accounts SET "refreshToken" = ${fresh} WHERE id = ${row.id} AND "refreshToken" = ${old}`
+        : field === "refreshToken"
+          ? sql`UPDATE accounts SET "refreshToken" = ${fresh} WHERE id = ${row.id} AND "refreshToken" = ${old}`
+          : sql`UPDATE accounts SET "idToken" = ${fresh} WHERE id = ${row.id} AND "idToken" = ${old}`
       ).pipe(
         Effect.asVoid,
         Effect.catchTag("SqlError", (error) =>
@@ -419,6 +421,7 @@ export const AccountsRepositoryLive: Layer.Layer<
         const config = yield* AccountsRepositoryConfig;
         const access = yield* read(row, "accessToken");
         const refresh = yield* read(row, "refreshToken");
+        const idTok = yield* read(row, "idToken");
         if (config.reencryptOnRead) {
           if (Option.isSome(access.refreshed) && access.stored !== null) {
             yield* persistRefreshed(row, "accessToken", access.stored, access.refreshed.value);
@@ -426,11 +429,15 @@ export const AccountsRepositoryLive: Layer.Layer<
           if (Option.isSome(refresh.refreshed) && refresh.stored !== null) {
             yield* persistRefreshed(row, "refreshToken", refresh.stored, refresh.refreshed.value);
           }
+          if (Option.isSome(idTok.refreshed) && idTok.stored !== null) {
+            yield* persistRefreshed(row, "idToken", idTok.stored, idTok.refreshed.value);
+          }
         }
         return Account.make({
           ...row,
           accessToken: access.plaintext,
           refreshToken: refresh.plaintext,
+          idToken: idTok.plaintext,
         });
       });
 
@@ -452,7 +459,13 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           input.refreshToken,
         );
-        const row = yield* repo.insert({ ...input, accessToken, refreshToken });
+        const idToken = yield* encryptToken(
+          input.providerId,
+          input.userId,
+          "idToken",
+          input.idToken,
+        );
+        const row = yield* repo.insert({ ...input, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
 
@@ -470,7 +483,8 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           input.refreshToken,
         );
-        const row = yield* repo.update({ ...input, accessToken, refreshToken });
+        const idToken = yield* encryptToken(aad.providerId, aad.userId, "idToken", input.idToken);
+        const row = yield* repo.update({ ...input, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
 

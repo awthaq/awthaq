@@ -165,6 +165,39 @@ describe("Repositories", () => {
       }).pipe(Effect.provide(RepositoriesLive)),
   );
 
+  it.effect("BAM-008: idToken round-trips through the repository and is ciphertext at rest", () =>
+    Effect.gen(function* () {
+      const accounts = yield* Repositories.AccountsRepository;
+      const users = yield* Repositories.UsersRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const user = yield* users.insert(
+        yield* Models.User.insert.makeEffect({ email: "idtoken@example.com", name: "Id" }),
+      );
+      const account = yield* accounts.insert(
+        yield* Models.Account.insert.makeEffect({
+          userId: user.id,
+          providerId: "google",
+          subject: "gh-id-token",
+          issuer: "",
+          passwordHash: null,
+          accessToken: "access",
+          refreshToken: null,
+          idToken: "plaintext.id.token",
+        }),
+      );
+      assert.strictEqual(account.idToken, "plaintext.id.token");
+      assert.strictEqual((yield* accounts.findById(account.id)).idToken, "plaintext.id.token");
+      const rows = yield* sql<{
+        readonly idToken: string;
+      }>`SELECT idToken FROM accounts WHERE id = ${account.id}`;
+      assert.isDefined(rows[0]);
+      assert.notInclude(rows[0]?.idToken, "plaintext.id.token");
+      // Never in the JSON variant.
+      const json = yield* Schema.encodeUnknownEffect(Models.Account.json)(account);
+      assert.notProperty(json, "idToken");
+    }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
   it.effect(
     "AccountsRepository.update replaces passwordHash (accessToken/refreshToken must be passed through unchanged, being Model.Sensitive rather than FieldExcept-excluded)",
     () =>

@@ -3,7 +3,7 @@ ID: "PDR-005"
 Title: "Insecure-by-default OAuth/passkey origins: localhost baseUrl and empty trustedOrigins ship as defaults"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:62"
 Auditor: "philippe-de-ryck"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `oauth` · reported by **Philippe De Ryck — Web Application Security Trainer** (`philippe-de-ryck`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Fail composition at boot when baseUrl/rpId/origins still equal the localhost def
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `oauth-config-safety`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:67`. Fix: Make baseUrl required (JwtConfig's precedent) and validate it at boot. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OAuthConfig is now a plain Context.Service (JwtConfig precedent) with no default; OAuth.config({ baseUrl, ...}) requires baseUrl (OAuthConfigInput.baseUrl is non-optional) so composing OAuth without it fails to type-check (@ts-expect-error test on OAuth.config({})). OAuth.make validates baseUrl at boot (URL parse, http/https, no path/query/fragment/credentials -> die naming baseUrl), warns on plain http non-loopback, and derives redirect_uri from the origin (a trailing slash no longer doubles). OAuthTokenAccess.layer's annotated requirement gains OAuthConfig. Callers (packages/oauth tests, features OAuthWorld) already passed baseUrl. BEH-EA-128 amended. Tests: path-component baseUrl dies (red before: booted), unparseable baseUrl dies, http non-localhost warns, localhost http silent, trailing slash normalized. AGA-005's boot log of each effective redirect_uri is included (its README half lands with the docs commit). Gates: tsc -b, tsconfig.test.json, vitest 889 pass, test:bdd 106, spec:verify:strict, oxlint.

@@ -57,3 +57,5 @@ Schema-validate the discovery document at resolve time (issuer as literal-valida
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `oauth-provider-boot-validation`. Duplicate of `ESS-002-effect-schema-specialist` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthProvider.ts:142`. Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ESS-002-effect-schema-specialist` — closed by its fix (see that issue's Resolved comment).

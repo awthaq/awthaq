@@ -102,6 +102,14 @@ export class Account extends Model.Class<Account>("Account")({
   passwordHash: Model.Sensitive(Schema.NullOr(Schema.String)),
   accessToken: Model.Sensitive(Schema.NullOr(Schema.String)),
   refreshToken: Model.Sensitive(Schema.NullOr(Schema.String)),
+  // BAM-008: the provider's OIDC `id_token`, a bearer-grade credential like
+  // the two above — sensitive, encrypted at rest. Constructor-defaulted to
+  // `null` so a pre-existing insert/update call site keeps compiling; every
+  // writer that rewrites a row from its old values (`updateCredentialHash`)
+  // must pass it through explicitly, or the default would null it.
+  idToken: Model.Sensitive(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
   // BE-002 (.issues/high): token *metadata*, not secrets themselves — no
   // `Model.Sensitive` (matching how `providerId`/`subject`/`issuer` already
   // sit unencrypted alongside `accessToken`/`refreshToken` on this same

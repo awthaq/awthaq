@@ -3,7 +3,7 @@ ID: "CSS-004"
 Title: "Wire tests assert cookie names only and discard attributes — the class of bug in CSS-001 is invisible to the suite"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/test/AuthHttp.test.ts:169"
 Auditor: "cookie-security-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `oauth` · reported by **Cookie Security Specialist** (`cookie-security-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Replace the name-only regex with an attribute-asserting helper (or a tiny RFC 62
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `oauth-callback-http-hardening`. Evidence at HEAD ec065a7: `packages/oauth/test/AuthHttp.test.ts:183`. Fix: Add a shared Set-Cookie attribute assertion helper and apply it to every OAuth-emitted cookie. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New @awthaq/test CookieAssertions (parseSetCookie, setCookiesOf, findSetCookie, assertHostPrefixedCookie, assertExpiredCookie; throws plain Error, no runner import); oauth gets @awthaq/test as devDependency (pnpm-lock updated). AuthHttp.test.ts now asserts the __Host-oauth-state cookie (HttpOnly, SameSite=Lax, Secure, Path=/, no Domain) and the callback's __Host-session (HttpOnly, SameSite=Strict) at wire level, plus the expiry cookie. Other packages' wire suites (password/admin/passkey/csrf) should adopt the helper (note for their programs). Gates: tsc -b, tsc -p tsconfig.test.json, vitest 869 pass, test:bdd, spec:verify:strict, oxlint (only the pre-existing core HttpApiTypes.test.ts barrel-import error), pnpm circular.
