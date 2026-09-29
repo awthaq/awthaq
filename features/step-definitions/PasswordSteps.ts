@@ -14,17 +14,15 @@ import {
   World,
   configureApp,
   request,
-  cookieFrom,
   setLastResponse,
   getLastResponse,
   setActor,
   getActor,
-  letForkedFibersRun,
   sentMail,
   publishedEvents,
   verifyLatestSignUp,
-  STRONG_PASSWORD,
 } from "./PasswordWorld.ts";
+import { cookieFrom, letForkedFibersRun, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 /** REQ-EA-327: an HttpClient that answers any HIBP range lookup with `password`'s own real SHA-1 suffix, so it reads back as "found in a known breach" regardless of which prefix the plugin actually queried. */
 const breachedPasswordHttpClient = (password: string): Layer.Layer<HttpClient.HttpClient> =>

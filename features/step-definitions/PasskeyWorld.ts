@@ -27,15 +27,12 @@ import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./Cs
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import { TestServices } from "./shared/Harness.ts";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 
 export const RP_ID = "example.com";
@@ -133,10 +130,6 @@ const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<Web
         };
       }),
   });
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
@@ -292,12 +285,6 @@ export const request = Effect.fn("features.passkey.request")(function* (
   yield* Ref.set(world.lastResponse, response);
   return response;
 });
-
-export const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
 
 /**
  * Issues a real session directly against `Sessions`, reaching into the

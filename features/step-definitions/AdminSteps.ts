@@ -2,7 +2,6 @@ import { defineSteps } from "@effect-cucumber/vitest";
 import * as Effect from "effect/Effect";
 import {
   configureApp,
-  cookieFrom,
   getOutcome,
   inspectSession,
   publishedEvents,
@@ -13,6 +12,7 @@ import {
   tokenFromCookie,
   World,
 } from "./AdminWorld.ts";
+import { cookieFrom } from "./shared/Harness.ts";
 
 const impersonate = Effect.fn("features.admin.impersonate")(function* (
   adminCookie: string,

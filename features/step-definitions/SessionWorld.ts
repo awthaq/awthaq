@@ -20,27 +20,28 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Password, PasswordApi } from "@awthaq/password";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Path from "effect/Path";
-import * as Etag from "effect/unstable/http/Etag";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { mailedToken } from "./MailedToken.ts";
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
+import {
+  cheapArgon2id,
+  cookieFrom,
+  letForkedFibersRun,
+  makeCapturingMailer,
+  setCookieFrom,
+  STRONG_PASSWORD,
+  TestServices,
+} from "./shared/Harness.ts";
 
 const CoreLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
   // CSG-001: the account handler runs `AccountErasure` over these same stores (and
@@ -86,14 +87,7 @@ const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
  * to a scenario.
  */
 const buildApp = () => {
-  const messages = Effect.runSync(Ref.make<ReadonlyArray<Mailer.MailMessage>>([]));
-  const capturingMailer = Layer.succeed(
-    Mailer.Mailer,
-    Mailer.Mailer.of({
-      send: (message) => Ref.update(messages, (existing) => [...existing, message]),
-      sent: Ref.get(messages),
-    }),
-  );
+  const { layer: capturingMailer, sent } = makeCapturingMailer();
 
   const appLayer = Layer.mergeAll(
     AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
@@ -110,7 +104,7 @@ const buildApp = () => {
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(
-        PasswordHasher.layerArgon2id,
+        cheapArgon2id,
         capturingMailer,
         RateLimiter.layerPermissive,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
@@ -128,7 +122,7 @@ const buildApp = () => {
     Layer.provideMerge(HttpRouter.layer),
   );
   const { handler } = HttpRouter.toWebHandler(appLayer);
-  return { handler, sentMail: Ref.get(messages) };
+  return { handler, sentMail: sent };
 };
 
 export interface ActorState {
@@ -161,7 +155,6 @@ export const WorldLive = Layer.effect(
   }),
 );
 
-const STRONG_PASSWORD = "correct horse battery staple";
 let nextEmail = 0;
 
 const get = (
@@ -194,28 +187,6 @@ const post = (
     }),
   );
 
-export const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
-
-const setCookieHeader = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw;
-};
-
-/**
- * `signUp`'s verification mail is dispatched via `Effect.forkDetach`
- * (BEH-EA-113: never awaited) — a few cooperative scheduler turns give
- * that detached fiber a chance to run to completion, mirroring
- * `AuthHttp.test.ts`'s own `letForkedFibersRun`.
- */
-const letForkedFibersRun = Effect.gen(function* () {
-  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-});
-
 /** Signs a fresh user up (BEH-EA-113's own detail is out of scope here — Password's `AuthHttp.test.ts` already covers it), returning the resulting `__Host-session` cookie. */
 export const signUp = Effect.fn("features.session.signUp")(function* (name: string) {
   const { handler, sentMail } = yield* World;
@@ -225,7 +196,7 @@ export const signUp = Effect.fn("features.session.signUp")(function* (name: stri
   );
   if (response.status !== 200) throw new Error(`sign-up failed for ${email}: ${response.status}`);
   const cookie = cookieFrom(response);
-  const setCookie = setCookieHeader(response);
+  const setCookie = setCookieFrom(response);
   const { actors } = yield* World;
   yield* Ref.update(actors, (existing) => ({ ...existing, [name]: { email, cookie, setCookie } }));
 
@@ -265,7 +236,7 @@ export const signInAgain = Effect.fn("features.session.signInAgain")(function* (
     throw new Error(`sign-in failed for ${owner.email}: ${response.status}`);
   }
   const cookie = cookieFrom(response);
-  const setCookie = setCookieHeader(response);
+  const setCookie = setCookieFrom(response);
   const { actors } = yield* World;
   yield* Ref.update(actors, (existing) => ({
     ...existing,

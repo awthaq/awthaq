@@ -4,7 +4,6 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   buildClientDataJSON,
   configureApp,
-  cookieFrom,
   extractChallenge,
   getLastResponse,
   getOutcome,
@@ -17,6 +16,7 @@ import {
   signIn,
   World,
 } from "./PasskeyWorld.ts";
+import { cookieFrom } from "./shared/Harness.ts";
 
 const registerCredential = Effect.fn("features.passkey.registerCredential")(function* (
   cookie: string,

@@ -205,12 +205,30 @@ importers:
       '@awthaq/api':
         specifier: workspace:*
         version: link:../packages/api
+      '@awthaq/api-key':
+        specifier: workspace:*
+        version: link:../packages/api-key
+      '@awthaq/cli':
+        specifier: workspace:*
+        version: link:../packages/cli
+      '@awthaq/client':
+        specifier: workspace:*
+        version: link:../packages/client
       '@awthaq/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@awthaq/jwt':
+        specifier: workspace:*
+        version: link:../packages/jwt
+      '@awthaq/next':
+        specifier: workspace:*
+        version: link:../packages/next
       '@awthaq/oauth':
         specifier: workspace:*
         version: link:../packages/oauth
+      '@awthaq/organization':
+        specifier: workspace:*
+        version: link:../packages/organization
       '@awthaq/passkey':
         specifier: workspace:*
         version: link:../packages/passkey
@@ -220,15 +238,36 @@ importers:
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../packages/ports
+      '@awthaq/qadi':
+        specifier: workspace:*
+        version: link:../packages/qadi
+      '@awthaq/react':
+        specifier: workspace:*
+        version: link:../packages/react
+      '@awthaq/roles':
+        specifier: workspace:*
+        version: link:../packages/roles
+      '@awthaq/scim':
+        specifier: workspace:*
+        version: link:../packages/scim
       '@awthaq/server':
         specifier: workspace:*
         version: link:../packages/server
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../packages/sql
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../packages/test
       '@effect-cucumber/vitest':
         specifier: ^0.10.1
         version: 0.10.1(@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1))(@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0))(effect@4.0.0-rc.116)(vitest@5.0.0)
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)

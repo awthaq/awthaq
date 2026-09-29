@@ -19,6 +19,12 @@ import {
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { mailedToken } from "./MailedToken.ts";
+import {
+  cheapArgon2id,
+  letForkedFibersRun,
+  makeCapturingMailer,
+  TestServices,
+} from "./shared/Harness.ts";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { Password, PasswordApi } from "@awthaq/password";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -27,20 +33,12 @@ import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import * as Path from "effect/Path";
-import * as Etag from "effect/unstable/http/Etag";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
 
 const CoreLive = Layer.mergeAll(
   Users.layerMemory,
@@ -91,14 +89,7 @@ export interface AppHandle {
  * `AuthEvents.test.ts`'s own `seen` `Ref` does.
  */
 const buildApp = (options: AppOptions = {}): AppHandle => {
-  const messages = Effect.runSync(Ref.make<ReadonlyArray<Mailer.MailMessage>>([]));
-  const capturingMailer = Layer.succeed(
-    Mailer.Mailer,
-    Mailer.Mailer.of({
-      send: (message) => Ref.update(messages, (existing) => [...existing, message]),
-      sent: Ref.get(messages),
-    }),
-  );
+  const { layer: capturingMailer, sent } = makeCapturingMailer();
 
   const events = Effect.runSync(Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]));
   const eventsLayer = Layer.effectDiscard(
@@ -123,7 +114,7 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(
-        options.hasher ?? PasswordHasher.layerArgon2id,
+        options.hasher ?? cheapArgon2id,
         capturingMailer,
         RateLimiter.layerPermissive,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
@@ -141,7 +132,7 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
   );
 
   const { handler } = HttpRouter.toWebHandler(appLayer);
-  return { handler, sentMail: Ref.get(messages), publishedEvents: Ref.get(events) };
+  return { handler, sentMail: sent, publishedEvents: Ref.get(events) };
 };
 
 export interface ActorState {
@@ -210,12 +201,6 @@ export const request = Effect.fn("features.password.request")(function* (
   return yield* Effect.promise(() => post(handler, path, body, cookie));
 });
 
-export const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
-
 export const setLastResponse = Effect.fn("features.password.setLastResponse")(function* (
   key: string,
   response: Response,
@@ -248,16 +233,6 @@ export const getActor = Effect.fn("features.password.getActor")(function* (name:
   return found;
 });
 
-/**
- * `signUp`'s verification mail is dispatched via `Effect.forkDetach`
- * (BEH-EA-113: never awaited) — a few cooperative scheduler turns give
- * that detached fiber a chance to run to completion, mirroring
- * `AuthHttp.test.ts`'s own `letForkedFibersRun`.
- */
-export const letForkedFibersRun = Effect.gen(function* () {
-  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-});
-
 export const sentMail = Effect.fn("features.password.sentMail")(function* () {
   const { app } = yield* World;
   return yield* (yield* Ref.get(app)).sentMail;
@@ -285,5 +260,3 @@ export const verifyLatestSignUp = Effect.fn("features.password.verifyLatestSignU
     throw new Error(`verify-email failed: ${response.status}`);
   }
 });
-
-export const STRONG_PASSWORD = "correct horse battery staple";

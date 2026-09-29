@@ -9,12 +9,12 @@ import {
   sessionIdOf,
   getSession,
   postSession,
-  cookieFrom,
   aliasActor,
   getActor,
   setLastResponse,
   getLastResponse,
 } from "./SessionWorld.ts";
+import { cookieFrom } from "./shared/Harness.ts";
 
 export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- REQ-EA-147: sign-in issues a newly minted session ----

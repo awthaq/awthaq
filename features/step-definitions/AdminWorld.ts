@@ -25,23 +25,16 @@ import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./Cs
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import { TestServices } from "./shared/Harness.ts";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 const ORIGIN = "http://localhost:3000";
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
 
 /**
  * IDS-003: `Admin.impersonate` refuses a nonexistent target. The scenarios name
@@ -238,12 +231,6 @@ export const request = Effect.fn("features.admin.request")(function* (
   yield* Ref.set(world.lastResponse, response);
   return response;
 });
-
-export const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
 
 export const tokenFromCookie = (cookie: string): string =>
   decodeURIComponent(cookie.replace(/^__Host-(session|impersonation)=/, ""));
