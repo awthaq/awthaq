@@ -11,3 +11,6 @@ entries:
   - id: "EFAUTH-APP-03"
     file: "03-nextjs-ssr-decision-hydration.md"
     title: "Next.js SSR with Decision Hydration"
+  - id: "EFAUTH-APP-04"
+    file: "04-sqlite-embedded-deployment.md"
+    title: "Embedded SQLite Deployment: Write Ceiling and the Move to Postgres"

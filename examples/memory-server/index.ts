@@ -8,6 +8,11 @@
 // the README's own single-plugin Postgres quickstart (that one stays
 // exactly as `shipping-gaps` ticket 29 shipped it).
 //
+// TRBS-005: this composition is single-process by construction — every
+// memory layer here is a per-process `Ref`, so a session revoked on one
+// instance is not revoked on another and state is lost on restart. Use the
+// `layerSql` variants for anything multi-instance.
+//
 // Run it:
 //   node --experimental-strip-types index.ts
 import {

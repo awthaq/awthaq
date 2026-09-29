@@ -44,7 +44,7 @@ const beforeUserDeleteVeto = <A>(
     ),
   );
 
-/** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. */
+/** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. INV-EA-017: an identifier, never a capability — UUIDv7, time-ordered and partially predictable, so nothing may act on it without a credential's proof. */
 export type UserId = string & Brand.Brand<"UserId">;
 export const UserId = Brand.nominal<UserId>();
 
@@ -116,7 +116,11 @@ interface State {
 
 const emptyState: State = { byId: HashMap.empty(), byEmail: HashMap.empty() };
 
-/** BEH-EA-046: dropping a user's own row is this Layer's whole job — cascading to `Accounts`/`Sessions` is each of those services' own responsibility, triggered by the caller that also calls `Users.delete`, not by this module reaching into them. */
+/**
+ * TRBS-005: single-process, test-grade storage — see `Sessions.layerMemory`. Use `layerSql` for any multi-instance deployment.
+ *
+ * BEH-EA-046: dropping a user's own row is this Layer's whole job — cascading to `Accounts`/`Sessions` is each of those services' own responsibility, triggered by the caller that also calls `Users.delete`, not by this module reaching into them.
+ */
 export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.BeforeUserDelete> =
   Layer.effect(
     Users,

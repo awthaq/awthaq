@@ -28,7 +28,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
 import { UserId } from "./Users.ts";
 
-/** BEH-EA-049: the public half of a session's `id.secret` token. */
+/**
+ * BEH-EA-049: the public half of a session's `id.secret` token. INV-EA-017: an id is an identifier, never a capability — it appears in cookies, JWT `sid` claims and error messages, so nothing may act on it without the secret's proof (PIL-007).
+ */
 export type SessionId = string & Brand.Brand<"SessionId">;
 export const SessionId = Brand.nominal<SessionId>();
 
@@ -218,7 +220,10 @@ export interface SessionsShape {
    * is the one to have earned.
    *
    * Upstream-hardening map, ticket 01: the same throttled-touch write also
-   * rotates the session's secret (the standard session-fixation defense) —
+   * rotates the session's secret (PIL-006: this is not the session-fixation
+   * defense — fixation is prevented by minting a fresh session at every
+   * sign-in and privilege change, BEH-EA-053; rotation limits the useful life
+   * of a leaked secret or a stale hash snapshot) —
    * `rotated` carries the freshly-minted full token exactly when this call
    * performed that rotation, `Option.none()` otherwise (including every
    * `actingAs` session, which never touches this path at all). The old
@@ -411,6 +416,14 @@ const toView = (row: SessionRow): SessionView => ({
   actingAs: row.actingAs,
 });
 
+/**
+ * TRBS-005: single-process, test-grade storage. State is one per-process
+ * `Ref`: it is not shared across instances (a revocation on one instance does
+ * not propagate to another), it is lost on restart, and it grows without bound
+ * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
+ * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
+ * `PubSub` has the same process boundary.
+ */
 export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvents.AuthEvents> =
   Layer.effect(
     Sessions,

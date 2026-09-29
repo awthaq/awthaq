@@ -3,7 +3,7 @@ ID: "PIL-006"
 Title: "Secret rotation mislabeled 'the standard session-fixation defense'"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:157"
 Auditor: "pilcrow"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `core` · reported by **pilcrow (pilcrowOnPaper) — Creator of Lucia Auth** (`pilcrow`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Reword the comment: fixation is prevented by fresh issuance at sign-in (BEH-EA-0
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-docs-accuracy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:187`. Fix: Reword the verify doc comment: fixation is prevented by fresh issuance/supersede (BEH-EA-053); throttled secret rotation limits the useful life of a leaked secret / stale hash snapshot. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Sessions.ts verify doc comment reworded: rotation is not the session-fixation defense (fresh issuance/supersede, BEH-EA-053, is); it limits the useful life of a leaked secret or stale hash snapshot. grep for the phrase in packages/*/src, spec, docs, README, examples finds no other copy (packages/next has none).

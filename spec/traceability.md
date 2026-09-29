@@ -121,6 +121,7 @@ One row per entry in `spec/invariants.md`. Type-level invariants (INV-EA-001 thr
 | [INV-EA-014](invariants.md#inv-ea-014-an-impersonation-session-carries-a-hard-expiry-with-no-sliding-refresh) | `Admin` plugin, impersonation session issuance (planned) | Planned: `packages/core/test/Impersonation.test.ts` |
 | [INV-EA-015](invariants.md#inv-ea-015-the-provider-subject-issuer-tuple-is-unique-per-account-and-the-oauth-state--pkce-verifier-is-single-use) | `OAuth` plugin; `Accounts`' `(providerId, subject, issuer)` uniqueness (a real `UNIQUE` index over all three columns, `layerSql`; an equivalent composite key, `layerMemory`); `Verification`'s single-use `consume` for `state`/PKCE-verifier flow state | `packages/core/test/Accounts.test.ts`, `packages/oauth/test/OAuth.test.ts` |
 | [INV-EA-016](invariants.md#inv-ea-016-a-plugin-cannot-alter-a-shared-table-outside-its-declared-extension-points) | Persistence stratum, migration ownership (planned) | Planned: `packages/sql/test/MigrationOwnership.test.ts` |
+| [INV-EA-017](invariants.md#inv-ea-017-identifiers-are-never-capabilities--no-state-transition-acts-on-a-principal-or-session-id-without-a-credentials-proof) | `Sessions.verify` (secret proven before any row-state branch); `Sessions.findOwned`/`revokeOwned` (ownership-bound); uniform enumeration-safe errors | `packages/core/test/Sessions.test.ts` |
 
 ---
 

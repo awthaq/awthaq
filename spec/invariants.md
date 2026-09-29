@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-INV |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-13 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-017 (identifiers are never capabilities, APS-010) |
 
 ---
 
@@ -177,3 +177,13 @@ These are properties intended to hold at runtime once the corresponding domain s
 **Enforcement**: Planned: `packages/sql/test/MigrationOwnership.test.ts` (no test exists yet).
 
 **Related**: [BEH-EA-033 through 040](behaviors/05-persistence-stratum.md), [BEH-EA-089 through 096](behaviors/12-hooks.md), [ADR-EA-004](decisions/004-database-neutral-models.md).
+
+## INV-EA-017: Identifiers are never capabilities — no state transition acts on a principal or session id without a credential's proof
+
+**Source**: APS-010, and PIL-007's own finding — principal and session ids are UUIDv7 (time-ordered, therefore partially predictable), and the session id in particular is the *public* half of the `id.secret` token: it appears in cookies, JWT `sid` claims, error messages and logs. Any path that authorizes, or even changes state, on an id alone is one leaked or guessed id away from abuse (PIL-007: presenting `<supersededId>.<anything>` used to trigger reuse detection and revoke the user's whole live session family).
+
+**Implication**: Without this, an id disclosed for a benign purpose (a device list, a log line, a JWT claim) becomes a lever for targeted denial of service or worse. With it, every operation that acts on a session or principal id first proves possession of the matching secret or credential (`Sessions.verify` proves the secret before evaluating any row state; ownership-scoped operations — `Sessions.findOwned`/`revokeOwned` — additionally bind the id to the authenticated user), and error responses for unknown, foreign and forged ids are uniform (BEH-EA-086).
+
+**Enforcement**: `Sessions.verify` (`packages/core/test/Sessions.test.ts` — the PIL-007 tests); `Sessions.revokeOwned`/`findOwned` (same file, GC-005/TIR-003 tests). Ids are additionally never used as bearer tokens by any endpoint.
+
+**Related**: [BEH-EA-049](behaviors/07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair), [BEH-EA-056](behaviors/07-sessions.md#beh-ea-056-session-secret-verification-is-a-constant-time-comparison-over-a-fixed-length-hash), [BEH-EA-086](behaviors/11-http-error-mapping.md#beh-ea-086-error-responses-are-enumeration-safe-uniformly-across-the-http-surface).

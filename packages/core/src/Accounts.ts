@@ -197,6 +197,14 @@ const emptyState: State = {
   providerTokens: HashMap.empty(),
 };
 
+/**
+ * TRBS-005: single-process, test-grade storage. State is one per-process
+ * `Ref`: it is not shared across instances (a revocation on one instance does
+ * not propagate to another), it is lost on restart, and it grows without bound
+ * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
+ * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
+ * `PubSub` has the same process boundary.
+ */
 export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.effect(
   Accounts,
   Effect.gen(function* () {
