@@ -3,7 +3,7 @@ ID: "BO-003"
 Title: "@awthaq/next declares an unused @awthaq/react dependency"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/package.json:36"
 Auditor: "balazs-orban"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `next` · reported by **Balázs Orbán — Lead Maintainer, Auth.js** (`balazs-orban`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Remove @awthaq/react from dependencies and the tsconfig.src.json path mapping; l
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-package-manifest-hygiene`. Evidence at HEAD ec065a7: `packages/next/package.json:27`. Fix: Remove the phantom @awthaq/react edge everywhere and make the description truthful. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Removed @awthaq/react from packages/next dependencies, tsconfig.src.json path+reference and the knip ignoreDependencies entry; description reworded to what ships (getSession/hasSessionCookie/withNextCookies); lockfile refreshed offline. Gates: typecheck, knip clean for packages/next without the ignore (remaining knip findings are pre-existing: migrate-better-auth devDep, features CsrfTestSupport exports). Changeset intentionally not added: no changeset has ever been committed in this repo and all packages are private.

@@ -53,3 +53,5 @@ Declare peerDependencies { next: ">=15", react: ">=19" } (peerDependenciesMeta o
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `next-package-manifest-hygiene`. Evidence at HEAD ec065a7: `packages/next/package.json:42`. Fix: Declare the Next.js range the recipes assume and document the proxy.ts/middleware.ts split. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Partially done: README now states the proxy.ts (Next 16.3+) vs middleware.ts split and the Next 15+ assumption. NOT done: `peerDependencies.next` (+ optional meta). pnpm auto-installs the peer for this workspace package, so adding it makes the lockfile resolve next + sharp (~500 lines) and breaks `pnpm install --offline` for every other worktree (no next metadata in the offline mirror). Enable by adding `"next": ">=15.0.0"` to packages/next peerDependencies with `peerDependenciesMeta.next.optional = true` and regenerating the lockfile online, at merge time.
