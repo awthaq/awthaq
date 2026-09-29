@@ -14,6 +14,7 @@
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as OAuthProvider from "./OAuthProvider.ts";
 
 /**
@@ -73,6 +74,16 @@ export interface OAuthConfigShape {
   readonly httpTimeouts: OAuthHttpTimeouts;
   readonly retry: OAuthRetryPolicy;
   readonly rateLimits: OAuthRateLimits;
+  /**
+   * OIT-004: leeway applied to an `id_token`'s `exp`, `nbf` and `iat` — the
+   * provider's clock and ours are never perfectly aligned (default 60s).
+   */
+  readonly clockSkew: Duration.Duration;
+  /**
+   * OIT-004: optional defence in depth — when set, an `id_token` whose `iat`
+   * is older than this (or missing) is rejected even if it has not expired.
+   */
+  readonly maxIdTokenAge: Option.Option<Duration.Duration>;
 }
 
 /**
@@ -81,8 +92,14 @@ export interface OAuthConfigShape {
  * nested policy objects may be given partially.
  */
 export interface OAuthConfigInput
-  extends Partial<Omit<OAuthConfigShape, "baseUrl" | "httpTimeouts" | "retry" | "rateLimits">> {
+  extends Partial<
+    Omit<
+      OAuthConfigShape,
+      "baseUrl" | "httpTimeouts" | "retry" | "rateLimits" | "maxIdTokenAge"
+    >
+  > {
   readonly baseUrl: string;
+  readonly maxIdTokenAge?: Duration.Duration;
   readonly httpTimeouts?: Partial<OAuthHttpTimeouts>;
   readonly retry?: Partial<OAuthRetryPolicy>;
   readonly rateLimits?: Partial<OAuthRateLimits>;
@@ -104,6 +121,8 @@ const defaults = {
     authorize: { limit: 30, window: Duration.minutes(1) },
     callback: { limit: 20, window: Duration.minutes(1) },
   },
+  clockSkew: Duration.seconds(60),
+  maxIdTokenAge: Option.none(),
 } satisfies Omit<OAuthConfigShape, "baseUrl">;
 
 export class OAuthConfig extends Context.Service<OAuthConfig, OAuthConfigShape>()(
@@ -114,6 +133,7 @@ export const config = (input: OAuthConfigInput) =>
   Layer.succeed(OAuthConfig, {
     ...defaults,
     ...input,
+    maxIdTokenAge: Option.fromNullOr(input.maxIdTokenAge ?? null),
     httpTimeouts: { ...defaults.httpTimeouts, ...input.httpTimeouts },
     retry: { ...defaults.retry, ...input.retry },
     rateLimits: { ...defaults.rateLimits, ...input.rateLimits },

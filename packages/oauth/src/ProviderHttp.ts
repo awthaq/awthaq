@@ -17,7 +17,6 @@ import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import type * as OAuthConfig from "./OAuthConfig.ts";
-import * as OAuthApi from "./OAuthApi.ts";
 
 /** The provider answered 5xx/429: its failure, not a malformed answer. */
 export class ProviderServerError extends Data.TaggedError("ProviderServerError")<{
@@ -72,9 +71,3 @@ export const isUnavailable = (error: unknown): boolean =>
   error instanceof ProviderServerError ||
   Cause.isTimeoutError(error) ||
   (HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError");
-
-/** Maps any failure of an outbound provider call onto the callback's two wire outcomes. */
-export const toCallbackFailure = (
-  error: unknown,
-): OAuthApi.ProviderUnavailable | OAuthApi.OAuthCallbackFailed =>
-  isUnavailable(error) ? new OAuthApi.ProviderUnavailable() : new OAuthApi.OAuthCallbackFailed();

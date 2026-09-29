@@ -12,6 +12,15 @@
 // implemented — a real gap, documented here rather than silently assumed
 // away, the same way `Verification.layerSql`/`WebAuthn` are documented as
 // deferred elsewhere in this codebase rather than pretended not to exist.
+//
+// OIT-007 — also deliberately not implemented, and compliant as it stands:
+//   - `at_hash` is not validated. Only `response_type=code` exists (pinned
+//     structurally in `OAuth.ts`'s `buildAuthorizeUrl`), and OIDC Core 3.1.3.7
+//     makes `at_hash` optional for the code flow. It becomes REQUIRED the day
+//     a hybrid or implicit `response_type` is added — that change must add
+//     the check.
+//   - `auth_time` / `max_age` (authentication freshness, step-up) are
+//     unsupported here; they belong to wayfinder ticket 15 (step-up).
 
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";

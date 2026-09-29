@@ -20,6 +20,29 @@ const okta = OAuthProvider.oidc({
 const OAuthConfig = OAuth.config({ providers: [okta], baseUrl: "https://app.example.com" });
 ```
 
+## Vendor presets
+
+`@awthaq/oauth/presets` ships data-only presets built on `OAuthProvider.oidc`/`oauth2` — the factories remain the escape hatch for any provider not listed:
+
+```ts
+import * as OAuthPresets from "@awthaq/oauth/presets";
+
+const google = OAuthPresets.google({
+  clientId: Config.string("GOOGLE_CLIENT_ID"),
+  clientSecret: Config.redacted("GOOGLE_CLIENT_SECRET"),
+});
+```
+
+| Preset | Kind | Notes |
+|---|---|---|
+| `google` | OIDC (discovery) | Google asserts `email_verified`: the usual candidate for `trustedProviders` |
+| `github` | OAuth2 | numeric `id` becomes the string subject; `/user`'s email is not asserted verified; secret in the body |
+| `microsoft({ tenant })` | OIDC (discovery) | `tenant` must be the tenant **id** (GUID) — the multi-tenant aliases (`common`, `organizations`) publish a placeholder issuer and fail loudly at boot |
+| `gitlab({ baseUrl? })` | OIDC (discovery) | gitlab.com by default; pass a self-managed instance's public URL |
+| `discord` | OAuth2 | `verified` is Discord's email assertion |
+
+Every preset accepts `id`, `scopes` and `mapProfile` overrides. **Apple is not shipped:** its `name`/`email` scopes require `response_mode=form_post`, a POST callback this GET-only contract cannot receive.
+
 ## Deploying behind a proxy or gateway
 
 `baseUrl` **must be the public scheme + host (+ port) your users and the provider see** — TLS usually terminates at the proxy, so the process itself may only see plain `http` on an internal port. It is validated at boot: no path, query, fragment or credentials, and a plain-`http` non-loopback value logs a warning (most providers refuse such a `redirect_uri`, and the session cookie needs HTTPS).
@@ -48,7 +71,7 @@ Deliberately **not** validated, and why:
 - `httpTimeouts` — a deadline per outbound call class (`tokenExchange` 10s, `jwks` 5s, `userinfo` 5s, `discovery` 10s), covering request and body decode. An overrun answers `ProviderUnavailable` (503).
 - `retry` — jittered exponential backoff for the idempotent GETs only (JWKS, userinfo, discovery; default two retries from 50ms). The code exchange and the refresh grant are **never** retried.
 - `rateLimits` — per-IP limits for `authorize` (30/min) and `callback` (20/min).
-- `clockSkew`-style leeway and id_token age limits for claim validation live alongside these (see `OAuthConfigShape`).
+- `clockSkew` (default 60s) — leeway on an `id_token`'s `exp`/`nbf`/`iat`; `maxIdTokenAge` — optionally also reject an `id_token` whose `iat` is older than this.
 - Provider `discovery: { mode: "lazy", refresh }` resolves a provider's discovery document on first use instead of at boot, answering `ProviderUnavailable` while it is unreachable (an issuer mismatch still disables the provider permanently).
 
 ## Migrating from Auth.js
@@ -59,6 +82,19 @@ Deliberately **not** validated, and why:
 | no flag (the default) | `linking: "explicit"` (the default) |
 
 awthaq is deliberately stricter than Auth.js: a trusted provider auto-links only when the **provider asserts `email_verified`** *and* the **local account's own email is already verified** (a squatter-registered, unverified local account is never linked into). Otherwise the callback answers `409 AccountExists`, listing the providers the account really has, and the user must sign in and then link explicitly. Users who relied on Auth.js's unconditional auto-link will see `AccountExists` on their first sign-in after migration.
+
+### Auth.js provider id to awthaq preset
+
+| Auth.js provider | awthaq |
+|---|---|
+| `Google` | `OAuthPresets.google` |
+| `GitHub` | `OAuthPresets.github` |
+| `AzureAD` / `MicrosoftEntraID` | `OAuthPresets.microsoft({ tenant: "<tenant id>" })` |
+| `GitLab` | `OAuthPresets.gitlab` |
+| `Discord` | `OAuthPresets.discord` |
+| `Apple` | not available (needs a POST callback) — see above |
+| any other OIDC provider | `OAuthProvider.oidc({ issuer, discoveryUrl, ... })` |
+| any other OAuth2 provider | `OAuthProvider.oauth2({ endpoints, ... })` |
 
 ## Importing federated identities
 

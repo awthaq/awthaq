@@ -7,7 +7,7 @@
 // swap `TestClock` is for time), and, for the `"oidc"` scenarios, a real
 // RSA keypair signing a real RS256 `id_token` that `Jwt.ts`'s own verifier
 // checks — not a stub that always returns `true`.
-import { generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
+import { createHmac, generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
 import {
   AuditLog,
   Hooks,
@@ -123,6 +123,8 @@ const buildLayer = (options: {
   readonly baseUrl?: string;
   readonly httpTimeouts?: OAuth.OAuthConfigInput["httpTimeouts"];
   readonly retry?: OAuth.OAuthConfigInput["retry"];
+  /** Extra `OAuth.config` fields (clock skew, id_token age, ...). */
+  readonly config?: Partial<OAuth.OAuthConfigInput>;
 }) =>
   OAuth.OAuth.layer.pipe(
     // `OAuthApi.OAuthGroup`'s own `.middleware(Api.OptionalAuthentication)`
@@ -160,6 +162,7 @@ const buildLayer = (options: {
         // Zero backoff by default: a retry never sleeps on the TestClock.
         retry: { base: Duration.zero, ...options.retry },
         ...(options.httpTimeouts === undefined ? {} : { httpTimeouts: options.httpTimeouts }),
+        ...options.config,
       }),
     ),
   );
@@ -2219,7 +2222,9 @@ describe("OAuth", () => {
           iss: "https://okta.example.com/oauth2/default",
           aud: "okta-client-id",
           sub: "user-y",
-          exp: Math.floor(Date.now() / 1000) - 60,
+          // MA-002: expiry is judged by the Effect Clock (TestClock at 0
+          // here), far enough back to be outside the default 60s skew.
+          exp: -120,
           nonce: nonceFrom(location),
         };
         const failure = yield* oauth
@@ -2357,6 +2362,319 @@ describe("OAuth", () => {
           buildLayer({
             providers: [okta()],
             httpRoutes: { ...idTokenRoutes(), "/jwks": new FakeReply(503) },
+          }),
+        ),
+      ),
+    );
+
+    // ---- claim integrity: MA-002 clock, OIT-003 aud/azp, OIT-004 skew, OIT-006/008/009 ----
+
+    /** Runs one authorize+callback with claims built from the flow's redirect URL. */
+    const attempt = (claimsFor: (location: string) => Record<string, unknown>) =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = claimsFor(location);
+        return yield* oauth
+          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.result);
+      });
+
+    /** Claims valid at TestClock time 0 (`iat`/`nbf` absent unless `extra` sets them). */
+    const claimsAtZero = (location: string, extra: Record<string, unknown> = {}) => ({
+      iss: "https://okta.example.com/oauth2/default",
+      aud: "okta-client-id",
+      sub: "claims-user",
+      exp: 100000,
+      nonce: nonceFrom(location),
+      ...extra,
+    });
+
+    const oktaLayer = (config?: Partial<OAuth.OAuthConfigInput>) =>
+      buildLayer({
+        providers: [okta()],
+        httpRoutes: idTokenRoutes(),
+        ...(config === undefined ? {} : { config }),
+      });
+
+    it.effect("MA-002: an id_token becomes expired when the TestClock advances past exp", () =>
+      Effect.gen(function* () {
+        const fresh = yield* attempt((location) => claimsAtZero(location, { exp: 3600 }));
+        assert.strictEqual(fresh._tag, "Success");
+        // exp + the default 60s skew has passed.
+        yield* TestClock.adjust(Duration.seconds(3600 + 61));
+        const stale = yield* attempt((location) => claimsAtZero(location, { exp: 3600 }));
+        assert.strictEqual(stale._tag, "Failure");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("MA-002: the JWKS cache refetches only after the TestClock passes the 15 minute TTL", () => {
+      let jwksCalls = 0;
+      return Effect.gen(function* () {
+        yield* attempt((location) => claimsAtZero(location, { sub: "ttl-1" }));
+        yield* TestClock.adjust(Duration.minutes(1));
+        yield* attempt((location) => claimsAtZero(location, { sub: "ttl-2" }));
+        assert.strictEqual(jwksCalls, 1);
+        yield* TestClock.adjust(Duration.minutes(16));
+        yield* attempt((location) => claimsAtZero(location, { sub: "ttl-3" }));
+        assert.strictEqual(jwksCalls, 2);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta()],
+            httpRoutes: {
+              ...idTokenRoutes(),
+              "/jwks": () => {
+                jwksCalls += 1;
+                return { keys: [jwk] };
+              },
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("OIT-003: an array aud containing the client id is accepted", () =>
+      Effect.gen(function* () {
+        const result = yield* attempt((location) =>
+          claimsAtZero(location, { aud: ["okta-client-id"] }),
+        );
+        assert.strictEqual(result._tag, "Success");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-003: a multi-value aud with azp naming this client is accepted", () =>
+      Effect.gen(function* () {
+        const result = yield* attempt((location) =>
+          claimsAtZero(location, { aud: ["okta-client-id", "other-api"], azp: "okta-client-id" }),
+        );
+        assert.strictEqual(result._tag, "Success");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-003: a multi-value aud without azp is rejected", () =>
+      Effect.gen(function* () {
+        const result = yield* attempt((location) =>
+          claimsAtZero(location, { aud: ["okta-client-id", "other-api"] }),
+        );
+        assert.strictEqual(result._tag, "Failure");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-003: an azp naming another client is rejected even when aud matches", () =>
+      Effect.gen(function* () {
+        const result = yield* attempt((location) =>
+          claimsAtZero(location, { azp: "someone-elses-client" }),
+        );
+        assert.strictEqual(result._tag, "Failure");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-003: an aud that does not contain the client id, or is not strings, is rejected", () =>
+      Effect.gen(function* () {
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { aud: ["another-client"] })))._tag,
+          "Failure",
+        );
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { aud: ["okta-client-id", 7] })))._tag,
+          "Failure",
+        );
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-004: an id_token expired by less than the skew is accepted", () =>
+      Effect.gen(function* () {
+        // exp 30s in the past at clock 0, inside the default 60s leeway.
+        const result = yield* attempt((location) => claimsAtZero(location, { exp: -30 }));
+        assert.strictEqual(result._tag, "Success");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-004: the skew is configurable (zero skew rejects a token 30s past exp)", () =>
+      Effect.gen(function* () {
+        const result = yield* attempt((location) => claimsAtZero(location, { exp: -30 }));
+        assert.strictEqual(result._tag, "Failure");
+      }).pipe(Effect.provide(oktaLayer({ clockSkew: Duration.zero }))),
+    );
+
+    it.effect("OIT-004: an id_token with iat in the future beyond the skew is rejected", () =>
+      Effect.gen(function* () {
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { iat: 300 })))._tag,
+          "Failure",
+        );
+        // Within the skew is fine.
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { iat: 30 })))._tag,
+          "Success",
+        );
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-004: an id_token with nbf in the future is rejected; a non-numeric nbf/iat too", () =>
+      Effect.gen(function* () {
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { nbf: 300 })))._tag,
+          "Failure",
+        );
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { nbf: "soon" })))._tag,
+          "Failure",
+        );
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { iat: "yesterday" })))._tag,
+          "Failure",
+        );
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-004: maxIdTokenAge rejects an old iat (and a missing one), driven by the TestClock", () =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust(Duration.minutes(30));
+        // iat = 0 is 30 minutes old against a 10 minute cap.
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { iat: 0 })))._tag,
+          "Failure",
+        );
+        // A recent iat passes; no iat at all cannot be aged, so it fails.
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location, { iat: 30 * 60 - 5 })))._tag,
+          "Success",
+        );
+        assert.strictEqual(
+          (yield* attempt((location) => claimsAtZero(location)))._tag,
+          "Failure",
+        );
+      }).pipe(Effect.provide(oktaLayer({ maxIdTokenAge: Duration.minutes(10) }))),
+    );
+
+    it.effect("OIT-006: an id_token without a nonce claim is rejected", () =>
+      Effect.gen(function* () {
+        const result = yield* attempt((location) => {
+          const { nonce: _dropped, ...rest } = claimsAtZero(location);
+          return rest;
+        });
+        assert.strictEqual(result._tag, "Failure");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-006: an oidc flow whose persisted payload lacks a nonce fails closed", () =>
+      Effect.gen(function* () {
+        const encryption = yield* Encryption.Encryption;
+        const verification = yield* Verification.Verification;
+        const oauth = yield* OAuth.OAuth;
+        const identifier = "oauth.flow:hand-made-1";
+        const codeVerifier = yield* encryption.encrypt(Redacted.make("a-verifier"), identifier);
+        const { value } = yield* verification.issue({
+          identifier,
+          ttl: Duration.minutes(5),
+          // No `nonce`: what a legacy or tampered flow row would look like.
+          payload: { providerId: "okta", codeVerifier, callbackURL: "/" },
+        });
+        const state = `${identifier}.${Redacted.value(value)}`;
+        currentClaims = claimsAtZero("https://x/?nonce=irrelevant");
+        const failure = yield* oauth
+          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("an id_token without a sub claim is rejected", () =>
+      Effect.gen(function* () {
+        const result = yield* attempt((location) => {
+          const { sub: _dropped, ...rest } = claimsAtZero(location);
+          return rest;
+        });
+        assert.strictEqual(result._tag, "Failure");
+      }).pipe(Effect.provide(oktaLayer())),
+    );
+
+    it.effect("OIT-008: a wrong-nonce failure logs reason=nonce while the error stays field-less", () => {
+      const logs: Array<string> = [];
+      const capture = Logger.make((entry) => {
+        logs.push(JSON.stringify(entry.message));
+      });
+      return Effect.gen(function* () {
+        const result = yield* attempt((location) => claimsAtZero(location, { nonce: "wrong" }));
+        if (result._tag !== "Failure") return assert.fail("expected the nonce mismatch to fail");
+        // The wire error carries no reason at all.
+        assert.strictEqual(JSON.stringify(result.failure), '{"_tag":"OAuthCallbackFailed"}');
+        assert.isTrue(logs.some((line) => line.includes("oauth callback failed: nonce")));
+      }).pipe(Effect.provide(Layer.merge(oktaLayer(), Logger.layer([capture]))));
+    });
+
+    // OIT-009: algorithm-confusion pins (both already fail at the RS256 gate).
+    const forgedToken = (header: Record<string, unknown>, claims: Record<string, unknown>, signature: string) => {
+      const head = toBase64Url(Buffer.from(JSON.stringify(header)));
+      const body = toBase64Url(Buffer.from(JSON.stringify(claims)));
+      return `${head}.${body}.${signature}`;
+    };
+
+    const forgedAttempt = (forge: (claims: Record<string, unknown>) => string) =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        forgedIdToken = forge(claimsAtZero(location));
+        return yield* oauth
+          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+      });
+
+    let forgedIdToken = "";
+    const forgedLayer = buildLayer({
+      providers: [okta()],
+      httpRoutes: {
+        ...idTokenRoutes(),
+        "/token": () => ({ access_token: "at-1", id_token: forgedIdToken }),
+      },
+    });
+
+    it.effect("OIT-009: an id_token with alg HS256 (signed with the RSA modulus as the HMAC key) is rejected", () =>
+      Effect.gen(function* () {
+        const failure = yield* forgedAttempt((claims) => {
+          const header = { alg: "HS256", typ: "JWT", kid: KID };
+          const unsigned = forgedToken(header, claims, "").slice(0, -1);
+          const key = Buffer.from(String(keyPair.publicKey.export({ format: "jwk" }).n), "base64url");
+          const mac = createHmac("sha256", key).update(unsigned).digest("base64url");
+          return `${unsigned}.${mac}`;
+        });
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(Effect.provide(forgedLayer)),
+    );
+
+    it.effect("OIT-009: an alg:none id_token is rejected", () =>
+      Effect.gen(function* () {
+        const failure = yield* forgedAttempt((claims) =>
+          forgedToken({ alg: "none", typ: "JWT" }, claims, ""),
+        );
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(Effect.provide(forgedLayer)),
+    );
+
+    it.effect("a userinfo body that yields no subject never becomes an account (no-subject)", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+        const failure = yield* oauth
+          .callback("acme", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": { email: "no-id@example.com" },
+            },
           }),
         ),
       ),

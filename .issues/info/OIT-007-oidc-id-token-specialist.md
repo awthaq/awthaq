@@ -3,7 +3,7 @@ ID: "OIT-007"
 Title: "at_hash unimplemented; auth_time/max_age absent — acceptable for the code-only flow but undocumented"
 Level: info
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:174"
 Auditor: "oidc-id-token-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `compliance` · `oauth` · reported by **OIDC ID Token Specialist** (`oidc-id-token-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Record the deferral in the Jwt.ts/OAuth.ts header comments next to the existing 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:198`. Fix: Document the at_hash/auth_time/max_age deferral next to the existing RS256 deferral, and pin response_type=code structurally. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Jwt.ts header documents the at_hash / auth_time / max_age deferral (at_hash becomes required if a hybrid/implicit response type is ever added; step-up is wayfinder ticket 15); OAuth.ts pins response_type via const RESPONSE_TYPE = 'code' (a const string literal already has the literal type -- no assertion needed); packages/oauth/README.md 'OIDC validation scope' table lists what is and is not validated; BEH-EA-127 amended. Docs only, no test.

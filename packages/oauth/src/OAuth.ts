@@ -49,7 +49,8 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import * as Jwt from "./Jwt.ts";
+import * as CallbackFailure from "./CallbackFailure.ts";
+import * as IdToken from "./IdToken.ts";
 import * as OAuthApi from "./OAuthApi.ts";
 import { OAuthConfig } from "./OAuthConfig.ts";
 import * as OAuthProvider from "./OAuthProvider.ts";
@@ -99,15 +100,6 @@ const expireStateCookie = HttpEffect.appendPreResponseHandler((_request, respons
 );
 const FLOW_TTL = Duration.minutes(10);
 const FLOW_PREFIX = "oauth.flow:";
-/**
- * JJS-001/KRS-004/OIT-002: bounds how long a provider-removed JWKS key
- * keeps verifying tokens. The kid-miss refetch (see `verifyIdToken`)
- * already converges as soon as a provider *rotates in* a new kid; a TTL
- * additionally converges the case a `kid` cache miss never catches at
- * all — a key the provider has *removed*, with no new kid ever presented
- * to force a refetch.
- */
-const JWKS_CACHE_TTL = Duration.minutes(15);
 
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
@@ -209,6 +201,14 @@ const resolveCallbackURL = (
   );
 };
 
+/**
+ * OIT-007: the only response type this plugin ever requests — authorization
+ * code. Pinned here (not a parameter) because `at_hash` validation is
+ * deliberately absent (see `Jwt.ts`'s header) and only becomes required if a
+ * hybrid/implicit type is ever added.
+ */
+const RESPONSE_TYPE = "code";
+
 const buildAuthorizeUrl = (
   provider: OAuthProvider.ResolvedProvider,
   params: {
@@ -219,7 +219,7 @@ const buildAuthorizeUrl = (
   },
 ): string => {
   const url = new URL(provider.authorizationEndpoint);
-  url.searchParams.set("response_type", "code");
+  url.searchParams.set("response_type", RESPONSE_TYPE);
   url.searchParams.set("client_id", provider.clientId);
   url.searchParams.set("redirect_uri", params.redirectUri);
   url.searchParams.set("scope", provider.scopes.join(" "));
@@ -285,7 +285,7 @@ const exchangeCode = (
       scope: body.scope,
       tokenType: body.token_type,
     };
-  }).pipe(Effect.catch((error) => Effect.fail(ProviderHttp.toCallbackFailure(error))));
+  }).pipe(Effect.catch((error) => CallbackFailure.providerFailure("token-exchange", error)));
 
 /** BE-002: the `TokenSet` half of the `Accounts.ProviderTokenSet` conversion — see `TokenSet`'s own comment. */
 const toProviderTokenSet = (tokens: TokenSet, now: DateTime.Utc): Accounts.ProviderTokenSet => ({
@@ -304,17 +304,6 @@ const toProviderTokenSet = (tokens: TokenSet, now: DateTime.Utc): Accounts.Provi
   scope: tokens.scope === undefined ? Option.none() : Option.some(tokens.scope),
   tokenType: tokens.tokenType === undefined ? Option.none() : Option.some(tokens.tokenType),
 });
-
-/**
- * BEH-EA-127 (claims side): `iss`/`aud`/`exp`/`nonce` are checked against
- * the provider's own configured issuer/client id and the flow's stored
- * nonce; the signature itself is verified against the provider's JWKS via
- * `Jwt.ts` (RS256 only — see that module's own header comment).
- */
-interface JwksCacheEntry {
-  readonly jwks: Jwt.Jwks;
-  readonly fetchedAt: number;
-}
 
 /**
  * OIT-001 (OIDC Core 5.3.2): identity-bearing claims come from the *signed*
@@ -336,86 +325,6 @@ const mergeClaims = (
   }
   return { ...idClaims, ...userinfoClaims, ...signedIdentity };
 };
-
-const verifyIdToken = (
-  httpClient: HttpClient.HttpClient,
-  jwksCache: Ref.Ref<HashMap.HashMap<string, JwksCacheEntry>>,
-  provider: OAuthProvider.ResolvedProvider,
-  idToken: string,
-  nonce: string | undefined,
-  jwksTimeout: Duration.Duration,
-): Effect.Effect<
-  Record<string, unknown>,
-  OAuthApi.OAuthCallbackFailed | OAuthApi.ProviderUnavailable
-> =>
-  Effect.gen(function* () {
-    if (Option.isNone(provider.jwksUri)) {
-      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
-    }
-    const jwksUri = provider.jwksUri.value;
-    const decoded = yield* Jwt.decode(idToken).pipe(
-      Effect.mapError(() => new OAuthApi.OAuthCallbackFailed()),
-    );
-    if (decoded.header.alg !== "RS256") {
-      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
-    }
-
-    // ESS-001/GC-001/SFS-002/TTE-001: the provider's JWKS document is
-    // untrusted, network-fetched input — decoded via `Schema`, never a
-    // cast (`packages/jwt/src/verify.ts`'s own established idiom for the
-    // identical shape). A malformed body now fails typed as
-    // `OAuthCallbackFailed`, the same as every other check in this
-    // function, instead of flowing forward fully typed into `findKey`.
-    // ECF-001/EEM-004/ERS-003: `httpClient` is the retrying client; the
-    // deadline covers request plus decode, and a transport/timeout/5xx
-    // failure is `ProviderUnavailable`, a rejected/malformed document a 400.
-    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(
-      Effect.flatMap(ProviderHttp.decodeBody(Jwt.JwksDocumentSchema)),
-      Effect.timeout(jwksTimeout),
-      Effect.tap((jwks) =>
-        Ref.update(jwksCache, (cache) =>
-          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),
-        ),
-      ),
-      Effect.catch((error) => Effect.fail(ProviderHttp.toCallbackFailure(error))),
-    );
-
-    // JJS-001/KRS-004/OIT-002: a TTL'd-out entry is treated the same as a
-    // cache miss — refetched below, same as an empty cache.
-    const cachedEntry = HashMap.get(yield* Ref.get(jwksCache), provider.id);
-    const jwks =
-      Option.isSome(cachedEntry) &&
-      Date.now() - cachedEntry.value.fetchedAt < Duration.toMillis(JWKS_CACHE_TTL)
-        ? cachedEntry.value.jwks
-        : yield* fetchAndCacheJwks;
-
-    const jwk = yield* Jwt.findKey(jwks, decoded.header.kid).pipe(
-      // A `kid` cache miss gets exactly one refetch — the provider may
-      // have rotated keys since this process last cached them.
-      Effect.catch(() =>
-        fetchAndCacheJwks.pipe(Effect.flatMap((fresh) => Jwt.findKey(fresh, decoded.header.kid))),
-      ),
-      Effect.catchTag("JwtVerificationError", () => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
-    );
-    const verified = yield* Jwt.verifyRs256(jwk, decoded.signingInput, decoded.signature).pipe(
-      Effect.mapError(() => new OAuthApi.OAuthCallbackFailed()),
-    );
-    if (!verified) return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
-
-    const claims = decoded.payload;
-    const expectedIssuer = Option.getOrUndefined(provider.issuer);
-    const exp = typeof claims["exp"] === "number" ? claims["exp"] : undefined;
-    if (
-      claims["iss"] !== expectedIssuer ||
-      claims["aud"] !== provider.clientId ||
-      exp === undefined ||
-      Date.now() >= exp * 1000 ||
-      (nonce !== undefined && claims["nonce"] !== nonce)
-    ) {
-      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
-    }
-    return claims;
-  });
 
 export const OAuthHandlers = HttpApiBuilder.group(
   OAuthApi.OAuthApi,
@@ -620,7 +529,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // ERS-003: the retrying client serves the idempotent GETs (JWKS,
       // userinfo); `httpClient` stays plain for the single-use code exchange.
       const readClient = ProviderHttp.retrying(httpClient, config_.retry);
-      const jwksCache = yield* Ref.make(HashMap.empty<string, JwksCacheEntry>());
+      const jwksCache = yield* Ref.make(HashMap.empty<string, IdToken.JwksCacheEntry>());
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const encryption = yield* Encryption.Encryption;
@@ -785,17 +694,16 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
             yield* digest(input.cookieState),
             yield* digest(input.state),
           );
-        if (Option.isNone(decoded) || !cookieMatches) {
-          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
-        }
+        if (Option.isNone(decoded)) return yield* CallbackFailure.callbackFailed("state-malformed");
+        if (!cookieMatches) return yield* CallbackFailure.callbackFailed("state-cookie-mismatch");
         const { identifier, value } = decoded.value;
         const consumed = yield* verification.consume(identifier, value).pipe(
-          Effect.catchTag("TokenConsumed", () => new OAuthApi.OAuthCallbackFailed()),
+          Effect.catchTag("TokenConsumed", () => CallbackFailure.callbackFailed("flow-consumed")),
           Effect.catchTag("PlatformError", Effect.die),
         );
         const decodedFlow = decodeFlowPayload(consumed.payload);
         if (Option.isNone(decodedFlow) || decodedFlow.value.providerId !== providerId) {
-          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+          return yield* CallbackFailure.callbackFailed("flow-invalid");
         }
         const flow = decodedFlow.value;
 
@@ -812,8 +720,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const codeVerifier = yield* encryption.decrypt(flow.codeVerifier, identifier).pipe(
           Effect.map(Redacted.value),
           Effect.catchTags({
-            DecryptionFailed: () => new OAuthApi.OAuthCallbackFailed(),
-            UnknownKeyId: () => new OAuthApi.OAuthCallbackFailed(),
+            DecryptionFailed: () => CallbackFailure.callbackFailed("decrypt"),
+            UnknownKeyId: () => CallbackFailure.callbackFailed("decrypt"),
           }),
         );
         const nonce =
@@ -822,8 +730,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
             : yield* encryption.decrypt(flow.nonce, identifier).pipe(
                 Effect.map(Redacted.value),
                 Effect.catchTags({
-                  DecryptionFailed: () => new OAuthApi.OAuthCallbackFailed(),
-                  UnknownKeyId: () => new OAuthApi.OAuthCallbackFailed(),
+                  DecryptionFailed: () => CallbackFailure.callbackFailed("decrypt"),
+                  UnknownKeyId: () => CallbackFailure.callbackFailed("decrypt"),
                 }),
               );
 
@@ -833,7 +741,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           Option.isSome(provider.issuer) &&
           input.iss !== provider.issuer.value
         ) {
-          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+          return yield* CallbackFailure.callbackFailed("iss-mismatch");
         }
 
         // AP-005 (RFC 6749 §4.1.2.1): an authorization-error redirect (no
@@ -853,7 +761,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           );
           const code = Schema.decodeUnknownOption(OAuthApi.AuthorizationErrorCode)(input.error);
           return yield* Option.match(code, {
-            onNone: () => Effect.fail(new OAuthApi.OAuthCallbackFailed()),
+            onNone: () => CallbackFailure.callbackFailed("error-redirect"),
             onSome: (error) => Effect.fail(new OAuthApi.OAuthAuthorizationDenied({ error })),
           });
         }
@@ -867,18 +775,25 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         );
         const exchangedAt = yield* DateTime.now;
 
+        // OIT-006: an oidc flow always carries a nonce (authorize mints one),
+        // so a flow payload without one is refused rather than verified
+        // without the replay/injection binding.
         const idClaims: Record<string, unknown> | undefined =
           provider.kind === "oidc"
             ? tokens.idToken === undefined
-              ? yield* Effect.fail(new OAuthApi.OAuthCallbackFailed())
-              : yield* verifyIdToken(
-                readClient,
-                jwksCache,
-                provider,
-                tokens.idToken,
-                nonce,
-                config_.httpTimeouts.jwks,
-              )
+              ? yield* CallbackFailure.callbackFailed("id-token-missing")
+              : nonce === undefined
+                ? yield* CallbackFailure.callbackFailed("missing-nonce")
+                : yield* IdToken.verify({
+                    httpClient: readClient,
+                    jwksCache,
+                    provider,
+                    idToken: tokens.idToken,
+                    nonce,
+                    jwksTimeout: config_.httpTimeouts.jwks,
+                    clockSkew: config_.clockSkew,
+                    maxIdTokenAge: config_.maxIdTokenAge,
+                  })
             : undefined;
 
         // A plain `"oauth2"` provider (no `id_token` at all, e.g. GitHub)
@@ -897,7 +812,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               .pipe(
                 Effect.flatMap(ProviderHttp.decodeBody(ProviderResponses.UserinfoSchema)),
                 Effect.timeout(config_.httpTimeouts.userinfo),
-                Effect.catch((error) => Effect.fail(ProviderHttp.toCallbackFailure(error))),
+                Effect.catch((error) => CallbackFailure.providerFailure("userinfo", error)),
               )
           : undefined;
 
@@ -906,10 +821,16 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           userinfoClaims !== undefined &&
           userinfoClaims["sub"] !== idClaims["sub"]
         ) {
-          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+          return yield* CallbackFailure.callbackFailed("userinfo-sub-mismatch");
         }
 
         const profile = provider.mapProfile(mergeClaims(idClaims, userinfoClaims));
+        // A claim set that yields no stable identifier (a userinfo body with
+        // no `id`/`sub`, a `mapProfile` reading the wrong field) must never
+        // become an account keyed on an empty or missing subject.
+        if (typeof profile.subject !== "string" || profile.subject === "") {
+          return yield* CallbackFailure.callbackFailed("no-subject");
+        }
 
         const accountIfLinked = yield* accounts.findByProviderSubject(
           providerId,
@@ -940,9 +861,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     ...issuerField(provider.issuer),
                   })
                   .pipe(
-                    Effect.catchTag(
-                      "AccountAlreadyLinked",
-                      () => new OAuthApi.OAuthCallbackFailed(),
+                    Effect.catchTag("AccountAlreadyLinked", () =>
+                      CallbackFailure.callbackFailed("account-already-linked"),
                     ),
                     Effect.orDie,
                   );

@@ -3,7 +3,7 @@ ID: "OIT-004"
 Title: "Expiry check has zero clock-skew leeway and iat/nbf are never validated"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:274"
 Auditor: "oidc-id-token-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `oauth` · reported by **OIDC ID Token Specialist** (`oidc-id-token-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Introduce a leeway constant (60s is a common choice) applied to both exp (and nb
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:356`. Fix: Add a configurable clock-skew leeway and validate iat/nbf. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OAuthConfig.clockSkew (default 60s) and maxIdTokenAge (Option, default none; config input takes a plain Duration). claimProblem: exp+skew, nbf-skew, iat<=now+skew (all must be finite numbers when present), optional max age rejects an old or missing iat. Tests (TestClock-driven): expired-by-less-than-skew accepted, zero skew rejects, future iat beyond skew rejected / within skew accepted, future or non-numeric nbf/iat rejected, maxIdTokenAge rejects an old iat and a missing one. Gates as MA-002.

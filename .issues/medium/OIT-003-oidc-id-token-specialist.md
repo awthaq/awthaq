@@ -3,7 +3,7 @@ ID: "OIT-003"
 Title: "azp never validated and array-valued aud rejected outright"
 Level: medium
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:272"
 Auditor: "oidc-id-token-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `oauth` · reported by **OIDC ID Token Specialist** (`oidc-id-token-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Normalize aud: if it is a string, compare directly; if an array, require it to c
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:356`. Fix: Accept aud as a string or an array containing clientId. Require azp === clientId when aud has more than one value, and whenever azp is present. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** IdToken.claimProblem/audienceProblem (no casts): aud is a string equal to the client id or an array of strings containing it; azp required and equal with several audiences and equal whenever present. Tests: array aud accepted (red before), multi-value aud with azp accepted, multi-value without azp rejected, foreign azp rejected, aud missing the client id or containing a non-string rejected. Also requires sub to be a non-empty string. JwtCodec.ts's first-party audience check left to slice 04. BEH-EA-127 amended. Gates as MA-002.
