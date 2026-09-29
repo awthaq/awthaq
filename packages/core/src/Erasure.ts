@@ -8,7 +8,7 @@
 // It is an aggregating registry (ADR-EA-012): each plugin contributes its own
 // erasure, ordered by declared `order` then id, frozen at first read.
 //
-// The type system carries the guarantee (ADR-EA-028's principle): a plugin's
+// The type system carries the guarantee (ADR-EA-033's principle): a plugin's
 // `contribute` layer *requires* `ErasureRegistry`, so a composition that installs
 // a plugin holding personal data without providing the registry does not
 // compile — erasure is no longer something a host has to remember to opt in to.
@@ -47,14 +47,16 @@ import { SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { Accounts } from "./Accounts.ts";
 import { AuditLog } from "./AuditLog.ts";
 import { AuthEvents } from "./AuthEvents.ts";
+import type { StoreUnavailable } from "./Errors.ts";
 import * as HookPoint from "./HookPoint.ts";
 import { ErasureRegistry, type ErasureSubject } from "./ErasureRegistry.ts";
 import * as Hooks from "./Hooks.ts";
 import { Sessions } from "./Sessions.ts";
-import { Users, type UserId, type UserNotFound } from "./Users.ts";
+import { emailOf, Users, type UserId, type UserNotFound } from "./Users.ts";
 import { Verification } from "./Verification.ts";
 
 export * from "./ErasureRegistry.ts";
@@ -86,7 +88,7 @@ export interface AccountErasureShape {
   readonly eraseAccount: (
     userId: UserId,
     options?: { readonly deletedBy?: "self" | "admin" },
-  ) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted>;
+  ) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted | StoreUnavailable>;
 }
 
 export class AccountErasure extends Context.Service<AccountErasure, AccountErasureShape>()(
@@ -110,10 +112,11 @@ export const layer = Layer.effect(
     const eraseAccount: AccountErasureShape["eraseAccount"] = (userId, options) =>
       Effect.gen(function* () {
         const user = yield* users.findById(userId);
-        const subject: ErasureSubject = { userId, email: user.email };
+        const email = Option.getOrUndefined(emailOf(user));
+        const subject: ErasureSubject = { userId, email };
         // Veto first: nothing has been touched yet (see the module header).
         yield* HookPoint.aborted(Hooks.BeforeUserDelete)(
-          beforeDelete.run({ id: userId, email: user.email }),
+          beforeDelete.run({ id: userId, ...(email === undefined ? {} : { email }) }),
         );
         const contributions = yield* registry.contributions;
         yield* sqlTransaction

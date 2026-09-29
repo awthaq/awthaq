@@ -23,6 +23,7 @@
 // per-hash figure documented in `PasswordHasher.ts`. Legacy verifiers (bcrypt)
 // still run on the calling thread, bounded by `AUTH_PASSWORD_HASH_CONCURRENCY`.
 
+import * as Defects from "./Defects.ts";
 import * as Config from "effect/Config";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -73,9 +74,7 @@ const poolSizeConfig = Config.Int("AUTH_PASSWORD_HASH_WORKER_POOL_SIZE").pipe(
 export const makeBackend = Effect.gen(function* () {
   const size = yield* poolSizeConfig;
   if (size < 1) {
-    return yield* Effect.die(
-      new Error(`awthaq: AUTH_PASSWORD_HASH_WORKER_POOL_SIZE (${size}) must be at least 1`),
-    );
+    return yield* Defects.invalidConfiguration("AUTH_PASSWORD_HASH_WORKER_POOL_SIZE", `awthaq: AUTH_PASSWORD_HASH_WORKER_POOL_SIZE (${size}) must be at least 1`);
   }
   const platform = yield* Worker.WorkerPlatform;
   const spawner = yield* Worker.Spawner;

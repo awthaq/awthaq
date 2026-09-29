@@ -38,8 +38,9 @@ import * as HookPoint from "./HookPoint.ts";
 // *every* user-creating path (NAM-002/SCP-008: password sign-up and the OAuth
 // first-login creation), so `strategy` says which one — `"password"`, or the
 // OAuth provider id — and one tap can tell them apart.
+// FAMS-002: `email` is absent for a sign-up that has none (an OAuth profile without one).
 const SignUpInput = Schema.Struct({
-  email: Schema.String,
+  email: Schema.optional(Schema.String),
   name: Schema.String,
   strategy: Schema.String,
 });
@@ -50,7 +51,7 @@ export class BeforeSignUp extends HookPoint.veto<BeforeSignUp>()("auth.user.sign
 // provisioning fan-out, CRM sync).
 const SignedUp = Schema.Struct({
   userId: Schema.String,
-  email: Schema.String,
+  email: Schema.optional(Schema.String),
   strategy: Schema.String,
 });
 export class AfterSignUp extends HookPoint.observe<AfterSignUp>()("auth.user.signedUp", SignedUp) {}
@@ -63,7 +64,7 @@ export class AfterSignUp extends HookPoint.observe<AfterSignUp>()("auth.user.sig
 // amended value is ignored: a sign-in cannot change who is signing in.
 const SignInInput = Schema.Struct({
   userId: Schema.String,
-  email: Schema.String,
+  email: Schema.optional(Schema.String),
   strategy: Schema.String,
 });
 export class BeforeSignIn extends HookPoint.veto<BeforeSignIn>()("auth.user.signIn", SignInInput) {}
@@ -108,7 +109,8 @@ export class BeforeSessionIssue extends HookPoint.divert<BeforeSessionIssue>()(
 // not observe: a plugin must be able to block a delete outright (a GDPR
 // legal hold, an org-ownership-transfer requirement), not just react
 // after the fact.
-const UserDeleteInput = Schema.Struct({ id: Schema.String, email: Schema.String });
+// FAMS-002: `email` is absent for a Phone/Anonymous user (`Users.emailOf` is `None`).
+const UserDeleteInput = Schema.Struct({ id: Schema.String, email: Schema.optional(Schema.String) });
 export class BeforeUserDelete extends HookPoint.veto<BeforeUserDelete>()(
   "auth.user.beforeDelete",
   UserDeleteInput,

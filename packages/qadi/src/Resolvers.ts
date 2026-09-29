@@ -18,7 +18,7 @@
 //   already-working uses of `@qadi/predicate-sql`/`@qadi/audit`/
 //   `@qadi/devtools` an application wires itself — application-level usage
 //   patterns, not something this bridge package ships.
-import { Sessions, Users } from "@awthaq/core";
+import { Defects, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -102,10 +102,12 @@ const isUserAttributeName = (attribute: string): attribute is UserAttributeName 
 const userAttributeReaders: {
   readonly [N in UserAttributeName]: (
     user: Users.UserRecord,
-  ) => Schema.Schema.Type<(typeof UserAttributeSchemas)[N]>;
+  ) => Schema.Schema.Type<(typeof UserAttributeSchemas)[N]> | undefined;
 } = {
-  email: (user) => user.email,
-  emailVerified: (user) => user.emailVerified,
+  // FAMS-002: a Phone/Anonymous user has no email — "no value", like an unknown attribute.
+  email: (user) => Option.getOrUndefined(Users.emailOf(user)),
+  emailVerified: (user) =>
+    user.identity._tag === "Email" ? user.identity.emailVerified : undefined,
   name: (user) => user.name,
 };
 
@@ -126,8 +128,11 @@ export const UserAttributes: Layer.Layer<AttributeResolver, never, Users.Users> 
       users.findById(userId).pipe(
         Effect.map(Option.some),
         // A deleted user stays "no opinion" (as documented); only a genuine
-        // outage (a defect) becomes a typed failure naming the attribute.
+        // outage (`StoreUnavailable`, or a defect) becomes a typed failure naming the attribute.
         Effect.catchTag("UserNotFound", () => Effect.succeed(Option.none<Users.UserRecord>())),
+        Effect.catchTag("StoreUnavailable", (cause) =>
+          Effect.fail(new AttributeResolveError({ attribute, cause })),
+        ),
         Effect.catchDefect((cause) => Effect.fail(new AttributeResolveError({ attribute, cause }))),
       );
 
@@ -223,15 +228,13 @@ export type ReauthRequired = Api.ReauthRequired;
  * rather than being silently discharged unexamined.
  */
 const reauthHandler: ObligationHandler<
-  Api.ReauthRequired,
+  Api.ReauthRequired | Api.StoreUnavailable,
   Api.CurrentPrincipal | Sessions.Sessions
 > = (obligations) =>
   Effect.gen(function* () {
     for (const duty of obligations) {
       if (duty.id !== REAUTH_OBLIGATION_ID) {
-        return yield* Effect.die(
-          new Error(`awthaq: ObligationHandlers.reauth cannot discharge obligation "${duty.id}"`),
-        );
+        return yield* Defects.invalidConfiguration("onObligations", `awthaq: ObligationHandlers.reauth cannot discharge obligation "${duty.id}"`);
       }
     }
     if (obligations.length === 0) return;
@@ -242,11 +245,7 @@ const reauthHandler: ObligationHandler<
     for (const duty of obligations) {
       const value = duty.attributes["maxAgeSeconds"];
       if (!isValidMaxAge(value)) {
-        return yield* Effect.die(
-          new Error(
-            "awthaq: reauth obligation is missing a finite, non-negative numeric maxAgeSeconds",
-          ),
-        );
+        return yield* Defects.invalidConfiguration("maxAgeSeconds", "awthaq: reauth obligation is missing a finite, non-negative numeric maxAgeSeconds");
       }
       windows.push(value);
     }

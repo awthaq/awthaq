@@ -44,7 +44,7 @@ const seed = Effect.gen(function* () {
   const users = yield* Users.Users;
   const accounts = yield* Accounts.Accounts;
   const sessions = yield* Sessions.Sessions;
-  const user = yield* users.create({ email: "Export@Example.com", name: "Exporter" });
+  const user = yield* users.create({ identity: { _tag: "Email", email: "Export@Example.com" }, name: "Exporter" });
   yield* accounts.link({
     userId: user.id,
     providerId: "google",
@@ -76,14 +76,18 @@ describe("AccountExport", () => {
         const auditLog = yield* AuditLog.AuditLog;
         const user = yield* seed;
         const other = yield* (yield* Users.Users).create({
-          email: "other@example.com",
+          identity: { _tag: "Email", email: "other@example.com" },
           name: "Other",
         });
 
         const document = yield* exporter.exportAccount(user.id);
 
         assert.strictEqual(document.user.id, user.id);
-        assert.strictEqual(document.user.email, "export@example.com");
+        assert.deepStrictEqual(document.user.identity, {
+          _tag: "Email",
+          email: "export@example.com",
+          emailVerified: false,
+        });
         assert.deepStrictEqual(
           document.accounts.map((account) => [account.providerId, account.issuer]),
           [

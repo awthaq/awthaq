@@ -3,7 +3,7 @@ ID: "MW-008"
 Title: "SessionDto date fields typed as unconstrained Schema.String — format is convention, not contract"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "api"
 Source: "packages/api/src/Session.ts:20"
 Auditor: "matias-woloski"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `api` · reported by **Matias Woloski — Co-founder/former CTO of Auth0** (`matias-woloski`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Use Effect Schema's date-time/ISO-8601 schema for these fields (or a branded Iso
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `api-contract-tests`. Evidence at HEAD ec065a7: `packages/api/src/Session.ts:18`. Fix: Make SessionDto's timestamps a real contract: Schema.DateTimeUtcFromString on the wire (an ISO string) that decodes to DateTime.Utc. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** SessionDto createdAt/lastActiveAt/expiresAt are now an ISO-8601-pattern string (Schema.isPattern with toJsonSchema format date-time) decoded to DateTime.Utc via SchemaTransformation.dateTimeUtcFromString; plain DateTimeUtcFromString would not emit format date-time. Session.toSessionDto and toDto (server) and Admin.toSessionListDto pass DateTime.Utc through (no formatIso). Consumer fixes: react Providers.decodeSeeds accepts a SessionDto instance as-is (the encoded-side decode would refuse DateTime values); client/react/server tests build DTOs with DateTime.makeUnsafe or decode wire JSON. Tests (red first, 3 failing in Contracts.test.ts): non-ISO refused, ISO to DateTime.Utc round trip, OpenAPI SessionDtoEncoded timestamps are date-time strings. BEH-EA-031 text and traceability row. Full test (1867) and bdd green.

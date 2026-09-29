@@ -53,26 +53,54 @@ describe("SubjectResolver (default)", () => {
     }),
   );
 
-  it.effect("an ApiKeyPrincipal resolves to id-only — no scopes source exists yet", () =>
+  it.effect("BEH-EA-140: an ApiKeyPrincipal's scopes become AuthSubject permissions", () =>
     Effect.gen(function* () {
       const resolver = yield* SubjectResolver.SubjectResolver;
       const principal = new Api.ApiKeyPrincipal({
         ref: new Api.PrincipalRef({ type: "apikey", id: "key-1" }),
+        scopes: ["reports:read", "scim:users:write"],
       });
       const subject = yield* resolver.resolve(principal);
       assert.strictEqual(subject.id, "apikey:key-1");
-      assert.strictEqual(subject.permissions.size, 0);
+      assert.deepStrictEqual([...subject.permissions].sort(), ["reports:read", "scim:users:write"]);
     }),
   );
 
-  it.effect("a ServicePrincipal resolves to id-only — no scopes source exists yet", () =>
+  it.effect("BEH-EA-141: a ServicePrincipal's scopes become AuthSubject permissions", () =>
     Effect.gen(function* () {
       const resolver = yield* SubjectResolver.SubjectResolver;
       const principal = new Api.ServicePrincipal({
         ref: new Api.PrincipalRef({ type: "service", id: "svc-1" }),
+        scopes: ["invoices:read"],
       });
       const subject = yield* resolver.resolve(principal);
       assert.strictEqual(subject.id, "service:svc-1");
+      assert.deepStrictEqual([...subject.permissions], ["invoices:read"]);
+    }),
+  );
+
+  it.effect("a scope that is not shaped resource:action names no permission (fail-closed)", () =>
+    Effect.gen(function* () {
+      const resolver = yield* SubjectResolver.SubjectResolver;
+      const principal = new Api.ApiKeyPrincipal({
+        ref: new Api.PrincipalRef({ type: "apikey", id: "key-2" }),
+        scopes: ["admin", ":read", "read:", "ok:read"],
+      });
+      const subject = yield* resolver.resolve(principal);
+      assert.deepStrictEqual([...subject.permissions], ["ok:read"]);
+      assert.strictEqual(subject.permissions.size, 1);
+    }),
+  );
+
+  it.effect("no scopes, no permissions", () =>
+    Effect.gen(function* () {
+      const resolver = yield* SubjectResolver.SubjectResolver;
+      const subject = yield* resolver.resolve(
+        new Api.ApiKeyPrincipal({
+          ref: new Api.PrincipalRef({ type: "apikey", id: "key-3" }),
+          scopes: [],
+        }),
+      );
       assert.strictEqual(subject.permissions.size, 0);
     }),
   );

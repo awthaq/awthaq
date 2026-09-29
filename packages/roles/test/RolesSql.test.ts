@@ -8,7 +8,15 @@
 // `layerMemory`'s own "assigning an already-held role name is a no-op"
 // contract — the one property `Roles.test.ts`'s in-memory suite cannot
 // itself prove.
-import { AuditLog, AuthEvents, DataExport, Erasure, Migrations, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  DataExport,
+  Erasure,
+  Migrations,
+  Slots,
+  Users,
+} from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -36,8 +44,11 @@ const owner = role({
 
 // `Roles` publishes `auth.roles.assigned/revoked` (RRM-005) and validates
 // assignments against the catalog (RRM-003), so it needs `AuthEvents` and a catalog.
+// MA-005: a plugin layer built outside `Auth.make` (which provides one itself) needs a `SlotsRegistry`.
 const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Slots.layer),
+  // CSG-001/CSG-005: the plugin contributes its erasure and export to the composition's registries.
   Layer.provideMerge(Erasure.registryLayer),
   Layer.provideMerge(DataExport.registryLayer),
 );
@@ -92,6 +103,19 @@ describe("Roles.Roles.layerSql", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // ECS-006: `awthaq seed admin` finds an existing administrator through `holders`.
+  it.effect("holders lists exactly the users holding the role", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const userA = Users.UserId("66666666-6666-6666-6666-666666666666");
+      const userB = Users.UserId("77777777-7777-7777-7777-777777777777");
+      yield* roles.assign(userA, "owner");
+      yield* roles.assign(userB, "editor");
+      assert.deepStrictEqual(yield* roles.holders("owner"), [userA]);
+      assert.deepStrictEqual(yield* roles.holders("nobody"), []);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("a user with no assigned roles lists empty", () =>
     Effect.gen(function* () {
       const roles = yield* Roles.Roles;
@@ -140,7 +164,7 @@ describe("Roles.Roles.layerSql", () => {
       const roles = yield* Roles.Roles;
       const userId = Users.UserId("66666666-6666-6666-6666-666666666666");
       const failure = yield* roles.assign(userId, "typo-role").pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "UnknownRole");
+      assert.strictEqual(failure._tag, "Roles/UnknownRole");
       assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
     }).pipe(Effect.provide(TestLayer)),
   );

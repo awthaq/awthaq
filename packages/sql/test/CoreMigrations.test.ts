@@ -41,6 +41,72 @@ describe("CoreMigrations", () => {
       }).pipe(Effect.provide(SqlLive)),
   );
 
+  it.effect(
+    "FAMS-002: the email-nullable migration preserves existing rows and the lower(email) unique index (SQLite table rebuild)",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        // A release that predates the identity union (migrations 1-20).
+        yield* Migrator.make({})({ loader: upTo(20) });
+        yield* sql`INSERT INTO users (id, email, emailVerified, name, createdAt, updatedAt, metadata)
+                   VALUES ('u1', 'ada@example.com', 1, 'Ada', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '{"k":1}')`;
+        yield* sql`INSERT INTO users (id, email, emailVerified, name, createdAt, updatedAt)
+                   VALUES ('u2', 'bo@example.com', 0, 'Bo', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`;
+
+        yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+
+        const rows = yield* sql<{
+          id: string;
+          email: string | null;
+          emailVerified: number;
+          metadata: string | null;
+          phone: string | null;
+          phoneVerified: number;
+          status: string;
+          image: string | null;
+        }>`SELECT id, email, emailVerified, metadata, phone, phoneVerified, status, image FROM users ORDER BY id`;
+        assert.deepStrictEqual(rows, [
+          {
+            id: "u1",
+            email: "ada@example.com",
+            emailVerified: 1,
+            metadata: '{"k":1}',
+            phone: null,
+            phoneVerified: 0,
+            status: "active",
+            image: null,
+          },
+          {
+            id: "u2",
+            email: "bo@example.com",
+            emailVerified: 0,
+            metadata: null,
+            phone: null,
+            phoneVerified: 0,
+            status: "active",
+            image: null,
+          },
+        ]);
+
+        // The email index survived the rebuild: still case-insensitively unique...
+        const duplicate =
+          yield* sql`INSERT INTO users (id, email, emailVerified, name, createdAt, updatedAt)
+                   VALUES ('u3', 'ADA@example.com', 0, 'Dup', 'x', 'x')`.pipe(Effect.flip);
+        assert.strictEqual(duplicate.reason._tag, "UniqueViolation");
+        // ...and now nullable: any number of email-less rows coexist (NULLs are distinct).
+        yield* sql`INSERT INTO users (id, email, emailVerified, name, createdAt, updatedAt)
+                   VALUES ('g1', NULL, 0, 'Guest 1', 'x', 'x')`;
+        yield* sql`INSERT INTO users (id, email, emailVerified, name, createdAt, updatedAt)
+                   VALUES ('g2', NULL, 0, 'Guest 2', 'x', 'x')`;
+
+        // Phone numbers are unique; rows without one never collide.
+        yield* sql`UPDATE users SET phone = '+15550100' WHERE id = 'g1'`;
+        const phoneDuplicate =
+          yield* sql`UPDATE users SET phone = '+15550100' WHERE id = 'g2'`.pipe(Effect.flip);
+        assert.strictEqual(phoneDuplicate.reason._tag, "UniqueViolation");
+      }).pipe(Effect.provide(SqlLive)),
+  );
+
   it.effect("every index migration uses IF NOT EXISTS", () =>
     Effect.gen(function* () {
       const source = yield* Effect.promise(() =>

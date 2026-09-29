@@ -3,7 +3,7 @@ ID: "SOS-008"
 Title: "No phone identity groundwork: no phone field, no E.164 normalization, identifier taxonomy is email/password only"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Verification.ts:71"
 Auditor: "sms-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `core` · reported by **SMS OTP Specialist** (`sms-otp-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Before any SMS plugin: add a normalizePhone (E.164) helper to core or a shared m
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `users-identity-model`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:72`. Fix: Ship E.164 normalization as part of ticket 09's Phone identity, enforced at the Users boundary, plus the verify-phone identifier scheme. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Closed by commit 4b63d9e. core Phone.ts: branded E164 (declared in @awthaq/sql Models like UserId) and normalizePhone(raw, {defaultCountryCode?}) (strip separators; +/00 prefix or a configured default country code; trunk 0 dropped) — deliberately a minimal well-formedness floor, not libphonenumber (module header says so; a host needing dialability validation does it before calling Users). Users.create/promoteIdentity/findByPhone accept only E164, so a raw string cannot reach storage; phoneVerified cannot be true without a phone (union shape). The verify-phone:<userId> (payload: the normalized number) and change-email identifier schemes are documented in BEH-EA-057 (spec/behaviors/08). Tests: core Phone.test.ts ('+1 555 0100', '15550100' with default region US and '+15550100' normalize identically; invalid inputs refused).

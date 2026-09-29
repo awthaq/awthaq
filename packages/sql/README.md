@@ -8,7 +8,7 @@ The persistence stratum: the entities, repositories and migrations behind `@awth
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Models`              | `makeModels(dialect)` — the `User`, `Account`, `Session`, `VerificationToken`, `VerificationReservation` `Model.Class` entities with the boolean/DateTime wire codec of the given dialect (`"pg"` or `"sqlite"`); `dialectFields(dialect)` / `resolveDialect(sql)` for record stores that declare their own `SqlSchema` structs; the id brands `UserId`, `AccountId`, `SessionId`, `VerificationTokenId` |
 | `Repositories`        | one `Context.Service` + `…Live` layer each: `Users`, `Accounts` (requires `Encryption`), `Sessions`, `Verification`, `VerificationReservations` (one atomic claim), `AuditLog`. Built over the ambient `SqlClient`; none opens its own transaction (BEH-EA-035) — the composing domain service holds the boundary, via `@awthaq/ports`' `SqlTransaction` where it needs one                              |
-| `CoreMigrations`      | `coreMigrations` — 20 forward-only migrations for the tables above, with one `pg` and one `sqlite` branch each                                                                                                                                                                                                                                                                                           |
+| `CoreMigrations`      | `coreMigrations` — 23 forward-only migrations for the tables above, with one `pg` and one `sqlite` branch each                                                                                                                                                                                                                                                                                           |
 | `RateLimiterStoreSql` | an opt-in SQL store for `@awthaq/core`'s rate limiter, with its own migration and tracking table                                                                                                                                                                                                                                                                                                         |
 
 Repositories resolve the dialect once, at layer construction, from the client they are given (`sql.onDialectOrElse`; anything but `pg`/`sqlite` dies), so wiring is just providing a `SqlClient` and, for accounts, `Encryption`:
@@ -114,7 +114,7 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 yield * Migrator.make({})({ loader: CoreMigrations.coreMigrations });
 ```
 
-**Two ledgers, on purpose.** `Migrator` records only a numeric id and skips any id at or below the newest one recorded. Core's ids (1–20) live in the default `effect_sql_migrations` table. The plugin list (`auth.migrations`, run with `@awthaq/core`'s `Migrations.run`) numbers from 1 as well, so it uses its own table, `awthaq_plugin_migrations`; the SQL rate limiter's migration uses `awthaq_rate_limiter_migrations`. Never run two id spaces against one table. Order: core first, then plugins. Plugin ids are positions in the dependency-ordered list, so on a database that has already been migrated, add new plugins at the end of the composition rather than in the middle.
+**Two ledgers, on purpose.** `Migrator` records only a numeric id and skips any id at or below the newest one recorded. Core's ids (1–25) live in the default `effect_sql_migrations` table. The plugin list (`auth.migrations`, run with `@awthaq/core`'s `Migrations.run`) numbers from 1 as well, so it uses its own table, `awthaq_plugin_migrations`; the SQL rate limiter's migration uses `awthaq_rate_limiter_migrations`. Never run two id spaces against one table. Order: core first, then plugins. Plugin ids are positions in the dependency-ordered list, so on a database that has already been migrated, add new plugins at the end of the composition rather than in the middle.
 
 ### Migrating a populated database
 
@@ -123,6 +123,10 @@ The migrator cannot run `CREATE INDEX CONCURRENTLY` (it holds one transaction fo
 1. Build the index out of band, on the primary, with the same name and definition: `CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_user_id ON sessions ("userId");`
 2. Deploy. The migration is recorded and its `IF NOT EXISTS` statement is a no-op (proven by `test/CoreMigrations.test.ts`).
 3. For a new `NOT NULL` column: expand (add it nullable, backfill in batches), deploy code that writes it, then contract (add the constraint) in a later release.
+
+**Identity migrations (21–23).** Migration 21 makes `users.email` nullable: `ALTER COLUMN … DROP NOT NULL` on Postgres, but SQLite has no such statement, so it rebuilds the `users` table (create, copy, drop, rename, re-create `users_email_unique`) inside the migrator's transaction — proven against pre-existing rows by `test/CoreMigrations.test.ts`. The rebuild runs _before_ the identity columns are added (22: `phone`, `phoneVerified`, `status`, `statusReason`, `suspendedUntil`, `image`, all with defaults so existing rows read as active, phone-less and image-less) so any later users column is a plain `ADD COLUMN`. Migration 23 adds the partial unique index `users_phone_unique … WHERE phone IS NOT NULL`. `users_email_unique` needs no rewrite: NULL emails are distinct in both engines, so any number of email-less (phone/anonymous) users coexist.
+
+**Tenant columns (24–25).** Migration 24 adds a nullable `"tenantId" TEXT` to `users`, `accounts`, `sessions`, `verification_tokens`, `verification_reservations` and `auth_audit_log`; migration 25 indexes it (`("tenantId", "userId")` on sessions and verification tokens, `"tenantId"` alone on the rest). Both are plain `ADD COLUMN` / `CREATE INDEX IF NOT EXISTS` with no backfill: `NULL` is "no tenant", which is every existing row. See "Multi-tenancy" below.
 
 A new _unique_ index over existing data fails if the data already violates it (for example `users_email_unique` on a database with case-insensitive duplicate emails); de-duplicate first.
 
@@ -135,6 +139,40 @@ A new _unique_ index over existing data fails if the data already violates it (f
 - **Email.** Compared by JavaScript `toLowerCase()` at the domain boundary; the unique index is `lower(email)` (BEH-EA-041).
 - **Spans.** Every hand-written repository method is wrapped in a `<Prefix>.<method>` span (`Users.findByEmail`) with id-only attributes; nothing secret or personal is ever an attribute.
 
+## Multi-tenancy
+
+Off by default and zero-cost (ADR-EA-018). A tenant is an `Organization` row; core only carries an opaque `"tenantId"` string on the six tables above, stamped at insert from the ambient `TenantContext` (`@awthaq/core`'s `Tenant`, defined in `@awthaq/ports`). Nothing provides the context in a single-tenant deployment, so every row stores `NULL` and behavior is unchanged. Provide it per request with `Organization.tenantMiddleware`, or per job with `Tenant.withTenant("acme")`; an explicit `tenantId` on an insert input wins over the ambient one.
+
+**Users and accounts are the global identity directory.** `lower(email)`, `phone` and `(providerId, subject, issuer)` stay unique across tenants and the sign-in lookups take no tenant predicate: one person can belong to many organizations, and sign-in resolves an identity before any tenant is known. Tenant routing applies to sessions, verification tokens/reservations and the audit log. Under sharding the directory stays unsharded (or is replicated read-only); the tenant-stamped tables are what partition.
+
+**Optional row-level security (Postgres).** The column is attribution, not enforcement, until you turn RLS on:
+
+```ts
+import { TenantScope } from "@awthaq/sql";
+
+yield * TenantScope.enableRls(); // idempotent; sessions, verification_tokens/reservations, auth_audit_log
+// `enableRls({ includeDirectory: true })` also covers users and accounts (every read must then run in withTenant)
+
+// Confine one unit of work to a tenant: provides TenantContext and, on Postgres, runs in a
+// transaction whose first statement is set_config('awthaq.tenant_id', 'acme', true).
+yield * handler.pipe(TenantScope.withTenant("acme"));
+```
+
+Inside `withTenant`, a forgotten application filter, a cross-tenant `UPDATE` and a forged cross-tenant `INSERT` all fail closed at the database (proven by `test/Repositories.postgres.test.ts`). The policy is deliberately fail-open when no tenant is set, so a single-tenant deployment, a migration and a maintenance script keep working with RLS on. `enableRls`/`disableRls` are idempotent functions, not numbered migrations: RLS is an operator's reversible choice, not a step every deployment must apply in order. SQLite has no RLS; there `withTenant` only provides the ambient tenant. Rows written before you adopted tenancy have `NULL` and are invisible inside a tenant scope, so backfill before enabling.
+
+**Run as a non-owner role.** RLS is bypassed by superusers, roles with `BYPASSRLS`, and (unless `FORCE` is set, which `enableRls` does) the table owner. Run migrations as the owner role and the application as a separate role with only the DML grants it needs (`SELECT, INSERT, UPDATE, DELETE` on the core tables); the guarantee then holds even without `FORCE`, and ad-hoc scripts using the application role are scoped too.
+
+**Migrating from Supabase: RLS and qadi.** Supabase apps lean on Postgres RLS for authorization. Keep your existing RLS active through the qadi rollout, driving both from one policy catalog: qadi answers "may this subject do this" at the call site, RLS remains the database backstop. Exit criteria for retiring app-table RLS: qadi call-site coverage of every data path, plus a review of the audit log (`auth_audit_log`) showing no path relied on RLS alone. Then disable RLS on your application tables and, optionally, keep awthaq's own `enableRls()` on the auth tables. RLS here is defence in depth, never the primary control (ADR-EA-009).
+
+## Data location & residency
+
+awthaq stores data in whatever database your `SqlClient` points at; it has no region or subprocessor concept of its own, and nothing here pins a row to a place. To answer "where does my users' data live and how do I pin it to a region":
+
+- **One region, one database:** point the `SqlClient` at a database in that region. The encryption boundary (what is ciphertext, what is plaintext at rest, what the deployer must encrypt) is the table under "Encryption at rest".
+- **Several regions:** provide the `SqlClient` per region and select it from the ambient tenant. The seams are the injected `SqlClient`, the `"tenantId"` column above, and ADR-EA-005's `LayerMap.Service` (a `LayerMap` keyed by region or tenant that yields a `SqlClient` layer, chosen from `TenantContext`). An organization's region is data: `OrganizationConfig.regions` is the vocabulary and `Organization.homeRegionOf(record)` the pure helper your router calls. No per-table logic is built.
+- **The directory:** `users`/`accounts` are the global identity directory (above). A residency policy that must keep a user's row in one region should route the whole directory to a home region and partition the tenant-stamped tables, or run separate deployments.
+- **Erasure and retention:** deleting a user runs the `BeforeUserDelete` hook cascade (the erasure entry point, `research/00-questions.md` Q50's deletion-cascade question); a retention sweep for audit data is separate compliance work. Both act on whichever database the routed `SqlClient` selected, so they need no per-region logic.
+
 ## Encryption at rest
 
 What this package encrypts, and what it does not:
@@ -145,6 +183,7 @@ What this package encrypts, and what it does not:
 | `accounts.passwordHash`, `sessions.secretHash`, `verification_tokens.valueHash` | Hash only (argon2id/scrypt for passwords, SHA-256 for session and token secrets); no reversible secret is stored                                                                                                                                                                                                                                                                        |
 | `sessions.ipAddress`, `sessions.userAgent`, `users.metadata`                    | Plaintext by default; **opt-in encryption** with the `…EncryptedLive` layers below                                                                                                                                                                                                                                                                                                      |
 | `users.email`, `users.name`, audit payloads                                     | Plaintext. Email must stay plaintext to be looked up and to enforce uniqueness (`lower(email)`); a blind-index scheme is deliberately not built (it would change the uniqueness semantics, and there is no customer for it yet)                                                                                                                                                         |
+| `users.phone`, `users.image`, `users.statusReason`                              | Plaintext. `phone` is a lookup and uniqueness key (`users_phone_unique`) exactly like `email`; `statusReason` is an operator note that no HTTP response returns to the affected user                                                                                                                                                                                                    |
 
 For SOC 2 / GDPR posture, **full-disk or database-level encryption and TLS to the database are deployer responsibilities** and are assumed for every plaintext column above.
 

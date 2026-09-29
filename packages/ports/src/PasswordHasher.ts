@@ -113,6 +113,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Semaphore from "effect/Semaphore";
 import { argon2id, scrypt } from "hash-wasm";
+import * as Defects from "./Defects.ts";
 import * as Hmac from "./Hmac.ts";
 
 const SALT_LENGTH = 16;
@@ -127,9 +128,7 @@ const rehashPolicyConfig = Config.Literals(["floor", "exact"], "AUTH_PASSWORD_RE
 const requireCeiling = (name: string, ceiling: number, targetName: string, target: number) =>
   ceiling >= target
     ? Effect.void
-    : Effect.die(
-        new Error(`awthaq: ${name} (${ceiling}) is below the configured ${targetName} (${target})`),
-      );
+    : Defects.invalidConfiguration("passwordHasher", `awthaq: ${name} (${ceiling}) is below the configured ${targetName} (${target})`);
 
 /**
  * TTE-005: a stored password hash — a PHC-style string (or, for an imported
@@ -221,9 +220,7 @@ const hashConcurrency = Config.Int("AUTH_PASSWORD_HASH_CONCURRENCY").pipe(Config
 export const makeSlots = Effect.gen(function* () {
   const permits = yield* hashConcurrency;
   if (permits < 1) {
-    return yield* Effect.die(
-      new Error(`awthaq: AUTH_PASSWORD_HASH_CONCURRENCY (${permits}) must be at least 1`),
-    );
+    return yield* Defects.invalidConfiguration("AUTH_PASSWORD_HASH_CONCURRENCY", `awthaq: AUTH_PASSWORD_HASH_CONCURRENCY (${permits}) must be at least 1`);
   }
   return yield* Semaphore.make(permits);
 });

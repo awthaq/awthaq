@@ -2,7 +2,7 @@
   "name": "@awthaq/cli",
   "version": "0.1.0",
   "private": true,
-  "description": "doctor, plugin list --graph, routes, migration status|apply, openapi, seed admin, import — reads the plugin manifest, never runs the application.",
+  "description": "The awthaq command line: doctor, config list, plugin list --graph, routes, migration status|apply, openapi, seed admin, import, login|logout|whoami. Reads the plugin manifest; never serves the application.",
   "license": "MIT",
   "files": [
     "lib",
@@ -11,6 +11,9 @@
   ],
   "type": "module",
   "sideEffects": false,
+  "bin": {
+    "awthaq": "./lib/bin.js"
+  },
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -26,15 +29,23 @@
   },
   "dependencies": {
     "@awthaq/api": "workspace:*",
+    "@awthaq/client": "workspace:*",
     "@awthaq/core": "workspace:*",
+    "@awthaq/migrate-better-auth": "workspace:*",
+    "@awthaq/migrate-firebase": "workspace:*",
     "@awthaq/ports": "workspace:*",
-    "@awthaq/qadi": "workspace:*",
+    "@awthaq/roles": "workspace:*",
     "@awthaq/server": "workspace:*",
     "@awthaq/sql": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-pg": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/password": "workspace:*",
     "@effect/vitest": "catalog:",
+    "@qadi/core": "^0.7.0",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },

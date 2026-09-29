@@ -14,6 +14,7 @@
 // all, rather than silently shipping an unconfigured `iss` claim — the
 // spec's own stricter-than-`OAuthConfig.baseUrl` decision.
 
+import { Defects } from "@awthaq/ports";
 import type { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -64,7 +65,7 @@ export interface JwtConfigShape {
    * also converts cookie-authenticated browser requests, better-auth style.
    * Response headers are a log/proxy/APM capture surface and cross-origin
    * scripts additionally need `Access-Control-Expose-Headers`; the explicit
-   * `GET /jwt/token` endpoint is the recommended delivery.
+   * `POST /jwt/token` endpoint is the recommended delivery.
    */
   readonly mirrorResponses: "off" | "bearer" | "always";
   /**
@@ -79,6 +80,19 @@ export interface JwtConfigShape {
    * database-verified `getSession` decides access (BEH-EA-188).
    */
   readonly sessionCookie: false | SessionMirrorCookie;
+  /**
+   * MAPS-001/NAM-001 (wayfinder ticket 33): whether a principal JWT this plugin
+   * minted (`GET /jwt/token`, the response mirror) is also accepted as a
+   * *bearer credential* by this API's `Authentication`, verified statelessly
+   * (`verify`, no session-store hit). Default `false`: installing `Jwt` mints a
+   * delegation token meant for downstream services, and quietly making that
+   * same token a valid origin credential would widen what a leaked or
+   * propagated token can do. On, a revoked session's JWT keeps authenticating
+   * until its own `exp`, so the revocation lag is bounded by `ttl`. A token
+   * minted with `signJWT(payload, { audience })` for a downstream service never
+   * re-enters (its `aud` is not this API's).
+   */
+  readonly acceptAsBearer: boolean;
   readonly definePayload: (principal: Api.Principal) => Effect.Effect<Record<string, unknown>>;
 }
 
@@ -108,11 +122,7 @@ export const config = (
       const ttl = options.ttl ?? Duration.minutes(15);
       const keyGracePeriod = options.keyGracePeriod ?? Duration.days(30);
       if (Duration.toMillis(keyGracePeriod) < Duration.toMillis(ttl)) {
-        return yield* Effect.die(
-          new Error(
-            "awthaq/jwt: keyGracePeriod must be at least ttl, or rotating a key would invalidate tokens it signed that have not expired yet",
-          ),
-        );
+        return yield* Defects.invalidConfiguration("keyGracePeriod", "awthaq/jwt: keyGracePeriod must be at least ttl, or rotating a key would invalidate tokens it signed that have not expired yet");
       }
       const sessionCookie = options.sessionCookie ?? false;
       const mirror =
@@ -125,14 +135,10 @@ export const config = (
               ttl: (sessionCookie === true ? undefined : sessionCookie.ttl) ?? Duration.minutes(5),
             };
       if (mirror !== false && !mirror.name.startsWith("__Host-")) {
-        return yield* Effect.die(
-          new Error(
-            "awthaq/jwt: sessionCookie.name must start with __Host- (Secure, Path=/, no Domain)",
-          ),
-        );
+        return yield* Defects.invalidConfiguration("sessionCookie.name", "awthaq/jwt: sessionCookie.name must start with __Host- (Secure, Path=/, no Domain)");
       }
       if (mirror !== false && Duration.toMillis(mirror.ttl) <= 0) {
-        return yield* Effect.die(new Error("awthaq/jwt: sessionCookie.ttl must be positive"));
+        return yield* Defects.invalidConfiguration("sessionCookie.ttl", "awthaq/jwt: sessionCookie.ttl must be positive");
       }
       return {
         issuer: options.issuer,
@@ -147,6 +153,7 @@ export const config = (
         keyMinRefreshInterval: options.keyMinRefreshInterval ?? Duration.seconds(30),
         mirrorResponses: options.mirrorResponses ?? "off",
         sessionCookie: mirror,
+        acceptAsBearer: options.acceptAsBearer ?? false,
         definePayload: options.definePayload ?? emptyPayload,
       };
     }),

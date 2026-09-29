@@ -3,7 +3,7 @@ ID: "SCP-003"
 Title: "Users.create has no create-or-get: IdP timeout retries surface as EmailAlreadyExists instead of idempotent success"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Users.ts:59"
 Auditor: "scim-provisioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **SCIM Provisioning Specialist** (`scim-provisioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Add Users.createOrGet (insert, and on unique violation return the existing recor
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `user-import-idempotency`. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:290`. Fix: Add Users.createOrGet: insert, and on unique violation return the existing record deterministically (both layers). (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Closed by commit 4b63d9e. Users.createOrGet(input) -> {user, created}: the memory layer decides insert-or-holder in one Ref.modify; the SQL layer uses INSERT ... ON CONFLICT DO NOTHING RETURNING * (UsersRepository.insertIfAbsent) then looks the holder up — not catch-the-violation, because a Postgres unique violation would abort an enclosing transaction (the import runs one per user). Conflict target per identity kind; Anonymous never conflicts. Tests (core Users.test.ts, both layers, sqlite + real Postgres): idempotent return with created=false for email and phone, Anonymous always fresh, 8 concurrent createOrGet -> one user and exactly one created=true; sql contract 'insertIfAbsent returns None on conflict and does not poison the transaction'.

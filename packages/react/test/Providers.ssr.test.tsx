@@ -3,6 +3,7 @@
 // server with no `window`/`document`, then hydrates on the client with no
 // recoverable error. The seed is applied while the registry is constructed,
 // during the server render as well, so server and client read the same value.
+import * as DateTime from "effect/DateTime";
 import { SessionContract, SubjectContract } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
 import { EvaluationServicesNone } from "@qadi/core";
@@ -18,9 +19,9 @@ const atoms = makeQadiAtoms(EvaluationServicesNone);
 
 const session = new SessionContract.SessionDto({
   id: "session-1",
-  createdAt: "2024-01-01T00:00:00.000Z",
-  lastActiveAt: "2024-01-01T00:00:00.000Z",
-  expiresAt: "2024-02-01T00:00:00.000Z",
+  createdAt: DateTime.makeUnsafe("2024-01-01T00:00:00.000Z"),
+  lastActiveAt: DateTime.makeUnsafe("2024-01-01T00:00:00.000Z"),
+  expiresAt: DateTime.makeUnsafe("2024-02-01T00:00:00.000Z"),
   userAgent: null,
   current: true,
 });

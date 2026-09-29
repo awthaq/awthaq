@@ -11,12 +11,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import * as ContributionRegistry from "./internal/contributionRegistry.ts";
+import type { StoreUnavailable } from "./Errors.ts";
 import type { UserId } from "./Users.ts";
 
-/** What a contribution is told about the user being erased. The email is carried so a plugin can sweep rows keyed by address (an invitation addressed to the user). */
+/** What a contribution is told about the user being erased. The email (absent for a phone or anonymous identity) is carried so a plugin can sweep rows keyed by address (an invitation addressed to the user). */
 export interface ErasureSubject {
   readonly userId: UserId;
-  readonly email: string;
+  readonly email?: string | undefined;
 }
 
 export interface ErasureContribution {
@@ -28,7 +29,7 @@ export interface ErasureContribution {
    * Deletes this plugin's rows for the user. It must fail (or die) if it cannot
    * — that aborts the erasure and rolls it back — and must be idempotent.
    */
-  readonly erase: (subject: ErasureSubject) => Effect.Effect<void>;
+  readonly erase: (subject: ErasureSubject) => Effect.Effect<void, StoreUnavailable>;
 }
 
 /** A contribution registered after the registry was first read — a composition-order bug. */
@@ -47,7 +48,7 @@ export class ErasureRegistry extends Context.Service<ErasureRegistry, ErasureReg
   "awthaq/core/ErasureRegistry",
 ) {}
 
-/** The registry, one per composition (like a hook point's, ADR-EA-028). */
+/** The registry, one per composition (like a hook point's, ADR-EA-033). */
 export const registryLayer: Layer.Layer<ErasureRegistry> = Layer.effect(
   ErasureRegistry,
   Effect.map(

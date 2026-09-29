@@ -240,3 +240,10 @@ Feature: The Contract Stratum
       When "Auth.make" composes the tuple regardless of which plugin appears later in the array
       Then composition is rejected
       And the outcome does not depend on which plugin was added to the array last
+
+    @REQ-EA-640
+    Scenario: The composed api is the one served document, carrying core's session and account groups
+      Given a plugin tuple containing "password"
+      When "Auth.make" composes the tuple
+      Then the composed api's groups are "session", "account" and "password"
+      And a plugin contributing a group id "session" is rejected as "E_GROUP_CONFLICT" naming "core"

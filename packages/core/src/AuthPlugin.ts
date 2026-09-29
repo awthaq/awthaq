@@ -7,6 +7,7 @@
 // does.
 
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import type * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Record from "effect/Record";
@@ -14,6 +15,7 @@ import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as HookPoint from "./HookPoint.ts";
+import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
 
 /**
@@ -83,6 +85,10 @@ export interface Class<
   readonly dependsOn: ReadonlyArray<Any>;
   /** PERS-003: the taps this plugin declared statically (`AuthPlugin.layer`'s `taps` option), readable without building any layer. */
   readonly taps: ReadonlyArray<DeclaredTap>;
+  /** JH-007: tables owned by *other* plugins this one reads; `Auth.make` requires the owner in `dependsOn`. */
+  readonly readsTables: ReadonlyArray<string>;
+  /** ECS-008/BEH-EA-229: the configuration inputs this plugin reads, declared statically (none when it has no policy knobs). */
+  readonly config: ReadonlyArray<ConfigDescriptor>;
 }
 
 /** PERS-003: a statically declared tap, as far as `Auth.make`'s manifest needs it. */
@@ -118,6 +124,10 @@ export interface Any {
   readonly dependsOn: ReadonlyArray<Any>;
   /** PERS-003: optional so a hand-built plugin value (a test fixture) need not declare any. */
   readonly taps?: ReadonlyArray<DeclaredTap>;
+  /** JH-007: optional here so a hand-built plugin value need not name it. */
+  readonly readsTables?: ReadonlyArray<string>;
+  /** Optional here (a hand-built `Any` may have none); every plugin made with `Service` carries the list. */
+  readonly config?: ReadonlyArray<ConfigDescriptor>;
   readonly layer: Layer.Layer<never, unknown, unknown>;
 }
 
@@ -150,6 +160,24 @@ const tapsByPlugin = new WeakMap<object, ReadonlyArray<DeclaredTap>>();
 const noTaps: ReadonlyArray<DeclaredTap> = [];
 
 /**
+ * ELC-006: `AuthPlugin.layer` was called a second time for one plugin class with a
+ * different `dependsOn` set. The side table above is keyed by class identity, so the
+ * second call would silently replace the first's ordering and typed requirements —
+ * `Auth.make` would then sort and check against whichever registration ran last.
+ * Thrown at definition time (module load), like `Auth.ts`'s `LinkerInvariantViolation`:
+ * it is a plugin-authoring defect, not a runtime condition.
+ */
+export class ConflictingDependsOn extends Data.TaggedError("ConflictingDependsOn")<{
+  readonly pluginId: string;
+  readonly first: ReadonlyArray<string>;
+  readonly second: ReadonlyArray<string>;
+  readonly message: string;
+}> {}
+
+const sameIds = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
+  left.length === right.length && left.every((id, index) => id === right[index]);
+
+/**
  * BEH-EA-001 through BEH-EA-007: builds the plugin's compiled service key and
  * freezes its static, declarative members. `options.tables`/`migrations` are
  * read off the class alone — no `Layer` is evaluated to produce them (BEH-EA-006).
@@ -163,6 +191,9 @@ export const Service =
       readonly contract: HttpApi.HttpApi<"auth", Groups>;
       readonly tables?: ReadonlyArray<`${Id}_${string}`>;
       readonly migrations?: Migrations;
+      readonly readsTables?: ReadonlyArray<string>;
+      /** ECS-008/BEH-EA-229: descriptors of the `Context.Reference`s this plugin reads (`ConfigDescriptor.make`). */
+      readonly config?: ReadonlyArray<ConfigDescriptor>;
     },
   ): Class<Self, Id, Shape, Groups> => {
     const key: Key<Id> = `awthaq/plugin/${id}`;
@@ -181,6 +212,8 @@ export const Service =
       contract: options.contract,
       tables: options.tables ?? [],
       migrations: options.migrations ?? [],
+      readsTables: options.readsTables ?? [],
+      config: options.config ?? [],
       dependsOn: noDependencies,
       taps: noTaps,
     });
@@ -328,7 +361,22 @@ export function layer<
     readonly handlers?: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
   },
 ) {
-  dependsOnByPlugin.set(plugin, options.dependsOn ?? noDependencies);
+  const dependsOn = options.dependsOn ?? noDependencies;
+  const registered = dependsOnByPlugin.get(plugin);
+  if (registered !== undefined) {
+    // Order-insensitive: `[A, B]` and `[B, A]` are the same dependency set.
+    const first = registered.map((dep) => dep.id).sort();
+    const second = dependsOn.map((dep) => dep.id).sort();
+    if (!sameIds(first, second)) {
+      throw new ConflictingDependsOn({
+        pluginId: plugin.id,
+        first,
+        second,
+        message: `awthaq: plugin "${plugin.id}" registered a second AuthPlugin.layer with dependsOn [${second.join(", ")}], but its first registration had [${first.join(", ")}]`,
+      });
+    }
+  }
+  dependsOnByPlugin.set(plugin, dependsOn);
   const taps = options.taps ?? [];
   tapsByPlugin.set(
     plugin,

@@ -23,6 +23,7 @@ export const gitlab = (input: PresetInput & { readonly baseUrl?: string }) => {
           email: stringClaim(claims, "email"),
           emailVerified: booleanClaim(claims, "email_verified"),
           name: stringClaim(claims, "name") ?? stringClaim(claims, "nickname"),
+          image: stringClaim(claims, "picture"),
         })),
   });
 };

@@ -23,16 +23,18 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
+import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import * as Observability from "./Observability.ts";
+import * as SecretHash from "./SecretHash.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { drainBatches } from "./internal/purgeBatches.ts";
+import * as Tenant from "./Tenant.ts";
 import { UserId } from "./Users.ts";
 
 /**
@@ -44,12 +46,8 @@ export const SessionId = Brand.nominal<SessionId>();
 
 const { toHex } = Hmac;
 
-/** BEH-EA-050: the one hash both `Layer`s persist in place of the plaintext secret. */
-const hashSecret = (
-  crypto: Crypto.Crypto,
-  secret: string,
-): Effect.Effect<string, PlatformError.PlatformError> =>
-  crypto.digest("SHA-256", new TextEncoder().encode(secret)).pipe(Effect.map(toHex));
+/** BEH-EA-050: the one hash both `Layer`s persist in place of the plaintext secret (OCM-002: shared with `@awthaq/api-key`). */
+const hashSecret = SecretHash.digest;
 
 /**
  * PIL-007: the hash an unknown session id is compared against, so a miss does
@@ -67,12 +65,11 @@ export const MAX_USER_AGENT_LENGTH = 512;
 const cappedUserAgent = (userAgent: string | undefined): string | undefined =>
   userAgent?.slice(0, MAX_USER_AGENT_LENGTH);
 
-const UNKNOWN_SESSION_HASH = "0".repeat(64);
+const UNKNOWN_SESSION_HASH = SecretHash.NEVER_MATCHES;
 
 // BEH-EA-056/ACS-005: both operands are the fixed-length hex output of the
 // same digest, compared in constant time by the shared `Hmac` primitive.
-const secretMatches = (presentedHash: string, storedHash: string): boolean =>
-  Hmac.constantTimeEqualString(presentedHash, storedHash);
+const secretMatches = SecretHash.equals;
 
 /**
  * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
@@ -196,6 +193,13 @@ export interface SessionView {
   readonly actingAs: Option.Option<ActingAs>;
   /** THS-003: the authentication methods recorded at issue (and unioned in by `reauthenticate`); empty when the issuing path recorded none. */
   readonly amr: ReadonlyArray<AuthMethod>;
+  /**
+   * DRS-001 (ADR-EA-018): the ambient tenant this session was issued under,
+   * `None` for a single-tenant deployment. A host that serves several tenants
+   * compares it with the request's own tenant to refuse a cookie minted for
+   * another one.
+   */
+  readonly tenantId: Option.Option<string>;
 }
 
 /** BEH-EA-054: one row of `Sessions.list`. */
@@ -249,8 +253,14 @@ const refuseSelfActingAs = (input: {
     ? Effect.die(new InvalidActingAs({ reason: "self" }))
     : Effect.void;
 
-export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
+/**
+ * EOTS-004: messages are constant strings — a session id is the public half of a bearer
+ * credential (and enough, for a superseded session, to be probed), and error messages reach
+ * logs. Identifiers ride only in typed fields, for in-process correlation; never log them.
+ */
+export class SessionNotFound extends Data.TaggedError("Sessions/NotFound")<{
   readonly message: string;
+  readonly id?: SessionId;
 }> {}
 
 export class SessionExpired extends Data.TaggedError("SessionExpired")<{
@@ -312,7 +322,7 @@ export interface SessionsShape {
     readonly absoluteDuration?: Duration.Duration;
   }) => Effect.Effect<
     { readonly session: SessionView; readonly token: Redacted.Redacted<string> },
-    PlatformError.PlatformError
+    StoreUnavailable
   >;
   /**
    * BEH-EA-050/056: hashes the presented secret and compares it to the
@@ -365,7 +375,7 @@ export interface SessionsShape {
     token: Redacted.Redacted<string>,
   ) => Effect.Effect<
     { readonly session: SessionView; readonly rotated: Option.Option<Redacted.Redacted<string>> },
-    SessionNotFound | SessionExpired | PlatformError.PlatformError
+    SessionNotFound | SessionExpired | StoreUnavailable
   >;
   /**
    * TIR-008: every revocation primitive takes the `reason` the session ended
@@ -376,7 +386,7 @@ export interface SessionsShape {
   readonly revoke: (
     id: SessionId,
     reason: AuthEvents.SessionRevocationReason,
-  ) => Effect.Effect<void, SessionNotFound>;
+  ) => Effect.Effect<void, SessionNotFound | StoreUnavailable>;
   /**
    * GC-005: revokes session `id` only if it belongs to `userId`, atomically —
    * ownership is enforced by the domain operation, not by a caller-side
@@ -388,18 +398,18 @@ export interface SessionsShape {
     userId: UserId,
     id: SessionId,
     reason: AuthEvents.SessionRevocationReason,
-  ) => Effect.Effect<void, SessionNotFound>;
+  ) => Effect.Effect<void, SessionNotFound | StoreUnavailable>;
   /** BEH-EA-054: revokes every session for `userId` except `keep`. */
   readonly revokeOthers: (
     userId: UserId,
     keep: SessionId,
     reason: AuthEvents.SessionRevocationReason,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreUnavailable>;
   /** Ticket 02: revokes every session for `userId`, no exceptions — including the caller's own current session. */
   readonly revokeAll: (
     userId: UserId,
     reason: AuthEvents.SessionRevocationReason,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreUnavailable>;
   /**
    * CSG-003: retention. Physically deletes every session — tombstoned rows
    * included — whose absolute or idle expiry is before `before`, and resolves to
@@ -407,7 +417,7 @@ export interface SessionsShape {
    * this is what bounds the table; `Retention.sweep` calls it with `now - sessionGrace`.
    * Publishes nothing: an expired session was already dead.
    */
-  readonly purgeExpired: (before: DateTime.Utc) => Effect.Effect<number>;
+  readonly purgeExpired: (before: DateTime.Utc) => Effect.Effect<number, StoreUnavailable>;
   /**
    * BEH-EA-054: exactly the user's *live* sessions — not tombstoned, past
    * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
@@ -425,7 +435,7 @@ export interface SessionsShape {
     userId: UserId,
     current?: SessionId,
     options?: SqlReadRouting.ReadOptions,
-  ) => Effect.Effect<ReadonlyArray<SessionListItem>>;
+  ) => Effect.Effect<ReadonlyArray<SessionListItem>, StoreUnavailable>;
   /**
    * TIR-003/ESS-005: the keyed ownership lookup every point query goes
    * through — one `findById` plus ownership, tombstone and expiry checks,
@@ -437,7 +447,7 @@ export interface SessionsShape {
   readonly findOwned: (
     userId: UserId,
     id: SessionId,
-  ) => Effect.Effect<Option.Option<SessionListItem>>;
+  ) => Effect.Effect<Option.Option<SessionListItem>, StoreUnavailable>;
   /**
    * TIR-002/FAMS-009/MAPS-006: the exact liveness check a caller holding
    * only a bare `id` (no secret — `verify`'s own credential) needs — e.g.
@@ -452,7 +462,7 @@ export interface SessionsShape {
    * already tombstoned, past either expiry, or simply absent — a single
    * keyed lookup (`findOwned`), not `list`'s full per-user scan.
    */
-  readonly isLive: (userId: UserId, id: SessionId) => Effect.Effect<boolean>;
+  readonly isLive: (userId: UserId, id: SessionId) => Effect.Effect<boolean, StoreUnavailable>;
   /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
    * (AAPS-001/BPAS-001): sets `authenticatedAt = now` only — deliberately a
@@ -467,7 +477,7 @@ export interface SessionsShape {
     id: SessionId,
     /** THS-003: methods this step-up just proved; unioned into the session's `amr` (monotone — never removed). */
     amr?: ReadonlyArray<AuthMethod>,
-  ) => Effect.Effect<SessionView, SessionNotFound>;
+  ) => Effect.Effect<SessionView, SessionNotFound | StoreUnavailable>;
 }
 
 export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
@@ -574,10 +584,10 @@ const traceVerify =
       ? Effect.annotateCurrentSpan(Observability.Field.sessionId, presentedId)
       : Effect.void;
     return Observability.observeSessionVerify(
-      (error: SessionNotFound | SessionExpired | PlatformError.PlatformError) =>
+      (error: SessionNotFound | SessionExpired | StoreUnavailable) =>
         error._tag === "SessionExpired"
           ? "expired"
-          : error._tag === "SessionNotFound"
+          : error._tag === "Sessions/NotFound"
             ? "not-found"
             : "unavailable",
     )(Effect.andThen(announce, verify(token)));
@@ -596,6 +606,7 @@ interface SessionRow {
   readonly userAgent: Option.Option<string>;
   readonly actingAs: Option.Option<ActingAs>;
   readonly amr: ReadonlyArray<AuthMethod>;
+  readonly tenantId: Option.Option<string>;
   /**
    * RRS-003: this row's founding session id — its own `id` when it has no
    * ancestor, inherited from the superseded row's own `familyId`
@@ -630,6 +641,7 @@ const toView = (row: SessionRow): SessionView => ({
   userAgent: row.userAgent,
   actingAs: row.actingAs,
   amr: row.amr,
+  tenantId: row.tenantId,
 });
 
 /**
@@ -656,6 +668,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         const secret = toHex(yield* crypto.randomBytes(32));
         const secretHash = yield* hashSecret(crypto, secret);
         const now = yield* DateTime.now;
+        const tenantId = yield* Tenant.TenantContext;
         const absoluteExpiresAt = DateTime.addDuration(
           now,
           input.absoluteDuration ?? config.absolute,
@@ -708,6 +721,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
               actingAs: Option.fromNullishOr(input.actingAs),
               amr: input.amr ?? [],
+              tenantId,
               familyId: Option.match(ancestor, {
                 onNone: () => id,
                 onSome: (r) => r.familyId,
@@ -769,7 +783,9 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         }
         yield* publishIssued(events, row, row.familyId, row.actingAs);
         return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
-      });
+      },
+      Effect.catchTag("PlatformError", storeUnavailable("Sessions.issue")),
+      );
 
       /**
        * BAM-003 (.issues/high): consulted only on a primary-store miss — a
@@ -820,12 +836,12 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           const bridged = yield* bridgeLegacySession(raw);
           if (Option.isSome(bridged)) return bridged.value;
           return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+            new SessionNotFound({ message: "awthaq: no such session", id }),
           );
         }
         if (!secretMatches(presentedHash, row.value.secretHash)) {
           return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+            new SessionNotFound({ message: "awthaq: no such session", id }),
           );
         }
         const now = yield* DateTime.now;
@@ -862,7 +878,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             });
           }
           return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+            new SessionNotFound({ message: "awthaq: no such session", id }),
           );
         }
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
@@ -873,7 +889,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             kind: "absolute",
           });
           return yield* Effect.fail(
-            new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
+            new SessionExpired({ message: "awthaq: session expired", id }),
           );
         }
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
@@ -884,7 +900,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             kind: "idle",
           });
           return yield* Effect.fail(
-            new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
+            new SessionExpired({ message: "awthaq: session idle-expired", id }),
           );
         }
         // BEH-EA-210: a session carrying `actingAs` never idle-refreshes — its
@@ -932,7 +948,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           const current = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
           if (Option.isNone(current)) {
             return yield* Effect.fail(
-              new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+              new SessionNotFound({ message: "awthaq: no such session", id }),
             );
           }
           return { session: toView(current.value), rotated: Option.none() };
@@ -949,7 +965,9 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           session: toView(touched.value),
           rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
         };
-      });
+      },
+      Effect.catchTag("PlatformError", storeUnavailable("Sessions.verify")),
+      );
 
       // TIR-008: each primitive removes the row(s) in one `Ref.modify` and
       // then publishes exactly one `auth.session.revoked` for the call.
@@ -968,7 +986,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             const row = HashMap.get(s, id);
             if (Option.isNone(row) || (userId !== undefined && row.value.userId !== userId)) {
               return [
-                Result.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+                Result.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
                 s,
               ] as const;
             }
@@ -1099,7 +1117,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           );
           if (Option.isNone(updated)) {
             return yield* Effect.fail(
-              new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+              new SessionNotFound({ message: "awthaq: no such session", id }),
             );
           }
           return toView(updated.value);
@@ -1137,6 +1155,7 @@ const toSessionView = (row: SqlModels.Session): SessionView => ({
       ? Option.none()
       : Option.some({ type: row.actingAsType, id: row.actingAsId }),
   amr: parseAmr(row.amr),
+  tenantId: Option.fromNullOr(row.tenantId),
 });
 
 export const layerSql: Layer.Layer<
@@ -1191,8 +1210,6 @@ export const layerSql: Layer.Layer<
             .pipe(
               Effect.catchTags({
                 NoSuchElementError: () => Effect.succeed(undefined),
-                SchemaError: Effect.die,
-                SqlError: Effect.die,
               }),
             );
           if (ancestor !== undefined) {
@@ -1218,7 +1235,7 @@ export const layerSql: Layer.Layer<
             reusedAt: null,
           })
           .pipe(Effect.orDie);
-        const inserted = yield* repo.insert(insert).pipe(Effect.orDie);
+        const inserted = yield* repo.insert(insert);
         // SMS-003: enforced in this same transaction — list the user's other
         // live, non-impersonation sessions (oldest activity first) and delete
         // the surplus. Under Postgres' default isolation two racing issues can
@@ -1227,12 +1244,12 @@ export const layerSql: Layer.Layer<
         const policy = input.actingAs === undefined ? config.maxConcurrent : undefined;
         const evicted: Array<string> = [];
         if (policy !== undefined) {
-          const live = yield* repo.listLiveIds(input.userId, now).pipe(Effect.orDie);
+          const live = yield* repo.listLiveIds(input.userId, now);
           for (const goneId of evictionOrder(
             policy.limit,
             live.filter((r) => r.id !== id),
           )) {
-            yield* repo.delete(SessionId(goneId)).pipe(Effect.orDie);
+            yield* repo.delete(SessionId(goneId));
             evicted.push(goneId);
           }
         }
@@ -1241,7 +1258,7 @@ export const layerSql: Layer.Layer<
       const { inserted: row, evicted, superseded } = yield* input.supersedes === undefined &&
       config.maxConcurrent === undefined
         ? persist
-        : sql.withTransaction(persist).pipe(Effect.catchTag("SqlError", Effect.die));
+        : sql.withTransaction(persist);
       // RRS-008: see `layerMemory.issue`.
       if (superseded !== undefined) {
         yield* events.publish({
@@ -1264,7 +1281,13 @@ export const layerSql: Layer.Layer<
       const view = toSessionView(row);
       yield* publishIssued(events, view, row.familyId, view.actingAs);
       return { session: view, token: Redacted.make(`${row.id}.${secret}`) };
-    });
+    },
+    Effect.catchTags({
+      PlatformError: storeUnavailable("Sessions.issue"),
+      SqlError: storeUnavailable("Sessions.issue"),
+      SchemaError: Effect.die,
+    }),
+    );
 
     /**
      * BAM-003 (.issues/high): consulted only on a primary-store miss — see
@@ -1306,8 +1329,6 @@ export const layerSql: Layer.Layer<
         Effect.map(Option.some),
         Effect.catchTags({
           NoSuchElementError: () => Effect.succeed(Option.none()),
-          SchemaError: Effect.die,
-          SqlError: Effect.die,
         }),
       );
       if (Option.isNone(found)) {
@@ -1315,13 +1336,13 @@ export const layerSql: Layer.Layer<
         const bridged = yield* bridgeLegacySession(raw);
         if (Option.isSome(bridged)) return bridged.value;
         return yield* Effect.fail(
-          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+          new SessionNotFound({ message: "awthaq: no such session", id }),
         );
       }
       const row = found.value;
       if (!secretMatches(presentedHash, row.secretHash)) {
         return yield* Effect.fail(
-          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+          new SessionNotFound({ message: "awthaq: no such session", id }),
         );
       }
       const now = yield* DateTime.now;
@@ -1334,8 +1355,8 @@ export const layerSql: Layer.Layer<
       if (row.supersededAt !== null) {
         if (row.reusedAt === null) {
           const familyId = SessionId(row.familyId);
-          yield* repo.markReused(id, now).pipe(Effect.orDie);
-          yield* repo.revokeFamily(familyId).pipe(Effect.orDie);
+          yield* repo.markReused(id, now);
+          yield* repo.revokeFamily(familyId);
           yield* events.publish({
             _tag: "auth.session.reuse",
             sessionId: id,
@@ -1351,7 +1372,7 @@ export const layerSql: Layer.Layer<
           });
         }
         return yield* Effect.fail(
-          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+          new SessionNotFound({ message: "awthaq: no such session", id }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
@@ -1362,7 +1383,7 @@ export const layerSql: Layer.Layer<
           kind: "absolute",
         });
         return yield* Effect.fail(
-          new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
+          new SessionExpired({ message: "awthaq: session expired", id }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
@@ -1373,7 +1394,7 @@ export const layerSql: Layer.Layer<
           kind: "idle",
         });
         return yield* Effect.fail(
-          new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
+          new SessionExpired({ message: "awthaq: session idle-expired", id }),
         );
       }
       // BEH-EA-210: a session carrying `actingAs` never idle-refreshes.
@@ -1406,15 +1427,12 @@ export const layerSql: Layer.Layer<
             DateTime.addDuration(now, config.idle),
             row.absoluteExpiresAt,
           ),
-        })
-        .pipe(Effect.orDie);
+        });
       if (Option.isNone(touched)) {
         const current = yield* repo.findById(id).pipe(
           Effect.catchTags({
             NoSuchElementError: () =>
-              Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
-            SchemaError: Effect.die,
-            SqlError: Effect.die,
+              Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
           }),
         );
         return { session: toSessionView(current), rotated: Option.none() };
@@ -1430,7 +1448,13 @@ export const layerSql: Layer.Layer<
         session: toSessionView(touched.value),
         rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
       };
-    });
+    },
+    Effect.catchTags({
+      PlatformError: storeUnavailable("Sessions.verify"),
+      SqlError: storeUnavailable("Sessions.verify"),
+      SchemaError: Effect.die,
+    }),
+    );
 
     // TIR-008: each primitive deletes, then publishes exactly one
     // `auth.session.revoked` for the call.
@@ -1438,13 +1462,10 @@ export const layerSql: Layer.Layer<
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
-          SchemaError: Effect.die,
-          SqlError: Effect.die,
+            Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
         }),
         Effect.flatMap((row) =>
           repo.delete(id).pipe(
-            Effect.orDie,
             Effect.andThen(
               events.publish({
                 _tag: "auth.session.revoked",
@@ -1456,11 +1477,14 @@ export const layerSql: Layer.Layer<
             ),
           ),
         ),
+        Effect.catchTags({
+          SqlError: storeUnavailable("Sessions.revoke"),
+          SchemaError: Effect.die,
+        }),
       );
 
     const revokeOwned: SessionsShape["revokeOwned"] = (userId, id, reason) =>
       repo.deleteOwned(id, userId).pipe(
-        Effect.orDie,
         Effect.flatMap((deleted) =>
           deleted
             ? events.publish({
@@ -1470,13 +1494,13 @@ export const layerSql: Layer.Layer<
                 scope: "one",
                 reason,
               })
-            : Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+            : Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Sessions.revokeOwned")),
       );
 
     const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep, reason) =>
       repo.deleteAllForUserExcept(userId, keep).pipe(
-        Effect.orDie,
         Effect.andThen(
           events.publish({
             _tag: "auth.session.revoked",
@@ -1486,11 +1510,11 @@ export const layerSql: Layer.Layer<
             reason,
           }),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Sessions.revokeOthers")),
       );
 
     const revokeAll: SessionsShape["revokeAll"] = (userId, reason) =>
       repo.deleteAllByUser(userId).pipe(
-        Effect.orDie,
         Effect.andThen(
           events.publish({
             _tag: "auth.session.revoked",
@@ -1500,10 +1524,13 @@ export const layerSql: Layer.Layer<
             reason,
           }),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Sessions.revokeAll")),
       );
 
     const purgeExpired: SessionsShape["purgeExpired"] = (before) =>
-      drainBatches((limit) => repo.deleteExpiredBefore(before, limit).pipe(Effect.orDie));
+      drainBatches((limit) =>
+        repo.deleteExpiredBefore(before, limit).pipe(orStoreUnavailable("Sessions.purgeExpired")),
+      );
 
     const toItem = (row: SqlModels.Session, current: SessionId | undefined): SessionListItem => ({
       id: SessionId(row.id),
@@ -1535,8 +1562,7 @@ export const layerSql: Layer.Layer<
             Option.getOrUndefined(cursor),
             SqlRepositories.MAX_PAGE_SIZE,
             options,
-          )
-          .pipe(Effect.orDie);
+          );
         rows.push(...page.items);
         if (Option.isNone(page.nextCursor)) return rows;
         cursor = page.nextCursor;
@@ -1550,6 +1576,10 @@ export const layerSql: Layer.Layer<
     const list: SessionsShape["list"] = (userId, current, options) =>
       drainLive(userId, options).pipe(
         Effect.map((rows) => newestActivityFirst(rows.map((row) => toItem(row, current)))),
+        Effect.catchTags({
+          SqlError: storeUnavailable("Sessions.list"),
+          SchemaError: Effect.die,
+        }),
       );
 
     const findOwned: SessionsShape["findOwned"] = (userId, id) =>
@@ -1558,8 +1588,6 @@ export const layerSql: Layer.Layer<
           Effect.map(Option.some),
           Effect.catchTags({
             NoSuchElementError: () => Effect.succeed(Option.none()),
-            SchemaError: Effect.die,
-            SqlError: Effect.die,
           }),
         );
         const now = yield* DateTime.now;
@@ -1573,7 +1601,12 @@ export const layerSql: Layer.Layer<
               supersededAt: Option.fromNullishOr(r.supersededAt),
             }),
         ).pipe(Option.map((r) => toItem(r, undefined)));
-      });
+      }).pipe(
+        Effect.catchTags({
+          SqlError: storeUnavailable("Sessions.findOwned"),
+          SchemaError: Effect.die,
+        }),
+      );
 
     const isLive: SessionsShape["isLive"] = (userId, id) =>
       findOwned(userId, id).pipe(Effect.map(Option.isSome));
@@ -1581,7 +1614,7 @@ export const layerSql: Layer.Layer<
     const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id, amr) {
       const now = yield* DateTime.now;
       const notFound = () =>
-        Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` }));
+        Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id }));
       // THS-003: union the newly proven methods into the stored `amr` (monotone).
       const unioned =
         amr === undefined || amr.length === 0
@@ -1590,19 +1623,20 @@ export const layerSql: Layer.Layer<
               Effect.map((current) => JSON.stringify(unionAmr(parseAmr(current.amr), amr))),
               Effect.catchTags({
                 NoSuchElementError: notFound,
-                SchemaError: Effect.die,
-                SqlError: Effect.die,
               }),
             );
       const row = yield* repo.reauthenticate(id, now, unioned).pipe(
         Effect.catchTags({
           NoSuchElementError: notFound,
-          SchemaError: Effect.die,
-          SqlError: Effect.die,
         }),
       );
       return toSessionView(row);
-    });
+    },
+    Effect.catchTags({
+      SqlError: storeUnavailable("Sessions.reauthenticate"),
+      SchemaError: Effect.die,
+    }),
+    );
 
     return {
       issue: traceIssue(issue),

@@ -3,7 +3,7 @@ ID: "DRS-007"
 Title: "Organization record has no region/homeRegion attribute — orgs cannot be pinned to a residency zone"
 Level: medium
 Category: "compliance"
-Status: ready-for-human
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/OrganizationRecords.ts:23"
 Auditor: "data-residency-sharding-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `organization` · reported by **Data Residency & Sharding Specialist** (`data-residency-sharding-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Add a typed residency field (e.g. homeRegion: 'eu' | 'us' | ...) to Organization
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-config-and-tenancy`. Evidence at HEAD ec065a7: `packages/organization/src/OrganizationRecords.ts:23`. Fix: Add a typed, config-validated homeRegion to organizations (pending decision) so the org→shard mapping is data-driven. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option (config-validated homeRegion) per plan; user may revisit. OrganizationConfig.regions (default empty, so any homeRegion is refused until a deployment lists its vocabulary), organization_org."homeRegion" nullable column (org plugin migration), OrganizationRecord.homeRegion Option, create/update accept it and fail OrganizationApi.UnknownRegion (422), OrganizationDto exposes it, pure Organization.homeRegionOf(record) for shard routing. Tests: OrganizationRecords (memory + SQL, run on Postgres) homeRegion round-trip/clear, Organization.test unknown region rejected on create and update.

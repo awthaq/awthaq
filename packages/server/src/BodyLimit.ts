@@ -22,6 +22,7 @@
 // The 413 body uses the same `{ _tag, message }` shape the typed API errors
 // serialize to, so a client's error decoding treats it uniformly.
 
+import { ConfigDescriptor } from "@awthaq/core";
 import * as ByteSize from "effect/ByteSize";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -47,6 +48,24 @@ export const BodyLimitConfig = Context.Reference("awthaq/server/BodyLimitConfig"
 
 export const config = (partial: Partial<BodyLimitConfigShape>) =>
   Layer.succeed(BodyLimitConfig, { ...defaultBodyLimitConfig, ...partial });
+
+/**
+ * ECS-008/BEH-EA-201: the body cap as a configuration descriptor, so `doctor` can flag a limit
+ * raised far past what an auth API's JSON bodies need. The server is not a plugin, so this is
+ * not in `manifest.config`; the CLI lists it next to `EffectiveConfig.core`.
+ */
+export const descriptor = ConfigDescriptor.make(BodyLimitConfig, {
+  audit: (value) =>
+    value.maxBytes > ByteSize.mebibytes(10)
+      ? [
+          ConfigDescriptor.finding(
+            "warning",
+            "body-limit-large",
+            "the request body limit exceeds 10 MiB: an unauthenticated caller can make the process buffer that much per request",
+          ),
+        ]
+      : [],
+});
 
 const payloadTooLarge = (maxBytes: number) =>
   HttpServerResponse.jsonUnsafe(

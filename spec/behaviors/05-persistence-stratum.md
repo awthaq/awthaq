@@ -152,6 +152,8 @@ REQUIREMENT: The runtime (`Auth.make`, `auth.layer`, `auth.migrations`) MUST
 
 `archive/PRD.md` §12 states this scoping decision directly: "Snapshot-diff planning with a checksum ledger and destructive-change guardrails (research 10) is a CLI feature layered on top, not a v1 runtime requirement." `research/10-schema-migrations.md`'s own recommended defaults describe the eventual shape (Drizzle-kit-style snapshot diff, Atlas-style destructive-change lint and plan files, Prisma-style drift detection) precisely as tooling built *on* `@effect/sql`, never as something `Auth.make` itself must compute before an application can boot.
 
+**First CLI guardrails (ECS-009).** The ordered-plan preview and the key-level drift refusal of [BEH-EA-204](26-cli.md#beh-ea-204-migration-status-and-apply-read-and-advance-the-ledger) are the first, minimum part of this CLI feature: `migration apply` prints the pending set, refuses on an applied id the linker does not know or a pending id that sorts before an applied one, and `migration status` fails with the drift exit code. Checksums and snapshot diffing remain deferred.
+
 ## BEH-EA-040: A plugin migration may only alter tables under its own prefix; shared tables are altered only through a declared extension point
 
 > **Invariant:** [INV-EA-016](../invariants.md#inv-ea-016-a-plugin-cannot-alter-a-shared-table-outside-its-declared-extension-points)

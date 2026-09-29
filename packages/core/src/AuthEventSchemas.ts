@@ -60,6 +60,8 @@ export const SignInFailureReason = Schema.Literals([
   "emailNotVerified",
   "assertionInvalid",
   "callbackRejected",
+  // SCP-001: the credential was right but `Users.assertCanSignIn` refused (a suspended account).
+  "suspended",
 ]);
 export type SignInFailureReason = typeof SignInFailureReason.Type;
 
@@ -167,6 +169,8 @@ export const SessionRevocationReason = Schema.Literals([
   "userDeleted",
   "impersonationStopped",
   "admin",
+  /** SCP-001/BAM-005: every session of a user ended because the account was suspended/banned. */
+  "suspended",
   "reuseDetected",
   /** SMS-003: evicted by `SessionConfig.maxConcurrent` when the user's newest session was issued. */
   "limitEvicted",
@@ -314,6 +318,139 @@ export const AdminSessionRevokedEvent = Schema.TaggedStruct("auth.admin.sessionR
   sessionId: Schema.NullOr(SessionIdSchema),
 });
 export type AdminSessionRevokedEvent = typeof AdminSessionRevokedEvent.Type;
+
+/**
+ * BAM-005/SCP-001: published by `@awthaq/admin`'s `banUser`, after `Users.setStatus("suspended")`
+ * and `Sessions.revokeAll(userId, "suspended")` both completed. `reason`/`until` are the
+ * operator's note and the optional expiry (ISO instant), `null` when not given.
+ */
+export const AdminUserBannedEvent = Schema.TaggedStruct("auth.admin.userBanned", {
+  adminUserId: UserIdSchema,
+  userId: UserIdSchema,
+  reason: Schema.NullOr(Schema.String),
+  until: Schema.NullOr(Schema.String),
+});
+export type AdminUserBannedEvent = typeof AdminUserBannedEvent.Type;
+
+/** BAM-005: published by `@awthaq/admin`'s `unbanUser`, after `Users.setStatus("active")`. */
+export const AdminUserUnbannedEvent = Schema.TaggedStruct("auth.admin.userUnbanned", {
+  adminUserId: UserIdSchema,
+  userId: UserIdSchema,
+});
+export type AdminUserUnbannedEvent = typeof AdminUserUnbannedEvent.Type;
+
+/**
+ * EP-003 (ADR-EA-018): published by `@awthaq/admin`'s `AdminTenants.suspendOrganization`,
+ * after the organization is marked suspended. `reason` is the operator's note, `null`
+ * when none was given.
+ */
+export const AdminOrganizationSuspendedEvent = Schema.TaggedStruct(
+  "auth.admin.organizationSuspended",
+  {
+    adminUserId: UserIdSchema,
+    organizationId: Schema.String,
+    reason: Schema.NullOr(Schema.String),
+  },
+);
+export type AdminOrganizationSuspendedEvent = typeof AdminOrganizationSuspendedEvent.Type;
+
+/** EP-003: published by `AdminTenants.unsuspendOrganization`, after the suspension is lifted. */
+export const AdminOrganizationUnsuspendedEvent = Schema.TaggedStruct(
+  "auth.admin.organizationUnsuspended",
+  {
+    adminUserId: UserIdSchema,
+    organizationId: Schema.String,
+  },
+);
+export type AdminOrganizationUnsuspendedEvent = typeof AdminOrganizationUnsuspendedEvent.Type;
+
+/**
+ * CWM-002 (ADR-EA-023): published by `@awthaq/scim` when a directory connection provisions a
+ * user (a repeat `POST` that converges on an existing one publishes nothing). `connectionId`
+ * names the SCIM connection, `organizationId` its organization.
+ */
+export const ScimUserProvisionedEvent = Schema.TaggedStruct("auth.scim.userProvisioned", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  userId: UserIdSchema,
+});
+export type ScimUserProvisionedEvent = typeof ScimUserProvisionedEvent.Type;
+
+/** CWM-002: published after a SCIM `active: false` (or `DELETE`, by default) suspended the user and revoked every session. */
+export const ScimUserDeactivatedEvent = Schema.TaggedStruct("auth.scim.userDeactivated", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  userId: UserIdSchema,
+});
+export type ScimUserDeactivatedEvent = typeof ScimUserDeactivatedEvent.Type;
+
+/** CWM-002: published after a SCIM `active: true` lifted a suspension that same connection made. */
+export const ScimUserReactivatedEvent = Schema.TaggedStruct("auth.scim.userReactivated", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  userId: UserIdSchema,
+});
+export type ScimUserReactivatedEvent = typeof ScimUserReactivatedEvent.Type;
+
+/** CWM-002: published after a SCIM `DELETE` configured to erase removed the user. */
+export const ScimUserDeletedEvent = Schema.TaggedStruct("auth.scim.userDeleted", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  userId: UserIdSchema,
+});
+export type ScimUserDeletedEvent = typeof ScimUserDeletedEvent.Type;
+
+/** CWM-002: published when a SCIM connection creates, updates or deletes a group (an organization team). */
+export const ScimGroupChangedEvent = Schema.TaggedStruct("auth.scim.groupChanged", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  teamId: Schema.String,
+  change: Schema.Literals(["created", "updated", "deleted"]),
+});
+export type ScimGroupChangedEvent = typeof ScimGroupChangedEvent.Type;
+
+/**
+ * ECS-006: published by `awthaq seed admin` after it grants the administrative role
+ * (BEH-EA-206). `outcome` says whether the account was created or an existing one
+ * promoted; `forced` that the grant went past an existing administrator. Carries the
+ * user id and the role, never the address.
+ */
+export const AdminSeededEvent = Schema.TaggedStruct("auth.admin.seeded", {
+  targetUserId: UserIdSchema,
+  outcome: Schema.Literals(["created", "promoted"]),
+  forced: Schema.Boolean,
+  role: Schema.String,
+  via: Schema.Literal("cli"),
+});
+export type AdminSeededEvent = typeof AdminSeededEvent.Type;
+
+/** ECS-006: `awthaq seed admin` refused because an administrator already exists (and `--force` was not given). No address: the refusal names a reason, not a person. */
+export const AdminSeedRefusedEvent = Schema.TaggedStruct("auth.admin.seedRefused", {
+  reason: Schema.Literal("adminExists"),
+});
+export type AdminSeedRefusedEvent = typeof AdminSeedRefusedEvent.Type;
+
+/** ECS-002: one `awthaq import --yes` run finished — every source row was imported, skipped or failed. */
+export const ImportCompletedEvent = Schema.TaggedStruct("auth.import.completed", {
+  source: Schema.String,
+  runId: Schema.String,
+  imported: Schema.Number,
+  skipped: Schema.Number,
+  failed: Schema.Number,
+  unmapped: Schema.Number,
+});
+export type ImportCompletedEvent = typeof ImportCompletedEvent.Type;
+
+/** ECS-002: one `awthaq import --yes` run stopped on a failed batch (counts are those reached so far). */
+export const ImportFailedEvent = Schema.TaggedStruct("auth.import.failed", {
+  source: Schema.String,
+  runId: Schema.String,
+  imported: Schema.Number,
+  skipped: Schema.Number,
+  failed: Schema.Number,
+  unmapped: Schema.Number,
+});
+export type ImportFailedEvent = typeof ImportFailedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `create`. */
 export const OrganizationCreatedEvent = Schema.TaggedStruct("auth.organization.created", {
@@ -565,6 +702,52 @@ export const MailFailedEvent = Schema.TaggedStruct("auth.mail.failed", {
 });
 export type MailFailedEvent = typeof MailFailedEvent.Type;
 
+/**
+ * OCM-002/OCM-005 (`@awthaq/api-key`): the lifecycle of a long-lived API key and of a
+ * `client_credentials` client. `userId` is the owner who acted; `keyId`/`clientId`
+ * are the public ids (never a secret or a hash). `rotated` names the predecessor
+ * (`keyId`) and its successor.
+ */
+export const ApiKeyCreatedEvent = Schema.TaggedStruct("auth.apiKey.created", {
+  userId: UserIdSchema,
+  keyId: Schema.String,
+});
+export type ApiKeyCreatedEvent = typeof ApiKeyCreatedEvent.Type;
+
+export const ApiKeyRevokedEvent = Schema.TaggedStruct("auth.apiKey.revoked", {
+  userId: UserIdSchema,
+  keyId: Schema.String,
+});
+export type ApiKeyRevokedEvent = typeof ApiKeyRevokedEvent.Type;
+
+export const ApiKeyRotatedEvent = Schema.TaggedStruct("auth.apiKey.rotated", {
+  userId: UserIdSchema,
+  keyId: Schema.String,
+  successorKeyId: Schema.String,
+});
+export type ApiKeyRotatedEvent = typeof ApiKeyRotatedEvent.Type;
+
+export const ApiKeyClientRegisteredEvent = Schema.TaggedStruct("auth.apiKey.clientRegistered", {
+  userId: UserIdSchema,
+  clientId: Schema.String,
+});
+export type ApiKeyClientRegisteredEvent = typeof ApiKeyClientRegisteredEvent.Type;
+
+export const ApiKeyClientRevokedEvent = Schema.TaggedStruct("auth.apiKey.clientRevoked", {
+  userId: UserIdSchema,
+  clientId: Schema.String,
+});
+export type ApiKeyClientRevokedEvent = typeof ApiKeyClientRevokedEvent.Type;
+
+export const ApiKeyClientSecretRotatedEvent = Schema.TaggedStruct(
+  "auth.apiKey.clientSecretRotated",
+  {
+    userId: UserIdSchema,
+    clientId: Schema.String,
+  },
+);
+export type ApiKeyClientSecretRotatedEvent = typeof ApiKeyClientSecretRotatedEvent.Type;
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries. */
 export const AuthEventSchema = Schema.Union([
   TokenReplayEvent,
@@ -589,7 +772,20 @@ export const AuthEventSchema = Schema.Union([
   AdminImpersonationDeniedEvent,
   AdminActionDeniedEvent,
   AdminUserUpdatedEvent,
+  AdminUserBannedEvent,
+  AdminUserUnbannedEvent,
   AdminSessionRevokedEvent,
+  AdminOrganizationSuspendedEvent,
+  AdminOrganizationUnsuspendedEvent,
+  ScimUserProvisionedEvent,
+  ScimUserDeactivatedEvent,
+  ScimUserReactivatedEvent,
+  ScimUserDeletedEvent,
+  ScimGroupChangedEvent,
+  AdminSeededEvent,
+  AdminSeedRefusedEvent,
+  ImportCompletedEvent,
+  ImportFailedEvent,
   OrganizationCreatedEvent,
   OrganizationUpdatedEvent,
   OrganizationDeletedEvent,
@@ -617,6 +813,12 @@ export const AuthEventSchema = Schema.Union([
   RolesRevokedEvent,
   RateLimitExceededEvent,
   MailFailedEvent,
+  ApiKeyCreatedEvent,
+  ApiKeyRevokedEvent,
+  ApiKeyRotatedEvent,
+  ApiKeyClientRegisteredEvent,
+  ApiKeyClientRevokedEvent,
+  ApiKeyClientSecretRotatedEvent,
 ]);
 
 export type AuthEvent = typeof AuthEventSchema.Type;

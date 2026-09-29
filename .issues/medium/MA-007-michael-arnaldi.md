@@ -51,3 +51,5 @@ Either enforce canonical order at the type level (a SameOrderCheck<P> in Validat
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `plugin-composition-soundness`. Duplicate of `JH-006` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Auth.ts:225`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `JH-006-jared-hanson` — closed by its fix (see that issue's Resolved comment).

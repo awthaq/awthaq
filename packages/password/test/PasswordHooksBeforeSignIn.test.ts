@@ -34,7 +34,11 @@ const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
 );
 
 const signedUp = Ref.makeUnsafe<
-  ReadonlyArray<{ readonly userId: string; readonly email: string; readonly strategy: string }>
+  ReadonlyArray<{
+    readonly userId: string;
+    readonly email?: string | undefined;
+    readonly strategy: string;
+  }>
 >([]);
 const signUpStrategies = Ref.makeUnsafe<ReadonlyArray<string>>([]);
 

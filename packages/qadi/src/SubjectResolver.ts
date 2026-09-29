@@ -23,25 +23,26 @@
 // instead — see that call site, and `Slots.ts`'s own header comment, for
 // how.
 //
-// **BEH-EA-140/141 (ApiKey/Service principal scopes → permissions) are also
-// not implemented, for a different reason**: `@awthaq/api`'s
-// `ApiKeyPrincipal`/`ServicePrincipal` (`Api.ts`) carry only a `ref`, no
-// `scopes` field — there is no `@awthaq/api-key` plugin yet (M7,
-// unbuilt) or any other mechanism that would populate one. Inventing a
-// `scopes` field on these Principal schemas now, with no code path that ever
-// sets it, would be exactly the kind of speculative infrastructure this
-// project avoids building ahead of a real caller (`WebAuthn`'s own port
-// interface is deferred for the identical reason — see `@awthaq/ports`).
-// The default resolver below still maps both principal kinds to a real,
-// well-formed `AuthSubject` — `id` only, per BEH-EA-137's own "identity-only"
-// default — so a policy checking a permission against either simply denies,
-// which is the correct fail-closed behavior in the absence of a scope
-// source, not a broken one.
+// **BEH-EA-140/141 (ApiKey/Service principal scopes -> permissions), OCM-002/MAPS-003.**
+// `@awthaq/api-key` populates `scopes` on `ApiKeyPrincipal`/`ServicePrincipal`, and this
+// default resolver maps them 1:1 onto `AuthSubject.permissions` (id `apikey:<keyId>` /
+// `service:<clientId>`). Only scope strings shaped like a qadi permission key
+// (`resource:action`) become permissions; any other scope string names no permission and
+// is ignored, so a policy checking one simply denies (fail-closed). This is the one place
+// the mapping lives, deliberately not a `SubjectResolver` override: `Roles` and
+// `Organization` already contest the exclusive slot (ADR-EA-012) and both delegate every
+// non-`User` principal here, so an API key never needs a third contender.
 import { Api } from "@awthaq/api";
 import { Slots } from "@awthaq/core";
 import * as Effect from "effect/Effect";
-import type { AuthSubject } from "@qadi/core";
+import type { AuthSubject, PermissionKey } from "@qadi/core";
 import { anonymous, makeSubject, withAttributes } from "@qadi/core";
+
+/** A scope is a qadi permission when it is `resource:action` with both halves non-empty (`:` may appear in the action, e.g. `scim:users:write`). */
+const isPermissionKey = (scope: string): scope is PermissionKey => {
+  const colon = scope.indexOf(":");
+  return colon > 0 && colon < scope.length - 1;
+};
 
 export interface SubjectResolverShape {
   /** BEH-EA-145: what `AuthorizedSubject`/`SubjectExtractorLive` both call. */
@@ -72,9 +73,15 @@ export const resolveIdentityOnly = (principal: Api.Principal): AuthSubject => {
           });
     }
     case "ApiKey":
-      return makeSubject({ id: `apikey:${principal.ref.id}` });
+      return makeSubject({
+        id: `apikey:${principal.ref.id}`,
+        permissions: principal.scopes.filter(isPermissionKey),
+      });
     case "Service":
-      return makeSubject({ id: `service:${principal.ref.id}` });
+      return makeSubject({
+        id: `service:${principal.ref.id}`,
+        permissions: principal.scopes.filter(isPermissionKey),
+      });
   }
 };
 

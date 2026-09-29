@@ -3,7 +3,7 @@ ID: "AVS-005"
 Title: "jwt package states a middleware convention that password's own contract violates"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/JwtApi.ts:16"
 Auditor: "api-design-versioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `jwt` · reported by **API Design & Versioning Specialist** (`api-design-versioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Pick one rule and enforce it: give password a `password.credentials`-style dotte
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `plugin-api-surface-conventions`. Evidence at HEAD ec065a7: `packages/jwt/src/JwtApi.ts:12`. Fix: Make password follow the stated convention: move its two authenticated endpoints into a dotted `password.account` sub-group with group-level Authentication; keep paths. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Already fixed at current HEAD by EHA-007 (password-api-contract-hygiene): PasswordApi.ts defines PasswordAccountGroup = HttpApiGroup.make('password.account') holding changePassword/reauthenticate with group-level Authentication + CsrfProtection (paths unchanged) and Password.ts serves it via a password.account handler group; proof: packages/password/test/AuthHttp.test.ts 'EHA-007: every password.account endpoint requires Authentication; no endpoint in the public group does' and 'change-password without a session is rejected' (401). JwtApi.ts header comment now cites the password/password.account example too. No code change beyond that.

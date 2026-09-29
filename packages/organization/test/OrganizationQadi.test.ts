@@ -10,6 +10,7 @@ import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -287,6 +288,45 @@ describe("OrganizationQadi", () => {
       yield* organization.removeMember(owner, record.id, Users.UserId("member-1"));
 
       assert.strictEqual(yield* check(), "Unrelated");
+    }).pipe(Effect.provide(QadiLive)),
+  );
+
+  // EP-003 (ADR-EA-018): a suspended organization confers nothing through qadi either.
+  it.effect("a suspended organization confers no relationship, and reinstating restores it", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const records = yield* OrganizationRecords.OrganizationRecords;
+      const owner = asCaller("owner-1");
+      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const team = yield* organization.createTeam(owner, record.id, "Engineering");
+      yield* organization.addTeamMember(owner, record.id, team.id, Users.UserId("owner-1"));
+      const relations = () =>
+        Effect.all([
+          check("member", record.id, "owner-1"),
+          check("owner", record.id, "owner-1"),
+          check("member:update", record.id, "owner-1"),
+          check("team-member", team.id, "owner-1"),
+          check("team-role:member", team.id, "owner-1"),
+        ]);
+      assert.deepStrictEqual(yield* relations(), [
+        "Related",
+        "Related",
+        "Related",
+        "Related",
+        "Related",
+      ]);
+
+      yield* records.setSuspended(record.id, Option.some(yield* DateTime.now));
+      assert.deepStrictEqual(yield* relations(), [
+        "Unrelated",
+        "Unrelated",
+        "Unrelated",
+        "Unrelated",
+        "Unrelated",
+      ]);
+
+      yield* records.setSuspended(record.id, Option.none());
+      assert.strictEqual(yield* check("member", record.id, "owner-1"), "Related");
     }).pipe(Effect.provide(QadiLive)),
   );
 

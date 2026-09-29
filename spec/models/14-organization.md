@@ -145,6 +145,15 @@ decision on how a `RelationshipResolver` contribution is wired into the
 so on). None of this has an allocated `BEH-EA` id; this plugin has no
 behaviors file.
 
+## Tenancy
+
+A tenant is an organization row ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md), [BEH-EA-230 through 237](../behaviors/28-tenancy.md)). The plugin contributes the tenant *resolution* and the tenant-owned data; core carries only an opaque `"tenantId"` and the ambient `TenantContext`.
+
+- `TenantResolver` — an application-provided port, `(request) => Effect<Option<organizationId>>` ([ADR-EA-010](../decisions/010-plugins-require-ports-never-provide.md)); `Organization.tenantMiddleware` calls it once per request and provides `TenantContext` (`tenantMiddlewareWithRls` also scopes the request to the tenant on Postgres).
+- `organization_org` gains `homeRegion` (validated against `OrganizationConfig.regions`, DRS-007) and `suspendedAt` (platform suspension, EP-003).
+- Per-organization OAuth connections (`organization_oauth_connection`, encrypted client secret) resolved through the `OrganizationConnections` `LayerMap.Service`, consulted by `@awthaq/oauth` after its static registry (BEH-EA-235).
+- `OrganizationConfig.limitsFor` per-organization quotas and finite defaults (`organizationLimit` 10, `requireEmailVerificationOnInvitation` true).
+
 ## Verification
 
 None yet — no test exists.

@@ -19,7 +19,10 @@ const newUserSession = (email: string) =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
     const sessions = yield* Sessions.Sessions;
-    const user = yield* users.create({ email, name: `Name of ${email}` });
+    const user = yield* users.create({
+      identity: { _tag: "Email", email },
+      name: `Name of ${email}`,
+    });
     const issued = yield* sessions.issue({ userId: user.id });
     return { userId: user.id, sessionId: issued.session.id };
   });

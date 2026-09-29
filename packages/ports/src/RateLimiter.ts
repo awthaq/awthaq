@@ -86,11 +86,10 @@ export interface ConsumeInput {
 export interface RateLimiterShape {
   readonly consume: (input: ConsumeInput) => Effect.Effect<void, RateLimitExceeded>;
   /**
-   * RBS-007: `true` on a limiter that never limits (`layerPermissive`). The rate-limit
-   * registry reads it to warn, once, when rules are registered under a limiter that
-   * cannot enforce them — the composition looks protected and is not.
+   * NHS-005/BEH-EA-201: set by `layerPermissive`, which disables every rule, so
+   * `awthaq doctor --build` can flag it left in a production composition.
    */
-  readonly permissive?: boolean;
+  readonly permissive?: true;
 }
 
 export class RateLimiter extends Context.Service<RateLimiter, RateLimiterShape>()(
@@ -334,9 +333,9 @@ export const layerStoreMemory = layerStoreMemoryWith({
 });
 
 /**
- * RBS-007: the documented default for a real deployment on one process — the limiter over
- * the bounded in-memory store, in one line. A multi-replica deployment needs a shared
- * store instead (`layer` over your own `RateLimiterStore`).
+ * RBS-007: the one-line real limiter for a single process — `layer` over the bounded memory
+ * store. The documented default for anything that is not a test; multi-replica deployments
+ * still need a shared store (`RateLimiterStoreSql.layerStoreSql`).
  */
 export const layerMemory = layer.pipe(Layer.provide(layerStoreMemory));
 
@@ -346,9 +345,21 @@ export const layerMemory = layer.pipe(Layer.provide(layerStoreMemory));
  * loop doesn't fail for a reason that has nothing to do with what it tests.
  *
  * Tests only, never production (NHS-005): it disables every rate-limit rule
- * every plugin registers. Production wiring is `layer` over a store.
+ * every plugin registers. Production wiring is `layerMemory` or `layer` over a store.
+ * RBS-007: the first `consume` — a rule actually running against it — logs one warning
+ * saying so, so a test composition copied into production is not silently unprotected.
  */
-export const layerPermissive: Layer.Layer<RateLimiter> = Layer.succeed(
+export const layerPermissive = Layer.effect(
   RateLimiter,
-  RateLimiter.of({ consume: () => Effect.void, permissive: true }),
+  Effect.gen(function* () {
+    const warned = yield* Ref.make(false);
+    const warnOnce = Effect.flatMap(Ref.getAndSet(warned, true), (already) =>
+      already
+        ? Effect.void
+        : Effect.logWarning(
+            "awthaq: RateLimiter.layerPermissive is active — every registered rate-limit rule is disabled (tests only; use RateLimiter.layerMemory or a shared store in production)",
+          ),
+    );
+    return RateLimiter.of({ consume: () => warnOnce, permissive: true });
+  }),
 );

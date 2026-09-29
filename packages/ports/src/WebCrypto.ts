@@ -1,82 +1,60 @@
 // @awthaq/ports — WebCrypto
 //
-// ERAS-002 (.issues/medium): the one `Crypto.Crypto` provider in the repository
-// used to be Node's (`@effect/platform-node`'s `NodeCrypto`), which pulls
-// `node:crypto` into every edge bundle. This is the edge-safe alternative: a
-// `Crypto` layer backed by `globalThis.crypto` (Web Crypto — present in Node
-// >= 20, browsers, Cloudflare Workers, Deno, Bun, Vercel Edge), with no
-// dependency beyond `effect`. It mirrors `@effect/platform-browser`'s
-// `BrowserCrypto` (random bytes from `getRandomValues`, digests from
-// `crypto.subtle.digest`) without adding a browser-platform package to the
-// server packages — the same no-new-dependency posture as the rest of the
-// edge tier (`@awthaq/next/edge`).
+// ERAS-002. Every composition in this repository provided `Crypto.Crypto` through
+// `@effect/platform-node`'s `NodeCrypto`, which an edge runtime (Cloudflare Workers,
+// Vercel Edge, Deno Deploy) does not have. This is the same service over
+// `globalThis.crypto` — present in every runtime with the Web Crypto API and in Node >= 20 —
+// mirroring `@effect/platform-browser`'s `BrowserCrypto` without adding a browser-platform
+// dependency to the server packages (the same no-new-dependency posture as the rest of this
+// stratum). Provide it where you would provide `NodeCrypto.layer`:
 //
-// Use it where `node:crypto` is unavailable: `Layer.provide(WebCrypto.layer)`
-// wherever `NodeCrypto.layer` would go. On Node, `NodeCrypto.layer` remains fine.
-// Everything the library needs from `Crypto` — randomness, uuidv7 ids, SHA-256
-// digests (and HMAC-SHA256, built from them in `Hmac.ts`) — is covered; what is
-// *not* edge-friendly is password hashing (argon2id/scrypt in WASM burns CPU
-// budgets), which belongs on the origin (see `PasswordHasher.ts`, ERAS-004).
+//   const AppLayer = MyLayer.pipe(Layer.provide(WebCrypto.layer));
+//
+// The layer dies at build time when no Web Crypto object exists (better than a later,
+// per-call failure in a security primitive); a digest failure is a `PlatformError`.
 
-import * as Context from "effect/Context";
+import * as Defects from "./Defects.ts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 
-/** The Web Crypto object the layer reads; defaults to `globalThis.crypto`, overridable for tests and embedded runtimes. */
-export const WebCryptoApi = Context.Reference<typeof globalThis.crypto | undefined>(
-  "awthaq/ports/WebCrypto/WebCryptoApi",
-  { defaultValue: () => globalThis.crypto },
-);
+/** `crypto.getRandomValues` refuses more than 65536 bytes per call. */
+const MAX_RANDOM_CHUNK = 65_536;
 
-const RANDOM_CHUNK = 65_536; // `getRandomValues` refuses more than 64 KiB per call
+const digestFailure = (description: string, cause?: unknown) =>
+  PlatformError.systemError({
+    module: "Crypto",
+    method: "digest",
+    _tag: "Unknown",
+    description,
+    ...(cause === undefined ? {} : { cause }),
+  });
 
-/**
- * A `Crypto.Crypto` over Web Crypto. Dies at build if no Web Crypto object exists;
- * `digest` fails with a `PlatformError` when `crypto.subtle.digest` is missing or the
- * runtime rejects the request.
- */
-export const layer: Layer.Layer<Crypto.Crypto> = Layer.effect(
+export const layer = Layer.effect(
   Crypto.Crypto,
   Effect.gen(function* () {
-    const webCrypto = yield* WebCryptoApi;
+    const webCrypto = globalThis.crypto;
     if (webCrypto === undefined) {
-      return yield* Effect.die(new Error("awthaq: the Web Crypto API is not available in this runtime"));
+      return yield* Defects.invalidConfiguration("Crypto", "awthaq: the Web Crypto API (globalThis.crypto) is not available");
     }
-    const randomBytes = (size: number): Uint8Array => {
+
+    const randomBytes = (size: number) => {
       const bytes = new Uint8Array(size);
-      for (let offset = 0; offset < bytes.length; offset += RANDOM_CHUNK) {
-        webCrypto.getRandomValues(bytes.subarray(offset, offset + RANDOM_CHUNK));
+      for (let offset = 0; offset < size; offset += MAX_RANDOM_CHUNK) {
+        webCrypto.getRandomValues(bytes.subarray(offset, offset + MAX_RANDOM_CHUNK));
       }
       return bytes;
     };
-    const digest: Crypto.Crypto["digest"] = (algorithm, data) => {
-      if (typeof webCrypto.subtle?.digest !== "function") {
-        return Effect.fail(
-          PlatformError.systemError({
-            module: "Crypto",
-            method: "digest",
-            _tag: "Unknown",
-            description: "crypto.subtle.digest is not available",
-          }),
-        );
-      }
-      return Effect.map(
-        Effect.tryPromise({
-          try: () => webCrypto.subtle.digest(algorithm, new Uint8Array(data)),
-          catch: (cause) =>
-            PlatformError.systemError({
-              module: "Crypto",
-              method: "digest",
-              _tag: "Unknown",
-              description: "Could not compute digest",
-              cause,
-            }),
-        }),
-        (buffer) => new Uint8Array(buffer),
-      );
-    };
+
+    const digest: Crypto.Crypto["digest"] = (algorithm, data) =>
+      typeof webCrypto.subtle?.digest === "function"
+        ? Effect.tryPromise({
+            try: () => webCrypto.subtle.digest(algorithm, new Uint8Array(data)),
+            catch: (cause) => digestFailure("Could not compute digest", cause),
+          }).pipe(Effect.map((buffer) => new Uint8Array(buffer)))
+        : Effect.fail(digestFailure("crypto.subtle.digest is not available"));
+
     return Crypto.make({ randomBytes, digest });
   }),
 );

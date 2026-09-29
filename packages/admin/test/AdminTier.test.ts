@@ -1,7 +1,20 @@
 // AR-003 / BEH-EA-071: the admin group is an admin-tier group, so a host can serve it on
 // its own listener (and behind its own authentication) without forking the contract.
 import { Api } from "@awthaq/api";
-import { AuditChain, AuditLog, AuthEvents, Auth, Hooks, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditChain,
+  AuditLog,
+  AuthEvents,
+  Auth,
+  DataExport,
+  Erasure,
+  Hooks,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
+import { RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -90,9 +103,10 @@ describe("AR-003: the admin tier", () => {
   it.effect("adminApi carries the admin group and publicApi does not", () =>
     Effect.sync(() => {
       assert.deepStrictEqual(Object.keys(auth.adminApi.groups), ["admin"]);
-      assert.deepStrictEqual(Object.keys(auth.publicApi.groups), []);
-      // The default composition still serves it exactly as before.
-      assert.deepStrictEqual(Object.keys(auth.api.groups), ["admin"]);
+      // MW-002: the public tier is core's own groups; `admin` is not among them.
+      assert.deepStrictEqual(Object.keys(auth.publicApi.groups).sort(), ["account", "session"]);
+      // The default composition still serves it, beside core's groups.
+      assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["account", "admin", "session"]);
     }),
   );
 
@@ -100,6 +114,15 @@ describe("AR-003: the admin tier", () => {
     Effect.gen(function* () {
       const { handler } = HttpRouter.toWebHandler(
         AuthHttp.routes(auth.publicApi).pipe(
+          Layer.provide(AuthHttp.coreHandlers),
+          // CSG-001/CSG-005: the account handlers call core's erasure and export, and rate limit the export.
+          Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive)),
+          Layer.provide(AuthenticationLive),
+          Layer.provide(CsrfProtectionLive),
+          Layer.provideMerge(SqlTransaction.layerNoop),
+          Layer.provideMerge(Accounts.layerMemory),
+          Layer.provideMerge(Verification.layerMemory),
+          Layer.provideMerge(CoreLive),
           Layer.provideMerge(TestServices),
           Layer.provideMerge(HttpRouter.layer),
         ),

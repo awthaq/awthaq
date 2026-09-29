@@ -3,7 +3,7 @@ ID: "ECS-006"
 Title: "No audit trail for seed admin privilege promotion"
 Level: medium
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/26-cli.md:120"
 Auditor: "effect-cli-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `—` · reported by **Effect CLI Specialist** (`effect-cli-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Require seed admin to publish a typed event (e.g. `auth.admin.seeded`) on AuthEv
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-seed-admin-audit`. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:116`. Fix: Require `seed admin` to publish a typed `auth.admin.seeded` event (and a refusal event) through AuthEvents, which AuditLog persists inline. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** auth.admin.seeded (target user id, created|promoted, forced, role, via: cli) and auth.admin.seedRefused (reason: adminExists, no address) added to AuthEvents/AuditLog (actorOf exhaustive switch); BEH-EA-206 and BEH-EA-101's registry note name them; seed admin publishes one on every grant or refusal. Roles gained holders(role) for the existing-administrator check. Proof: packages/core/test/AuditLog.test.ts, packages/cli/test/Seed.test.ts (real SQLite: seeded audited with forced=true under --force, seedRefused audited on refusal), packages/roles tests (memory + SQL).

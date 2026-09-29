@@ -3,7 +3,7 @@ ID: "ECS-001"
 Title: "No exit-code contract despite CI-first design"
 Level: high
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/26-cli.md:32"
 Auditor: "effect-cli-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `dx` · `—` · reported by **Effect CLI Specialist** (`effect-cli-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — evidence quote matches `spec/behaviors/26-cli.md:32` exactly; the file confirms (line 15) the CLI is pre-implementation spec, and `grep -n "exit code"` across `spec/behaviors/26-cli.md` and `features/features/08-tooling/26-cli.feature` returns nothing. The recommended exit-code taxonomy is concrete and mechanical to add as spec/BDD content. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-exit-code-and-arg-contract`. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:32`. Fix: Add a normative process contract for every CLI command: a fixed exit-code table derived mechanically from each command's TaggedError `_tag` via Effect v4's `Runtime.errorExitCode`, plus one scenario per class. (effort M). Full dossier: `.plan/slices/12-spec.md`.
+
+**Resolved (2026-09-29):** BEH-EA-225 (see CTA-003): one normative exit-code table referenced by BEH-EA-201/204/206/207/227; every CLI error class carries its code as [Runtime.errorExitCode]; --json prints the same _tag and code on stderr (stdout stays the result); the framework's own CliError is remapped to the usage class. No command sets the process status by hand. Test: packages/cli/test/ExitCodes.test.ts.

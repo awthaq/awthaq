@@ -3,15 +3,15 @@
 // spec/behaviors/16-oauth.md, BEH-EA-127 (issuer exact match feeds the same
 // claim check here). Not itself a numbered behavior — `research/05-oauth-oidc.md`
 // Q54's open question 3 leaves "depend on jose vs. a minimal internal
-// verifier" open; this is the minimal-internal-verifier answer, scoped
-// deliberately: RS256 only (the OIDC-mandated, near-universal default —
-// Google, Okta, Auth0, Entra ID all sign with RS256 by default), signature
-// verification via the platform `crypto.subtle` (Node's WebCrypto, no
-// dependency), and no JWKS-rotation refresh policy beyond "refetch once on
-// a `kid` cache miss." ES256/EdDSA and a real rotation policy are not
-// implemented — a real gap, documented here rather than silently assumed
-// away, the same way `Verification.layerSql`/`WebAuthn` are documented as
-// deferred elsewhere in this codebase rather than pretended not to exist.
+// verifier" open; this is the minimal-internal-verifier answer: signature
+// verification via the platform `crypto.subtle` (WebCrypto, no dependency) over
+// a small algorithm table — RS256 (the near-universal default), PS256, ES256,
+// ES384 and EdDSA (AOMS-005). Which of them a given provider's `id_token` may
+// use is that provider's own allowlist (`OAuthProviderConfig.idTokenSigningAlgs`,
+// seeded from discovery), never the token header's say-so; the header `alg`
+// only *selects within* the allowlist, and `findKey` only returns a key whose
+// type (and curve) the chosen algorithm can use. HS256 and `none` are not in
+// the table and cannot be enabled. JWKS refresh policy lives in `IdToken.ts`.
 //
 // OIT-007 — also deliberately not implemented, and compliant as it stands:
 //   - `at_hash` is not validated. Only `response_type=code` exists (pinned
@@ -43,19 +43,46 @@ export const JwksDocumentSchema = Schema.Struct({
 export type Jwks = typeof JwksDocumentSchema.Type;
 
 /**
- * ACS-004: the structural RSA JWK `findKey` admits. A JWKS entry is only
- * ever a candidate once it decodes as this — a `kty`-less or `n`/`e`-less
- * entry can no longer reach `crypto.subtle.importKey` as key material.
+ * ACS-004: the structural JWKs `findKey` admits. A JWKS entry is only ever a
+ * candidate once it decodes as one of these — a `kty`-less or member-less entry
+ * can no longer reach `crypto.subtle.importKey` as key material.
  */
+const JwkCommon = {
+  kid: Schema.optional(Schema.String),
+  alg: Schema.optional(Schema.String),
+  use: Schema.optional(Schema.String),
+};
+
 export const RsaJwkSchema = Schema.Struct({
   kty: Schema.Literal("RSA"),
   n: Schema.String,
   e: Schema.String,
-  kid: Schema.optional(Schema.String),
-  alg: Schema.optional(Schema.String),
-  use: Schema.optional(Schema.String),
+  ...JwkCommon,
 });
-export type Jwk = typeof RsaJwkSchema.Type;
+export const EcJwkSchema = Schema.Struct({
+  kty: Schema.Literal("EC"),
+  crv: Schema.String,
+  x: Schema.String,
+  y: Schema.String,
+  ...JwkCommon,
+});
+export const OkpJwkSchema = Schema.Struct({
+  kty: Schema.Literal("OKP"),
+  crv: Schema.String,
+  x: Schema.String,
+  ...JwkCommon,
+});
+export const JwkSchema = Schema.Union([RsaJwkSchema, EcJwkSchema, OkpJwkSchema]);
+export type Jwk = typeof JwkSchema.Type;
+
+/**
+ * AOMS-005: the id_token signature algorithms this verifier implements. An entry
+ * here is a claim that it is verified against a real signature in `test/Jwt.test.ts`.
+ */
+export type SigningAlg = "RS256" | "PS256" | "ES256" | "ES384" | "EdDSA";
+export const SIGNING_ALGS: ReadonlyArray<SigningAlg> = ["RS256", "PS256", "ES256", "ES384", "EdDSA"];
+export const isSigningAlg = (value: unknown): value is SigningAlg =>
+  SIGNING_ALGS.some((alg) => alg === value);
 
 export class JwtVerificationError extends Data.TaggedError("JwtVerificationError")<{
   readonly reason: string;
@@ -139,27 +166,92 @@ export const decode = (token: string): Effect.Effect<DecodedJwt, JwtVerification
     };
   });
 
-/** Verifies an RS256 signature against one JWKS entry (matched by `kid` beforehand). */
-export const verifyRs256 = (
+/** Whether `jwk`'s key type (and curve) is one `alg` can verify with. */
+const usableFor = (alg: SigningAlg, jwk: Jwk): boolean => {
+  switch (alg) {
+    case "RS256":
+    case "PS256":
+      return jwk.kty === "RSA";
+    case "ES256":
+      return jwk.kty === "EC" && jwk.crv === "P-256";
+    case "ES384":
+      return jwk.kty === "EC" && jwk.crv === "P-384";
+    case "EdDSA":
+      return jwk.kty === "OKP" && jwk.crv === "Ed25519";
+  }
+};
+
+/** Only the public-key members: `kid`/`alg`/`use` were already checked by `findKey` and mean nothing to WebCrypto's import. */
+const publicMembers = (jwk: Jwk): JsonWebKey => {
+  switch (jwk.kty) {
+    case "RSA":
+      return { kty: jwk.kty, n: jwk.n, e: jwk.e };
+    case "EC":
+      return { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y };
+    case "OKP":
+      return { kty: jwk.kty, crv: jwk.crv, x: jwk.x };
+  }
+};
+
+/** WebCrypto's import and verify parameters for each algorithm in the table. */
+const parameters = (
+  alg: SigningAlg,
+): {
+  readonly importAlgorithm: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams;
+  readonly verifyAlgorithm: AlgorithmIdentifier | RsaPssParams | EcdsaParams;
+} => {
+  switch (alg) {
+    case "RS256":
+      return {
+        importAlgorithm: { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+        verifyAlgorithm: "RSASSA-PKCS1-v1_5",
+      };
+    case "PS256":
+      return {
+        importAlgorithm: { name: "RSA-PSS", hash: "SHA-256" },
+        verifyAlgorithm: { name: "RSA-PSS", saltLength: 32 },
+      };
+    case "ES256":
+      return {
+        importAlgorithm: { name: "ECDSA", namedCurve: "P-256" },
+        verifyAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      };
+    case "ES384":
+      return {
+        importAlgorithm: { name: "ECDSA", namedCurve: "P-384" },
+        verifyAlgorithm: { name: "ECDSA", hash: "SHA-384" },
+      };
+    case "EdDSA":
+      return { importAlgorithm: { name: "Ed25519" }, verifyAlgorithm: { name: "Ed25519" } };
+  }
+};
+
+/**
+ * Verifies `signature` over `signingInput` with one JWKS entry (matched by `kid` beforehand) under
+ * `alg`. JWS ECDSA signatures are the raw `r || s` form WebCrypto expects, so no DER conversion.
+ */
+export const verifySignature = (
+  alg: SigningAlg,
   jwk: Jwk,
   signingInput: Uint8Array<ArrayBuffer>,
   signature: Uint8Array<ArrayBuffer>,
 ): Effect.Effect<boolean, JwtVerificationError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const key = await globalThis.crypto.subtle.importKey(
-        "jwk",
-        // Only the public-key members: `kid`/`alg`/`use` were already
-        // checked by `findKey` and mean nothing to WebCrypto's import.
-        { kty: jwk.kty, n: jwk.n, e: jwk.e },
-        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-        false,
-        ["verify"],
-      );
-      return globalThis.crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, signingInput);
-    },
-    catch: () => new JwtVerificationError({ reason: "signature verification failed" }),
-  });
+  usableFor(alg, jwk)
+    ? Effect.tryPromise({
+        try: async () => {
+          const { importAlgorithm, verifyAlgorithm } = parameters(alg);
+          const key = await globalThis.crypto.subtle.importKey(
+            "jwk",
+            publicMembers(jwk),
+            importAlgorithm,
+            false,
+            ["verify"],
+          );
+          return globalThis.crypto.subtle.verify(verifyAlgorithm, key, signature, signingInput);
+        },
+        catch: () => new JwtVerificationError({ reason: "signature verification failed" }),
+      })
+    : Effect.fail(new JwtVerificationError({ reason: "key type does not match the algorithm" }));
 
 /**
  * Picks the JWKS entry matching a decoded JWT's `kid` (or its lone RSA
@@ -179,15 +271,17 @@ export const verifyRs256 = (
 export const findKey = (
   jwks: Jwks,
   kid: string | undefined,
+  alg: SigningAlg = "RS256",
 ): Effect.Effect<Jwk, JwtVerificationError> => {
-  // ACS-004: only structurally valid RSA signing keys are candidates — a
-  // `use` other than `sig`, or an `alg` other than RS256, marks a key this
-  // verifier must not select even when its `kid` matches.
+  // ACS-004/AOMS-005: only structurally valid signing keys the algorithm can use are candidates
+  // — a `use` other than `sig`, an advertised `alg` other than the one being verified, or a key
+  // of the wrong type or curve marks a key this verifier must not select even when its `kid` matches.
   const candidates = jwks.keys.flatMap((entry) => {
-    const key = Schema.decodeUnknownOption(RsaJwkSchema)(entry);
+    const key = Schema.decodeUnknownOption(JwkSchema)(entry);
     return Option.isSome(key) &&
       (key.value.use === undefined || key.value.use === "sig") &&
-      (key.value.alg === undefined || key.value.alg === "RS256")
+      (key.value.alg === undefined || key.value.alg === alg) &&
+      usableFor(alg, key.value)
       ? [key.value]
       : [];
   });

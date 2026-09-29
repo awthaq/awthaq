@@ -3,7 +3,7 @@ ID: "BAM-001"
 Title: "better-auth import tooling is spec-only; the cli package ships nothing"
 Level: high
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/26-cli.md:131"
 Auditor: "better-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `dx` · `—` · reported by **better-auth Migration Specialist** (`better-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `spec/behaviors/26-cli.md:131` matches (the `awthaq import --from better-auth|authjs|lucia` example), and `packages/cli/src/index.ts` is still an `export {}` placeholder. Building the import ETL (source-framework table mapping, resumable apply ledger) requires real design work beyond mechanical wiring. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-import-tooling`. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:131`. Fix: Follow decision ticket 07 §6: a generic `SourceAdapter` interface and `import --from <source>` command, only the better-auth adapter implemented and validated against a real export fixture; authjs/lucia registered but refusing with a typed NotImplemented error; rows go through Users/Accounts domain services; unmapped fields reported; resumable via an import-runs table. (effort XL). Full dossier: `.plan/slices/12-spec.md`.
+
+**Resolved (2026-09-29):** awthaq import --from better-auth via the generic SourceAdapter registry (packages/cli/src/Sources.ts, Import.ts): read (keyset-paginated), map onto UserImport.ImportUserInput through Schemas, unmapped columns reported, credentials stored verbatim for BetterAuthScryptVerifier, resumable via awthaq_import_runs; authjs and lucia are registered and refused with NotYetValidated (exit 2). The better-auth adapter (packages/migrate-better-auth/src/BetterAuthSource.ts) is validated against a REAL export: test/fixtures/better-auth-export.sqlite was produced by better-auth 1.7.6 itself (its migrations, signUpEmail, internal adapter createOAuthUser; generator script beside it). Proof: migrate-better-auth/test/BetterAuthSource.test.ts (imported password verifies with the real password and is flagged for rehash), cli/test/Import.test.ts. Note: the rows are written through P14's UserImport.importUser.

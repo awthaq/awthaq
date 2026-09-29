@@ -60,6 +60,8 @@ export interface OAuthRateLimit {
 export interface OAuthRateLimits {
   readonly authorize: OAuthRateLimit;
   readonly callback: OAuthRateLimit;
+  /** MNA-003: the native exchange-code redemption (`POST /oauth/token`), also unauthenticated. */
+  readonly token: OAuthRateLimit;
 }
 
 export interface OAuthConfigShape {
@@ -71,6 +73,20 @@ export interface OAuthConfigShape {
   /** BEH-EA-128/354: `redirect_uri` is always derived from this, never from request input. */
   readonly baseUrl: string;
   readonly defaultCallbackURL: string;
+  /**
+   * MNA-004 (RFC 8252 §7.1): the private-use-scheme (or claimed-`https`-less)
+   * deep links a *native-mode* flow may return to — e.g. `myapp://oauth/callback`
+   * or `com.example.app:/cb`. A requested `callbackURL` is honoured only when its
+   * normalized serialization equals an entry or extends it at a path boundary
+   * (scheme, authority and path all compared, never just an origin, which is
+   * `"null"` for these schemes). `http`, `https`, `javascript`, `data`, `blob`
+   * and `file` entries are refused at boot. Default `[]`: native return leg off.
+   * Prefer a claimed `https` universal/app link in `trustedOrigins` where the
+   * platform supports it.
+   */
+  readonly nativeRedirectURLs: ReadonlyArray<string>;
+  /** MNA-003: how long a native exchange code may be redeemed for (default 60 seconds). It is single-use regardless. */
+  readonly nativeExchangeTtl: Duration.Duration;
   readonly httpTimeouts: OAuthHttpTimeouts;
   readonly retry: OAuthRetryPolicy;
   readonly rateLimits: OAuthRateLimits;
@@ -106,6 +122,8 @@ const defaults = {
   linking: "explicit",
   trustedOrigins: [],
   defaultCallbackURL: "/",
+  nativeRedirectURLs: [],
+  nativeExchangeTtl: Duration.seconds(60),
   httpTimeouts: {
     tokenExchange: Duration.seconds(10),
     jwks: Duration.seconds(5),
@@ -116,6 +134,7 @@ const defaults = {
   rateLimits: {
     authorize: { limit: 30, window: Duration.minutes(1) },
     callback: { limit: 20, window: Duration.minutes(1) },
+    token: { limit: 20, window: Duration.minutes(1) },
   },
   clockSkew: Duration.seconds(60),
   maxIdTokenAge: Option.none(),

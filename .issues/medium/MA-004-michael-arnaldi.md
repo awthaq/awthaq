@@ -56,3 +56,8 @@ Define the taxonomy explicitly: keep die for the genuinely-unreachable invariant
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `core-error-taxonomy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:747`. Fix: Adopt one infrastructure-error policy across core Shapes (recommended: typed StoreUnavailable), recorded as an ADR, and make every Shape's E channel authoritative for both layers. (effort XL). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-human.
+
+**Decision (2026-09-29):** adopted recommended option B per plan (typed `StoreUnavailable`); user may revisit. Recorded as ADR-EA-028.
+
+**Plan note (2026-09-29):** landed for Sessions, Verification, Accounts and Users (E channels, layerSql seams, layerMemory crypto PlatformError -> StoreUnavailable, `Errors.storeUnavailable`/`orStoreUnavailable`, the Authentication/Optional/Admin/Csrf middleware declaring it so an outage answers 503 with a request-scoped outage record so the security chain's fall-through cannot turn it back into 401, qadi's extractor mapping it to SubjectExtractionFailed, the nine `catchTag("PlatformError", Effect.die)` bridges removed). Tests: core Sessions/Verification/Accounts/Users infrastructure-failure suites, server Authentication 503. **Still open:** `AuditLog` (P10 owns it; its `record` path still `orDie`s SqlError and the crypto PlatformError), the per-endpoint 503 mention in features/03-http-layer/11-http-error-mapping.feature (feature is skipped and unwired), and the Schedule-based retry helper for SQLITE_BUSY (SEA-002). Status left ready-for-human until AuditLog follows the same helper.
+

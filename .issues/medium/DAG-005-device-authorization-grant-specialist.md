@@ -3,7 +3,7 @@ ID: "DAG-005"
 Title: "Strongest RFC 8628 design in the repo is non-normative third-party analysis"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "better-auth/05-mfa-and-verification/08-device-authorization-and-one-tap.md:104"
 Auditor: "device-authorization-grant-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `—` · reported by **Device Authorization Grant Specialist** (`device-authorization-grant-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Port §A.1–A.6 into spec/behaviors as a numbered BEH-EA range with matching in
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `device-authorization-grant`. Evidence at HEAD ec065a7: `better-auth/05-mfa-and-verification/08-device-authorization-and-one-tap.md:104`. Fix: Graduate the better-auth §A.1–A.6 polling state machine into awthaq's own spec/models/13-device-authorization.md as a 'Design constraints' section (normative intent for Phase 3), adding RFC 8628 §3.5's client slow_down +5 s duty and the BEH-EA-208/CLI-login linkage; allocate a BEH-EA range when the plugin enters a roadmap milestone. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/models/13-device-authorization.md rev 1.1: new 'Design constraints' section adopting better-auth §A.1-A.6 in awthaq's own words (state only advances pending->approved|denied; CAS approve/deny; every fallible check before an atomic conditional consume so at most one session under concurrent polls, side effects strictly after the claim; server-side slow_down with lastPolledAt updated on every poll incl. rejected ones; GC on first discovery; claim-then-decide verification, idempotent for one session; client MUST add 5s on slow_down, RFC 8628 §3.5) linked to ticket 06 (CLI login backend) and ticket 03 (BeforeSessionIssue). The model no longer calls itself speculative in its entirety; 'What is missing' and Verification updated; no BEH range allocated (none until a milestone schedules the plugin). spec:verify:strict passes.

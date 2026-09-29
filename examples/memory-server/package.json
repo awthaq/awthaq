@@ -14,6 +14,7 @@
     "@awthaq/core": "workspace:*",
     "@awthaq/organization": "workspace:*",
     "@awthaq/password": "workspace:*",
+    "@awthaq/ports": "workspace:*",
     "@awthaq/qadi": "workspace:*",
     "@awthaq/roles": "workspace:*",
     "@awthaq/server": "workspace:*",

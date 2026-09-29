@@ -18,7 +18,7 @@
 // declare `migrations` on their own `AuthPlugin.Service` options; `Auth.ts`
 // already aggregates and dependency-orders those (`renumberMigrations`).
 
-// N11: these ids (1-17) live in the migrator's default `effect_sql_migrations`
+// N11: these ids (1-25) live in the migrator's default `effect_sql_migrations`
 // ledger. The plugin list (`@awthaq/core`'s `Migrations.run`) numbers from 1
 // too and therefore uses its own tracking table (`awthaq_plugin_migrations`);
 // the migrator skips any id at or below the newest one recorded, so two id
@@ -33,6 +33,7 @@
 // New index migrations MUST follow it (see `packages/sql/README.md`,
 // "Migrating a populated database").
 
+import { Defects } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -88,7 +89,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           createdAt TEXT NOT NULL,
           updatedAt TEXT NOT NULL
         )`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   migration(2, "create_accounts", (sql) =>
@@ -121,7 +122,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           updatedAt TEXT NOT NULL,
           UNIQUE (providerId, subject, issuer)
         )`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   migration(3, "create_sessions", (sql) =>
@@ -154,7 +155,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           actingAsType TEXT,
           actingAsId TEXT
         )`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   migration(4, "create_verification_tokens", (sql) =>
@@ -179,7 +180,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           createdAt TEXT NOT NULL,
           payload TEXT NOT NULL
         )`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   migration(5, "create_verification_tokens_live_identifier_index", (sql) =>
@@ -190,7 +191,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       sqlite: () => sql`
         CREATE UNIQUE INDEX IF NOT EXISTS verification_tokens_live_identifier
         ON verification_tokens(identifier) WHERE consumedAt IS NULL`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   migration(6, "create_verification_reservations", (sql) =>
@@ -205,7 +206,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           identifier TEXT PRIMARY KEY,
           expiresAt TEXT NOT NULL
         )`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // Upstream-hardening map, ticket 03: `Users.ts`'s own header comment and
@@ -230,7 +231,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       pg: () => sql`CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email))`,
       sqlite: () =>
         sql`CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email))`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // Ticket 03: `accounts.userId` is a real filter key (`Repositories.ts`'s
@@ -239,7 +240,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
     sql.onDialectOrElse({
       pg: () => sql`CREATE INDEX IF NOT EXISTS accounts_user_id ON accounts("userId")`,
       sqlite: () => sql`CREATE INDEX IF NOT EXISTS accounts_user_id ON accounts(userId)`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // Ticket 03: `sessions.userId` is a real filter key (`Repositories.ts`'s
@@ -248,7 +249,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
     sql.onDialectOrElse({
       pg: () => sql`CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions("userId")`,
       sqlite: () => sql`CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions(userId)`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // RRS-003 — .scratch/resolve-ready-for-human-findings/issues/
@@ -272,7 +273,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN supersededAt TEXT`),
           Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN reusedAt TEXT`),
         ),
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // RRS-003: `familyId` is the walk key `revokeFamily` bulk-deletes on;
@@ -282,7 +283,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
     sql.onDialectOrElse({
       pg: () => sql`CREATE INDEX IF NOT EXISTS sessions_family_id ON sessions("familyId")`,
       sqlite: () => sql`CREATE INDEX IF NOT EXISTS sessions_family_id ON sessions(familyId)`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -307,7 +308,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
             sql`UPDATE sessions SET authenticatedAt = createdAt WHERE authenticatedAt IS NULL`,
           ),
         ),
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 01
@@ -352,7 +353,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
             sql`CREATE INDEX IF NOT EXISTS auth_audit_log_actor_user_id ON auth_audit_log ("actorUserId")`,
           ),
         ),
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // AOMS-001/AOMS-002 (.issues/high): free-form JSON metadata, mirroring
@@ -366,7 +367,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
     sql.onDialectOrElse({
       pg: () => sql`ALTER TABLE users ADD COLUMN metadata TEXT`,
       sqlite: () => sql`ALTER TABLE users ADD COLUMN metadata TEXT`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // BCR-003 (.issues/high): nullable — an OAuth sign-in flow's own state
@@ -379,7 +380,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
     sql.onDialectOrElse({
       pg: () => sql`ALTER TABLE verification_tokens ADD COLUMN "userId" TEXT`,
       sqlite: () => sql`ALTER TABLE verification_tokens ADD COLUMN userId TEXT`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // `deleteAllByUser`'s own real filter key, unindexed until now — the same
@@ -390,7 +391,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
         sql`CREATE INDEX IF NOT EXISTS verification_tokens_user_id ON verification_tokens("userId")`,
       sqlite: () =>
         sql`CREATE INDEX IF NOT EXISTS verification_tokens_user_id ON verification_tokens(userId)`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // BE-002 (.issues/high): `accessToken`/`refreshToken` (migration 2) were
@@ -414,7 +415,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           Effect.andThen(sql`ALTER TABLE accounts ADD COLUMN scope TEXT`),
           Effect.andThen(sql`ALTER TABLE accounts ADD COLUMN tokenType TEXT`),
         ),
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // BAM-008: the provider's OIDC `id_token`, stored (encrypted at rest, like
@@ -425,7 +426,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
     sql.onDialectOrElse({
       pg: () => sql`ALTER TABLE accounts ADD COLUMN "idToken" TEXT`,
       sqlite: () => sql`ALTER TABLE accounts ADD COLUMN idToken TEXT`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // PPS-002/SEA-006/SSMS-008: the session device-list page query filters on
@@ -441,7 +442,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
         sql`CREATE INDEX IF NOT EXISTS sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL`,
       sqlite: () =>
         sql`CREATE INDEX IF NOT EXISTS sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // THS-003/APS-007: RFC 8176 `amr` — the authentication methods that proved a
@@ -452,6 +453,134 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
     sql.onDialectOrElse({
       pg: () => sql`ALTER TABLE sessions ADD COLUMN amr TEXT NOT NULL DEFAULT '[]'`,
       sqlite: () => sql`ALTER TABLE sessions ADD COLUMN amr TEXT NOT NULL DEFAULT '[]'`,
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // FAMS-002/SAM-003 (wayfinder ticket 09): a user may have no email (a phone
+  // or anonymous identity). Postgres drops the constraint in place; SQLite has
+  // no `ALTER COLUMN`, so the table is rebuilt (create, copy, drop, rename,
+  // re-index) — kept *before* the identity columns are added (id 22), so this
+  // rebuild only ever names the columns that existed at id 20 and any later
+  // column is a plain `ADD COLUMN`. `users_email_unique` is a full index over
+  // `lower(email)`; NULLs are distinct in both engines, so any number of
+  // email-less rows coexist with it unchanged.
+  migration(21, "make_users_email_nullable", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`ALTER TABLE users ALTER COLUMN email DROP NOT NULL`,
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`
+            CREATE TABLE users_rebuild (
+              id TEXT PRIMARY KEY,
+              email TEXT,
+              emailVerified INTEGER NOT NULL,
+              name TEXT NOT NULL,
+              createdAt TEXT NOT NULL,
+              updatedAt TEXT NOT NULL,
+              metadata TEXT
+            )`;
+          yield* sql`
+            INSERT INTO users_rebuild (id, email, emailVerified, name, createdAt, updatedAt, metadata)
+            SELECT id, email, emailVerified, name, createdAt, updatedAt, metadata FROM users`;
+          yield* sql`DROP TABLE users`;
+          yield* sql`ALTER TABLE users_rebuild RENAME TO users`;
+          yield* sql`CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email))`;
+        }),
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // FAMS-002/SCP-001/BAM-009: phone identity, suspension state and the profile
+  // image. Every existing row reads as an active, phone-less, image-less user
+  // — no backfill. `phoneVerified` mirrors `emailVerified`.
+  migration(22, "add_users_identity_status_image_columns", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        Effect.gen(function* () {
+          yield* sql`ALTER TABLE users ADD COLUMN phone TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN "phoneVerified" BOOLEAN NOT NULL DEFAULT FALSE`;
+          yield* sql`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`;
+          yield* sql`ALTER TABLE users ADD COLUMN "statusReason" TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN "suspendedUntil" TIMESTAMPTZ`;
+          yield* sql`ALTER TABLE users ADD COLUMN image TEXT`;
+        }),
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`ALTER TABLE users ADD COLUMN phone TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN phoneVerified INTEGER NOT NULL DEFAULT 0`;
+          yield* sql`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`;
+          yield* sql`ALTER TABLE users ADD COLUMN statusReason TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN suspendedUntil TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN image TEXT`;
+        }),
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // FAMS-002: phone numbers are unique across users; a partial index so the
+  // (many) email/anonymous rows with no phone never collide on NULL.
+  migration(23, "create_users_phone_unique_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique ON users (phone) WHERE phone IS NOT NULL`,
+      sqlite: () =>
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique ON users (phone) WHERE phone IS NOT NULL`,
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // DRS-001/EP-001 (wayfinder ticket 18, ADR-EA-018): the tenant attribution
+  // column. Opaque, nullable `TEXT` — never a foreign key (the tenant is an
+  // `Organization` row, and core cannot reference a plugin's table) and never
+  // backfilled: `NULL` is "no tenant", which is every row a single-tenant
+  // deployment ever writes. Quoted camelCase like every other column here (the
+  // ticket's `tenant_id` spelling is not this schema's convention). Six tables:
+  // the five ticket 18 names plus `auth_audit_log`, which post-dates it.
+  migration(24, "add_tenant_id_columns", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        Effect.gen(function* () {
+          yield* sql`ALTER TABLE users ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE accounts ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE sessions ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE verification_tokens ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE verification_reservations ADD COLUMN "tenantId" TEXT`;
+          yield* sql`ALTER TABLE auth_audit_log ADD COLUMN "tenantId" TEXT`;
+        }),
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`ALTER TABLE users ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE accounts ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE sessions ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE verification_tokens ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE verification_reservations ADD COLUMN tenantId TEXT`;
+          yield* sql`ALTER TABLE auth_audit_log ADD COLUMN tenantId TEXT`;
+        }),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // DRS-001/DRS-005: a tenant-routed read prunes on `("tenantId", "userId")` for
+  // the two per-user partitioned tables (the leading column also serves a
+  // tenant-only predicate, so they get no separate single-column index); the
+  // directory (`users`/`accounts`), reservations and audit log get one on
+  // `"tenantId"` alone. `IF NOT EXISTS`, per the SSMS-006 index convention.
+  migration(25, "create_tenant_id_indexes", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        Effect.gen(function* () {
+          yield* sql`CREATE INDEX IF NOT EXISTS users_tenant_id ON users("tenantId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS accounts_tenant_id ON accounts("tenantId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS sessions_tenant_user ON sessions("tenantId", "userId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS verification_tokens_tenant_user ON verification_tokens("tenantId", "userId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS verification_reservations_tenant_id ON verification_reservations("tenantId")`;
+          yield* sql`CREATE INDEX IF NOT EXISTS auth_audit_log_tenant_id ON auth_audit_log("tenantId")`;
+        }),
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`CREATE INDEX IF NOT EXISTS users_tenant_id ON users(tenantId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS accounts_tenant_id ON accounts(tenantId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS sessions_tenant_user ON sessions(tenantId, userId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS verification_tokens_tenant_user ON verification_tokens(tenantId, userId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS verification_reservations_tenant_id ON verification_reservations(tenantId)`;
+          yield* sql`CREATE INDEX IF NOT EXISTS auth_audit_log_tenant_id ON auth_audit_log(tenantId)`;
+        }),
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
@@ -459,7 +588,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
   // retention sweep's `occurredAt < cutoff` delete both filter on the timestamp,
   // which had no index (only the tag and actor columns did). `IF NOT EXISTS`
   // keeps an out-of-band `CREATE INDEX CONCURRENTLY` (a large table) possible.
-  migration(21, "create_auth_audit_log_occurred_at_index", (sql) =>
+  migration(26, "create_auth_audit_log_occurred_at_index", (sql) =>
     sql.onDialectOrElse({
       pg: () =>
         sql`CREATE INDEX IF NOT EXISTS auth_audit_log_occurred_at ON auth_audit_log ("occurredAt")`,
@@ -471,7 +600,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
   // CWM-004: the event relay's persisted position — one row per named relay holding the
   // id of the last audit event it delivered (`auth_audit_log.id`, a time-ordered uuidv7),
   // so a restart resumes instead of redelivering the whole log or skipping ahead.
-  migration(22, "create_auth_relay_cursor", (sql) =>
+  migration(27, "create_auth_relay_cursor", (sql) =>
     sql.onDialectOrElse({
       pg: () =>
         sql`

@@ -81,6 +81,13 @@ Feature: Plugin Composition and Validate<P>
       Then the rejection is a literal string naming both "Password" and "TwoFactor"
       And the rejection is not merely an opaque unsatisfied service requirement
 
+    @REQ-EA-641
+    Scenario: A dependent listed before its dependency fails composition at compile time
+      Given a plugin tuple listing "TwoFactor" before its declared dependency "Password"
+      When "Auth.make" composes the tuple
+      Then composition is rejected
+      And the rejection names "Password" as a plugin that must be listed before "TwoFactor"
+
   # BEH-EA-012 — spec/behaviors/02-plugin-composition-validate.md; see also
   # INV-EA-004.
   # Compile-time contract: the enforcing mechanism is the TypeScript
@@ -102,6 +109,12 @@ Feature: Plugin Composition and Validate<P>
       Given a plugin tuple containing "Roles" overriding the "SubjectResolver" slot and another plugin overriding a distinct slot
       When "Auth.make" composes the tuple
       Then composition succeeds
+
+    @REQ-EA-642
+    Scenario: The slot-conflict check runs without the application providing a slots registry
+      Given a plugin tuple containing "Roles" and "Organization", both overriding the "SubjectResolver" slot
+      When the composed layer is built without any explicit "Slots.layer"
+      Then the build fails with a "SlotConflict" naming both owners
 
   # BEH-EA-013 — spec/behaviors/02-plugin-composition-validate.md
   # Compile-time contract: the enforcing mechanism is the TypeScript

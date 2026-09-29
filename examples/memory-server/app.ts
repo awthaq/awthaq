@@ -17,6 +17,7 @@ import {
   TeamRecords,
 } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
+import { RateLimiter } from "@awthaq/ports";
 import { Auth, HookPoint, Hooks, Retention, SecuritySignals, Slots, Users } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
@@ -128,11 +129,11 @@ const RolesConfigLive = Roles.config([platformAdmin]);
 // tap that refuses any e-mail outside an allow-list, so a private deployment stays private. A
 // veto surfaces as the typed `HookAborted` (403) naming the point. `TestAuth.layer` builds the
 // point in its own bundle and provides it to `services`, so the tap registers in the same
-// per-composition registry the sign-up flow consults (ADR-EA-028).
+// per-composition registry the sign-up flow consults (ADR-EA-033).
 const allowedEmailDomains: ReadonlyArray<string> = ["example.com"];
 
 const SignUpAllowList = Hooks.BeforeSignUp.tap((input) =>
-  allowedEmailDomains.includes(input.email.split("@").at(-1)?.toLowerCase() ?? "")
+  allowedEmailDomains.includes(input.email?.split("@").at(-1)?.toLowerCase() ?? "")
     ? Effect.succeed(input)
     : Effect.fail(new HookPoint.HookAbort({ code: "EMAIL_DOMAIN_NOT_ALLOWED" })),
 );
@@ -145,6 +146,9 @@ const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
   TestAuth.layer(
     built,
     Layer.mergeAll(
+      // `TestAuth`'s bundled limiter is the permissive test one; this example serves real
+      // HTTP, so it swaps in the real single-process limiter (RBS-007) through the same param.
+      RateLimiter.layerMemory,
       AuthenticationLive,
       CsrfProtectionLive,
       OrganizationMemory,

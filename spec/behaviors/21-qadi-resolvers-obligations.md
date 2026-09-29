@@ -71,6 +71,8 @@ REQUIREMENT: `Organization.relationships` MUST resolve a `"member"` relation
 
 _Previous: [BEH-EA-161](21-qadi-resolvers-obligations.md#beh-ea-161-attributes-resolved-from-the-user-table) | Next: [BEH-EA-163](21-qadi-resolvers-obligations.md#beh-ea-163-fixed-graphs-use-relationshipresolverfromedges)_
 
+RRC-003: relationship decisions read organization membership from the primary. `MembershipRecords.findByUserAndOrg`, `TeamRecords.findTeamMembership`, `OrgRoleRecords`' lookups and `ActiveContextRecords.findBySessionId` take no `ReadOptions` and never route through `@awthaq/sql`'s `ReadRouting`, so with a read replica configured a removed member is `Unrelated` on the very next decision: revocation latency is zero under replica topology. Only display listings may become replica-eligible, and only through an explicit `consistency: "eventual"` (`packages/organization/test/DecisionReads.test.ts` pins both).
+
 ## BEH-EA-163: Fixed graphs use `relationshipResolverFromEdges`
 
 ```ts

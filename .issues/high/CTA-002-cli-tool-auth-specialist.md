@@ -3,7 +3,7 @@ ID: "CTA-002"
 Title: "BEH-EA-208 normatively bars every CLI login flow shape, with no documented carve-out"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/26-cli.md:157"
 Auditor: "cli-tool-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `—` · reported by **CLI Tool Auth Specialist** (`cli-tool-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [CLI login flow design vs. the BEH-EA-208 network-boundary prohibition](../../.scratch/resolve-ready-for-human-findings/issues/06-cli-login-vs-beh-ea-208.md) — amend BEH-EA-208 with an explicit session-command exception (`login`/`logout`/`whoami` may act as an outbound network client of a running server; they still may not start a listener or accept inbound requests), narrowing the requirement's scope without relaxing its protected property. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-session-login-carveout`. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:156`. Fix: Apply decision ticket 06 verbatim: amend BEH-EA-208 so it scopes to *inspection* commands and carve out a `login`/`logout`/`whoami` session-command family that is an outbound-only client of a running server (never a listener, never inbound), add a new behavior for that family, and cross-link spec/models/13-device-authorization.md. (effort M). Full dossier: `.plan/slices/12-spec.md`.
+
+**Resolved (2026-09-29):** Spec revision 1.3 of spec/behaviors/26-cli.md (one revision for the whole CLI program): BEH-EA-208 now scopes to what a command acts on and partitions commands into manifest-only / database-backed / session, with login/logout/whoami carved out as outbound-only clients (never a listener, never inbound); new BEH-EA-227 (session commands); spec/models/13-device-authorization.md rev 1.2 names the CLI as first consumer and points poll-issued sessions at BeforeSessionIssue; 26-cli.feature rewritten (no-listener rule scoped, session scenarios). Proof: spec:verify:strict passes (229 contiguous BEH ids); packages/cli/test/Session.test.ts asserts login/whoami/logout never call net.Server.listen. Note: BEH ids are 225-229 (224 was taken by admin) and the ADR is ADR-EA-027 (017 was taken).

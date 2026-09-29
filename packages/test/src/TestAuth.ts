@@ -70,6 +70,7 @@ import {
   Migrations,
   RateLimits,
   Sessions,
+  Slots,
   Users,
   Verification,
 } from "@awthaq/core";
@@ -88,6 +89,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
+import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -126,12 +128,16 @@ const MemoryStores = Layer.mergeAll(
   Users.layerMemory,
   Accounts.layerMemory,
   Sessions.layerMemory,
-  // ETVS-004: what every password-style composition needs beyond the core stores.
+  // ETVS-004/MW-002: what every password-style composition needs beyond the core stores
+  // (also `AuthHttp.coreHandlers`' always-served `account` group).
   Verification.layerMemory,
   TestHasher,
   Mailer.layerMemory,
   RateLimiter.layerPermissive,
   RateLimits.layer,
+  // MA-005: `Auth.make` provides its own `SlotsRegistry`; this one is for a plugin layer a
+  // test composes standalone (outside `Auth.make`), whose `Slots.override` requires one.
+  Slots.layer,
   SqlTransaction.layerNoop,
   // AGA-001/NHS-003: `ClientAddress.layerDirect` — the raw-`remoteAddress`
   // passthrough every zero-config app (and every composition here) gets
@@ -221,8 +227,14 @@ const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGu
  * `never` is what a contravariant slot accepts from any concrete success
  * type, the same reasoning `Auth.ts`'s own comments give for that field).
  */
-export function layer<P extends ReadonlyArray<AuthPlugin.Any>, MR, ME, MRIn>(
-  built: Auth.Built<P>,
+export function layer<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint,
+  MR,
+  ME,
+  MRIn,
+>(
+  built: Auth.Built<P, Extra>,
   services: Layer.Layer<MR, ME, MRIn>,
 ): Layer.Layer<
   | Layer.Success<typeof MemoryPorts>
@@ -232,15 +244,23 @@ export function layer<P extends ReadonlyArray<AuthPlugin.Any>, MR, ME, MRIn>(
   | Layer.Success<typeof HttpRouter.layer>
   | MR,
   ME,
-  Exclude<Layer.Services<Auth.Built<P>["layer"]> | MRIn, Layer.Success<typeof MemoryPorts> | MR>
+  Exclude<
+    | Layer.Services<Auth.Built<P, Extra>["layer"]>
+    | Layer.Services<typeof AuthHttp.coreHandlers>
+    | MRIn,
+    Layer.Success<typeof MemoryPorts> | MR
+  >
 >;
 export function layer(
-  built: Auth.Built<ReadonlyArray<AuthPlugin.Any>>,
+  built: Auth.Built<ReadonlyArray<AuthPlugin.Any>, HttpApiGroup.Constraint>,
   services: Layer.Layer<unknown, unknown, unknown>,
 ): Layer.Layer<never, unknown, unknown> {
+  // MW-002: `built.api` always carries core's session/account groups, so their
+  // handlers are part of every test pipeline (the same layer `AuthHttp.coreHandlers` gives a host).
   // The plugins' own services stay in the output (`provideMerge`), so a test can
   // `yield* Password.Password` from the same composition it serves over HTTP.
   return AuthHttp.routes(built.api, {}).pipe(
+    Layer.provide(AuthHttp.coreHandlers),
     Layer.provideMerge(built.layer),
     Layer.provide(services),
     // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) are part
@@ -275,7 +295,7 @@ export const signInAs = (input: {
     const users = yield* Users.Users;
     const sessions = yield* Sessions.Sessions;
     const user = yield* users
-      .create({ email: input.email, name: input.name ?? input.email })
+      .create({ identity: { _tag: "Email", email: input.email }, name: input.name ?? input.email })
       .pipe(Effect.orDie);
     if (input.onSignedUp !== undefined) {
       yield* input.onSignedUp(user.id);

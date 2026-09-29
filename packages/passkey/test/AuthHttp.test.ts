@@ -176,7 +176,7 @@ const issueSessionCookieHeader = (email: string): Promise<string> =>
         return yield* Effect.gen(function* () {
           const users = yield* Users.Users;
           const sessions = yield* Sessions.Sessions;
-          const user = yield* users.create({ email, name: email });
+          const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
           const issued = yield* sessions.issue({ userId: user.id });
           return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
         }).pipe(Effect.provide(context));
@@ -323,6 +323,87 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         );
         assert.strictEqual(verifyResponse.status, 200);
         assert.match(cookieFrom(verifyResponse), /^__Host-session=/);
+      }),
+  );
+
+  // WPS-004/MNA-001: delivery goes through the shared `SessionDelivery`; with
+  // the opt-in header the token rides the body and no cookie is set.
+  it.effect(
+    "WPS-004: authenticate/verify with X-Awthaq-Token-Delivery: bearer returns the token and sets no cookie",
+    () =>
+      Effect.gen(function* () {
+        const cookie = yield* Effect.promise(() =>
+          issueSessionCookieHeader("bearerpasskey@example.com"),
+        );
+        const registerOptionsResponse = yield* Effect.promise(() =>
+          post(handler, "/passkey/register/options", {}, { cookie }),
+        );
+        const registerChallenge = extractChallenge(
+          yield* Effect.promise(() => registerOptionsResponse.json()),
+        );
+        yield* Effect.promise(() =>
+          post(
+            handler,
+            "/passkey/register/verify",
+            {
+              credential: {
+                id: "cred-mock-bearer",
+                rawId: "cred-mock-bearer",
+                type: "public-key",
+                response: {
+                  clientDataJSON: buildClientDataJSON({
+                    type: "webauthn.create",
+                    challenge: registerChallenge,
+                    origin: ORIGIN,
+                  }),
+                  attestationObject: "",
+                },
+              },
+            },
+            { cookie },
+          ),
+        );
+        const authOptionsResponse = yield* Effect.promise(() =>
+          post(handler, "/passkey/authenticate/options", {}),
+        );
+        const { ceremonyId, options } = (yield* Effect.promise(() =>
+          authOptionsResponse.json(),
+        )) as { ceremonyId: string; options: unknown };
+        const credential = {
+          id: "cred-mock-bearer",
+          rawId: "cred-mock-bearer",
+          type: "public-key",
+          response: {
+            clientDataJSON: buildClientDataJSON({
+              type: "webauthn.get",
+              challenge: extractChallenge(options),
+              origin: ORIGIN,
+            }),
+            authenticatorData: "",
+            signature: "",
+          },
+        };
+        const bad = yield* Effect.promise(() =>
+          post(
+            handler,
+            "/passkey/authenticate/verify",
+            { ceremonyId, credential },
+            { [Api.TOKEN_DELIVERY_HEADER]: "nope" },
+          ),
+        );
+        assert.strictEqual(bad.status, 400);
+        const verifyResponse = yield* Effect.promise(() =>
+          post(
+            handler,
+            "/passkey/authenticate/verify",
+            { ceremonyId, credential },
+            { [Api.TOKEN_DELIVERY_HEADER]: "bearer" },
+          ),
+        );
+        assert.strictEqual(verifyResponse.status, 200);
+        assert.isNull(verifyResponse.headers.get("set-cookie"));
+        const body = (yield* Effect.promise(() => verifyResponse.json())) as { token?: string };
+        assert.isString(body.token);
       }),
   );
 

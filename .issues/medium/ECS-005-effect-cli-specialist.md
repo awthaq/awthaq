@@ -3,7 +3,7 @@ ID: "ECS-005"
 Title: "doctor has no secret-redaction requirement for reported configuration"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/26-cli.md:24"
 Auditor: "effect-cli-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `—` · reported by **Effect CLI Specialist** (`effect-cli-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Add an explicit clause: doctor reports validity verdicts and non-sensitive value
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-doctor-hardening`. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:24`. Fix: Add a CLI-wide output-redaction requirement: configuration inputs that are Config.Redacted (or declared sensitive in the ECS-008 descriptors) are reported only as present/valid/invalid, never as values, enforced by a BDD scenario and a unit test. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-201 no-secret-values clause: a Redacted or declared-sensitive input is reported only as <redacted> (present/valid/invalid), in text, --json, config list and error messages; a connection string's password is scrubbed even from an undeclared field; a build failure is reported by the failure's name, never its message (a Config error can quote the value). Implemented in packages/core ConfigDescriptor (flatten/scrubCredentials) and packages/cli Doctor/Output. Proof: packages/cli/test/Doctor.test.ts ('prints neither the secrets nor the connection password, in text or JSON' with canary secrets, and 'reports an application Layer that fails to build without quoting the failure'), packages/core/test/EffectiveConfig.test.ts.

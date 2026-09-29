@@ -50,7 +50,7 @@ const WhoamiHandlers = HttpApiBuilder.group(TestApi, "whoami", (handlers) =>
       const sessions = yield* Sessions.Sessions;
       const users = yield* Users.Users;
       const user = yield* users
-        .create({ email: "whoami@example.com", name: "Whoami" })
+        .create({ identity: { _tag: "Email", email: "whoami@example.com" }, name: "Whoami" })
         .pipe(Effect.orDie);
       const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
       yield* SessionCookie.set(session, token);

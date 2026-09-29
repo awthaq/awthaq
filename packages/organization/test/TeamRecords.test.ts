@@ -238,7 +238,7 @@ const suite = (name: string, layer: Layer.Layer<TeamRecords.TeamRecords, unknown
           const failure = yield* records
             .moveTeam({ organizationId: orgId, id: a.id, parentId: Option.some(parentId) })
             .pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "TeamHierarchyCycle");
+          assert.strictEqual(failure._tag, "TeamRecords/HierarchyCycle");
         }
         // Nothing moved.
         assert.deepStrictEqual(names(yield* records.getDescendants(orgId, a.id)), ["B", "C"]);
@@ -255,7 +255,7 @@ const suite = (name: string, layer: Layer.Layer<TeamRecords.TeamRecords, unknown
         Effect.gen(function* () {
           const { records, a, b, c } = yield* seedTree;
           const failure = yield* records.removeTeam(orgId, b.id).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "TeamHasChildren");
+          assert.strictEqual(failure._tag, "TeamRecords/HasChildren");
           yield* records.removeTeam(orgId, c.id);
           assert.deepStrictEqual(names(yield* records.getDescendants(orgId, a.id)), ["B"]);
           yield* records.removeTeam(orgId, b.id);

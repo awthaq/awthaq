@@ -3,7 +3,7 @@ ID: "EP-006"
 Title: "Organization configuration is deployment-wide; SaaS-facing defaults fail open and unbounded"
 Level: medium
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:68"
 Auditor: "eugenio-pace"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `organization` · reported by **Co-founder/former CEO of Auth0** (`eugenio-pace`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Invert the risky defaults (create-org denied unless configured; a finite organiz
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-config-and-tenancy`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:67`. Fix: Add per-organization quota overrides and set a finite default organizationLimit (pending the default decision). (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended default (finite organizationLimit = 10; allowUserToCreateOrganization stays permissive) per plan; user may revisit. OrganizationConfig.limitsFor(organizationId) per-organization overrides (membershipLimit, invitationLimit, maximumTeams, maximumMembersPerTeam, maximumRolesPerOrganization) merged over the static values through one limitsOf helper used by addMember, acceptInvitation, invite, createTeam, addTeamMember, createRole. Tests: default stops the eleventh owned org; limitsFor overrides one org only.

@@ -181,13 +181,23 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.organization.teamMemberRoleUpdated":
     case "auth.organization.teamMemberRemoved":
     case "auth.organization.permissionDenied":
+    case "auth.apiKey.created":
+    case "auth.apiKey.revoked":
+    case "auth.apiKey.rotated":
+    case "auth.apiKey.clientRegistered":
+    case "auth.apiKey.clientRevoked":
+    case "auth.apiKey.clientSecretRotated":
       return Option.some(UserId(event.userId));
     case "auth.admin.impersonationStarted":
     case "auth.admin.impersonationStopped":
     case "auth.admin.impersonationDenied":
     case "auth.admin.actionDenied":
     case "auth.admin.userUpdated":
+    case "auth.admin.userBanned":
+    case "auth.admin.userUnbanned":
     case "auth.admin.sessionRevoked":
+    case "auth.admin.organizationSuspended":
+    case "auth.admin.organizationUnsuspended":
       return Option.some(UserId(event.adminUserId));
     case "auth.mail.failed":
       return Option.fromNullishOr(event.userId).pipe(Option.map(UserId));
@@ -206,6 +216,17 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.token.replay":
     case "auth.rateLimit.exceeded":
     case "auth.user.signInFailed":
+    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
+    case "auth.scim.userProvisioned":
+    case "auth.scim.userDeactivated":
+    case "auth.scim.userReactivated":
+    case "auth.scim.userDeleted":
+    case "auth.scim.groupChanged":
+    // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
+    case "auth.admin.seeded":
+    case "auth.admin.seedRefused":
+    case "auth.import.completed":
+    case "auth.import.failed":
     case "auth.organization.updated":
     case "auth.organization.deleted":
     case "auth.organization.invitationCreated":

@@ -109,7 +109,7 @@ const resolve = (token: string) =>
     // A `PlatformError` (a real backing-store outage) is not caught here
     // and propagates, distinct from the ordinary case.
     Effect.catchTags({
-      SessionNotFound: () => Effect.succeed(undefined),
+      "Sessions/NotFound": () => Effect.succeed(undefined),
       SessionExpired: () => Effect.succeed(undefined),
       UserNotFound: () => Effect.succeed(undefined),
     }),

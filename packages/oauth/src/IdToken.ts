@@ -10,12 +10,12 @@
 // expiry, `iat`/`nbf` and the JWKS cache age are all driven by `TestClock` in
 // tests and agree with each other within one verification.
 
+import { RefreshingCache } from "@awthaq/ports";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as CallbackFailure from "./CallbackFailure.ts";
 import * as Jwt from "./Jwt.ts";
@@ -23,12 +23,7 @@ import type * as OAuthApi from "./OAuthApi.ts";
 import type * as OAuthProvider from "./OAuthProvider.ts";
 import * as ProviderHttp from "./ProviderHttp.ts";
 
-export interface JwksCacheEntry {
-  readonly jwks: Jwt.Jwks;
-  readonly fetchedAt: number;
-}
-
-type JwksCache = Ref.Ref<HashMap.HashMap<string, JwksCacheEntry>>;
+type JwksFailure = OAuthApi.OAuthCallbackFailed | OAuthApi.ProviderUnavailable;
 
 /**
  * JJS-001/KRS-004/OIT-002: bounds how long a provider-removed JWKS key keeps
@@ -38,6 +33,46 @@ type JwksCache = Ref.Ref<HashMap.HashMap<string, JwksCacheEntry>>;
  * with no new kid ever presented to force a refetch.
  */
 const JWKS_CACHE_TTL = Duration.minutes(15);
+
+/**
+ * ECF-002: at most one forced refetch (an unknown `kid`) per this interval, and a failed
+ * fetch is replayed for as long — so a flood of forged tokens, or an unreachable JWKS
+ * endpoint, costs the provider one request per interval rather than one per callback.
+ */
+const JWKS_MIN_REFETCH_INTERVAL = Duration.seconds(30);
+
+/**
+ * ECF-002: one single-flight, TTL'd `RefreshingCache` per (provider, `jwks_uri`), created on
+ * first use. Keyed by the URI as well as the id so a connection whose discovery changed can
+ * never be served the old endpoint's keys.
+ */
+export interface JwksCaches {
+  readonly forProvider: (
+    provider: OAuthProvider.ResolvedProvider,
+    jwksUri: string,
+    load: Effect.Effect<Jwt.Jwks, JwksFailure>,
+  ) => Effect.Effect<RefreshingCache.RefreshingCache<Jwt.Jwks, JwksFailure>>;
+}
+
+export const makeJwksCaches = Effect.gen(function* () {
+  const caches = new Map<string, RefreshingCache.RefreshingCache<Jwt.Jwks, JwksFailure>>();
+  const creation = yield* Semaphore.make(1);
+  const forProvider: JwksCaches["forProvider"] = (provider, jwksUri, load) =>
+    creation.withPermit(
+      Effect.gen(function* () {
+        const key = `${provider.id}\n${jwksUri}`;
+        const existing = caches.get(key);
+        if (existing !== undefined) return existing;
+        const created = yield* RefreshingCache.make(load, {
+          ttl: JWKS_CACHE_TTL,
+          minRefetchInterval: JWKS_MIN_REFETCH_INTERVAL,
+        });
+        caches.set(key, created);
+        return created;
+      }),
+    );
+  return { forProvider };
+});
 
 /**
  * OIT-003 (OIDC Core 3.1.3.7 rules 3–5): `aud` is a string equal to the
@@ -115,7 +150,7 @@ const claimProblem = (
 export interface VerifyInput {
   /** The retrying client (ERS-003): JWKS is an idempotent GET. */
   readonly httpClient: HttpClient.HttpClient;
-  readonly jwksCache: JwksCache;
+  readonly jwksCaches: JwksCaches;
   readonly provider: OAuthProvider.ResolvedProvider;
   readonly idToken: string;
   readonly nonce: string;
@@ -136,12 +171,12 @@ export const verify = (
   OAuthApi.OAuthCallbackFailed | OAuthApi.ProviderUnavailable
 > =>
   Effect.gen(function* () {
-    const { provider, jwksCache } = input;
+    const { provider, jwksCaches } = input;
     if (Option.isNone(provider.jwksUri)) {
       return yield* CallbackFailure.callbackFailed("jwks", "provider declares no jwksUri");
     }
     const jwksUri = provider.jwksUri.value;
-    // MA-002: one clock reading serves the JWKS cache age and every time claim.
+    // MA-002: one clock reading serves every time claim.
     const nowMs = yield* Clock.currentTimeMillis;
 
     const decoded = yield* Jwt.decode(input.idToken).pipe(
@@ -149,8 +184,10 @@ export const verify = (
         CallbackFailure.callbackFailed("jwt-malformed", error.reason),
       ),
     );
-    if (decoded.header.alg !== "RS256") {
-      return yield* CallbackFailure.callbackFailed("alg", decoded.header.alg ?? "absent");
+    // AOMS-005: the header `alg` selects within the provider's allowlist; it never widens it.
+    const alg = decoded.header.alg;
+    if (!Jwt.isSigningAlg(alg) || !provider.idTokenSigningAlgs.includes(alg)) {
+      return yield* CallbackFailure.callbackFailed("alg", alg ?? "absent");
     }
 
     // ESS-001/GC-001/SFS-002/TTE-001: the JWKS document is untrusted,
@@ -158,36 +195,31 @@ export const verify = (
     // ERS-003: the retrying client, a deadline over request plus decode, and a
     // transport/timeout/5xx failure is `ProviderUnavailable` while a rejected
     // or malformed document is a 400.
-    const fetchAndCacheJwks = input.httpClient.get(jwksUri).pipe(
+    const fetchJwks = input.httpClient.get(jwksUri).pipe(
       Effect.flatMap(ProviderHttp.decodeBody(Jwt.JwksDocumentSchema)),
       Effect.timeout(input.jwksTimeout),
-      Effect.tap((jwks) =>
-        Effect.flatMap(Clock.currentTimeMillis, (fetchedAt) =>
-          Ref.update(jwksCache, (cache) => HashMap.set(cache, provider.id, { jwks, fetchedAt })),
-        ),
-      ),
       Effect.catch((error) => CallbackFailure.providerFailure("jwks", error)),
     );
 
-    // JJS-001/KRS-004/OIT-002: a TTL'd-out entry is a cache miss, refetched.
-    const cachedEntry = HashMap.get(yield* Ref.get(jwksCache), provider.id);
-    const jwks =
-      Option.isSome(cachedEntry) &&
-      nowMs - cachedEntry.value.fetchedAt < Duration.toMillis(JWKS_CACHE_TTL)
-        ? cachedEntry.value.jwks
-        : yield* fetchAndCacheJwks;
+    // JJS-001/KRS-004/OIT-002/ECF-002: a TTL'd-out entry is a cache miss, refetched by exactly one
+    // of the callers that noticed (single-flight).
+    const cache = yield* jwksCaches.forProvider(provider, jwksUri, fetchJwks);
+    const jwks = yield* cache.get;
 
-    const jwk = yield* Jwt.findKey(jwks, decoded.header.kid).pipe(
-      // A `kid` cache miss gets exactly one refetch — the provider may have
-      // rotated keys since this process last cached them.
+    const jwk = yield* Jwt.findKey(jwks, decoded.header.kid, alg).pipe(
+      // A `kid` cache miss earns a refetch — the provider may have rotated keys since this
+      // process last cached them — but at most one per `JWKS_MIN_REFETCH_INTERVAL` (ECF-002),
+      // so tokens naming garbage kids cannot turn the callback into a request amplifier.
       Effect.catch(() =>
-        fetchAndCacheJwks.pipe(Effect.flatMap((fresh) => Jwt.findKey(fresh, decoded.header.kid))),
+        cache.refreshOnMiss.pipe(
+          Effect.flatMap((fresh) => Jwt.findKey(fresh, decoded.header.kid, alg)),
+        ),
       ),
       Effect.catchTag("JwtVerificationError", (error) =>
         CallbackFailure.callbackFailed("kid", error.reason),
       ),
     );
-    const verified = yield* Jwt.verifyRs256(jwk, decoded.signingInput, decoded.signature).pipe(
+    const verified = yield* Jwt.verifySignature(alg, jwk, decoded.signingInput, decoded.signature).pipe(
       Effect.catchTag("JwtVerificationError", (error) =>
         CallbackFailure.callbackFailed("signature", error.reason),
       ),

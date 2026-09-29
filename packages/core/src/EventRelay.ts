@@ -21,7 +21,7 @@
 //     much, in exchange for not missing late-committing rows. Raise it if your processes' clocks
 //     or commit latencies differ by more.
 //   - **Resumable.** The position lives in a `RelayCursorStore` (SQL: `auth_relay_cursor`, core
-//     migration 22; memory for tests), one row per relay `name`. Several relays with different
+//     migration 27; memory for tests), one row per relay `name`. Several relays with different
 //     names (one per consumer) each keep their own.
 //   - **One writer per name.** Two processes running the same name both deliver: that is safe
 //     (at-least-once) but wasteful, so run one per name, or accept the duplicates.
@@ -84,7 +84,7 @@ export const layerCursorMemory = Layer.effect(
   }),
 );
 
-/** Durable positions in `auth_relay_cursor` (run core migrations, including 22). */
+/** Durable positions in `auth_relay_cursor` (run core migrations, including 27). */
 export const layerCursorSql = Layer.effect(
   RelayCursorStore,
   Effect.gen(function* () {

@@ -3,7 +3,7 @@ ID: "AOMS-009"
 Title: "SAML and SCIM are Phase-3 plans with no code: enterprise IdP interop and directory sync absent"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/00-adoption-matrix.md:124"
 Auditor: "auth0-okta-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `—` · reported by **Auth0/Okta Migration Specialist** (`auth0-okta-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [SAML/SCIM enterprise IdP interop — roadmap scope decision](../../.scratch/resolve-ready-for-human-findings/issues/08-saml-scim-roadmap-scope.md) — recommend shipping both as new first-party packages (`packages/saml` SP-only, `packages/scim` inbound provisioning), sequenced behind ticket 09's `UserRecord` deactivation state, flagged as a scope call for sanity-check rather than an inevitable conclusion. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `enterprise-federation-saml-scim`. Evidence at HEAD ec065a7: `spec/models/00-adoption-matrix.md:124`. Fix: Execute decision ticket 08's spec half now (ADR + contracts + resequenced roadmap) and its code half in order: UserRecord deactivation (ticket 09) -> packages/scim -> packages/saml (SP-only), SAML runnable in parallel with SCIM substrate. (effort XL). Full dossier: `.plan/slices/12-spec.md`.
+
+**Resolved (2026-09-29):** Spec half executed and the SCIM code half landed; the SAML code half is deliberately left as follow-up tickets per decision 08 (spec now, code in order). ADR-EA-023 (spec/decisions/023-enterprise-federation-packages.md; the plan proposed 019, already taken by encryption-key-rotation) fixes two first-party AuthPlugin.Service packages (saml SP-only, scim inbound), the substrate-before-protocol sequence, the SamlSigner port, the Sso dispatcher and the deprovisioning semantics; spec/models/00-adoption-matrix.md, spec/roadmap.md, 09-sso.md, 10-saml.md (SamlApi contract, saml_connection shape, SamlSigner contract) and 12-scim.md (contract, ownership rules) now describe designs instead of "no design exists". Code: packages/scim is built (see CWM-002). NOT built: packages/saml and the SamlSigner implementation (needs a maintained XML-DSig dependency audited before adoption, no offline candidate was available), the Sso dispatcher plugin. Acceptance (ADR exists, matrix/roadmap show SAML/SCIM as scheduled, the model docs describe contracts) is met.

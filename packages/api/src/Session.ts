@@ -4,23 +4,35 @@
 //
 // Core's own `session` `HttpApiGroup` — reserved, root-level ids
 // (`current`/`list`/`signOut`/`revoke`/`revokeOthers`), needing no plugin
-// to exist at all. Not yet folded into `Auth.make`'s composed `api`
-// (`Auth.ts`'s own header comment tracks that as separate, later work);
-// this is the standalone contract, wired to real handlers in
-// `@awthaq/server/src/Session.ts`.
+// to exist at all. Folded into `Auth.make`'s composed `api` (MW-002);
+// wired to real handlers in `@awthaq/server/src/Session.ts`.
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { Authentication, CsrfProtection, Unauthenticated } from "./Api.ts";
 
+/**
+ * MW-008: a timestamp on the wire is an ISO-8601 date-time string (the generated OpenAPI
+ * schema says `format: "date-time"`), decoded to `DateTime.Utc`. `Schema.DateTimeUtcFromString`
+ * alone accepts any string `DateTime.make` parses and advertises none of that.
+ */
+const Timestamp = Schema.String.check(
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/, {
+    expected: "an ISO-8601 date-time string",
+    toJsonSchema: () => ({ format: "date-time" }),
+  }),
+).pipe(Schema.decodeTo(Schema.DateTimeUtc, SchemaTransformation.dateTimeUtcFromString));
+
 /** One row of `list` — the wire shape of `@awthaq/core`'s `SessionListItem`. */
 export class SessionDto extends Schema.Class<SessionDto>("SessionDto")({
   id: Schema.String,
-  createdAt: Schema.String,
-  lastActiveAt: Schema.String,
-  expiresAt: Schema.String,
+  // MW-008: ISO-8601 on the wire, `DateTime.Utc` in memory — an invalid timestamp neither decodes nor encodes.
+  createdAt: Timestamp,
+  lastActiveAt: Timestamp,
+  expiresAt: Timestamp,
   userAgent: Schema.NullOr(Schema.String),
   /**
    * THS-003: RFC 8176 `amr` — how this session was authenticated (`pwd`,
@@ -32,6 +44,13 @@ export class SessionDto extends Schema.Class<SessionDto>("SessionDto")({
     Schema.withConstructorDefault(Effect.succeed<ReadonlyArray<string>>([])),
   ),
   current: Schema.Boolean,
+  /**
+   * MNA-001 (ticket 17): the raw session token, present only when the request
+   * opted in with `X-Awthaq-Token-Delivery: bearer` (and then no cookie is set).
+   * Never populated for a browser request, so the token stays out of JS-readable
+   * bodies there.
+   */
+  token: Schema.optional(Schema.String),
 }) {}
 
 /**

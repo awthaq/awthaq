@@ -3,7 +3,7 @@ ID: "BAM-009"
 Title: "User profile surface cannot receive better-auth user fields: no image, no email change"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Users.ts:62"
 Auditor: "better-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `core` · reported by **better-auth Migration Specialist** (`better-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Add an image column (nullable) and an email-change operation with re-verificatio
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `users-profile-surface`. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:96`. Fix: Add a nullable image field and a verified email-change primitive to Users; document better-auth field mapping. (effort L). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Closed by commit 4b63d9e for the dossier's steps 1, 2 and 4 (the program-table scope: 'nullable image field and a verified email-change primitive to Users'). image: User.image column (migration 22), UserRecord.image Option, updateProfile image (client-writable; the HTTP payload's image is optional|null, bounded <= 2048 and http(s)-only via AccountContract.ImageUrl — a stored javascript:/data: URL would be an XSS vector), AccountDto {identity, name, image}. Users.changeEmail(id, newEmail): lower-cases, EmailAlreadyExists on conflict, resets emailVerified (BEH-EA-042's one permitted lowering; spec revised), no-op for the current address, IdentityMismatch for a non-Email user; the repository side is one guarded UPDATE ... RETURNING. better-auth field mapping documented in packages/migrate-better-auth/README.md. Tests: core Users.test.ts (both layers: image set/keep/clear; changeEmail resets verified, moves the uniqueness key, frees the old address), sql contract, server AuthHttp 'PATCH /user sets the avatar (http(s) only)'. DEFERRED (Plan note): dossier step 3, the password plugin's mailed change-email flow (Verification.issue('change-email:<userId>', {newEmail}) to the NEW address; consume -> changeEmail + verifyEmail in one transaction). It adds two endpoints, rate-limit rules and mail templates to packages/password (owned by other programs); Users.changeEmail is the primitive it will call and the purpose is reserved in BEH-EA-057. Until then no HTTP path can change an email at all, so 'only via a verified flow' holds trivially.

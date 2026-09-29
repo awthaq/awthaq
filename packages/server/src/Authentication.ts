@@ -7,12 +7,14 @@
 import { Observability, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import type { unhandled } from "effect/Types";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
@@ -28,7 +30,9 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
  * principal without touching `Authentication` itself.
  */
 export interface PrincipalResolverShape {
-  readonly resolve: (session: Sessions.SessionView) => Effect.Effect<Api.Principal>;
+  readonly resolve: (
+    session: Sessions.SessionView,
+  ) => Effect.Effect<Api.Principal, Api.StoreUnavailable>;
 }
 
 export class PrincipalResolver extends Context.Service<PrincipalResolver, PrincipalResolverShape>()(
@@ -79,7 +83,7 @@ export const PrincipalResolverWithUserFactsLive = Layer.effect(
     return {
       resolve: (session: Sessions.SessionView) =>
         users.findById(session.userId).pipe(
-          Effect.map((user) => user.emailVerified),
+          Effect.map(Users.isEmailVerified),
           Effect.catchTag("UserNotFound", () => Effect.succeed(false)),
           Effect.map(
             (emailVerified) =>
@@ -116,7 +120,7 @@ export interface PostAuthResponseHookShape {
   readonly decorate: (
     principal: Api.Principal,
     response: HttpServerResponse.HttpServerResponse,
-    context: { readonly scheme: "cookie" | "bearer" | "impersonation" },
+    context: { readonly scheme: "cookie" | "bearer" | "impersonation" | "apiKey" },
   ) => Effect.Effect<HttpServerResponse.HttpServerResponse>;
 }
 
@@ -125,8 +129,167 @@ export const PostAuthResponseHook = Context.Reference<PostAuthResponseHookShape>
   { defaultValue: () => ({ decorate: (_principal, response) => Effect.succeed(response) }) },
 );
 
-/** APS-006: the three credential carriers `Api.Authentication`'s security record declares, in chain order. */
+/** APS-006: the credential carriers that resolve to a session, in chain order. */
 type Scheme = "impersonation" | "cookie" | "bearer";
+
+/**
+ * MAPS-001/MAPS-004/OCM-002: the carriers whose credentials a plugin may claim
+ * instead of a session: `bearer` (`Authorization: Bearer`, JWTs) and `apiKey`
+ * (`x-api-key`). `cookie`/`impersonation` are session-only by design (BEH-EA-065).
+ */
+export type CredentialCarrier = "bearer" | "apiKey";
+
+/**
+ * MAPS-001/MAPS-004 (wayfinder ticket 33, registry option): one plugin's claim on
+ * a carrier's credentials. `claims` is a cheap, secret-free look at the credential's
+ * *shape* (three dot-separated segments and a JOSE `typ`, a key prefix), never a
+ * verification and never constant-time-sensitive; the first contribution whose
+ * `claims` matches resolves, and if that resolution fails the request is
+ * `Unauthenticated` (later contributions are not tried, so one credential is
+ * never probed against several strategies). A `bearer` credential nobody claims
+ * falls through to opaque session resolution, exactly as before.
+ * `resolve` goes straight to an `Api.Principal`: a stateless token has no session
+ * row to hand `PrincipalResolver` (and so no rotation to deliver). It runs inside
+ * the request (`HttpServerRequest` is the one service it may require, e.g. to
+ * rate-limit by client address); every other dependency is captured when the
+ * contributing layer is built.
+ */
+export interface CredentialResolverContribution {
+  readonly id: string;
+  /** Lower runs first among contributions claiming the same credential shape; ties break on `id`. Default 0. */
+  readonly order?: number;
+  readonly claims: (credential: string) => boolean;
+  readonly resolve: (
+    credential: Redacted.Redacted<string>,
+  ) => Effect.Effect<Api.Principal, Api.Unauthenticated, HttpServerRequest.HttpServerRequest>;
+}
+
+/** Two contributions on one carrier share an `id`: a composition mistake, surfaced at layer build. */
+export class DuplicateCredentialResolver extends Data.TaggedError("DuplicateCredentialResolver")<{
+  readonly carrier: CredentialCarrier;
+  readonly id: string;
+  readonly message: string;
+}> {}
+
+/** A contribution arrived after the registry was first read (ADR-EA-012: registries freeze at first read). */
+export class CredentialResolversFrozen extends Data.TaggedError("CredentialResolversFrozen")<{
+  readonly message: string;
+}> {}
+
+export interface CredentialResolversShape {
+  readonly register: (
+    carrier: CredentialCarrier,
+    contribution: CredentialResolverContribution,
+  ) => Effect.Effect<void, DuplicateCredentialResolver | CredentialResolversFrozen>;
+  /** The carrier's contributions in (`order`, `id`) order; the first call freezes the registry. */
+  readonly resolvers: (
+    carrier: CredentialCarrier,
+  ) => Effect.Effect<ReadonlyArray<CredentialResolverContribution>>;
+}
+
+/**
+ * ADR-EA-012 registry (aggregating, not an exclusive slot): any number of plugins
+ * add a credential type with `contribute` and a Layer alone, without editing
+ * `@awthaq/api` or this package. A real per-composition service (like
+ * `RateLimitsRegistry`), so unrelated compositions and tests never share one.
+ * `Authentication` reads it per request through `Effect.serviceOption`, so
+ * `AuthenticationLive`'s own `R` is unchanged and an app that provides no
+ * registry simply has no contributions.
+ */
+export class CredentialResolvers extends Context.Service<
+  CredentialResolvers,
+  CredentialResolversShape
+>()("awthaq/server/CredentialResolvers") {}
+
+export const CredentialResolversLive = Layer.effect(
+  CredentialResolvers,
+  Effect.gen(function* () {
+    const entries = yield* Ref.make<
+      ReadonlyArray<{
+        readonly carrier: CredentialCarrier;
+        readonly contribution: CredentialResolverContribution;
+      }>
+    >([]);
+    const frozen = yield* Ref.make(false);
+    const register: CredentialResolversShape["register"] = (carrier, contribution) =>
+      Effect.gen(function* () {
+        if (yield* Ref.get(frozen)) {
+          return yield* new CredentialResolversFrozen({
+            message: `awthaq: credential resolver "${contribution.id}" was contributed after the registry was first read`,
+          });
+        }
+        const existing = yield* Ref.get(entries);
+        if (existing.some((e) => e.carrier === carrier && e.contribution.id === contribution.id)) {
+          return yield* new DuplicateCredentialResolver({
+            carrier,
+            id: contribution.id,
+            message: `awthaq: two ${carrier} credential resolvers share the id "${contribution.id}"`,
+          });
+        }
+        yield* Ref.set(entries, [...existing, { carrier, contribution }]);
+      });
+    const resolvers: CredentialResolversShape["resolvers"] = (carrier) =>
+      Ref.set(frozen, true).pipe(
+        Effect.flatMap(() => Ref.get(entries)),
+        Effect.map((all) =>
+          all
+            .filter((e) => e.carrier === carrier)
+            .map((e) => e.contribution)
+            .sort(
+              (a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+            ),
+        ),
+      );
+    return CredentialResolvers.of({ register, resolvers });
+  }),
+);
+
+/** A Layer that adds one contribution to `carrier`: how `@awthaq/jwt` and `@awthaq/api-key` claim credentials. */
+export const contribute = (
+  carrier: CredentialCarrier,
+  contribution: CredentialResolverContribution,
+) =>
+  Layer.effectDiscard(
+    Effect.flatMap(CredentialResolvers, (registry) => registry.register(carrier, contribution)),
+  );
+
+/**
+ * The claiming contribution's principal, or `None` when no contribution claims
+ * the credential (or none are registered). A claimed credential that fails to
+ * resolve fails `Unauthenticated`: see `CredentialResolverContribution`.
+ */
+export const resolveClaimed = (carrier: CredentialCarrier, credential: Redacted.Redacted<string>) =>
+  Effect.gen(function* () {
+    const raw = Redacted.value(credential);
+    const registry = yield* Effect.serviceOption(CredentialResolvers);
+    if (raw === "" || Option.isNone(registry)) return Option.none<Api.Principal>();
+    const contributions = yield* registry.value.resolvers(carrier);
+    const claiming = contributions.find((contribution) => contribution.claims(raw));
+    if (claiming === undefined) return Option.none<Api.Principal>();
+    return Option.some(yield* claiming.resolve(credential));
+  });
+
+/**
+ * Serves `httpEffect` as `principal` and runs the post-auth hook. Shared by the
+ * session path and the claimed-credential path. `PostAuthResponseHook` is
+ * resolved here, per request, not captured at layer-build time: a plugin
+ * overriding it (e.g. `@awthaq/jwt`) may itself need `Api.Authentication` for
+ * its own endpoints, which would make capturing it in THIS layer an
+ * unresolvable circular build order.
+ */
+const serve = (
+  scheme: Scheme | "apiKey",
+  httpEffect: Effect.Effect<HttpServerResponse.HttpServerResponse, unhandled, Api.CurrentPrincipal>,
+  principal: Api.Principal,
+) =>
+  Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
+    Effect.annotateLogs(principalFields(principal)),
+    Effect.flatMap((response) =>
+      Effect.flatMap(PostAuthResponseHook, (hook) =>
+        hook.decorate(principal, response, { scheme }),
+      ),
+    ),
+  );
 
 /** What a resolved session carries once verified — including whether `verify` rotated its secret this call. */
 export interface ResolvedSession {
@@ -164,8 +327,18 @@ export interface ResolvedSession {
  */
 const sessionResolutionCache = new WeakMap<
   object,
-  Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated>>
+  Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>>
 >();
+
+/**
+ * MA-004: Effect's security chain falls through to the next scheme on *any* typed failure and
+ * answers with the last scheme's, so a `StoreUnavailable` from the cookie scheme would be
+ * overwritten by the bearer scheme's ordinary `Unauthenticated` (no credential presented) and
+ * answer 401 again — the very conflation NHS-002 fixed. The first scheme to see the outage
+ * records it here (weak-keyed on the request, like the memo above) and every later scheme of the
+ * same request fails with it before doing any work, so the final answer is the 503.
+ */
+const requestOutages = new WeakMap<object, Api.StoreUnavailable>();
 
 /**
  * Atomically finds or creates the current request's slot for `raw`. `owner`
@@ -176,11 +349,11 @@ const claimResolution = (request: HttpServerRequest.HttpServerRequest, raw: stri
   Effect.sync(() => {
     const perRequest =
       sessionResolutionCache.get(request.source) ??
-      new Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated>>();
+      new Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>>();
     sessionResolutionCache.set(request.source, perRequest);
     const existing = perRequest.get(raw);
     if (existing !== undefined) return { deferred: existing, owner: false, perRequest };
-    const deferred = Deferred.makeUnsafe<ResolvedSession, Api.Unauthenticated>();
+    const deferred = Deferred.makeUnsafe<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>();
     perRequest.set(raw, deferred);
     return { deferred, owner: true, perRequest };
   });
@@ -276,25 +449,21 @@ export const resolveSession = (
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const raw = Redacted.value(credential);
+    const outage = requestOutages.get(request.source);
+    if (outage !== undefined) return yield* Effect.fail(outage);
     if (raw === "") return yield* Effect.fail(new Api.Unauthenticated());
     const { deferred, owner, perRequest } = yield* claimResolution(request, raw);
     if (!owner) return yield* Deferred.await(deferred);
-    // NHS-002/EEM-003: `verify`'s three failure tags used to collapse
-    // uniformly to `Unauthenticated` via a blanket `Effect.mapError` — a
-    // backing-store outage (`PlatformError`) answered 401 on every
-    // request, indistinguishable from a bad credential, RFC-inverted (401
-    // claims the credential is wrong, not that the server is broken), and
-    // invisible to status-code-keyed alerting. `PlatformError` alone dies
-    // (this codebase's own established idiom, e.g. `Password.ts`/
-    // `OAuth.ts`'s identical `Effect.catchTag("PlatformError", Effect.die)`)
-    // — a real infrastructure fault, reported as a server error by the
-    // framework's own default defect handling instead. Only what's left
-    // after that (`SessionNotFound`/`SessionExpired`, a genuinely absent or
-    // expired session) maps to `Unauthenticated`; ordering matters here —
-    // `catchTag` must run before `mapError`, or the die would itself get
-    // mapped away.
+    // NHS-002/EEM-003: `verify`'s failure tags used to collapse uniformly to
+    // `Unauthenticated` via a blanket `Effect.mapError` — a backing-store
+    // outage answered 401 on every request, indistinguishable from a bad
+    // credential, RFC-inverted (401 claims the credential is wrong, not that
+    // the server is broken), and invisible to status-code-keyed alerting.
+    // MA-004: an outage is now the typed `StoreUnavailable` (the interim
+    // `Effect.die` -> 500 is gone), which this middleware declares and so
+    // answers 503; only `SessionNotFound`/`SessionExpired` (a genuinely absent
+    // or expired session) map to `Unauthenticated`.
     const verified = sessions.verify(Redacted.make(raw)).pipe(
-      Effect.catchTag("PlatformError", Effect.die),
       // EOTS-003: a rejected credential is otherwise silent. One structured debug line
       // (fixed vocabulary, ticket 27 §3) and a span outcome — never the credential or
       // the session id: the id is the public half of the bearer credential, and a
@@ -318,7 +487,15 @@ export const resolveSession = (
           ),
         ),
       ),
-      Effect.mapError(() => new Api.Unauthenticated()),
+      Effect.catchTags({
+        "Sessions/NotFound": () => Effect.fail(new Api.Unauthenticated()),
+        SessionExpired: () => Effect.fail(new Api.Unauthenticated()),
+      }),
+      Effect.tapError((error) =>
+        Predicate.isTagged(error, "StoreUnavailable")
+          ? Effect.sync(() => requestOutages.set(request.source, error))
+          : Effect.void,
+      ),
       Effect.tap(({ session, rotated }) =>
         Option.isSome(rotated)
           ? HttpEffect.appendPreResponseHandler(rotationDelivery(scheme, session, rotated.value))
@@ -339,29 +516,25 @@ export const resolveSession = (
   );
 
 /**
- * MAPS-007: names the principal and session on the current span and on every log
- * the handler writes — ids only (`auth.principal.ref`, `auth.session.id`), never a
- * name, email or credential — so a trace or a log line identifies who and which
- * session without a join.
+ * MAPS-007: names the principal (and, for a user, its session) on the current span and on
+ * every log the handler writes — ids only (`auth.principal.ref`, `auth.session.id`), never
+ * a name, email or credential — so a trace or a log line identifies who and which session
+ * without a join.
  */
-const principalFields = (principal: Api.Principal, session: Sessions.SessionView) => ({
+const principalFields = (principal: Api.Principal) => ({
   [Observability.Field.principalType]: principal.ref.type,
   [Observability.Field.principalRef]: principal.ref.id,
-  [Observability.Field.sessionId]: session.id,
+  ...(principal._tag === "User" ? { [Observability.Field.sessionId]: principal.sessionId } : {}),
 });
 
-const resolveAndAnnotate = (
-  resolver: PrincipalResolverShape,
-  session: Sessions.SessionView,
-) =>
-  resolver.resolve(session).pipe(
-    Effect.tap((principal) =>
-      Effect.annotateCurrentSpan({
-        ...principalFields(principal, session),
-        [Observability.Field.outcome]: "success",
-      }),
-    ),
-  );
+const annotatePrincipal = (principal: Api.Principal) =>
+  Effect.annotateCurrentSpan({
+    ...principalFields(principal),
+    [Observability.Field.outcome]: "success",
+  });
+
+const resolveAndAnnotate = (resolver: PrincipalResolverShape, session: Sessions.SessionView) =>
+  resolver.resolve(session).pipe(Effect.tap(annotatePrincipal));
 
 /**
  * Exported (not module-private) so `@awthaq/qadi`'s `SubjectExtractor.ts`
@@ -370,16 +543,33 @@ const resolveAndAnnotate = (
  * BEH-EA-153 requires exactly that reuse. A rotated secret is still
  * delivered (PIL-005): `resolveSession` registers the delivery on the
  * request itself, so this principal-only wrapper needs no response.
+ *
+ * MAPS-001/OCM-002: a `bearer`/`apiKey` credential is offered to the
+ * registered credential resolvers first (Path B must recognise exactly what
+ * `Authentication` does); an unclaimed `bearer` credential is a session token,
+ * an unclaimed `apiKey` is `Unauthenticated`.
  */
 export const resolvePrincipal = (
   sessions: Sessions.SessionsShape,
   resolver: PrincipalResolverShape,
   credential: Redacted.Redacted<string>,
-  scheme: Scheme,
-) =>
-  resolveSession(sessions, credential, scheme).pipe(
-    Effect.flatMap(({ session }) => resolveAndAnnotate(resolver, session)),
+  scheme: Scheme | "apiKey",
+) => {
+  const viaSession = (sessionScheme: Scheme) =>
+    resolveSession(sessions, credential, sessionScheme).pipe(
+      Effect.flatMap(({ session }) => resolveAndAnnotate(resolver, session)),
+    );
+  if (scheme === "cookie" || scheme === "impersonation") return viaSession(scheme);
+  return resolveClaimed(scheme, credential).pipe(
+    Effect.flatMap(
+      Option.match({
+        onSome: (principal) => Effect.succeed(principal),
+        onNone: () =>
+          scheme === "bearer" ? viaSession("bearer") : Effect.fail(new Api.Unauthenticated()),
+      }),
+    ),
   );
+};
 
 /**
  * IC-007: the `cookie` scheme's decoded credential is keyed on the *default*
@@ -421,12 +611,7 @@ const requireImpersonationSession = (scheme: Scheme, resolved: ResolvedSession) 
  * rotating `verify` uses to register its delivery (PIL-005) — see
  * `rotationDelivery`.
  */
-export const AuthenticationLive: Layer.Layer<
-  Api.Authentication,
-  never,
-  Sessions.Sessions | PrincipalResolver
-> = Layer.effect(
-  Api.Authentication,
+const makeSessionTierHandlers = (machine: boolean) =>
   Effect.gen(function* () {
     const sessions = yield* Sessions.Sessions;
     const resolver = yield* PrincipalResolver;
@@ -441,41 +626,50 @@ export const AuthenticationLive: Layer.Layer<
     ) =>
       resolveSession(sessions, credential, scheme).pipe(
         Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
+        // Rotation delivery is not here: it rides the request's pre-response
+        // handler (PIL-005), so it also covers responses this success path
+        // never sees. See `serve` for the per-request `PostAuthResponseHook`.
         Effect.flatMap(({ session }) =>
           resolveAndAnnotate(resolver, session).pipe(
-            Effect.flatMap((principal) =>
-              Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
-                Effect.annotateLogs(principalFields(principal, session)),
-                Effect.flatMap((response) =>
-                  // `PostAuthResponseHook` is resolved here, per request,
-                  // not captured once above alongside `sessions`/
-                  // `resolver` — a plugin overriding it (e.g.
-                  // `@awthaq/jwt`) may itself need `Api.Authentication`
-                  // for its own endpoints, which would make capturing the
-                  // override at THIS layer's own build time an
-                  // unresolvable circular build order. Resolved per
-                  // request instead, from whatever the request's own full
-                  // ambient context already has. Rotation delivery is not
-                  // here: it rides the request's pre-response handler
-                  // (PIL-005), so it also covers responses this success
-                  // path never sees.
-                  Effect.flatMap(PostAuthResponseHook, (hook) =>
-                    hook.decorate(principal, response, { scheme }),
-                  ),
-                ),
-              ),
-            ),
-          ),
+            Effect.flatMap((principal) => serve(scheme, httpEffect, principal))),
+        ),
+      );
+    // MAPS-001/OCM-002: a credential a registered resolver claims resolves to its
+    // principal directly (no session, no rotation); `bearer` alone falls back to
+    // opaque session resolution when nothing claims it. Only the machine tier
+    // admits a non-`User` principal (see `Api.MachineAuthentication`).
+    const authenticateCarried = (
+      carrier: CredentialCarrier,
+      httpEffect: Effect.Effect<
+        HttpServerResponse.HttpServerResponse,
+        unhandled,
+        Api.CurrentPrincipal
+      >,
+      credential: Redacted.Redacted<string>,
+    ) =>
+      resolveClaimed(carrier, credential).pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: (principal) =>
+              machine || principal._tag === "User"
+                ? serve(carrier, httpEffect, principal)
+                : Effect.fail(new Api.Unauthenticated()),
+            onNone: () =>
+              carrier === "bearer"
+                ? authenticate("bearer", httpEffect, credential)
+                : Effect.fail(new Api.Unauthenticated()),
+          }),
         ),
       );
     const handle: HttpApiMiddleware.HttpApiMiddlewareSecurity<
       {
         readonly impersonation: typeof Api.ImpersonationCookie;
         readonly cookie: typeof Api.SessionCookie;
+        readonly apiKey: typeof Api.ApiKeyHeader;
         readonly bearer: typeof Api.BearerToken;
       },
       Api.CurrentPrincipal,
-      typeof Api.Unauthenticated,
+      typeof Api.Unauthenticated | typeof Api.StoreUnavailable,
       never
     >["cookie"] = (httpEffect, { credential }) =>
       cookieCredential(credential).pipe(
@@ -488,8 +682,12 @@ export const AuthenticationLive: Layer.Layer<
       cookieCredential(credential, "impersonation").pipe(
         Effect.flatMap((resolved) => authenticate("impersonation", httpEffect, resolved)),
       );
+    // OCM-002: `x-api-key`, between `cookie` and `bearer` so `bearer` stays last.
+    // Only `Api.MachineAuthentication` declares this scheme.
+    const apiKey: typeof handle = (httpEffect, { credential }) =>
+      authenticateCarried("apiKey", httpEffect, credential);
     const bearer: typeof handle = (httpEffect, { credential }) =>
-      authenticate("bearer", httpEffect, credential).pipe(
+      authenticateCarried("bearer", httpEffect, credential).pipe(
         // JR-007: `bearer` is the last declared scheme, so an `Unauthenticated`
         // here is the middleware's final failure — answer it with an RFC
         // 7235/6750 challenge alongside the unchanged typed JSON body.
@@ -515,9 +713,32 @@ export const AuthenticationLive: Layer.Layer<
             : Effect.void,
         ),
       );
-    return { impersonation, cookie: handle, bearer };
-  }),
+    return { impersonation, cookie: handle, apiKey, bearer };
+  });
+
+export const AuthenticationLive: Layer.Layer<
+  Api.Authentication,
+  never,
+  Sessions.Sessions | PrincipalResolver
+> = Layer.effect(
+  Api.Authentication,
+  Effect.map(makeSessionTierHandlers(false), ({ impersonation, cookie, bearer }) => ({
+    impersonation,
+    cookie,
+    bearer,
+  })),
 );
+
+/**
+ * OCM-002/MAPS-003: the machine tier — `AuthenticationLive`'s chain plus the
+ * `x-api-key` carrier, admitting `ApiKey`/`Service` principals that plugins'
+ * credential resolvers produce. Provide it next to `AuthenticationLive`.
+ */
+export const MachineAuthenticationLive: Layer.Layer<
+  Api.MachineAuthentication,
+  never,
+  Sessions.Sessions | PrincipalResolver
+> = Layer.effect(Api.MachineAuthentication, makeSessionTierHandlers(true));
 
 /**
  * AR-003: the default admin-tier scheme is `Authentication` itself — the identical
@@ -566,19 +787,28 @@ export const OptionalAuthenticationLive: Layer.Layer<
         Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
         Effect.flatMap(({ session }) =>
           resolveAndAnnotate(resolver, session).pipe(
-            Effect.flatMap((principal) =>
-              Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
-                Effect.annotateLogs(principalFields(principal, session)),
-                Effect.flatMap((response) =>
-                  // Per request, not captured at build time — see the
-                  // identical note on `AuthenticationLive` above.
-                  Effect.flatMap(PostAuthResponseHook, (hook) =>
-                    hook.decorate(principal, response, { scheme }),
-                  ),
-                ),
-              ),
-            ),
-          ),
+            Effect.flatMap((principal) => serve(scheme, httpEffect, principal))),
+        ),
+      );
+    // See the identical helper on `AuthenticationLive` above: this is the user
+    // tier, so a claimed credential is admitted only as a `User`.
+    const authenticateBearer = (
+      httpEffect: Effect.Effect<
+        HttpServerResponse.HttpServerResponse,
+        unhandled,
+        Api.CurrentPrincipal
+      >,
+      credential: Redacted.Redacted<string>,
+    ) =>
+      resolveClaimed("bearer", credential).pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: (principal) =>
+              principal._tag === "User"
+                ? serve("bearer", httpEffect, principal)
+                : Effect.fail(new Api.Unauthenticated()),
+            onNone: () => authenticate("bearer", httpEffect, credential),
+          }),
         ),
       );
     // EHA-006/NHS-010: `Api.OptionalAuthentication` declares no error type, so
@@ -610,9 +840,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
         Effect.flatMap((resolved) => authenticate("cookie", httpEffect, resolved)),
         Effect.catchTag("Unauthenticated", () =>
           HttpApiBuilder.securityDecode(Api.BearerToken).pipe(
-            Effect.flatMap((bearerCredential) =>
-              authenticate("bearer", httpEffect, bearerCredential),
-            ),
+            Effect.flatMap((bearerCredential) => authenticateBearer(httpEffect, bearerCredential)),
             // The anonymous fallback is a *recovery* from resolution failure,
             // never a success `authenticate` itself produced —
             // `PostAuthResponseHook` is only ever consulted on the genuine
@@ -629,7 +857,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
         readonly bearer: typeof Api.BearerToken;
       },
       Api.CurrentPrincipal,
-      never,
+      typeof Api.StoreUnavailable,
       never
     >["cookie"] = (httpEffect, { credential }) => cookieChain(httpEffect, credential);
     const impersonation: typeof cookie = (httpEffect, { credential }) =>
@@ -642,7 +870,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
         ),
       );
     const bearer: typeof cookie = (httpEffect, { credential }) =>
-      authenticate("bearer", httpEffect, credential).pipe(
+      authenticateBearer(httpEffect, credential).pipe(
         Effect.catchTag("Unauthenticated", () => anonymous(httpEffect)),
       );
     return { impersonation, cookie, bearer };

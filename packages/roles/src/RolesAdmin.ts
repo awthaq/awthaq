@@ -110,7 +110,7 @@ export class RolesAdmin extends AuthPlugin.Service<RolesAdmin, RolesAdminShape>(
 
       const assign: RolesAdminShape["assign"] = (actor, userId, roleName) =>
         roles.assign(userId, roleName, { actorId: actorOf(actor) }).pipe(
-          Effect.catchTag("UnknownRole", (unknown) =>
+          Effect.catchTag("Roles/UnknownRole", (unknown) =>
             Effect.fail(new RolesAdminApi.UnknownRole({ roleName: unknown.roleName })),
           ),
           Effect.andThen(userRoles(userId)),

@@ -28,6 +28,13 @@ describe("Models.makeModels (TS-001)", () => {
         emailVerified: true,
         name: "A",
         metadata: null,
+        phone: null,
+        phoneVerified: false,
+        image: null,
+        status: "active",
+        statusReason: null,
+        tenantId: null,
+        suspendedUntil: null,
         createdAt: date,
         updatedAt: date,
       });
@@ -44,6 +51,13 @@ describe("Models.makeModels (TS-001)", () => {
         emailVerified: 1,
         name: "A",
         metadata: null,
+        phone: null,
+        phoneVerified: 0,
+        image: null,
+        status: "active",
+        statusReason: null,
+        tenantId: null,
+        suspendedUntil: null,
         createdAt: iso,
         updatedAt: iso,
       });
@@ -60,6 +74,13 @@ describe("Models.makeModels (TS-001)", () => {
         emailVerified: true,
         name: "A",
         metadata: null,
+        phone: null,
+        phoneVerified: false,
+        image: null,
+        status: "active",
+        statusReason: null,
+        tenantId: null,
+        suspendedUntil: null,
         createdAt: date,
         updatedAt: date,
       };
@@ -98,6 +119,7 @@ describe("Models.makeModels (TS-001)", () => {
         supersededAt: null,
         reusedAt: date,
         amr: "[]",
+        tenantId: null,
       });
       assert.strictEqual(session.supersededAt, null);
       assert.isNotNull(session.reusedAt);
@@ -110,6 +132,7 @@ describe("Models.makeModels (TS-001)", () => {
         id: "t1",
         identifier: "verify-email:u1",
         userId: null,
+        tenantId: null,
         valueHash: "h",
         expiresAt: date,
         consumedAt: null,
@@ -119,6 +142,7 @@ describe("Models.makeModels (TS-001)", () => {
       assert.strictEqual(token.consumedAt, null);
       const reservation = yield* Schema.decodeUnknownEffect(pg.VerificationReservation)({
         identifier: "x",
+        tenantId: null,
         expiresAt: date,
       });
       assert.isTrue(DateTime.Equivalence(reservation.expiresAt, at));
@@ -150,6 +174,13 @@ describe("Models.makeModels (TS-001)", () => {
         emailVerified: true,
         name: "A",
         metadata: null,
+        phone: null,
+        phoneVerified: false,
+        image: null,
+        status: "active",
+        statusReason: null,
+        tenantId: null,
+        suspendedUntil: null,
         createdAt: date,
         updatedAt: date,
       });
@@ -159,6 +190,13 @@ describe("Models.makeModels (TS-001)", () => {
         emailVerified: 1,
         name: "A",
         metadata: null,
+        phone: null,
+        phoneVerified: 0,
+        image: null,
+        status: "active",
+        statusReason: null,
+        tenantId: null,
+        suspendedUntil: null,
         createdAt: iso,
         updatedAt: iso,
       });

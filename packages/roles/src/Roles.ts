@@ -8,9 +8,9 @@
 // — `Anonymous`, `ApiKey`, `Service`, and a `UserPrincipal`'s own
 // `actingAs` — is delegated to `@awthaq/qadi`'s own
 // `resolveIdentityOnly`, so installing this plugin never changes how those
-// kinds resolve (BEH-EA-140's/141's real gap — no `scopes` field exists yet
-// on `ApiKeyPrincipal`/`ServicePrincipal` — is documented once, in
-// `@awthaq/qadi`'s `SubjectResolver.ts`, not repeated here).
+// kinds resolve (BEH-EA-140/141's scope-to-permission mapping for `ApiKey`/
+// `Service` principals lives once, in `@awthaq/qadi`'s `SubjectResolver.ts`,
+// which this delegation reaches — not repeated here).
 //
 // **Global, not tenant-scoped (ADR-EA-025, MTI-007).** `Roles` answers "is
 // this user a *platform* admin/support/operator" — `AuthSubject.roles`/
@@ -28,8 +28,16 @@
 // `RevocationStore.layerSql` (`INSERT ... ON CONFLICT ... DO NOTHING`,
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
-import { Users } from "@awthaq/core";
-import { AuthEvents, AuthPlugin, DataExport, Erasure, Migrations, Slots } from "@awthaq/core";
+import { Defects, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  ConfigDescriptor,
+  DataExport,
+  Erasure,
+  Migrations,
+  Slots,
+} from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -46,7 +54,7 @@ import type { Role } from "@qadi/core";
 import { fromRoles, withAttributes } from "@qadi/core";
 
 /** RRM-003: the role name is not in this deployment's catalog — a typo, or a role since removed. */
-export class UnknownRole extends Data.TaggedError("UnknownRole")<{
+export class UnknownRole extends Data.TaggedError("Roles/UnknownRole")<{
   readonly roleName: string;
 }> {}
 
@@ -75,6 +83,12 @@ export interface RolesShape {
     options?: RoleChangeOptions,
   ) => Effect.Effect<void>;
   readonly listRoleNames: (userId: Users.UserId) => Effect.Effect<ReadonlyArray<string>>;
+  /**
+   * ECS-006: the users currently holding `roleName`. `awthaq seed admin` must find an
+   * existing administrator before it grants another, and nothing else can answer "who has
+   * this role" (`listRoleNames` goes the other way).
+   */
+  readonly holders: (roleName: string) => Effect.Effect<ReadonlyArray<Users.UserId>>;
   /**
    * RRM-003: stored assignments whose role name is no longer in the catalog
    * (drift after a rename/removal) — for a startup/doctor check. Empty when
@@ -116,11 +130,7 @@ const validatedCatalog = Effect.gen(function* () {
   const names = rolesConfig.catalog.map((role) => role.name);
   const duplicates = Array.from(new Set(names.filter((name, i) => names.indexOf(name) !== i)));
   if (duplicates.length > 0) {
-    return yield* Effect.die(
-      new Error(
-        `awthaq: the Roles catalog defines duplicate role name(s): ${duplicates.join(", ")}`,
-      ),
-    );
+    return yield* Defects.invalidConfiguration("catalog", `awthaq: the Roles catalog defines duplicate role name(s): ${duplicates.join(", ")}`);
   }
   return new Map(rolesConfig.catalog.map((role) => [role.name, role] as const));
 });
@@ -184,6 +194,14 @@ const rolesMake: Effect.Effect<RolesShape, never, AuthEvents.AuthEvents> = Effec
         }
       }),
     listRoleNames: (userId) => Ref.get(state).pipe(Effect.map((map) => namesOf(map, userId))),
+    holders: (roleName) =>
+      Ref.get(state).pipe(
+        Effect.map((map) =>
+          Array.from(HashMap.entries(map))
+            .filter(([, names]) => names.includes(roleName))
+            .map(([userId]) => userId),
+        ),
+      ),
     listUnknownAssignments: Ref.get(state).pipe(
       Effect.map((map) =>
         Array.from(HashMap.entries(map)).flatMap(([userId, names]) =>
@@ -238,6 +256,12 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
           : sql`SELECT "userId", role FROM role_assignments WHERE role NOT IN ${sql.in(names)}`,
     });
 
+    const holdersQuery = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Schema.Struct({ userId: Schema.String }),
+      execute: (roleName) => sql`SELECT "userId" FROM role_assignments WHERE role = ${roleName}`,
+    });
+
     const listQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: Schema.Struct({ role: Schema.String }),
@@ -273,6 +297,11 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       listRoleNames: (userId) =>
         listQuery(userId).pipe(
           Effect.map((rows) => rows.map((row) => row.role)),
+          Effect.orDie,
+        ),
+      holders: (roleName) =>
+        holdersQuery(roleName).pipe(
+          Effect.map((rows) => rows.map((row) => Users.UserId(row.userId))),
           Effect.orDie,
         ),
       listUnknownAssignments: listUnknownQuery(catalogNames).pipe(
@@ -312,7 +341,7 @@ const rolesMigrations: Migrations.Migrations = [
             "createdAt" TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             UNIQUE ("userId", role)
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -323,7 +352,7 @@ const rolesMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments("userId")`,
         sqlite: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments("userId")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -422,6 +451,22 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   contract: HttpApi.make("auth"),
   tables: ["role_assignments"],
   migrations: rolesMigrations,
+  // The catalog is listed by role name (each `Role` carries its whole permission tree).
+  config: [
+    ConfigDescriptor.make(RolesConfig, {
+      project: (value) => ({ catalog: value.catalog.map((role) => role.name) }),
+      audit: (value) =>
+        value.catalog.length === 0
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "roles-empty-catalog",
+                "the Roles catalog is empty: every user resolves with no roles (provide Roles.config([...]))",
+              ),
+            ]
+          : [],
+    }),
+  ],
 }) {
   /**
    * Self-referential the same way `Password`'s own `static readonly layer`
@@ -438,8 +483,9 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
    * exposes both `Roles` and the overridden `SubjectResolver` in its
    * `ROut` — the real, working half of BEH-EA-138 this module's own header
    * comment describes. `Slots.override` also registers this claim with
-   * `@awthaq/core`'s opt-in `Slots.SlotsRegistry`, so an application
-   * that provides `Slots.layer` gets a real `SlotConflict` if some other
+   * `@awthaq/core`'s `Slots.SlotsRegistry` (MA-005: required; `Auth.make`
+   * provides one per composition, a standalone build provides `Slots.layer`),
+   * so a `SlotConflict` fails the build if some other
    * plugin ever claims this same slot too (`Slots.ts`'s own header comment
    * explains why that check is enforced at `Layer`-build time, not by
    * `Auth.make`'s type checker).

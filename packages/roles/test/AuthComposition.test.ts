@@ -42,15 +42,16 @@ class Ping extends AuthPlugin.Service<Ping, Record<string, never>>()("ping", {
 }
 
 describe("Auth.make([Roles])", () => {
-  it("a Roles-only tuple fails — it contributes zero HTTP groups", () => {
-    assert.throws(() => Auth.make([Roles.Roles]), /Auth.make requires at least one plugin/);
+  it("a Roles-only tuple composes — it contributes no HTTP group, but core's own are always served (MW-002)", () => {
+    const auth = Auth.make([Roles.Roles]);
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["account", "session"]);
   });
 
   it("Roles + RolesAdmin compose: the admin plugin depends on Roles and contributes the one group (YL-009)", () => {
     const auth = Auth.make([Roles.Roles, RolesAdmin.RolesAdmin]);
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [] },
-      { id: "rolesAdmin", apiVersion: 1, tables: [], dependsOn: ["roles"] },
+      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [], groups: [] },
+      { id: "rolesAdmin", apiVersion: 1, tables: [], dependsOn: ["roles"], groups: ["rolesAdmin"] },
     ]);
   });
 
@@ -58,14 +59,14 @@ describe("Auth.make([Roles])", () => {
     const auth = Auth.make([Ping, Roles.Roles]);
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "ping", apiVersion: 1, tables: [], dependsOn: [] },
-      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [] },
+      { id: "ping", apiVersion: 1, tables: [], dependsOn: [], groups: ["ping"] },
+      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [], groups: [] },
     ]);
   });
 });
 
 // RRM-012: BEH-EA-138's exclusivity is enforced when the layers are *built*
-// (through the opt-in `Slots.SlotsRegistry`), before any request is served —
+// (through the `Slots.SlotsRegistry` `Auth.make` provides per composition, MA-005), before any request is served —
 // not by `Auth.make`'s type checker, which cannot observe a `Context.Reference`
 // override (`Slots.ts`'s and `SubjectResolver.ts`'s own header comments give the
 // structural reason).

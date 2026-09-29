@@ -146,7 +146,7 @@ const seedUser = (email: string) =>
     const accounts = yield* Accounts.Accounts;
     const sessions = yield* Sessions.Sessions;
     const verification = yield* Verification.Verification;
-    const user = yield* users.create({ email, name: "Seeded" });
+    const user = yield* users.create({ identity: { _tag: "Email", email }, name: "Seeded" });
     yield* accounts.link({ userId: user.id, providerId: "google", subject: `sub-${email}` });
     const { session } = yield* sessions.issue({ userId: user.id });
     yield* verification.issue({

@@ -13,11 +13,13 @@ import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
@@ -28,6 +30,7 @@ import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
+import * as Tenant from "../src/Tenant.ts";
 import * as Users from "../src/Users.ts";
 
 const MemoryLayer = Sessions.layerMemory.pipe(
@@ -73,7 +76,8 @@ const Migrated = Layer.effectDiscard(
         supersededBy TEXT,
         supersededAt TEXT,
         reusedAt TEXT,
-        amr TEXT NOT NULL DEFAULT '[]'
+        amr TEXT NOT NULL DEFAULT '[]',
+        tenantId TEXT
       )
     `;
   }),
@@ -104,6 +108,18 @@ const suite = (
   shortLivedLayer: Layer.Layer<Sessions.Sessions, unknown, never>,
 ): void => {
   describe(name, () => {
+    // EOTS-004: the session id is the public half of a bearer credential and error messages reach logs.
+    it.effect("EOTS-004: SessionNotFound's message never contains the session id", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const failure = yield* sessions
+          .verify(Redacted.make("enumerable-session-id.deadbeefdeadbeef"))
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+        assert.notInclude(failure.message, "enumerable-session-id");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect(
       "BEH-EA-049/050: issues an opaque id.secret token, never storing the secret itself",
       () =>
@@ -118,6 +134,23 @@ const suite = (
           assert.strictEqual(view.id, session.id);
           assert.strictEqual(view.userId, userId);
         }).pipe(Effect.provide(layer)),
+    );
+
+    // DRS-001 (ADR-EA-018): a session carries the tenant it was issued under,
+    // so a multi-tenant host can refuse a cookie minted for another tenant.
+    it.effect("DRS-001: issue stamps the ambient tenant and verify reports it", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const tenanted = yield* sessions.issue({ userId }).pipe(Tenant.withTenant("tenant-1"));
+        assert.deepStrictEqual(tenanted.session.tenantId, Option.some("tenant-1"));
+        const plain = yield* sessions.issue({ userId });
+        assert.isTrue(Option.isNone(plain.session.tenantId));
+        // Read under a different ambient tenant: the recorded one is what comes back.
+        const { session } = yield* sessions
+          .verify(tenanted.token)
+          .pipe(Tenant.withTenant("tenant-2"));
+        assert.deepStrictEqual(session.tenantId, Option.some("tenant-1"));
+      }).pipe(Effect.provide(layer)),
     );
 
     // RSC-001: a `SessionView` must never carry the stored secret hash (or
@@ -143,6 +176,7 @@ const suite = (
           "userAgent",
           "actingAs",
           "amr",
+          "tenantId",
         ].sort();
         assert.deepStrictEqual(Object.keys(session).sort(), expectedKeys);
         assert.notProperty(session, "secretHash");
@@ -159,7 +193,7 @@ const suite = (
         const { session } = yield* sessions.issue({ userId });
         const bogus = Redacted.make(`${session.id}.not-the-real-secret`);
         const failure = yield* sessions.verify(bogus).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -207,7 +241,7 @@ const suite = (
           yield* TestClock.adjust(Duration.millis(600));
           const forged = Redacted.make(`${session.id}.deadbeef`);
           const failure = yield* sessions.verify(forged).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "SessionNotFound");
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(shortLivedLayer)),
     );
 
@@ -297,7 +331,7 @@ const suite = (
         const failure = yield* sessions
           .reauthenticate(Sessions.SessionId("does-not-exist"))
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -340,7 +374,7 @@ const suite = (
 
           // The old token no longer verifies — no grace window.
           const oldFails = yield* sessions.verify(token).pipe(Effect.flip);
-          assert.strictEqual(oldFails._tag, "SessionNotFound");
+          assert.strictEqual(oldFails._tag, "Sessions/NotFound");
 
           // The freshly-rotated token verifies and resolves the same session.
           const rotatedToken = Option.getOrThrow(touched.rotated);
@@ -363,7 +397,7 @@ const suite = (
           const newWorks = yield* sessions.verify(second.token);
           assert.strictEqual(newWorks.session.id, second.session.id);
           const oldFails = yield* sessions.verify(first.token).pipe(Effect.flip);
-          assert.strictEqual(oldFails._tag, "SessionNotFound");
+          assert.strictEqual(oldFails._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(layer)),
     );
 
@@ -380,13 +414,13 @@ const suite = (
 
         yield* sessions.revokeOthers(userId, a.session.id, "userRevoked");
         const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
-        assert.strictEqual(bFails._tag, "SessionNotFound");
+        assert.strictEqual(bFails._tag, "Sessions/NotFound");
         const aStillWorks = yield* sessions.verify(a.token);
         assert.strictEqual(aStillWorks.session.id, a.session.id);
 
         yield* sessions.revoke(a.session.id, "signOut");
         const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
-        assert.strictEqual(aFails._tag, "SessionNotFound");
+        assert.strictEqual(aFails._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -401,9 +435,9 @@ const suite = (
           yield* sessions.revokeAll(userId, "userRevoked");
 
           const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(aFails._tag, "SessionNotFound");
+          assert.strictEqual(aFails._tag, "Sessions/NotFound");
           const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
-          assert.strictEqual(bFails._tag, "SessionNotFound");
+          assert.strictEqual(bFails._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(layer)),
     );
 
@@ -622,7 +656,7 @@ const suite = (
         const mine = yield* sessions.issue({ userId });
         yield* sessions.revokeOwned(userId, mine.session.id, "userRevoked");
         const failure = yield* sessions.verify(mine.token).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -632,7 +666,7 @@ const suite = (
         const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
         const theirs = yield* sessions.issue({ userId: otherUser });
         const failure = yield* sessions.revokeOwned(userId, theirs.session.id, "userRevoked").pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
         yield* sessions.verify(theirs.token);
       }).pipe(Effect.provide(layer)),
     );
@@ -643,7 +677,7 @@ const suite = (
         const failure = yield* sessions
           .revokeOwned(userId, Sessions.SessionId("missing"), "userRevoked")
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -719,19 +753,19 @@ const reuseSuite = (
           // A's own token, presented again — A is already tombstoned
           // (superseded by B), so this is the reuse signal.
           const firstReplay = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(firstReplay._tag, "SessionNotFound");
+          assert.strictEqual(firstReplay._tag, "Sessions/NotFound");
 
           // C — the only still-live member of the family — is revoked as
           // a side effect of that one reuse.
           const cFails = yield* sessions.verify(c.token).pipe(Effect.flip);
-          assert.strictEqual(cFails._tag, "SessionNotFound");
+          assert.strictEqual(cFails._tag, "Sessions/NotFound");
 
           // A second presentation of the same already-flagged row is
           // still met with the uniform `SessionNotFound` — no
           // distinguishable signal leaked — but does not publish a
           // second event.
           const secondReplay = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(secondReplay._tag, "SessionNotFound");
+          assert.strictEqual(secondReplay._tag, "Sessions/NotFound");
 
           const collected = yield* Fiber.join(reused);
           assert.strictEqual(collected.length, 1);
@@ -770,7 +804,7 @@ const reuseSuite = (
 
           const forged = Redacted.make(`${a.session.id}.deadbeef`);
           const failure = yield* sessions.verify(forged).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "SessionNotFound");
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
 
           // The successor is untouched.
           const successor = yield* sessions.verify(b.token);
@@ -788,9 +822,9 @@ const reuseSuite = (
         const b = yield* sessions.issue({ userId, supersedes: a.session.id });
 
         const replay = yield* sessions.verify(a.token).pipe(Effect.flip);
-        assert.strictEqual(replay._tag, "SessionNotFound");
+        assert.strictEqual(replay._tag, "Sessions/NotFound");
         const successor = yield* sessions.verify(b.token).pipe(Effect.flip);
-        assert.strictEqual(successor._tag, "SessionNotFound");
+        assert.strictEqual(successor._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -1120,7 +1154,7 @@ const capSuite = (
           );
           assert.strictEqual(live.length, 2);
           const failure = yield* sessions.verify(b.token).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "SessionNotFound");
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
 
           for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
           const revoked = yield* Ref.get(seen);
@@ -1230,6 +1264,56 @@ const FlakySqlLayer = Sessions.layerSql.pipe(
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
+
+// MA-004: an infrastructure failure is one typed, retryable `StoreUnavailable` in the Shape's `E`,
+// for both layers — never a defect and never the raw `SqlError`/`PlatformError`.
+describe("Sessions infrastructure failures (MA-004)", () => {
+  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable, not a defect", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      yield* Ref.set(failNextInsert, true);
+      const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+      yield* Ref.set(failNextInsert, false);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+      assert.strictEqual(failure.operation, "Sessions.issue");
+      // The cause is logged where it happened; it is not a field a response could carry.
+      assert.notProperty(failure, "cause");
+    }).pipe(Effect.provide(FlakySqlLayer)),
+  );
+
+  const BrokenCrypto = Layer.succeed(
+    Crypto.Crypto,
+    Crypto.make({
+      randomBytes: (size) => new Uint8Array(size),
+      digest: () =>
+        Effect.fail(
+          PlatformError.systemError({
+            module: "Crypto",
+            method: "digest",
+            _tag: "Unknown",
+            description: "provider down",
+          }),
+        ),
+    }),
+  );
+  const BrokenCryptoLayer = Sessions.layerMemory.pipe(
+    Layer.provide(BrokenCrypto),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layerMemory),
+  );
+
+  it.effect("layerMemory: a crypto PlatformError surfaces as StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issueFailure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+      assert.strictEqual(issueFailure._tag, "StoreUnavailable");
+      const verifyFailure = yield* sessions
+        .verify(Redacted.make("some-id.some-secret"))
+        .pipe(Effect.flip);
+      assert.strictEqual(verifyFailure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(BrokenCryptoLayer)),
+  );
+});
 
 describe("Sessions atomic supersede (layerSql)", () => {
   it.effect(

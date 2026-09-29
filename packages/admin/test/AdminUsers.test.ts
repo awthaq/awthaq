@@ -8,6 +8,7 @@ import { AuditChain, AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awtha
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -71,8 +72,14 @@ const asCaller = (id: string): Api.UserPrincipal =>
 
 const seed = Effect.gen(function* () {
   const users = yield* Users.Users;
-  const admin = yield* users.create({ email: "admin@example.com", name: "Admin" });
-  const target = yield* users.create({ email: "target@example.com", name: "Target" });
+  const admin = yield* users.create({
+    identity: { _tag: "Email", email: "admin@example.com" },
+    name: "Admin",
+  });
+  const target = yield* users.create({
+    identity: { _tag: "Email", email: "target@example.com" },
+    name: "Target",
+  });
   return { adminId: admin.id, targetId: target.id, users };
 });
 
@@ -118,7 +125,10 @@ describe("Admin user administration (BAM-005)", () => {
   it.effect("the gate sees the target, so a host can protect an account; list sees none", () =>
     Effect.gen(function* () {
       const { adminId, targetId, users } = yield* seed;
-      const boss = yield* users.create({ email: "boss@example.com", name: "Boss" });
+      const boss = yield* users.create({
+        identity: { _tag: "Email", email: "boss@example.com" },
+        name: "Boss",
+      });
       protectedIds.add(boss.id);
       const admin = yield* Admin.Admin;
       const caller = asCaller(adminId);
@@ -153,7 +163,10 @@ describe("Admin user administration (BAM-005)", () => {
       Effect.gen(function* () {
         const { adminId, users } = yield* seed;
         for (const n of [1, 2, 3])
-          yield* users.create({ email: `u${n}@example.com`, name: `U${n}` });
+          yield* users.create({
+            identity: { _tag: "Email", email: `u${n}@example.com` },
+            name: `U${n}`,
+          });
         const admin = yield* Admin.Admin;
         const caller = asCaller(adminId);
 
@@ -207,7 +220,10 @@ describe("Admin user administration (BAM-005)", () => {
     () =>
       Effect.gen(function* () {
         const { adminId, targetId, users } = yield* seed;
-        const other = yield* users.create({ email: "other@example.com", name: "Other" });
+        const other = yield* users.create({
+          identity: { _tag: "Email", email: "other@example.com" },
+          name: "Other",
+        });
         const admin = yield* Admin.Admin;
         const sessions = yield* Sessions.Sessions;
         const seen = yield* collectEvents;
@@ -243,14 +259,14 @@ describe("Admin user administration (BAM-005)", () => {
         yield* admin.revokeUserSession(caller, targetId, first.session.id);
         assert.strictEqual(
           (yield* sessions.verify(first.token).pipe(Effect.flip))._tag,
-          "SessionNotFound",
+          "Sessions/NotFound",
         );
         assert.strictEqual((yield* sessions.verify(second.token)).session.id, second.session.id);
 
         yield* admin.revokeUserSessions(caller, targetId);
         assert.strictEqual(
           (yield* sessions.verify(second.token).pipe(Effect.flip))._tag,
-          "SessionNotFound",
+          "Sessions/NotFound",
         );
         // Other users' sessions and the support episode are untouched.
         assert.strictEqual((yield* sessions.verify(foreign.token)).session.id, foreign.session.id);
@@ -268,5 +284,143 @@ describe("Admin user administration (BAM-005)", () => {
         Effect.scoped,
         Effect.provide(buildLayer({ ...manageAll, canImpersonate: () => Effect.succeed(true) })),
       ),
+  );
+});
+
+describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
+  it.effect(
+    "banUser and unbanUser are fail-closed by default — even for an administrator of users",
+    () =>
+      Effect.gen(function* () {
+        const { adminId, targetId } = yield* seed;
+        const admin = yield* Admin.Admin;
+        const seen = yield* collectEvents;
+        const caller = asCaller(adminId);
+        const ban = yield* admin.banUser(caller, targetId, {}).pipe(Effect.flip);
+        const unban = yield* admin.unbanUser(caller, targetId).pipe(Effect.flip);
+        assert.strictEqual(ban._tag, "AdminActionDenied");
+        assert.strictEqual(unban._tag, "AdminActionDenied");
+        // Nothing changed.
+        const users = yield* Users.Users;
+        assert.strictEqual((yield* users.findById(targetId)).status, "active");
+        yield* TestClock.adjust(Duration.millis(10));
+        const denied = (yield* Ref.get(seen)).filter((e) => e._tag === "auth.admin.actionDenied");
+        assert.deepStrictEqual(
+          denied.map((e) => (e._tag === "auth.admin.actionDenied" ? e.action : "")),
+          ["banUser", "unbanUser"],
+        );
+      }).pipe(Effect.scoped, Effect.provide(buildLayer(manageAll))),
+  );
+
+  it.effect(
+    "a banned user cannot sign in (UserSuspended) and all their sessions are revoked; unban restores sign-in",
+    () =>
+      Effect.gen(function* () {
+        const { adminId, targetId, users } = yield* seed;
+        const admin = yield* Admin.Admin;
+        const sessions = yield* Sessions.Sessions;
+        const seen = yield* collectEvents;
+        const caller = asCaller(adminId);
+        const a = yield* sessions.issue({ userId: targetId });
+        const b = yield* sessions.issue({ userId: targetId });
+        const bystander = yield* sessions.issue({ userId: adminId });
+
+        const banned = yield* admin.banUser(caller, targetId, { reason: "  spam  " });
+        assert.strictEqual(banned.status, "suspended");
+        assert.deepStrictEqual(banned.statusReason, Option.some("spam"));
+        // Every session of the target is gone; other users' are not.
+        for (const issued of [a, b]) {
+          assert.strictEqual(
+            (yield* sessions.verify(issued.token).pipe(Effect.flip))._tag,
+            "Sessions/NotFound",
+          );
+        }
+        assert.strictEqual(
+          (yield* sessions.verify(bystander.token)).session.id,
+          bystander.session.id,
+        );
+
+        // The shared gate refuses — while an administrator still resolves the user.
+        const refused = yield* Users.assertCanSignIn(yield* users.findById(targetId)).pipe(
+          Effect.flip,
+        );
+        assert.strictEqual(refused._tag, "UserSuspended");
+        assert.strictEqual((yield* admin.getUser(caller, targetId)).id, targetId);
+
+        const unbanned = yield* admin.unbanUser(caller, targetId);
+        assert.strictEqual(unbanned.status, "active");
+        yield* Users.assertCanSignIn(unbanned);
+        // Accounts/identity survived: ban is not deletion.
+        assert.isTrue(Option.isSome(yield* users.findByEmail("target@example.com")));
+
+        yield* TestClock.adjust(Duration.millis(10));
+        const events = yield* Ref.get(seen);
+        const banEvent = events.find((e) => e._tag === "auth.admin.userBanned");
+        assert.deepStrictEqual(
+          banEvent === undefined || banEvent._tag !== "auth.admin.userBanned"
+            ? undefined
+            : { userId: banEvent.userId, reason: banEvent.reason, until: banEvent.until },
+          { userId: targetId, reason: "spam", until: null },
+        );
+        assert.isTrue(events.some((e) => e._tag === "auth.admin.userUnbanned"));
+        const revocations = events.filter(
+          (e) => e._tag === "auth.session.revoked" && e.reason === "suspended",
+        );
+        // `revokeAll` announces the sweep with the "suspended" reason.
+        assert.isAtLeast(revocations.length, 1);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(buildLayer({ ...manageAll, canBanUsers: () => Effect.succeed(true) })),
+      ),
+  );
+
+  it.effect("a ban with `until` lapses by itself; an administrator cannot ban themselves", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId, users } = yield* seed;
+      const admin = yield* Admin.Admin;
+      const caller = asCaller(adminId);
+      const at = yield* DateTime.now;
+      const banned = yield* admin.banUser(caller, targetId, {
+        until: DateTime.add(at, { hours: 1 }),
+      });
+      assert.isTrue(Users.isSuspendedAt(banned, at));
+      yield* TestClock.adjust(Duration.hours(2));
+      // Still flagged `suspended` in storage, but no longer in force.
+      const later = yield* users.findById(targetId);
+      assert.strictEqual(later.status, "suspended");
+      yield* Users.assertCanSignIn(later);
+
+      const self = yield* admin.banUser(caller, adminId, {}).pipe(Effect.flip);
+      assert.strictEqual(self._tag, "AdminSelfBanRefused");
+      const unknown = yield* admin
+        .banUser(caller, Users.UserId("00000000-0000-0000-0000-000000000000"), {})
+        .pipe(Effect.flip);
+      assert.strictEqual(unknown._tag, "AdminTargetNotFound");
+    }).pipe(Effect.scoped, Effect.provide(buildLayer({ canBanUsers: () => Effect.succeed(true) }))),
+  );
+
+  it.effect("the ban gate sees the target, so a host can protect a superadmin", () =>
+    Effect.gen(function* () {
+      const { adminId, users } = yield* seed;
+      const boss = yield* users.create({
+        identity: { _tag: "Email", email: "root@example.com" },
+        name: "Root",
+      });
+      protectedIds.add(boss.id);
+      const admin = yield* Admin.Admin;
+      const denied = yield* admin.banUser(asCaller(adminId), boss.id, {}).pipe(Effect.flip);
+      assert.strictEqual(denied._tag, "AdminActionDenied");
+      assert.strictEqual((yield* users.findById(boss.id)).status, "active");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        buildLayer({
+          canBanUsers: ({ target }) =>
+            Effect.succeed(
+              Option.match(target, { onNone: () => false, onSome: (t) => !protectedIds.has(t.id) }),
+            ),
+        }),
+      ),
+    ),
   );
 });

@@ -1,10 +1,10 @@
-# ADR-EA-028: Hook Registries Belong to the Composition, and a Tap Requires Its Point
+# ADR-EA-033: Hook Registries Belong to the Composition, and a Tap Requires Its Point
 
 > **Document Control**
 >
 > | Property | Value |
 > |---|---|
-> | Document ID | EFAUTH-ADR-028 |
+> | Document ID | EFAUTH-ADR-033 |
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |

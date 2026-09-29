@@ -22,8 +22,11 @@ describe("Auth.make([Organization])", () => {
           "organization_team_closure",
           "organization_role",
           "organization_active_context",
+          "organization_oauth_connection",
+          "organization_oauth_connection_domain",
         ],
         dependsOn: [],
+        groups: ["organization"],
       },
     ]);
   });

@@ -25,6 +25,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as Accounts from "../src/Accounts.ts";
 import * as Users from "../src/Users.ts";
 
@@ -65,6 +66,22 @@ const userId = Users.UserId("22222222-2222-2222-2222-222222222222");
 
 const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, never>): void => {
   describe(name, () => {
+    it.effect("EOTS-004: error messages never contain the subject, account id or user id", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        yield* accounts.link({ userId, providerId: "google", subject: "subject-in-idp" });
+        const duplicate = yield* accounts
+          .link({ userId, providerId: "google", subject: "subject-in-idp" })
+          .pipe(Effect.flip);
+        assert.notInclude(duplicate.message, "subject-in-idp");
+        const missing = yield* accounts
+          .unlink(Accounts.AccountId("88888888-8888-8888-8888-888888888888"))
+          .pipe(Effect.flip);
+        assert.strictEqual(missing._tag, "AccountNotFound");
+        assert.notInclude(missing.message, "88888888");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BEH-EA-043: (providerId, subject) is unique", () =>
       Effect.gen(function* () {
         const accounts = yield* Accounts.Accounts;
@@ -515,5 +532,37 @@ describe("Accounts (layerSql) undecryptable provider tokens (SMS-002)", () => {
       const healed = yield* accounts.findProviderTokens(account.id);
       assert.strictEqual(Redacted.value(Option.getOrThrow(healed).accessToken), "access");
     }).pipe(Effect.provide(SqlTestLayer)),
+  );
+});
+
+// MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect.
+describe("Accounts infrastructure failures (MA-004)", () => {
+  const DownRepository = Layer.effect(
+    Repositories.AccountsRepository,
+    Effect.gen(function* () {
+      const real = yield* Repositories.AccountsRepository;
+      return {
+        ...real,
+        listByUser: () =>
+          Effect.fail(
+            new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
+          ),
+      };
+    }),
+  ).pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))));
+
+  const DownLayer = Accounts.layerSql.pipe(
+    Layer.provide(DownRepository),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const failure = yield* accounts.listByUser(userId).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+      assert.strictEqual(failure.operation, "Accounts.listByUser");
+    }).pipe(Effect.provide(DownLayer)),
   );
 });

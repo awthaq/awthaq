@@ -23,7 +23,16 @@
 // Firebase import mapping: `role`-shaped claims -> `Roles.assign`; every other custom claim ->
 // `UserClaims.merge`/`set`. See `packages/qadi/README.md`.
 
-import { AuthEvents, AuthPlugin, DataExport, Erasure, Hooks, Migrations, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  DataExport,
+  Defects,
+  Erasure,
+  Hooks,
+  Migrations,
+  Users,
+} from "@awthaq/core";
 import { AttributeResolveError, AttributeResolver } from "@qadi/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -178,7 +187,7 @@ const userClaimsMigrations: Migrations.Migrations = [
             claims TEXT NOT NULL,
             updated TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },

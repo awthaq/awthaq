@@ -13,12 +13,24 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { Authentication, CsrfProtection, RateLimited } from "./Api.ts";
 
+/**
+ * FAMS-002: the wire shape of `@awthaq/core`'s `UserIdentity` — a tagged union,
+ * so a client cannot read a verified flag for an identity kind that has none.
+ * Shared with the admin surface's `UserDto`.
+ */
+export const IdentityDto = Schema.Union([
+  Schema.TaggedStruct("Email", { email: Schema.String, emailVerified: Schema.Boolean }),
+  Schema.TaggedStruct("Phone", { phone: Schema.String, phoneVerified: Schema.Boolean }),
+  Schema.TaggedStruct("Anonymous", {}),
+]);
+export type IdentityDto = typeof IdentityDto.Type;
+
 /** The wire shape of `@awthaq/core`'s `UserRecord`, minus internal ids/timestamps a caller has no use for. */
 export class AccountDto extends Schema.Class<AccountDto>("AccountDto")({
   id: Schema.String,
-  email: Schema.String,
-  emailVerified: Schema.Boolean,
+  identity: IdentityDto,
   name: Schema.String,
+  image: Schema.NullOr(Schema.String),
 }) {}
 
 /**
@@ -30,10 +42,11 @@ export class AccountExportDto extends Schema.Class<AccountExportDto>("AccountExp
   generatedAt: Schema.String,
   user: Schema.Struct({
     id: Schema.String,
-    email: Schema.String,
-    emailVerified: Schema.Boolean,
+    identity: IdentityDto,
     name: Schema.String,
+    image: Schema.NullOr(Schema.String),
     metadata: Schema.NullOr(Schema.String),
+    status: Schema.Literals(["active", "suspended"]),
     createdAt: Schema.String,
     updatedAt: Schema.String,
   }),
@@ -66,7 +79,20 @@ export class AccountExportDto extends Schema.Class<AccountExportDto>("AccountExp
   sections: Schema.Record(Schema.String, Schema.Json),
 }) {}
 
-export const UpdateProfilePayload = Schema.Struct({ name: Schema.String });
+/**
+ * BAM-009/NAM-009: `image` is client-writable like `name`, so it is bounded and
+ * limited to `http(s)` URLs — a stored `javascript:`/`data:` value would be an
+ * XSS vector for any frontend that renders it as a link.
+ */
+export const ImageUrl = Schema.String.check(
+  Schema.isMaxLength(2048),
+  Schema.isPattern(/^https?:\/\//i),
+);
+
+export const UpdateProfilePayload = Schema.Struct({
+  name: Schema.String,
+  image: Schema.optional(Schema.NullOr(ImageUrl)),
+});
 export type UpdateProfilePayload = typeof UpdateProfilePayload.Type;
 
 export const AccountGroup = HttpApiGroup.make("account")

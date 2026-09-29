@@ -10,7 +10,7 @@
 // commit together (BEH-EA-058). Every paginated query takes an opaque
 // `(createdAt, id)` cursor, never an offset (BEH-EA-036).
 
-import { Encryption } from "@awthaq/ports";
+import { Encryption, Tenant } from "@awthaq/ports";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -73,6 +73,23 @@ const traced = (name: string, attributes?: Record<string, unknown>) =>
   Effect.withSpan(name, attributes === undefined ? {} : { attributes }, {
     captureStackTrace: false,
   });
+
+// ---- Tenant attribution (DRS-001, ADR-EA-018) --------------------------------------
+
+/**
+ * Every insert path funnels through here: an explicit `tenantId` on the input
+ * wins, otherwise the ambient `TenantContext`, otherwise `NULL` — so a
+ * single-tenant deployment (nothing provides the context) writes exactly what
+ * it wrote before the column existed. Core service signatures do not change;
+ * the repositories are the one choke point a caller cannot forget.
+ */
+const stampTenant = <A extends { readonly tenantId: string | null }>(input: A): Effect.Effect<A> =>
+  input.tenantId !== null
+    ? Effect.succeed(input)
+    : Effect.map(Tenant.TenantContext, (tenant) => ({
+        ...input,
+        tenantId: Option.getOrNull(tenant),
+      }));
 
 // ---- Opt-in PII column encryption (CSG-006, option B) -------------------------------
 
@@ -152,10 +169,33 @@ export interface UsersRepositoryShape {
   readonly models: SqlModels;
   readonly insert: (input: UserInsert) => Effect.Effect<User, RepositoryError>;
   readonly update: (input: UserUpdate) => Effect.Effect<User, RepositoryError>;
+  /**
+   * GC-004: one `UPDATE ... RETURNING *` on `name`, and on `metadata`/`image` when given (`null`
+   * clears, `undefined` leaves the column), so a row deleted since the caller last read it is
+   * `None` — not the defect the generic `update` reports it as — and no other column is rewritten
+   * from a stale read.
+   */
+  readonly updateProfile: (input: {
+    readonly id: UserId;
+    readonly name: string;
+    readonly metadata: string | null | undefined;
+    readonly image: string | null | undefined;
+  }) => Effect.Effect<Option.Option<User>, RepositoryError>;
   readonly findById: (
     id: UserId,
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
   readonly findByEmail: (email: string) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /** FAMS-002: `phone` is compared as stored (callers normalize to E.164 first). */
+  readonly findByPhone: (phone: string) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /**
+   * SCP-003: `INSERT ... ON CONFLICT DO NOTHING RETURNING *` — `None` when any
+   * unique index (email, phone) already holds the value. Unlike `insert` +
+   * catching `UniqueViolation`, this does not abort an enclosing Postgres
+   * transaction, so an idempotent import can keep going after a duplicate.
+   */
+  readonly insertIfAbsent: (
+    input: UserInsert,
+  ) => Effect.Effect<Option.Option<User>, RepositoryError>;
   /**
    * BEH-EA-042: `emailVerified` is excluded from `update`/`jsonUpdate` (see
    * `Models.ts`), so flipping it needs its own repository operation rather
@@ -163,6 +203,39 @@ export interface UsersRepositoryShape {
    */
   readonly verifyEmail: (
     id: UserId,
+  ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
+  /** FAMS-002: `phoneVerified`'s only writer, mirroring `verifyEmail`. */
+  readonly verifyPhone: (
+    id: UserId,
+  ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
+  /**
+   * FAMS-002: sets an identity on a row that has none (an Anonymous user) —
+   * `None` when the row is missing *or already has an email/phone*. A duplicate
+   * surfaces as `SqlError`'s `UniqueViolation`.
+   */
+  readonly promoteIdentity: (
+    id: UserId,
+    identity:
+      | { readonly _tag: "Email"; readonly email: string }
+      | { readonly _tag: "Phone"; readonly phone: string },
+  ) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /**
+   * BAM-009: replaces an email and clears `emailVerified` in one statement —
+   * the only write that may lower it. `None` when the row is missing or has no
+   * email identity.
+   */
+  readonly changeEmail: (
+    id: UserId,
+    email: string,
+  ) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /** SCP-001: `status`, its reason and expiry have no other writer. */
+  readonly setStatus: (
+    id: UserId,
+    state: {
+      readonly status: "active" | "suspended";
+      readonly reason: string | null;
+      readonly until: DateTime.Utc | null;
+    },
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
   readonly delete: (id: UserId) => Effect.Effect<void, RepositoryError>;
   /**
@@ -229,7 +302,9 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
 
     const insert: UsersRepositoryShape["insert"] = (input) =>
       concealMetadata(input.id, input.metadata).pipe(
-        Effect.flatMap((metadata) => repo.insert({ ...input, metadata })),
+        Effect.flatMap((metadata) =>
+          Effect.flatMap(stampTenant(input), (stamped) => repo.insert({ ...stamped, metadata })),
+        ),
         Effect.flatMap(revealUser),
       );
 
@@ -262,6 +337,43 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
           }),
         ),
         traced("Users.findByEmail"),
+      );
+
+    const findByPhoneQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: models.User,
+      execute: (phone) => sql`SELECT * FROM users WHERE phone = ${phone}`,
+    });
+
+    const findByPhone: UsersRepositoryShape["findByPhone"] = (phone) =>
+      findByPhoneQuery(phone).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
+          }),
+        ),
+        traced("Users.findByPhone"),
+      );
+
+    const insertIfAbsentQuery = SqlSchema.findAll({
+      Request: models.User.insert,
+      Result: models.User,
+      execute: (request) =>
+        sql`INSERT INTO users ${sql.insert(request)} ON CONFLICT DO NOTHING RETURNING *`,
+    });
+
+    const insertIfAbsent: UsersRepositoryShape["insertIfAbsent"] = (input) =>
+      concealMetadata(input.id, input.metadata).pipe(
+        Effect.flatMap((metadata) =>
+          Effect.flatMap(stampTenant(input), (stamped) =>
+            insertIfAbsentQuery({ ...stamped, metadata }),
+          ),
+        ),
+        Effect.flatMap(([row]) =>
+          row === undefined ? Effect.succeedNone : revealUser(row).pipe(Effect.map(Option.some)),
+        ),
+        traced("Users.insertIfAbsent"),
       );
 
     const usersPage = SqlSchema.findAll({
@@ -308,6 +420,44 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
       );
     };
 
+    // GC-004: `metadata`/`image` are each rewritten only when the caller supplied them; the flags
+    // bind through the dialect's boolean codec like `verified` below, and `metadata` is sealed
+    // (encrypted variant) only when it is set.
+    const updateProfileQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        name: Schema.String,
+        setMetadata: models.wire.boolean,
+        metadata: Schema.NullOr(Schema.String),
+        setImage: models.wire.boolean,
+        image: Schema.NullOr(Schema.String),
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET name = ${r.name}, metadata = CASE WHEN ${r.setMetadata} THEN ${r.metadata} ELSE metadata END, image = CASE WHEN ${r.setImage} THEN ${r.image} ELSE image END, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
+    });
+
+    const updateProfile: UsersRepositoryShape["updateProfile"] = (input) =>
+      Effect.gen(function* () {
+        const updatedAt = yield* DateTime.now;
+        const metadata =
+          input.metadata === undefined ? null : yield* concealMetadata(input.id, input.metadata);
+        const row = yield* updateProfileQuery({
+          id: input.id,
+          name: input.name,
+          setMetadata: input.metadata !== undefined,
+          metadata,
+          setImage: input.image !== undefined,
+          image: input.image ?? null,
+          updatedAt,
+        });
+        return yield* Option.match(row, {
+          onNone: () => Effect.succeedNone,
+          onSome: (updated) => revealUser(updated).pipe(Effect.map(Option.some)),
+        });
+      }).pipe(traced("Users.updateProfile", { id: input.id }));
+
     // PPS-007: one `UPDATE ... RETURNING *`, decoded through the dialect
     // model. The boolean binds through the dialect's own wire codec (`TRUE`
     // on pg, `1` on SQLite), so there is no per-dialect literal branch (TS-002).
@@ -329,6 +479,110 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         traced("Users.verifyEmail", { id }),
       );
 
+    const verifyPhoneQuery = SqlSchema.findOne({
+      Request: Schema.Struct({
+        id: UserId,
+        verified: models.wire.boolean,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET "phoneVerified" = ${r.verified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
+    });
+
+    const verifyPhone: UsersRepositoryShape["verifyPhone"] = (id) =>
+      DateTime.now.pipe(
+        Effect.flatMap((updatedAt) => verifyPhoneQuery({ id, verified: true, updatedAt })),
+        Effect.flatMap(revealUser),
+        traced("Users.verifyPhone", { id }),
+      );
+
+    // Both promote statements guard on "no identity yet" in the WHERE clause,
+    // so two racing promotions cannot both win.
+    const promoteEmailQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        email: Schema.String,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET email = ${r.email}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NULL AND phone IS NULL RETURNING *`,
+    });
+
+    const promotePhoneQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        phone: Schema.String,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET phone = ${r.phone}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NULL AND phone IS NULL RETURNING *`,
+    });
+
+    const promoteIdentity: UsersRepositoryShape["promoteIdentity"] = (id, identity) =>
+      DateTime.now.pipe(
+        Effect.flatMap((updatedAt) =>
+          identity._tag === "Email"
+            ? promoteEmailQuery({ id, email: identity.email, updatedAt })
+            : promotePhoneQuery({ id, phone: identity.phone, updatedAt }),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
+          }),
+        ),
+        traced("Users.promoteIdentity", { id }),
+      );
+
+    const changeEmailQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        email: Schema.String,
+        unverified: models.wire.boolean,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET email = ${r.email}, "emailVerified" = ${r.unverified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NOT NULL RETURNING *`,
+    });
+
+    const changeEmail: UsersRepositoryShape["changeEmail"] = (id, email) =>
+      DateTime.now.pipe(
+        Effect.flatMap((updatedAt) =>
+          changeEmailQuery({ id, email, unverified: false, updatedAt }),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
+          }),
+        ),
+        traced("Users.changeEmail", { id }),
+      );
+
+    const setStatusQuery = SqlSchema.findOne({
+      Request: Schema.Struct({
+        id: UserId,
+        status: Schema.Literals(["active", "suspended"]),
+        reason: Schema.NullOr(Schema.String),
+        until: models.wire.nullableDateTime,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET status = ${r.status}, "statusReason" = ${r.reason}, "suspendedUntil" = ${r.until}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
+    });
+
+    const setStatus: UsersRepositoryShape["setStatus"] = (id, state) =>
+      DateTime.now.pipe(
+        Effect.flatMap((updatedAt) => setStatusQuery({ id, ...state, updatedAt })),
+        Effect.flatMap(revealUser),
+        traced("Users.setStatus", { id }),
+      );
+
     return {
       models,
       insert,
@@ -336,7 +590,14 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
       findById,
       delete: repo.delete,
       findByEmail,
+      findByPhone,
+      insertIfAbsent,
+      updateProfile,
       verifyEmail,
+      verifyPhone,
+      promoteIdentity,
+      changeEmail,
+      setStatus,
       listPage,
     };
   });
@@ -671,7 +932,8 @@ export const AccountsRepositoryLive: Layer.Layer<
           "idToken",
           input.idToken,
         );
-        const row = yield* repo.insert({ ...input, accessToken, refreshToken, idToken });
+        const stamped = yield* stampTenant(input);
+        const row = yield* repo.insert({ ...stamped, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
 
@@ -1059,7 +1321,15 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
 
     const insert: SessionsRepositoryShape["insert"] = (input) =>
       concealPii(input.id, input).pipe(
-        Effect.flatMap((columns) => repo.insert({ ...input, ...columns })),
+        Effect.flatMap((columns) =>
+          Effect.flatMap(stampTenant(input), (stamped) =>
+            repo.insert({
+              ...stamped,
+              ipAddress: columns.ipAddress,
+              userAgent: columns.userAgent,
+            }),
+          ),
+        ),
         Effect.flatMap(revealSession),
       );
 
@@ -1460,6 +1730,7 @@ export const VerificationRepositoryLive: Layer.Layer<
         id: VerificationTokenId,
         identifier: Schema.String,
         userId: Schema.NullOr(UserId),
+        tenantId: Schema.NullOr(Schema.String),
         valueHash: Schema.String,
         expiresAt: models.wire.dateTime,
         createdAt: models.wire.dateTime,
@@ -1467,12 +1738,13 @@ export const VerificationRepositoryLive: Layer.Layer<
       }),
       Result: models.VerificationToken,
       execute: (request) => sql`
-        INSERT INTO verification_tokens (id, identifier, "userId", "valueHash", "expiresAt", "consumedAt", "createdAt", payload)
-        VALUES (${request.id}, ${request.identifier}, ${request.userId}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload})
+        INSERT INTO verification_tokens (id, identifier, "userId", "tenantId", "valueHash", "expiresAt", "consumedAt", "createdAt", payload)
+        VALUES (${request.id}, ${request.identifier}, ${request.userId}, ${request.tenantId}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload})
         ON CONFLICT(identifier) WHERE "consumedAt" IS NULL
         DO UPDATE SET
           id = excluded.id,
           "userId" = excluded."userId",
+          "tenantId" = excluded."tenantId",
           "valueHash" = excluded."valueHash",
           "expiresAt" = excluded."expiresAt",
           "createdAt" = excluded."createdAt",
@@ -1483,7 +1755,10 @@ export const VerificationRepositoryLive: Layer.Layer<
     });
 
     const upsertLive: VerificationRepositoryShape["upsertLive"] = (input) =>
-      upsertLiveQuery(input).pipe(traced("VerificationTokens.upsertLive", { id: input.id }));
+      Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+        Effect.flatMap((tenantId) => upsertLiveQuery({ ...input, tenantId })),
+        traced("VerificationTokens.upsertLive", { id: input.id }),
+      );
 
     const deleteAllByUser: VerificationRepositoryShape["deleteAllByUser"] = (userId) =>
       sql`DELETE FROM verification_tokens WHERE "userId" = ${userId}`.pipe(
@@ -1537,7 +1812,7 @@ export const VerificationRepositoryLive: Layer.Layer<
 
     return {
       models,
-      insert: repo.insert,
+      insert: (input) => Effect.flatMap(stampTenant(input), repo.insert),
       update: repo.update,
       findById: repo.findById,
       delete: repo.delete,
@@ -1603,21 +1878,26 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
     const attempt = SqlSchema.findOneOption({
       Request: Schema.Struct({
         identifier: Schema.String,
+        tenantId: Schema.NullOr(Schema.String),
         expiresAt: models.wire.dateTime,
         now: models.wire.dateTime,
       }),
       Result: models.VerificationReservation,
       execute: (request) => sql`
-        INSERT INTO verification_reservations (identifier, "expiresAt")
-        VALUES (${request.identifier}, ${request.expiresAt})
-        ON CONFLICT(identifier) DO UPDATE SET "expiresAt" = excluded."expiresAt"
+        INSERT INTO verification_reservations (identifier, "tenantId", "expiresAt")
+        VALUES (${request.identifier}, ${request.tenantId}, ${request.expiresAt})
+        ON CONFLICT(identifier) DO UPDATE SET "expiresAt" = excluded."expiresAt", "tenantId" = excluded."tenantId"
         WHERE verification_reservations."expiresAt" < ${request.now}
         RETURNING *
       `,
     });
 
     const claim: VerificationReservationsRepositoryShape["claim"] = (input) =>
-      attempt(input).pipe(Effect.map(Option.isSome), traced("VerificationReservations.claim"));
+      Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+        Effect.flatMap((tenantId) => attempt({ ...input, tenantId })),
+        Effect.map(Option.isSome),
+        traced("VerificationReservations.claim"),
+      );
 
     const deleteExpiredQuery = SqlSchema.findAll({
       Request: Schema.Struct({ cutoff: models.wire.dateTime, limit: Schema.Number }),
@@ -1716,7 +1996,7 @@ export interface AuditLogRepositoryShape {
    * ALF-010: retention. Deletes up to `limit` rows that occurred before `cutoff`
    * — only those whose tag is in `eventTags` when it is given, and never those in
    * `exceptTags` — and resolves to how many went. The `occurredAt` index
-   * (core migration 21) serves the range.
+   * (core migration 26) serves the range.
    */
   readonly deleteOccurredBefore: (input: {
     readonly cutoff: DateTime.Utc;
@@ -1743,14 +2023,15 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
           id: Schema.String,
           eventTag: Schema.String,
           actorUserId: Schema.NullOr(Schema.String),
+          tenantId: Schema.NullOr(Schema.String),
           occurredAt: models.wire.dateTime,
           correlationId: Schema.NullOr(Schema.String),
           payload: Schema.fromJsonString(Schema.Unknown),
         }),
         Result: models.AuditLogRow,
         execute: (r) => sql`
-        INSERT INTO auth_audit_log (id, "eventTag", "actorUserId", "occurredAt", "correlationId", payload)
-        VALUES (${r.id}, ${r.eventTag}, ${r.actorUserId}, ${r.occurredAt}, ${r.correlationId}, ${r.payload})
+        INSERT INTO auth_audit_log (id, "eventTag", "actorUserId", "tenantId", "occurredAt", "correlationId", payload)
+        VALUES (${r.id}, ${r.eventTag}, ${r.actorUserId}, ${r.tenantId}, ${r.occurredAt}, ${r.correlationId}, ${r.payload})
         RETURNING *
       `,
       });
@@ -1848,7 +2129,8 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
         );
 
       const insert: AuditLogRepositoryShape["insert"] = (input) =>
-        insertQuery(input).pipe(
+        Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+          Effect.flatMap((tenantId) => insertQuery({ ...input, tenantId })),
           traced("AuditLog.insert", { id: input.id, eventTag: input.eventTag }),
         );
 

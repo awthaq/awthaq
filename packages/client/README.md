@@ -81,6 +81,40 @@ it. On the typed `Unauthenticated` error, re-authenticate and `store.set` a fres
 token. Keep `set-auth-token` intact through proxies, expose it via CORS if
 cross-origin, and never log it.
 
+### Getting the first token
+
+The transform also sends `X-Awthaq-Token-Delivery: bearer` on every request. That
+header is what makes a session-minting response (password sign-up/sign-in/change-password,
+passkey authenticate, `POST /oauth/token`) return the session token in its body's `token`
+field instead of setting a cookie your app has no jar for. `captureSessionToken` puts it
+in the store:
+
+```ts
+import { AuthClient } from "@awthaq/client";
+import * as Effect from "effect/Effect";
+import { auth } from "./auth.ts";
+
+const signIn = (email: string, password: string) =>
+  Effect.gen(function* () {
+    const store = yield* AuthClient.BearerTokenStore;
+    const client = yield* AuthClient.make(auth.api, {
+      baseUrl: "https://auth.example.com",
+      transformClient: AuthClient.bearerTransformClient(store),
+    });
+    // The response carries `token`; captureSessionToken stores it, the next call is authenticated.
+    return yield* AuthClient.captureSessionToken(
+      client.password.signIn({ payload: { email, password } }),
+    );
+  });
+```
+
+### React Native / Expo recipe
+
+1. Implement `BearerTokenStore` over the Keychain/Keystore (`expo-secure-store`, `react-native-keychain`): `get`, `set` and `clear` read and write one secret string. Where the token lives on the device is your app's responsibility; the library ships only the wire contract, and plain app storage is not an acceptable place for a session token.
+2. Build the client with `make(api, { baseUrl, transformClient: bearerTransformClient(store) })` and provide your store `Layer`.
+3. Sign in with `captureSessionToken(...)`. For OAuth, open `https://auth.example.com/oauth/<provider>/authorize?mode=native&callbackURL=myapp://oauth/callback&code_challenge=<S256>` in `ASWebAuthenticationSession`/Custom Tabs, take `code` from the returned deep link, and redeem it with `POST /oauth/token` (`{ code, codeVerifier }`) through `captureSessionToken`; see `@awthaq/oauth`'s README.
+4. CSRF: a bearer client has no `__Host-csrf` cookie to echo before it holds a token, so its *first* mutating call (sign-in) is still checked (the `{ csrf: false }` contract variant is unbuilt). Requests that carry `Authorization` are exempt. If your runtime cannot read `Set-Cookie`, sign in from a browser-capable step (a web view) or through the OAuth native flow, whose `POST /oauth/token` is outside CSRF protection by design.
+
 ## Errors as data: `ErrorCodes`
 
 `AuthClient.ErrorCodes<typeof auth.api>` is the set of `_tag` literals your i18n

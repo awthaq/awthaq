@@ -46,7 +46,7 @@ describe("PasskeyClientError.fromCeremonyFailure", () => {
       new DOMException("already registered", "InvalidStateError"),
     );
     const classified = PasskeyClientError.fromCeremonyFailure(error);
-    assert.strictEqual(classified._tag, "PasskeyAlreadyRegistered");
+    assert.strictEqual(classified._tag, "PasskeyClient/AlreadyRegistered");
   });
 
   it("an unclassified WebAuthnError code (e.g. ERROR_INVALID_DOMAIN) falls back to PasskeyCeremonyFailed with the original error as cause", () => {
@@ -96,7 +96,7 @@ describe("PasskeyClientError.fromCeremonyFailure", () => {
     const classified = PasskeyClientError.fromCeremonyFailure(
       new DOMException("already registered", "InvalidStateError"),
     );
-    assert.strictEqual(classified._tag, "PasskeyAlreadyRegistered");
+    assert.strictEqual(classified._tag, "PasskeyClient/AlreadyRegistered");
   });
 
   it("an arbitrary error classifies as PasskeyCeremonyFailed with the original error as cause", () => {

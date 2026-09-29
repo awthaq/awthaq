@@ -70,13 +70,13 @@ export class TeamRecordNotFound extends Data.TaggedError("TeamRecordNotFound")<{
 }> {}
 
 /** OHS-001: a move would place a team under itself or one of its own descendants. */
-export class TeamHierarchyCycle extends Data.TaggedError("TeamHierarchyCycle")<{
+export class TeamHierarchyCycle extends Data.TaggedError("TeamRecords/HierarchyCycle")<{
   readonly id: string;
   readonly parentId: string;
 }> {}
 
 /** OHS-001: a team that still has child teams cannot be removed; move or remove them first. */
-export class TeamHasChildren extends Data.TaggedError("TeamHasChildren")<{
+export class TeamHasChildren extends Data.TaggedError("TeamRecords/HasChildren")<{
   readonly id: string;
 }> {}
 
@@ -188,6 +188,7 @@ export interface TeamRecordsShape {
    * being erased), decrementing each `memberCount`. Idempotent; atomic under `layerSql`.
    */
   readonly removeUserFromAllTeams: (userId: Users.UserId) => Effect.Effect<void>;
+  /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findTeamMembership: (
     teamId: string,
     userId: Users.UserId,

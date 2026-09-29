@@ -19,7 +19,7 @@
 // `RateLimiter.layer` turns into fail-open (default) or reject — the store
 // never fails a request itself.
 
-import { RateLimiter } from "@awthaq/ports";
+import { Defects, RateLimiter } from "@awthaq/ports";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -57,7 +57,7 @@ export const migrations: Migrator.Loader<never> = Effect.succeed([
               hit_count INTEGER NOT NULL,
               reset_at_ms INTEGER NOT NULL
             )`,
-          orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+          orElse: () => Defects.unsupportedDialect("migrations"),
         });
       }),
     ),

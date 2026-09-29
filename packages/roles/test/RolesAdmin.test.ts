@@ -2,7 +2,7 @@
 // `RequirePermission` consumer in the repo: nothing here checks a permission by hand — a
 // subject without `roles:manage` is refused by the guard before the handler runs.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Sessions, Slots, Users } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -41,6 +41,8 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  // MA-005: `Roles.layer` (built here, not through `Auth.make`) needs a `SlotsRegistry`.
+  Layer.provideMerge(Slots.layer),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );

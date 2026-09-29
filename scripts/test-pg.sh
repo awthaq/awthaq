@@ -18,13 +18,17 @@
 set -euo pipefail
 
 suites=(
+  packages/cli/test/Migration.postgres.test.ts
   packages/sql/test/Repositories.postgres.test.ts
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
+  packages/core/test/Users.test.ts
+  packages/core/test/UserImport.test.ts
   packages/jwt/test/KeyRing.test.ts
   packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
   packages/organization/test/ActiveContextRecords.test.ts
+  packages/organization/test/ConnectionRecords.test.ts
   packages/organization/test/InvitationRecords.test.ts
   packages/organization/test/MembershipRecords.test.ts
   packages/organization/test/OrgRoleRecords.test.ts
@@ -35,6 +39,7 @@ suites=(
   packages/passkey/test/PasskeyCredentials.test.ts
   packages/passkey/test/PasskeyUserHandle.test.ts
   packages/qadi/test/UserClaims.test.ts
+  packages/scim/test/ScimRecords.test.ts
   packages/roles/test/RolesSql.test.ts
 )
 

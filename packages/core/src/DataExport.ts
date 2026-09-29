@@ -32,8 +32,9 @@ import { Accounts } from "./Accounts.ts";
 import { AuditLog } from "./AuditLog.ts";
 import { AuthEvents } from "./AuthEvents.ts";
 import { DataExportRegistry, type ExportSection } from "./DataExportRegistry.ts";
+import type { StoreUnavailable } from "./Errors.ts";
 import { Sessions } from "./Sessions.ts";
-import { Users, type UserId, type UserNotFound } from "./Users.ts";
+import { emailOf, Users, type UserId, type UserIdentity, type UserNotFound } from "./Users.ts";
 
 export * from "./DataExportRegistry.ts";
 
@@ -41,10 +42,15 @@ export interface AccountExportDocument {
   readonly generatedAt: string;
   readonly user: {
     readonly id: string;
-    readonly email: string;
-    readonly emailVerified: boolean;
+    /** FAMS-002: how the person is known: an email, a phone number or neither, each with its verified flag. */
+    readonly identity:
+      | { readonly _tag: "Email"; readonly email: string; readonly emailVerified: boolean }
+      | { readonly _tag: "Phone"; readonly phone: string; readonly phoneVerified: boolean }
+      | { readonly _tag: "Anonymous" };
     readonly name: string;
+    readonly image: string | null;
     readonly metadata: string | null;
+    readonly status: "active" | "suspended";
     readonly createdAt: string;
     readonly updatedAt: string;
   };
@@ -81,7 +87,7 @@ export interface AccountExportShape {
   readonly exportAccount: (
     userId: UserId,
     options?: { readonly requestedBy?: "self" | "admin" },
-  ) => Effect.Effect<AccountExportDocument, UserNotFound>;
+  ) => Effect.Effect<AccountExportDocument, UserNotFound | StoreUnavailable>;
 }
 
 export class AccountExport extends Context.Service<AccountExport, AccountExportShape>()(
@@ -89,6 +95,17 @@ export class AccountExport extends Context.Service<AccountExport, AccountExportS
 ) {}
 
 const iso = (value: DateTime.Utc): string => DateTime.formatIso(value);
+
+const identityOf = (identity: UserIdentity): AccountExportDocument["user"]["identity"] => {
+  switch (identity._tag) {
+    case "Email":
+      return { _tag: "Email", email: identity.email, emailVerified: identity.emailVerified };
+    case "Phone":
+      return { _tag: "Phone", phone: identity.phone, phoneVerified: identity.phoneVerified };
+    case "Anonymous":
+      return { _tag: "Anonymous" };
+  }
+};
 
 export const layer = Layer.effect(
   AccountExport,
@@ -103,7 +120,7 @@ export const layer = Layer.effect(
     const exportAccount: AccountExportShape["exportAccount"] = (userId, options) =>
       Effect.gen(function* () {
         const user = yield* users.findById(userId);
-        const subject = { userId, email: user.email };
+        const subject = { userId, email: Option.getOrUndefined(emailOf(user)) };
         const linked = yield* accounts.listByUser(userId);
         const live = yield* sessions.list(userId);
         // Newest first, as `AuditLog.list` orders; the person's own trail, no one else's.
@@ -116,10 +133,11 @@ export const layer = Layer.effect(
           generatedAt: iso(yield* DateTime.now),
           user: {
             id: user.id,
-            email: user.email,
-            emailVerified: user.emailVerified,
+            identity: identityOf(user.identity),
             name: user.name,
+            image: Option.getOrNull(user.image),
             metadata: Option.getOrNull(user.metadata),
+            status: user.status,
             createdAt: iso(user.createdAt),
             updatedAt: iso(user.updatedAt),
           },

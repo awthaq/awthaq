@@ -10,6 +10,7 @@
 // noise) and drive the real queries and mutations through `Providers`:
 // anonymous first load, a session-keyed mutation flipping the subject without
 // a remount, the sign-out window, failure reporting, and focus revalidation.
+import * as DateTime from "effect/DateTime";
 import { SessionContract, SubjectContract } from "@awthaq/api";
 import { useAtomSet, useAtomValue } from "@effect/atom-react/Hooks";
 import { assert, describe, it } from "@effect/vitest";
@@ -41,9 +42,9 @@ const atoms = makeQadiAtoms(EvaluationServicesNone);
 const sessionDto = (id: string) =>
   new SessionContract.SessionDto({
     id,
-    createdAt: "2024-01-01T00:00:00.000Z",
-    lastActiveAt: "2024-01-01T00:00:00.000Z",
-    expiresAt: "2024-02-01T00:00:00.000Z",
+    createdAt: DateTime.makeUnsafe("2024-01-01T00:00:00.000Z"),
+    lastActiveAt: DateTime.makeUnsafe("2024-01-01T00:00:00.000Z"),
+    expiresAt: DateTime.makeUnsafe("2024-02-01T00:00:00.000Z"),
     userAgent: null,
     current: true,
   });

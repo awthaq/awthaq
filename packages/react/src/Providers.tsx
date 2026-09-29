@@ -107,10 +107,14 @@ const decodeSeeds = (
   initialSession: SessionSeed | undefined,
   initialSubject: SubjectSeed | undefined,
 ) => {
+  // MW-008: an instance already holds `DateTime.Utc` timestamps, which the encoded-side decode
+  // (ISO strings) would refuse; only the encoded plain-object seed needs decoding.
   const session =
     initialSession === undefined
       ? undefined
-      : Schema.decodeUnknownExit(SessionContract.SessionDto)(initialSession);
+      : initialSession instanceof SessionContract.SessionDto
+        ? Exit.succeed(initialSession)
+        : Schema.decodeUnknownExit(SessionContract.SessionDto)(initialSession);
   const subject =
     initialSubject === undefined
       ? undefined

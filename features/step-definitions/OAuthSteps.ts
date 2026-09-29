@@ -107,17 +107,14 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
-  Then(
-    "the callback fails with the typed denial {string}",
-    function* (error: string) {
-      const failure = (yield* getOutcome("denial")) as {
-        readonly _tag: string;
-        readonly error?: string;
-      };
-      assert.strictEqual(failure._tag, "OAuthAuthorizationDenied");
-      assert.strictEqual(failure.error, error);
-    },
-  );
+  Then("the callback fails with the typed denial {string}", function* (error: string) {
+    const failure = (yield* getOutcome("denial")) as {
+      readonly _tag: string;
+      readonly error?: string;
+    };
+    assert.strictEqual(failure._tag, "OAuthAuthorizationDenied");
+    assert.strictEqual(failure.error, error);
+  });
 
   Then(
     "the flow is consumed, so a replay carrying a code fails",
@@ -313,7 +310,9 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (email: string, _providerId: string) {
       const users = yield* usersService();
       const accounts = yield* accountsService();
-      const user = yield* users.create({ email, name: "Alice" }).pipe(Effect.orDie);
+      const user = yield* users
+        .create({ identity: { _tag: "Email", email }, name: "Alice" })
+        .pipe(Effect.orDie);
       // NAM-006: `AccountExists` reports the providers the account really
       // has, so this account is a real password account, not a bare user row.
       yield* accounts
@@ -356,7 +355,9 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       // World, so REQ-EA-335's setup is reproduced here rather than shared.
       yield* configure({ providers: [google()], linking: "explicit", httpRoutes: googleRoutes });
       const users = yield* usersService();
-      yield* users.create({ email: "alice@example.com", name: "Alice" }).pipe(Effect.orDie);
+      yield* users
+        .create({ identity: { _tag: "Email", email: "alice@example.com" }, name: "Alice" })
+        .pipe(Effect.orDie);
       const oauth = yield* oauthService();
       const { state } = yield* oauth.authorize("google", {
         callbackURL: undefined,
@@ -395,7 +396,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       });
       const users = yield* usersService();
       const user = yield* users
-        .create({ email: "alice-link@example.com", name })
+        .create({ identity: { _tag: "Email", email: "alice-link@example.com" }, name })
         .pipe(Effect.orDie);
       yield* setOutcome("linkUserId", user.id);
     }),
@@ -438,7 +439,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (providerId: string) {
       const users = yield* usersService();
       const alice = yield* users
-        .create({ email: "alice@example.com", name: "Alice" })
+        .create({ identity: { _tag: "Email", email: "alice@example.com" }, name: "Alice" })
         .pipe(Effect.orDie);
       // TMS-007: the local account's own email is proven, so only the
       // provider-trust policy decides whether this links.
@@ -451,7 +452,9 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     "a {string} callback whose verified email matches an existing, unlinked account whose own email is unverified",
     function* (providerId: string) {
       const users = yield* usersService();
-      yield* users.create({ email: "alice@example.com", name: "Alice" }).pipe(Effect.orDie);
+      yield* users
+        .create({ identity: { _tag: "Email", email: "alice@example.com" }, name: "Alice" })
+        .pipe(Effect.orDie);
       yield* setOutcome("trustedProvider", providerId);
     },
   );
@@ -530,7 +533,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     const accounts = yield* accountsService();
     const users = yield* usersService();
     const user = yield* users
-      .create({ email: "okta-user@example.com", name: "Okta" })
+      .create({ identity: { _tag: "Email", email: "okta-user@example.com" }, name: "Okta" })
       .pipe(Effect.orDie);
     const providerId = (yield* getOutcome("provider")) as string;
     const subject = (yield* getOutcome("subject")) as string;
@@ -555,7 +558,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     const accounts = yield* accountsService();
     const users = yield* usersService();
     const user = yield* users
-      .create({ email: "okta-dup@example.com", name: "Okta" })
+      .create({ identity: { _tag: "Email", email: "okta-dup@example.com" }, name: "Okta" })
       .pipe(Effect.orDie);
     yield* accounts.link({ userId: user.id, providerId, subject, issuer }).pipe(Effect.orDie);
     yield* setOutcome("provider", providerId);
@@ -578,7 +581,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       const accounts = yield* accountsService();
       const users = yield* usersService();
       const user = yield* users
-        .create({ email: "okta-dup@example.com", name: "Okta" })
+        .create({ identity: { _tag: "Email", email: "okta-dup@example.com" }, name: "Okta" })
         .pipe(Effect.orDie);
       yield* accounts.link({ userId: user.id, providerId, subject, issuer }).pipe(Effect.orDie);
       yield* setOutcome("provider", providerId);
@@ -646,8 +649,12 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configure({ providers: [google()] });
       const accounts = yield* accountsService();
       const users = yield* usersService();
-      const userA = yield* users.create({ email: `a-${email}`, name: "A" }).pipe(Effect.orDie);
-      const userB = yield* users.create({ email: `b-${email}`, name: "B" }).pipe(Effect.orDie);
+      const userA = yield* users
+        .create({ identity: { _tag: "Email", email: `a-${email}` }, name: "A" })
+        .pipe(Effect.orDie);
+      const userB = yield* users
+        .create({ identity: { _tag: "Email", email: `b-${email}` }, name: "B" })
+        .pipe(Effect.orDie);
       yield* accounts.link({ userId: userA.id, providerId, subject: "sub-a" }).pipe(Effect.orDie);
       yield* accounts.link({ userId: userB.id, providerId, subject: "sub-b" }).pipe(Effect.orDie);
       yield* setOutcome("emailProvider", providerId);
@@ -889,6 +896,64 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("the callback is not treated as authorizing an arbitrary redirect target", function* () {
     yield* Effect.void;
   });
+
+  // ---- MNA-003/MNA-004: the native return leg ----
+
+  Given("a native redirect allowlist including {string}", function* (deepLink: string) {
+    yield* configure({
+      providers: [google()],
+      nativeRedirectURLs: [deepLink],
+      httpRoutes: {
+        "/token": { access_token: "at-1" },
+        "/userinfo": { id: "native-sub", email: "native@example.com" },
+      },
+    });
+  });
+
+  When(
+    "a native-mode sign-in request specifies {string}",
+    Effect.fn(function* (queryParam: string) {
+      const callbackURL = queryParam.split("callbackURL=")[1];
+      const oauth = yield* oauthService();
+      const { state } = yield* oauth.authorize("google", {
+        callbackURL,
+        link: undefined,
+        native: {},
+      });
+      const outcome = yield* oauth.callback("google", {
+        code: "auth-code",
+        state,
+        iss: undefined,
+        cookieState: state,
+      });
+      yield* setOutcome("nativeOutcome", outcome);
+    }),
+  );
+
+  Then(
+    "the post-login redirect to {string} carries a one-time exchange code and no session",
+    function* (deepLink: string) {
+      const outcome = (yield* getOutcome("nativeOutcome")) as {
+        readonly callbackURL: string;
+        readonly session: unknown;
+      };
+      assert.ok(outcome.callbackURL.startsWith(`${deepLink}?code=`));
+      assert.strictEqual(outcome.session, undefined);
+    },
+  );
+
+  Then(
+    "redeeming that code returns a session token exactly once",
+    Effect.fn(function* () {
+      const outcome = (yield* getOutcome("nativeOutcome")) as { readonly callbackURL: string };
+      const code = URL.parse(outcome.callbackURL)?.searchParams.get("code") ?? "";
+      const oauth = yield* oauthService();
+      const redeemed = yield* oauth.exchange({ code });
+      assert.ok(typeof redeemed.token === "string" && redeemed.token.length > 0);
+      const replay = yield* oauth.exchange({ code }).pipe(Effect.flip);
+      assert.strictEqual(replay._tag, "OAuthCallbackFailed");
+    }),
+  );
 
   // ---- REQ-EA-354: redirect_uri always derived from configured base URL ----
 

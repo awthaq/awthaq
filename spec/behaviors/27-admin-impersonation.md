@@ -36,7 +36,7 @@ REQUIREMENT: `Sessions.issue` MUST accept an optional `actingAs` reference;
 
 **Self-act-as is refused in the primitive (IDS-008).** `Sessions.issue` (both layers) MUST die with `InvalidActingAs` when `actingAs` names the session's own user (`type: "user"`, `id === userId`) — a programming error in the producing plugin, so a defect, leaving `issue`'s public error channel unchanged. The nesting rule ([BEH-EA-214](27-admin-impersonation.md#beh-ea-214-self-impersonation-and-nested-impersonation-are-refused)) needs the *caller's* session, which `issue` never sees, so it stays with the producer; `Admin.impersonate` is the reference implementation.
 
-_Previous: [BEH-EA-208](26-cli.md#beh-ea-208-the-cli-reads-the-manifest-it-never-runs-the-application) | Next: [BEH-EA-210](27-admin-impersonation.md#beh-ea-210-a-session-carrying-actingas-never-idle-refreshes)_
+_Previous: [BEH-EA-229](26-cli.md#beh-ea-229-plugins-declare-their-configuration-statically-and-config-list-prints-it-redacted) | Next: [BEH-EA-210](27-admin-impersonation.md#beh-ea-210-a-session-carrying-actingas-never-idle-refreshes)_
 
 ## BEH-EA-210: A session carrying `actingAs` never idle-refreshes
 
@@ -155,6 +155,7 @@ interface ImpersonationRecord {
   readonly expiresAt: DateTime.Utc | null   // the session's hard expiry (IDS-004)
   readonly endedAt: DateTime.Utc | null
   readonly endedBy: "self" | "forcedByAdmin" | "expired" | null
+  readonly tenantId: string | null            // the ambient tenant when it started (IDS-002)
 }
 ```
 
@@ -186,6 +187,8 @@ REQUIREMENT: The trail MUST be tamper-evident (ALF-005). The database MUST
 ```
 
 ALF-005 (decision recorded 2026-09-29: adopted recommended option C now + A, shared primitive; B — an external append-only sink — is left as an optional future port): a DBA can still drop the triggers, which is what the chain is for — editing, deleting or reordering a row, or forging one with raw SQL, is detectable by anyone holding the key. Without a configured key the chain is unkeyed SHA-256: it catches casual edits but can be recomputed end to end, so a host wanting forgery-evidence supplies `AuditChain.config({ key })`. Detecting truncation of the newest links needs an external anchor (an exported head hash) and is the host's. The primitive (`@awthaq/core`'s `AuditChain`) is table-agnostic; applying it to the core `audit_log` (BEH-EA-100) is tracked separately. The Postgres trigger DDL ships in the same migration but is untested here (SQLite only).
+
+IDS-002 ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)): the row records the ambient `TenantContext` at `impersonate` (`null` when none), frozen with the other start facts by the immutability triggers and included in the ledger payload only when set — so every link written before the column existed, and every single-tenant one, still verifies byte-for-byte. `findBySessionId`, `endEpisode` and `list` see only the ambient tenant's episodes (an untenanted request sees the untenanted ones — everything, in a single-tenant deployment) unless the caller opts into `{ anyTenant: true }`, which `Admin` does only for a caller passing `canAdministerTenants`, and for its own tenant-blind "is this an impersonation session" classification (so another tenant's impersonation session is never mistaken for an ordinary one by the user-session endpoints). `closeExpired` and `verifyChain` are maintenance over every tenant.
 
 IDS-004: before this, `"expired"` was declared but nothing produced it, so a naturally-expired episode stayed reported `active` forever and the audit trail never closed. The close is a single atomic statement that returns only the rows it closed, so concurrent readers cannot double-announce an episode.
 
@@ -239,6 +242,13 @@ REQUIREMENT: `forceStop` MUST look the episode up by the named session id
              an episode row proves is an impersonation session; an episode
              that had already ended is reported `AdminImpersonationNotFound`
              (its live session, if any, is still revoked) (IDS-007).
+
+REQUIREMENT: An episode belonging to another tenant than the ambient one MUST
+             be reported `AdminImpersonationNotFound`, exactly like an unknown
+             id (IDS-002), unless the caller passes
+             `AdminConfig.canAdministerTenants` (fail-closed by default), in
+             which case `forceStop` may end any tenant's episode (still
+             subject to `canManageEpisode`).
 ```
 
 [MOD-EA-015](../models/15-admin-impersonation.md) named this explicitly as an undecided question. Resolved here: yes, an admin (any caller passing the same gate) can end another active impersonation episode, identified by the impersonation session's own id — the same id BEH-EA-219's listing endpoint surfaces — rather than inventing a second, parallel identifier space for it.
@@ -281,7 +291,10 @@ REQUIREMENT: `Admin` MUST expose a listing endpoint over `admin_impersonation`,
              defaulting to 50 and bounded to 1..200 on the wire, never an
              offset and never more than `limit + 1` rows read (BEH-EA-036;
              ESS-006). An expired episode MUST NOT be listed as active
-             (IDS-004).
+             (IDS-004). The listing MUST show only the ambient tenant's
+             episodes unless the caller passes `canAdministerTenants`
+             (IDS-002), and the impersonation gates MUST be told the ambient
+             `tenantId` so a host predicate can compare tenant affinity.
 ```
 
 An audit trail nobody can query defeats much of its own purpose; both the "what happened" (full history) and "what's live right now" (support-ops needing a kill switch target for BEH-EA-217) shapes are real, distinct use cases over the same one table.
@@ -311,6 +324,10 @@ interface AdminConfigShape {
     admin: AuthSubject
     target: Option<AuthSubject>   // None for a collection-level call (listUsers)
   }) => Effect.Effect<boolean>
+  readonly canBanUsers: (input: {   // same shape; gates banUser / unbanUser
+    admin: AuthSubject
+    target: Option<AuthSubject>
+  }) => Effect.Effect<boolean>
 }
 ```
 
@@ -318,7 +335,8 @@ interface AdminConfigShape {
 REQUIREMENT: Every user- and session-administration operation (`listUsers`,
              `getUser`, `updateUser`, `listUserSessions`, `revokeUserSession`,
              `revokeUserSessions`) MUST be gated by
-             `AdminConfig.canManageUsers`, which MUST deny by default. The
+             `AdminConfig.canManageUsers`, and `banUser`/`unbanUser` by its
+             own `AdminConfig.canBanUsers`; both MUST deny by default. The
              predicate MUST receive the target user (identity-only
              `AuthSubject`, like BEH-EA-212) for every per-user operation.
              The gate MUST run before the target's existence is checked, so a
@@ -329,7 +347,9 @@ REQUIREMENT: Every user- and session-administration operation (`listUsers`,
              `impersonationDenied`, which stays specific to BEH-EA-212/218.
 ```
 
-BAM-005 (wayfinder ticket 19 §1): an admin plugin that only impersonates cannot run a support desk. Each capability has its own predicate — `canManageUsers` here; banning (`canBanUsers`) and tenant administration (`canAdministerTenants`) get theirs when those land — so a deployment enables exactly the powers it means to, and impersonation being on says nothing about user administration. The target is in the gate's view for the reason BEH-EA-212's IDS-001 amendment gives: a caller-only predicate cannot refuse an operation on a more privileged account. **Role assignment (`setRole`) is deliberately not an admin endpoint** (ADR-EA-009, wayfinder ticket 19 §2): who holds which role is a qadi/application concern, and duplicating it here would put a second authority next to the authorization library.
+BAM-005 (wayfinder ticket 19 §1): an admin plugin that only impersonates cannot run a support desk. Each capability has its own predicate — `canManageUsers`, `canBanUsers` (BAM-005's ban slice, below), and `canAdministerTenants` when tenant administration lands — so a deployment enables exactly the powers it means to, and impersonation being on says nothing about user administration. The target is in the gate's view for the reason BEH-EA-212's IDS-001 amendment gives: a caller-only predicate cannot refuse an operation on a more privileged account. **Banning is a separate capability with the shared gate behind it (SCP-001).** `banUser(userId, { reason?, until? })` (`POST /admin/users/:userId/ban`) runs, in this order, the `canBanUsers` gate (failing `AdminActionDenied` and publishing `auth.admin.actionDenied` with action `banUser`), a refusal to ban oneself (`AdminSelfBanRefused`, 400), the existence check (`AdminTargetNotFound`), `Users.setStatus(userId, "suspended", …)` and `Sessions.revokeAll(userId, "suspended")` — every session of the user, impersonation sessions issued *as* them included, since the account's access ends as a whole — and finally publishes `auth.admin.userBanned { adminUserId, userId, reason, until }`. The block itself is `Users.assertCanSignIn` (BEH-EA-046), which password, passkey and OAuth sign-in each consult, so a banned user is refused `UserSuspended` (403) at every sign-in path while the admin surface still resolves them (`getUser`, `unbanUser`). `unbanUser` (`POST /admin/users/:userId/unban`) is `Users.setStatus(userId, "active")` plus `auth.admin.userUnbanned`; nothing was deleted, so the user simply signs in again. A timed ban (`until`) lapses by itself at that instant without any write. The reason is an operator note: it is returned to administrators (`UserDto.statusReason`) and never to the banned user.
+
+**Role assignment (`setRole`) is deliberately not an admin endpoint** (ADR-EA-009, wayfinder ticket 19 §2): who holds which role is a qadi/application concern, and duplicating it here would put a second authority next to the authorization library.
 
 _Previous: [BEH-EA-220](27-admin-impersonation.md#beh-ea-220-impersonation-never-touches-the-targets-own-sessions) | Next: [BEH-EA-222](27-admin-impersonation.md#beh-ea-222-users-are-listed-keyset-paginated-read-and-updated-through-the-admin-surface)_
 
@@ -354,7 +374,7 @@ REQUIREMENT: `listUsers` MUST be keyset-paginated on `(createdAt, id)` (oldest
              (BEH-EA-224).
 ```
 
-The admin surface reuses the same domain operations a user's own `Account` endpoints use rather than a second write path, so BEH-EA-041/042's invariants hold identically here. Changing a user's email or password, deleting a user, and banning one are separate capabilities (tracked under BAM-005) because each needs a domain operation `Users`/`Accounts` do not have yet.
+The admin surface reuses the same domain operations a user's own `Account` endpoints use rather than a second write path, so BEH-EA-041/042's invariants hold identically here. Changing a user's password and deleting a user remain separate capabilities (tracked under BAM-005): password writes belong to the password plugin and deletion needs the single shared erasure cascade. The domain now has `Users.changeEmail` (BEH-EA-042) but no admin endpoint uses it yet, because an admin-set address must itself be verified by the owner. `UserDto` carries the identity union (`identity`), `image`, `status`, `statusReason` and `suspendedUntil` in place of the former flat `email`/`emailVerified`.
 
 _Previous: [BEH-EA-221](27-admin-impersonation.md#beh-ea-221-user-and-session-administration-is-gated-per-capability-fail-closed-with-the-target-in-view) | Next: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes)_
 
@@ -389,13 +409,18 @@ _Previous: [BEH-EA-222](27-admin-impersonation.md#beh-ea-222-users-are-listed-ke
 REQUIREMENT: `Admin` MUST publish `auth.admin.actionDenied { adminUserId,
              action }` when `canManageUsers` resolves `false`,
              `auth.admin.userUpdated { adminUserId, userId }` after a
-             successful `updateUser`, and `auth.admin.sessionRevoked {
+             successful `updateUser`, `auth.admin.userBanned {
+             adminUserId, userId, reason, until }` after `banUser` and
+             `auth.admin.userUnbanned { adminUserId, userId }` after
+             `unbanUser` (the sweep that ends the sessions is announced by
+             `Sessions` itself as `auth.session.revoked` with reason
+             `suspended`), and `auth.admin.sessionRevoked {
              adminUserId, userId, sessionId }` after `revokeUserSession`
-             (`sessionId: null` after `revokeUserSessions`). All three are
+             (`sessionId: null` after `revokeUserSessions`). All of these are
              `AuthEvent` members, so `AuditLog` (BEH-EA-100) records them
              durably with `adminUserId` as the actor.
 ```
 
 Denials, changes and revocations are exactly the events a security review reconstructs "who did what to whom" from; making them `AuthEvent`s (rather than logs) puts them on the durable audit path BEH-EA-100 already guarantees, with no per-plugin persistence.
 
-_Previous: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes)_
+_Previous: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes) | Next: [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none)_

@@ -49,10 +49,12 @@ export interface OrgRoleRecordsShape {
     readonly role: string;
     readonly permission: PermissionEngine.Statements;
   }) => Effect.Effect<OrgRoleRecord, OrgRoleRecordNameTaken>;
+  /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findById: (
     organizationId: string,
     id: string,
   ) => Effect.Effect<Option.Option<OrgRoleRecord>>;
+  /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly listByOrganization: (
     organizationId: string,
   ) => Effect.Effect<ReadonlyArray<OrgRoleRecord>>;

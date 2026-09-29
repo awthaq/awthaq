@@ -54,7 +54,7 @@ export interface PasskeyCredentialRecord {
   readonly counterAnomalyCount: number;
 }
 
-export class PasskeyCredentialNotFound extends Data.TaggedError("PasskeyCredentialNotFound")<{
+export class PasskeyCredentialNotFound extends Data.TaggedError("PasskeyCredentials/NotFound")<{
   readonly message: string;
 }> {}
 

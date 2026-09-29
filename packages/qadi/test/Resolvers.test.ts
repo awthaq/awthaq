@@ -26,7 +26,10 @@ describe("UserAttributes (BEH-EA-161)", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const attributeResolver = yield* AttributeResolver;
-      const user = yield* users.create({ email: "attrs@example.com", name: "Attrs" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "attrs@example.com" },
+        name: "Attrs",
+      });
       const subjectId = makeSubjectId(`user:${user.id}`);
 
       const email = yield* attributeResolver.resolve(subjectId, "email");
@@ -43,7 +46,10 @@ describe("UserAttributes (BEH-EA-161)", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const attributeResolver = yield* AttributeResolver;
-      const user = yield* users.create({ email: "attrs2@example.com", name: "Attrs2" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "attrs2@example.com" },
+        name: "Attrs2",
+      });
       const value = yield* attributeResolver.resolve(makeSubjectId(`user:${user.id}`), "plan");
       assert.isUndefined(value);
     }).pipe(Effect.provide(AttributesLayer)),
@@ -61,7 +67,10 @@ describe("UserAttributes (BEH-EA-161)", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const attributeResolver = yield* AttributeResolver;
-      const user = yield* users.create({ email: "gone@example.com", name: "Gone" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "gone@example.com" },
+        name: "Gone",
+      });
       yield* users.delete(user.id);
       const value = yield* attributeResolver.resolve(makeSubjectId(`user:${user.id}`), "email");
       assert.isUndefined(value);
@@ -74,7 +83,10 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "fresh@example.com", name: "Fresh" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "fresh@example.com" },
+        name: "Fresh",
+      });
       const { session } = yield* sessions.issue({ userId: user.id });
       const principal = new Api.UserPrincipal({
         ref: new Api.PrincipalRef({ type: "user", id: user.id }),
@@ -91,7 +103,10 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "stale@example.com", name: "Stale" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "stale@example.com" },
+        name: "Stale",
+      });
       const { session } = yield* sessions.issue({ userId: user.id });
       const principal = new Api.UserPrincipal({
         ref: new Api.PrincipalRef({ type: "user", id: user.id }),
@@ -104,7 +119,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         Effect.provideService(Api.CurrentPrincipal, principal),
         Effect.flip,
       );
-      assert.strictEqual(failure._tag, "ReauthRequired");
+      if (failure._tag !== "ReauthRequired") return assert.fail(failure._tag);
       assert.strictEqual(failure.maxAgeSeconds, 300);
     }).pipe(Effect.provide(CoreLive)),
   );
@@ -122,7 +137,10 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
       Effect.gen(function* () {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ email: "reauthed@example.com", name: "Reauthed" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "reauthed@example.com" },
+          name: "Reauthed",
+        });
         const { session } = yield* sessions.issue({ userId: user.id });
         const principal = new Api.UserPrincipal({
           ref: new Api.PrincipalRef({ type: "user", id: user.id }),
@@ -142,6 +160,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
     Effect.gen(function* () {
       const principal = new Api.ApiKeyPrincipal({
         ref: new Api.PrincipalRef({ type: "apikey", id: "key-1" }),
+        scopes: [],
       });
       const failure = yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
         Effect.provideService(Api.CurrentPrincipal, principal),
@@ -155,6 +174,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
     Effect.gen(function* () {
       const principal = new Api.ApiKeyPrincipal({
         ref: new Api.PrincipalRef({ type: "apikey", id: "key-2" }),
+        scopes: [],
       });
       yield* Resolvers.ObligationHandlers.reauth([]).pipe(
         Effect.provideService(Api.CurrentPrincipal, principal),
@@ -167,6 +187,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
 describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-001)", () => {
   const apiKey = new Api.ApiKeyPrincipal({
     ref: new Api.PrincipalRef({ type: "apikey", id: "key-ts001" }),
+    scopes: [],
   });
   const run = (duties: ReadonlyArray<ReturnType<typeof obligation>>) =>
     Resolvers.ObligationHandlers.reauth(duties).pipe(
@@ -198,7 +219,10 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "strict@example.com", name: "Strict" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "strict@example.com" },
+        name: "Strict",
+      });
       const { session } = yield* sessions.issue({ userId: user.id });
       const principal = new Api.UserPrincipal({
         ref: new Api.PrincipalRef({ type: "user", id: user.id }),
@@ -214,7 +238,7 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
           Effect.provideService(Api.CurrentPrincipal, principal),
           Effect.flip,
         );
-        assert.strictEqual(failure._tag, "ReauthRequired");
+        if (failure._tag !== "ReauthRequired") return assert.fail(failure._tag);
         assert.strictEqual(failure.maxAgeSeconds, 60);
       }
     }).pipe(Effect.provide(CoreLive)),
@@ -233,10 +257,16 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
 describe("UserAttributes maps a Users outage to AttributeResolveError (TS-002)", () => {
   const DyingUsers = Layer.succeed(Users.Users, {
     create: () => Effect.die("create is not used"),
+    createOrGet: () => Effect.die("createOrGet is not used"),
     findById: () => Effect.die(new Error("users store is down")),
     findByEmail: () => Effect.die("findByEmail is not used"),
+    findByPhone: () => Effect.die("findByPhone is not used"),
     updateProfile: () => Effect.die("updateProfile is not used"),
     verifyEmail: () => Effect.die("verifyEmail is not used"),
+    verifyPhone: () => Effect.die("verifyPhone is not used"),
+    promoteIdentity: () => Effect.die("promoteIdentity is not used"),
+    changeEmail: () => Effect.die("changeEmail is not used"),
+    setStatus: () => Effect.die("setStatus is not used"),
     delete: () => Effect.die("delete is not used"),
     list: () => Effect.die("list is not used"),
   });
@@ -283,7 +313,10 @@ describe("UserAttributes memoizes the user record per request (AAPS-004)", () =>
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const attributeResolver = yield* AttributeResolver;
-      const user = yield* users.create({ email: "memo@example.com", name: "Memo" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "memo@example.com" },
+        name: "Memo",
+      });
       const subjectId = makeSubjectId(`user:${user.id}`);
       counter.lookups = 0;
 
@@ -315,7 +348,10 @@ describe("UserAttributes memoizes the user record per request (AAPS-004)", () =>
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const attributeResolver = yield* AttributeResolver;
-      const user = yield* users.create({ email: "nomemo@example.com", name: "NoMemo" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "nomemo@example.com" },
+        name: "NoMemo",
+      });
       const subjectId = makeSubjectId(`user:${user.id}`);
       counter.lookups = 0;
       yield* attributeResolver.resolve(subjectId, "email");
@@ -360,7 +396,10 @@ describe("typed user attribute names (AAPS-003)", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const attributeResolver = yield* AttributeResolver;
-      const user = yield* users.create({ email: "typed@example.com", name: "Typed" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "typed@example.com" },
+        name: "Typed",
+      });
       const subjectId = makeSubjectId(`user:${user.id}`);
       for (const name of Resolvers.UserAttributeNames) {
         const value = yield* attributeResolver.resolve(subjectId, name);

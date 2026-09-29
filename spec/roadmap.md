@@ -67,7 +67,7 @@ This document restates the milestone roadmap of `archive/PRD.md` §23 as this sp
 - `TwoFactor` (divert hook, hashed recovery codes).
 - `MagicLink`, `EmailOtp`.
 - `Organization` (membership, invitations, relationship resolver).
-- `ApiKey` (service principals).
+- `ApiKey` (service principals): long-lived API keys plus `client_credentials` clients minting short-lived service JWTs through `Jwt`. Scope note (wayfinder ticket 10): this pulls a slice of Phase 3's authorization-server capability — the `client_credentials` grant, a pure back-channel POST needing none of the browser, consent or discovery machinery of the `OidcProvider` plugin — into M7 ahead of schedule. It lives in `@awthaq/api-key`; `@awthaq/oauth` stays a client of external IdPs.
 - `Admin` (impersonation with hard expiry and `actingAs`).
 - `Jwt` (EdDSA, JWKS on `LayerRef`) and `Bearer`.
 
@@ -122,4 +122,4 @@ Drawn from `archive/PRD.md` §4 (Non-goals). The initial product will not:
 - Be a general application plugin system.
 - Be an ORM or a mail provider.
 - Implement authorization — that is qadi's responsibility, not awthaq's (see `archive/PRD.md` §5, principle 7, and [ADR-EA-009](decisions/009-authorization-delegated-to-qadi.md)).
-- Implement every enterprise protocol in v1 (SSO, SAML, an OIDC provider, SCIM and device authorization are M(3) roadmap items, not v1 scope — see `archive/PRD.md` §17, Phase 3).
+- Implement every enterprise protocol in v1 (an OIDC provider and device authorization are M(3) roadmap items, not v1 scope — see `archive/PRD.md` §17, Phase 3). SAML (service provider only) and SCIM (inbound) are scheduled, not deferred: user status (done) → `@awthaq/scim` (done) → `@awthaq/saml` (specified) → the `Sso` dispatcher, per [ADR-EA-023](decisions/023-enterprise-federation-packages.md).

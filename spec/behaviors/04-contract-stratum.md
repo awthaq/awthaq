@@ -145,6 +145,8 @@ REQUIREMENT: The core `session` group MUST mount at the root of the
              `revokeOthers` as its endpoints.
 ```
 
+MW-008: `SessionDto`'s `createdAt`, `lastActiveAt` and `expiresAt` are ISO-8601 date-time strings on the wire (`format: "date-time"` in the generated OpenAPI document) that decode to `DateTime.Utc`; a malformed timestamp neither decodes nor encodes, and constructing a `SessionDto` takes `DateTime.Utc` values, not strings.
+
 `archive/design/plugins-as-layers.md` §6 states core's one privilege plainly: "its groups sit at the root of `/auth` and its ids are reserved." `archive/design/usage-examples-v4.md` §5.1 is the worked example of every one of these five endpoints in use (listing devices, revoking one, revoking the rest, signing out) through the same client the plugin groups are reached through — core's session surface is designed to need no plugin to exist at all.
 
 ## BEH-EA-032: `Auth.api` merges contracts and refuses a duplicate group id
@@ -163,6 +165,8 @@ REQUIREMENT: Merging two contracts that declare the same `HttpApiGroup` id
 ```
 
 `archive/design/usage-examples-v4.md` §2.2 is the documented failure this behavior must reproduce: `password()` and a third-party `acmeLegacyLogin()` both contributing a group named `"password"` is designed to be caught as `E_GROUP_CONFLICT`, naming both contributing plugins by version, at the point the contracts are merged — never resolved by whichever plugin happened to be added to the array last.
+
+MW-002 (wayfinder ticket 26): the composed `api` is the one served document. `Auth.make` seeds it with core's own `session` and `account` groups (attributed to the pseudo-owner `core` in a conflict message, so a plugin reusing one of those ids, or one of their routes, is refused exactly as two plugins colliding are), then the optional `extraGroups` a host passes for groups no plugin owns (`@awthaq/qadi`'s `SubjectApi.SubjectGroup`), then every plugin group. `Built<P, Extra>["api"]` types all of them; `publicApi` keeps core's and the host's groups (none is admin-tier). Their handlers are `@awthaq/server`'s `AuthHttp.coreHandlers` (a composition that serves `built.api` without them fails at layer build); the standalone `AuthCore.AuthCoreApi` remains the typed input those handlers are built against, not a separately served document.
 
 AVS-004: group ids are not the only thing two plugins can collide on. `Auth.make` also refuses two contributed endpoints, in the same or different groups, with the same method and path (`RouteConflict`, `E_ROUTE_CONFLICT`, naming both plugins, the method and the path); the router would otherwise serve whichever registered first and shadow the other. This is a composition-time check rather than a registry of reserved paths, so it covers a plugin's deliberate root-level routes too — currently informative: `@awthaq/password` owns `POST /verify-email`, `/resend-verification` and `/change-password` at the root, alongside its `/password/*` routes.
 

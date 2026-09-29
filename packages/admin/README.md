@@ -14,10 +14,14 @@ Admin.config({
   canImpersonate: ({ admin, target }) => Effect.succeed(/* your policy */ false),
   canManageEpisode: ({ admin, episode }) => Effect.succeed(false), // optional; defaults to canImpersonate(admin, episode.target)
   canManageUsers: ({ admin, target }) => Effect.succeed(false), // target is None for listUsers
+  canBanUsers: ({ admin, target }) => Effect.succeed(false), // banUser / unbanUser
+  canAdministerTenants: ({ admin, organizationId }) => Effect.succeed(false), // superadmin: cross-tenant episodes + AdminTenants
 });
 ```
 
-Every predicate defaults to "deny", and every one **sees the target** — so a host can refuse to impersonate or administer a more privileged account (or another tenant's). Subjects are identity-only (`{ id }`); a predicate that needs roles or tenant looks them up itself by id. `list` filters impersonation episodes through `canManageEpisode` row by row, so a caller who may manage none sees an empty history.
+Every predicate defaults to "deny", and every one **sees the target** (and, for `canImpersonate`/`canManageUsers`, the request's ambient `tenantId`) — so a host can refuse to impersonate or administer a more privileged account (or another tenant's). Subjects are identity-only (`{ id }`); a predicate that needs roles or tenant looks them up itself by id. `list` filters impersonation episodes through `canManageEpisode` row by row, so a caller who may manage none sees an empty history.
+
+**Tenant scoping (IDS-002, ADR-EA-018).** Each episode records the ambient `TenantContext` it started under, and `list`/`forceStop` are confined to the request's own tenant: another tenant's episode is `AdminImpersonationNotFound`, exactly like an unknown id. `canAdministerTenants` is the one predicate that lifts the confinement (a platform superadmin sees and ends every tenant's episodes, still subject to `canManageEpisode`). In a single-tenant deployment nothing provides a tenant, every episode is untenanted, and behavior is unchanged.
 
 ## Impersonation client contract
 
@@ -37,7 +41,13 @@ Every predicate defaults to "deny", and every one **sees the target** — so a h
 
 `GET /admin/users` (keyset-paginated), `GET`/`PATCH /admin/users/:userId`, `GET /admin/users/:userId/sessions`, `DELETE /admin/users/:userId/sessions/:sessionId`, `DELETE /admin/users/:userId/sessions`. All behind `canManageUsers`; an unknown user is a 404 only after the gate passes. Impersonation sessions are never listed or revoked by these routes (use `force-stop`). Actions publish `auth.admin.*` events, recorded durably by `AuditLog`.
 
-Not shipped yet (tracked under BAM-005): ban/unban and the sign-in gate, user deletion, admin email/password change, and the superadmin tenant-administration surface. **There is deliberately no `setRole` endpoint** — role assignment is a qadi/application concern (ADR-EA-009), not the admin plugin's.
+**Ban and unban** (`POST /admin/users/:userId/ban` `{ reason?, until? }`, `POST /admin/users/:userId/unban`) sit behind their own predicate, `canBanUsers` — being allowed to edit a user does not imply being allowed to lock them out. `banUser` is `Users.setStatus(userId, "suspended", …)` plus `Sessions.revokeAll(userId, "suspended")` (every session, impersonation sessions issued as the user included), publishes `auth.admin.userBanned`, and refuses to ban the calling admin (`AdminSelfBanRefused`). The block is the one shared sign-in gate, `Users.assertCanSignIn`, which password, passkey and OAuth sign-in each consult, so a banned user is refused `UserSuspended` (403) everywhere while `getUser`/`unbanUser` still resolve them; `until` makes a ban lapse by itself and `reason` is an operator note the banned user never sees. `unbanUser` is `setStatus("active")` — nothing was deleted, so the user just signs in again.
+
+Not shipped yet (tracked under BAM-005): user deletion (needs the single shared erasure cascade) and admin email/password change (an admin-set address must itself be verified by its owner; `Users.changeEmail` exists as a primitive). **There is deliberately no `setRole` endpoint** — role assignment is a qadi/application concern (ADR-EA-009), not the admin plugin's: who holds which role belongs next to the authorization library, and a second authority here would drift from it.
+
+## Tenant administration (`AdminTenants`)
+
+An opt-in second plugin for a multi-tenant platform (EP-003, BEH-EA-237): `Auth.make([Organization, Admin, AdminTenants])`. It `dependsOn: [Organization]`, so `Admin` alone still composes without the organization plugin. `GET /admin/organizations` (keyset-paginated), `GET /admin/organizations/:organizationId`, `POST .../suspend` `{ reason? }` and `POST .../unsuspend`, all in the admin-tier group `admin.tenants` behind `Api.AdminAuthentication` and `canAdministerTenants` — fail-closed, gate before existence (a denied caller cannot probe which ids exist). Suspending marks the organization; the organization plugin's own checks then refuse every organization-scoped operation and every qadi relationship through it (members and outsiders both get `OrganizationNotFound`), until it is reinstated. Both actions publish audited `auth.admin.organization*` events.
 
 ## Serving the admin surface separately
 
@@ -45,22 +55,23 @@ The `admin` group is an admin-tier group (any group id with an `admin` segment i
 
 ## Audit integrity
 
-`admin_impersonation` rejects DELETE and any UPDATE other than closing an open episode (database triggers), and every start/end is appended to a hash-chained ledger (`admin_impersonation_chain`). `ImpersonationRecords.verifyChain` reports the first tampered row. Supply a secret with `AuditChain.config({ key })` to make the chain forgery-evident; without one it is an unkeyed hash chain (catches casual edits only). The Postgres trigger DDL is untested in this repository (SQLite only).
+`admin_impersonation` rejects DELETE and any UPDATE other than closing an open episode (database triggers), and every start/end is appended to a hash-chained ledger (`admin_impersonation_chain`). `ImpersonationRecords.verifyChain` reports the first tampered row. Supply a secret with `AuditChain.config({ key })` to make the chain forgery-evident; without one it is an unkeyed hash chain (catches casual edits only). The trigger DDL runs on SQLite and, under `pnpm run test:pg`, on Postgres; the `tenantId` column is frozen by the same triggers and joins the ledger payload only when set, so links written before tenancy still verify.
 
 ## Migrating from better-auth's admin plugin
 
 better-auth swaps the session cookie server-side and restores it on stop; awthaq never touches the admin's session, audits every episode, and adds force-stop and history.
 
-| better-auth                                                                      | awthaq                                                                                     |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `impersonateUser`                                                                | `POST /admin/impersonate/:userId` (a `reason` is required)                                 |
-| `stopImpersonating`                                                              | `POST /admin/stop-impersonating`                                                           |
-| `listUsers`                                                                      | `GET /admin/users`                                                                         |
-| `getUser`                                                                        | `GET /admin/users/:userId`                                                                 |
-| `adminUpdateUser`                                                                | `PATCH /admin/users/:userId` (`name`, `metadata`)                                          |
-| `listUserSessions`                                                               | `GET /admin/users/:userId/sessions`                                                        |
-| `revokeUserSession` / `revokeUserSessions`                                       | `DELETE /admin/users/:userId/sessions/:sessionId` / `DELETE /admin/users/:userId/sessions` |
-| `banUser`, `unbanUser`, `removeUser`, `setUserPassword`, `setRole`, `createUser` | not shipped (see above)                                                                    |
+| better-auth                                              | awthaq                                                                                     |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `impersonateUser`                                        | `POST /admin/impersonate/:userId` (a `reason` is required)                                 |
+| `stopImpersonating`                                      | `POST /admin/stop-impersonating`                                                           |
+| `listUsers`                                              | `GET /admin/users`                                                                         |
+| `getUser`                                                | `GET /admin/users/:userId`                                                                 |
+| `adminUpdateUser`                                        | `PATCH /admin/users/:userId` (`name`, `metadata`)                                          |
+| `listUserSessions`                                       | `GET /admin/users/:userId/sessions`                                                        |
+| `revokeUserSession` / `revokeUserSessions`               | `DELETE /admin/users/:userId/sessions/:sessionId` / `DELETE /admin/users/:userId/sessions` |
+| `banUser` / `unbanUser`                                  | `POST /admin/users/:userId/ban` `{ reason?, until? }` / `POST /admin/users/:userId/unban`  |
+| `removeUser`, `setUserPassword`, `setRole`, `createUser` | not shipped (see above)                                                                    |
 
 ## Impersonation authority and the JWT `act` claim
 

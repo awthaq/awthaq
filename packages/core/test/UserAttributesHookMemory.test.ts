@@ -27,7 +27,10 @@ describe("Users.layerMemory attribute-change hook (AAPS-005)", () => {
   it.effect("updateProfile announces name; verifyEmail announces emailVerified once", () =>
     Effect.gen(function* () {
       const users = yield* Users.Users;
-      const user = yield* users.create({ email: "hook@example.com", name: "Hook" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "hook@example.com" },
+        name: "Hook",
+      });
       assert.deepStrictEqual(seen, []);
 
       yield* users.updateProfile(user.id, { name: "Renamed" });

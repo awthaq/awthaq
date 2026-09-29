@@ -25,6 +25,7 @@
 // See spec/overview.md for the full package map.
 
 export * as ClientAddress from "./ClientAddress.ts";
+export * as Defects from "./Defects.ts";
 export * as Encryption from "./Encryption.ts";
 export * as Hmac from "./Hmac.ts";
 export * as KeyProvider from "./KeyProvider.ts";
@@ -35,5 +36,6 @@ export * as PasswordHasherWorkerPool from "./PasswordHasherWorkerPool.ts";
 export * as RateLimiter from "./RateLimiter.ts";
 export * as RefreshingCache from "./RefreshingCache.ts";
 export * as SqlTransaction from "./SqlTransaction.ts";
+export * as Tenant from "./Tenant.ts";
 export * as WebAuthn from "./WebAuthn.ts";
 export * as WebCrypto from "./WebCrypto.ts";

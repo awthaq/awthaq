@@ -52,6 +52,8 @@ These are properties that the TypeScript compiler enforces the moment `Auth.make
 
 **Source**: TypeScript compiler, via `Validate<P>`'s `SlotConflict<P>` conditional type — a slot (for example `SubjectResolver`) is a `Context.Reference` a plugin may override by providing it in its Layer's `ROut` (`archive/design/plugins-as-layers.md` §3.5); `SlotConflict<P>` walks the tuple's `ROut` types pairwise and, on finding one slot key present in two plugins' `ROut`, narrows the tuple's type to a literal naming both plugin ids and the slot.
 
+**As shipped (MA-005)**: enforced at layer-build time, always — `Slots.override` requires the `SlotsRegistry` that `Auth.make` provides once per composition, so `Auth.make([Roles, Organization])` fails to build with a `SlotConflict` naming both plugins and the slot; a `Context.Reference` is invisible to `ROut`, which is why the compiler cannot see it.
+
 **Implication**: Without this, installing both `Roles` and `Organization` — each of which wants to be the one source of truth for `SubjectResolver` — resolves by silent last-registration-wins, which is precisely the ambiguity ADR-EA-012 (Slots Are Exclusive, Registries Aggregate) exists to rule out. With it, `Auth.make([Roles, Organization])` fails to compile, naming both plugins and the contested slot, forcing an explicit composing plugin instead.
 
 **Related**: [BEH-EA-017 through 024](behaviors/03-ports-slots-hooks-registries.md), [ADR-EA-012](decisions/012-slots-exclusive-registries-aggregate.md), [ADR-EA-008](decisions/008-plugin-is-context-service-class.md).

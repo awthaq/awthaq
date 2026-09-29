@@ -6,7 +6,7 @@
 // `canImpersonate` function (no `Layer.mock` needed — it is a bare config
 // predicate, not a service).
 import { Api } from "@awthaq/api";
-import { AuditChain, AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditChain, AuditLog, AuthEvents, Hooks, Sessions, Tenant, Users } from "@awthaq/core";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -90,8 +90,14 @@ const deny = () => Effect.succeed(false);
  */
 const seedUsers = Effect.gen(function* () {
   const users = yield* Users.Users;
-  const admin = yield* users.create({ email: "admin-1@example.com", name: "admin" });
-  const target = yield* users.create({ email: "target-1@example.com", name: "target" });
+  const admin = yield* users.create({
+    identity: { _tag: "Email", email: "admin-1@example.com" },
+    name: "admin",
+  });
+  const target = yield* users.create({
+    identity: { _tag: "Email", email: "target-1@example.com" },
+    name: "target",
+  });
   return { adminId: admin.id, targetId: target.id, users };
 });
 
@@ -253,7 +259,7 @@ describe("Admin", () => {
         yield* admin.stopImpersonating(impersonating);
 
         const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
-        assert.strictEqual(revoked._tag, "SessionNotFound");
+        assert.strictEqual(revoked._tag, "Sessions/NotFound");
 
         const record = yield* records.findBySessionId(issued.session.id);
         assert.isTrue(Option.isSome(record));
@@ -294,7 +300,7 @@ describe("Admin", () => {
         yield* admin.forceStop(anotherAdmin, issued.session.id);
 
         const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
-        assert.strictEqual(revoked._tag, "SessionNotFound");
+        assert.strictEqual(revoked._tag, "Sessions/NotFound");
 
         const notFound = yield* admin.forceStop(anotherAdmin, issued.session.id).pipe(Effect.flip);
         assert.strictEqual(notFound._tag, "AdminImpersonationNotFound");
@@ -377,7 +383,7 @@ describe("Admin", () => {
     Effect.gen(function* () {
       const { adminId, targetId, users } = yield* seedUsers;
       const protectedUser = yield* users.create({
-        email: "superadmin-2@example.com",
+        identity: { _tag: "Email", email: "superadmin-2@example.com" },
         name: "superadmin",
       });
       protectedIds.add(protectedUser.id);
@@ -413,7 +419,10 @@ describe("Admin", () => {
   it.effect("IDS-001: forceStop/list are filtered by canManageEpisode", () =>
     Effect.gen(function* () {
       const { adminId, targetId, users } = yield* seedUsers;
-      const other = yield* users.create({ email: "other@example.com", name: "other" });
+      const other = yield* users.create({
+        identity: { _tag: "Email", email: "other@example.com" },
+        name: "other",
+      });
       const admin = yield* Admin.Admin;
       const sessions = yield* Sessions.Sessions;
       const caller = asCaller({ id: adminId, sessionId: "admin-session" });
@@ -595,7 +604,7 @@ describe("Admin", () => {
         }),
       );
       const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
-      assert.strictEqual(revoked._tag, "SessionNotFound");
+      assert.strictEqual(revoked._tag, "Sessions/NotFound");
     }).pipe(Effect.provide(buildLayer(allow))),
   );
 
@@ -649,7 +658,120 @@ describe("Admin", () => {
         const failure = yield* admin.forceStop(caller, issued.session.id).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AdminImpersonationNotFound");
         const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
-        assert.strictEqual(revoked._tag, "SessionNotFound");
+        assert.strictEqual(revoked._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(buildLayer(allow))),
+  );
+});
+
+// ---- IDS-002 (ADR-EA-018): impersonation is tenant-scoped ------------------------------
+
+/** What `canImpersonate` was asked, tenant-wise. */
+const seenTenants: Array<Option.Option<string>> = [];
+
+describe("Admin tenant scoping (IDS-002)", () => {
+  it.effect("the gate sees the ambient tenant and the episode is stamped with it", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seedUsers;
+      const admin = yield* Admin.Admin;
+      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+      const issued = yield* admin
+        .impersonate({ caller, targetUserId: targetId, reason: "in org-a" })
+        .pipe(Tenant.withTenant("org-a"));
+      const [episode] = (yield* admin.list(caller).pipe(Tenant.withTenant("org-a"))).items;
+      assert.deepStrictEqual(episode?.tenantId, Option.some("org-a"));
+      assert.strictEqual(episode?.sessionId, issued.session.id);
+      // Asked once by `impersonate` (the request's tenant) and once per listed row by the default
+      // per-episode gate (the episode's own tenant).
+      assert.deepStrictEqual(seenTenants, [Option.some("org-a"), Option.some("org-a")]);
+    }).pipe(
+      Effect.provide(
+        buildLayerWith({
+          canImpersonate: ({ tenantId }) =>
+            Effect.sync(() => {
+              seenTenants.push(tenantId);
+              return true;
+            }),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("list and forceStop stay inside the ambient tenant unless canAdministerTenants passes", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seedUsers;
+      const admin = yield* Admin.Admin;
+      const sessions = yield* Sessions.Sessions;
+      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+      const inA = yield* admin
+        .impersonate({ caller, targetUserId: targetId, reason: "a" })
+        .pipe(Tenant.withTenant("org-a"));
+      const inB = yield* admin
+        .impersonate({ caller, targetUserId: targetId, reason: "b" })
+        .pipe(Tenant.withTenant("org-b"));
+
+      // A plain admin in org-a sees org-a's episode only, and cannot stop org-b's.
+      const listedInA = (yield* admin.list(caller).pipe(Tenant.withTenant("org-a"))).items;
+      assert.deepStrictEqual(
+        listedInA.map((row) => row.sessionId),
+        [inA.session.id],
+      );
+      const crossStop = yield* admin
+        .forceStop(caller, inB.session.id)
+        .pipe(Tenant.withTenant("org-a"), Effect.flip);
+      assert.strictEqual(crossStop._tag, "AdminImpersonationNotFound");
+      assert.strictEqual((yield* sessions.verify(inB.token)).session.id, inB.session.id);
+
+      // The superadmin sees every tenant's episodes and can end one across the boundary.
+      const superadmin = asCaller({ id: "superadmin-1", sessionId: "superadmin-session" });
+      const everything = (yield* admin.list(superadmin).pipe(Tenant.withTenant("org-a"))).items;
+      assert.sameMembers(
+        everything.map((row) => row.sessionId),
+        [inA.session.id, inB.session.id],
+      );
+      yield* admin.forceStop(superadmin, inB.session.id).pipe(Tenant.withTenant("org-a"));
+      const revoked = yield* sessions.verify(inB.token).pipe(Effect.flip);
+      assert.strictEqual(revoked._tag, "Sessions/NotFound");
+    }).pipe(
+      Effect.provide(
+        buildLayerWith({
+          canImpersonate: () => Effect.succeed(true),
+          canAdministerTenants: ({ admin }) => Effect.succeed(admin.id === "superadmin-1"),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("a single-tenant deployment (no ambient tenant) behaves exactly as before", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seedUsers;
+      const admin = yield* Admin.Admin;
+      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+      const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "plain" });
+      const listed = (yield* admin.list(caller)).items;
+      assert.strictEqual(listed.length, 1);
+      assert.isTrue(Option.isNone(listed[0]?.tenantId ?? Option.some("x")));
+      yield* admin.forceStop(caller, issued.session.id);
+    }).pipe(Effect.provide(buildLayer(allow))),
+  );
+
+  it.effect("the user-administration session list never mistakes another tenant's impersonation session for an ordinary one", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seedUsers;
+      const admin = yield* Admin.Admin;
+      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+      yield* admin
+        .impersonate({ caller, targetUserId: targetId, reason: "org-a episode" })
+        .pipe(Tenant.withTenant("org-a"));
+      // Listing the target's sessions from org-b must not expose the org-a impersonation session.
+      const listed = yield* admin.listUserSessions(caller, targetId).pipe(Tenant.withTenant("org-b"));
+      assert.strictEqual(listed.length, 0);
+    }).pipe(
+      Effect.provide(
+        buildLayerWith({
+          canImpersonate: () => Effect.succeed(true),
+          canManageUsers: () => Effect.succeed(true),
+        }),
+      ),
+    ),
   );
 });

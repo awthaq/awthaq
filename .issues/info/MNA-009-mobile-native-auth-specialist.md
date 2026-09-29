@@ -3,7 +3,7 @@ ID: "MNA-009"
 Title: "Docs promise a native bearer path the code does not finish"
 Level: info
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/09-authentication-middleware.md:55"
 Auditor: "mobile-native-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `docs` · `—` · reported by **Mobile/Native Auth Specialist** (`mobile-native-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Mark the native path explicitly as resolution-only in the behavior docs until is
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `native-bearer-bootstrap`. Evidence at HEAD ec065a7: `spec/behaviors/09-authentication-middleware.md:55`. Fix: Doc-side only here: amend BEH-EA-066's native-client paragraph to state what exists (bearer resolution + `set-auth-token` rotation header) and what doesn't (token issuance → MNA-001 per decision ticket 17; `{ csrf: false }` variant → BEH-EA-171; magic-link unimplemented). Rewrite it again as a positive statement when MNA-001 lands. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-066's native-client paragraph rewritten as a positive statement now that MNA-001 landed: opt-in bearer delivery (X-Awthaq-Token-Delivery), Authorization: Bearer presentation, set-auth-token rotation (now normative prose), CSRF bootstrap for the first mutating call, {csrf:false} variant (BEH-EA-171) and magic-link still unbuilt. Revision 1.0->1.1 with change-history row. Skipped the optional new feature scenario for set-auth-token (unit coverage in packages/server/test cited by the text is unchanged). spec:verify:strict passes.

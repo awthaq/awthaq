@@ -20,7 +20,7 @@ const register = (email: string) =>
     const passkey = yield* Passkey.Passkey;
     const users = yield* Users.Users;
     const sessions = yield* Sessions.Sessions;
-    const user = yield* users.create({ email, name: email });
+    const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
     const issued = yield* sessions.issue({ userId: user.id });
     const options = yield* passkey.registerOptions(user.id, issued.session.id);
     return yield* passkey.registerVerify(

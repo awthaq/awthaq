@@ -138,7 +138,7 @@ const suite = (
         const wrongOwner = yield* credentials
           .rename("cred-rename", userB, "Stolen")
           .pipe(Effect.flip);
-        assert.strictEqual(wrongOwner._tag, "PasskeyCredentialNotFound");
+        assert.strictEqual(wrongOwner._tag, "PasskeyCredentials/NotFound");
         const renamed = yield* credentials.rename("cred-rename", userA, "Renamed");
         assert.strictEqual(renamed.name, "Renamed");
       }).pipe(Effect.provide(layer)),
@@ -163,8 +163,8 @@ const suite = (
           });
           const unknown = yield* credentials.delete("does-not-exist", userA).pipe(Effect.flip);
           const wrongOwner = yield* credentials.delete("cred-delete", userB).pipe(Effect.flip);
-          assert.strictEqual(unknown._tag, "PasskeyCredentialNotFound");
-          assert.strictEqual(wrongOwner._tag, "PasskeyCredentialNotFound");
+          assert.strictEqual(unknown._tag, "PasskeyCredentials/NotFound");
+          assert.strictEqual(wrongOwner._tag, "PasskeyCredentials/NotFound");
           yield* credentials.delete("cred-delete", userA);
           const found = yield* credentials.findById("cred-delete");
           assert.isTrue(Option.isNone(found));
@@ -244,7 +244,7 @@ const suite = (
         Effect.gen(function* () {
           const credentials = yield* PasskeyCredentials.PasskeyCredentials;
           const failure = yield* credentials.flagCounterAnomaly("nope").pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "PasskeyCredentialNotFound");
+          assert.strictEqual(failure._tag, "PasskeyCredentials/NotFound");
         }).pipe(Effect.provide(layer)),
     );
   });

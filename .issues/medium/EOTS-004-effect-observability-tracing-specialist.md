@@ -3,7 +3,7 @@ ID: "EOTS-004"
 Title: "Session ids — the public half of a bearer credential — are interpolated into error messages that reach logs"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:274"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Either drop the id from messages (keep it in a typed field for correlation) or d
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `core-error-taxonomy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:428`. Fix: Stop interpolating identifiers into core error messages; carry them only as typed fields, and state the logging policy. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Core error messages are constant strings (Sessions/Users/Accounts/Verification and OAuthTokenAccess): SessionNotFound gained optional typed id, SessionExpired/UserNotFound/AccountNotFound/TokenConsumed/EmailAlreadyExists keep theirs as fields only. Tests (red first, 8 failing across both layers): message never contains the session id / user id / email / token identifier / subject / account id. Acceptance grep for interpolated identifiers inside message template literals in core src is empty. Logging policy recorded as an ADR-EA-013 addendum.

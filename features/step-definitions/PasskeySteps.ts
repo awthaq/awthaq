@@ -193,7 +193,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Then(
-    'the session cookie is set by core "Sessions", not by any cookie-setting code in the passkey plugin',
+    'the session is delivered through the shared "SessionDelivery" helper as the "__Host-session" cookie',
     Effect.fn(function* () {
       const response = (yield* getOutcome("authenticateResponse")) as Response;
       const cookie = cookieFrom(response);

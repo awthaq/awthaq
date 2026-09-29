@@ -10,6 +10,7 @@
 // these two factories with a vendor's issuer/endpoints/claim mapping, so the
 // factories remain the escape hatch for any provider not listed.
 
+import { Defects } from "@awthaq/ports";
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
@@ -64,6 +65,12 @@ export interface OAuthProfile {
   readonly email?: string;
   readonly emailVerified?: boolean;
   readonly name?: string;
+  /**
+   * NAM-009: the provider's avatar URL. Applied only when the sign-in creates
+   * the local user, and only if it is an `http(s)` URL (it is an untrusted
+   * claim that ends up in a client-visible field).
+   */
+  readonly image?: string;
 }
 
 /**
@@ -102,6 +109,13 @@ export interface OAuthProviderConfig {
   readonly tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   /** NAM-004: only meaningful with a `discoveryUrl`. */
   readonly discovery?: OAuthDiscoveryPolicy;
+  /**
+   * AOMS-005: the `id_token` signature algorithms this provider may use — an allowlist the token
+   * header can select within but never widen. Unset: the discovery document's
+   * `id_token_signing_alg_values_supported` intersected with what `Jwt.SIGNING_ALGS` verifies, or
+   * `["RS256"]` when discovery does not advertise any. An empty effective list dies at boot.
+   */
+  readonly idTokenSigningAlgs?: ReadonlyArray<Jwt.SigningAlg>;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
@@ -143,6 +157,8 @@ export interface ResolvedProvider {
   readonly scopes: ReadonlyArray<string>;
   readonly skipPkce: boolean;
   readonly tokenEndpointAuthMethod: TokenEndpointAuthMethod;
+  /** AOMS-005: the effective `id_token` algorithm allowlist (never empty for an `oidc` provider). */
+  readonly idTokenSigningAlgs: ReadonlyArray<Jwt.SigningAlg>;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
@@ -164,6 +180,7 @@ const DiscoveryDocumentSchema = Schema.Struct({
   jwks_uri: Schema.optional(AbsoluteUrl),
   userinfo_endpoint: Schema.optional(AbsoluteUrl),
   token_endpoint_auth_methods_supported: Schema.optional(Schema.Array(Schema.String)),
+  id_token_signing_alg_values_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 
 /**
@@ -203,18 +220,14 @@ export const resolve = (
         : Option.some(yield* liftConfig(config.issuer).pipe(Effect.orDie));
 
     if (config.kind === "oidc" && Option.isNone(configuredIssuer)) {
-      return yield* Effect.die(
-        new Error(`awthaq/oauth: provider "${config.id}" is oidc but declares no issuer`),
-      );
+      return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" is oidc but declares no issuer`);
     }
 
     // JR-009: an oidc provider that never asks for `openid` gets no
     // `id_token` back, which would otherwise surface only as an opaque
     // runtime 400 at the first callback.
     if (config.kind === "oidc" && !config.scopes.includes("openid")) {
-      return yield* Effect.die(
-        new Error(`awthaq/oauth: provider "${config.id}" is oidc but its scopes omit "openid"`),
-      );
+      return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" is oidc but its scopes omit "openid"`);
     }
 
     // OAP-005 (RFC 9700 §2.1.1): `skipPkce` is a per-vendor escape hatch for
@@ -223,12 +236,8 @@ export const resolve = (
     const skipPkce = config.quirks?.skipPkce ?? false;
     if (skipPkce) {
       if (Option.isNone(clientSecret)) {
-        return yield* Effect.die(
-          new Error(
-            `awthaq/oauth: provider "${config.id}" sets quirks.skipPkce but has no clientSecret — ` +
-              "a public client must use PKCE (RFC 9700 §2.1.1)",
-          ),
-        );
+        return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" sets quirks.skipPkce but has no clientSecret — ` +
+              "a public client must use PKCE (RFC 9700 §2.1.1)");
       }
       yield* Effect.logWarning(
         `awthaq/oauth: provider "${config.id}" runs the authorization-code flow without PKCE (quirks.skipPkce)`,
@@ -240,6 +249,7 @@ export const resolve = (
     let jwksUri = config.endpoints?.jwksUri;
     let userinfoEndpoint = config.endpoints?.userinfoEndpoint;
     let advertisedAuthMethods: ReadonlyArray<string> | undefined;
+    let advertisedIdTokenAlgs: ReadonlyArray<string> | undefined;
 
     if (config.discoveryUrl !== undefined) {
       const discoveryUrl = yield* liftConfig(config.discoveryUrl).pipe(Effect.orDie);
@@ -254,36 +264,25 @@ export const resolve = (
                   message: `awthaq/oauth: provider "${config.id}" discovery is unreachable: ${error.message}`,
                 }),
               )
-            : Effect.die(
-                new Error(
-                  `awthaq/oauth: provider "${config.id}" discovery document is invalid ` +
-                    `or unfetchable: ${error.message}`,
-                ),
-              ),
+            : Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" discovery document is invalid ` +
+                    `or unfetchable: ${error.message}`),
         ),
       );
       if (Option.isSome(configuredIssuer) && document.issuer !== configuredIssuer.value) {
-        return yield* Effect.die(
-          new Error(
-            `awthaq/oauth: provider "${config.id}" discovery issuer "${document.issuer}" ` +
-              `does not match configured issuer "${configuredIssuer.value}"`,
-          ),
-        );
+        return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" discovery issuer "${document.issuer}" ` +
+              `does not match configured issuer "${configuredIssuer.value}"`);
       }
       authorizationEndpoint ??= document.authorization_endpoint;
       tokenEndpoint ??= document.token_endpoint;
       jwksUri ??= document.jwks_uri;
       userinfoEndpoint ??= document.userinfo_endpoint;
       advertisedAuthMethods = document.token_endpoint_auth_methods_supported;
+      advertisedIdTokenAlgs = document.id_token_signing_alg_values_supported;
     }
 
     if (authorizationEndpoint === undefined || tokenEndpoint === undefined) {
-      return yield* Effect.die(
-        new Error(
-          `awthaq/oauth: provider "${config.id}" has no authorizationEndpoint/tokenEndpoint ` +
-            "(supply endpoints, or a discoveryUrl that publishes them)",
-        ),
-      );
+      return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" has no authorizationEndpoint/tokenEndpoint ` +
+            "(supply endpoints, or a discoveryUrl that publishes them)");
     }
 
     // ESS-002: explicit endpoints get the same absolute-URL guarantee the
@@ -295,11 +294,7 @@ export const resolve = (
       ["userinfoEndpoint", userinfoEndpoint],
     ]) {
       if (value !== undefined && !URL.canParse(value)) {
-        return yield* Effect.die(
-          new Error(
-            `awthaq/oauth: provider "${config.id}" ${field} "${value}" is not an absolute URL`,
-          ),
-        );
+        return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" ${field} "${value}" is not an absolute URL`);
       }
     }
 
@@ -309,7 +304,7 @@ export const resolve = (
     const hasSecret = Option.isSome(clientSecret);
     const configuredMethod = config.tokenEndpointAuthMethod;
     const methodProblem = (problem: string) =>
-      Effect.die(new Error(`awthaq/oauth: provider "${config.id}" ${problem}`));
+      Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" ${problem}`);
     let tokenEndpointAuthMethod: TokenEndpointAuthMethod;
     if (configuredMethod !== undefined) {
       if (configuredMethod === "none" && hasSecret) {
@@ -349,6 +344,20 @@ export const resolve = (
       );
     }
 
+    // AOMS-005: explicit list, else what discovery advertises (only the algorithms this plugin can
+    // verify), else the RS256 every provider supports. Nothing verifiable is a boot defect, not a
+    // first-sign-in surprise.
+    const idTokenSigningAlgs =
+      config.idTokenSigningAlgs ??
+      (advertisedIdTokenAlgs === undefined
+        ? Jwt.SIGNING_ALGS.filter((alg) => alg === "RS256")
+        : Jwt.SIGNING_ALGS.filter((alg) => advertisedIdTokenAlgs.includes(alg)));
+    if (config.kind === "oidc" && idTokenSigningAlgs.length === 0) {
+      return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" advertises id_token signing algorithms ` +
+            `[${(advertisedIdTokenAlgs ?? []).join(", ")}], none of which this plugin verifies ` +
+            `(${Jwt.SIGNING_ALGS.join(", ")}); set idTokenSigningAlgs explicitly or use another provider`);
+    }
+
     return {
       id: config.id,
       kind: config.kind,
@@ -363,6 +372,7 @@ export const resolve = (
       scopes: config.scopes,
       skipPkce,
       tokenEndpointAuthMethod,
+      idTokenSigningAlgs,
       mapProfile: config.mapProfile,
     };
   });

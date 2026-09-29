@@ -1,6 +1,6 @@
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-138 through BEH-EA-141.
 import { Api } from "@awthaq/api";
-import { AuditLog, DataExport, Erasure, AuthEvents, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, DataExport, Erasure, Slots, Users } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -18,9 +18,11 @@ const owner = role({ name: "owner", permissions: [projectDelete], inherits: [edi
 
 // `Roles` now publishes `auth.roles.assigned/revoked` (RRM-005), so it needs `AuthEvents`;
 // `provideMerge` also exposes `AuditLog` so tests can read the durable record back.
+// MA-005: a plugin layer built outside `Auth.make` (which provides one itself) needs a `SlotsRegistry`.
 const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
-  // CSG-001: the plugin contributes its erasure to the composition's registry.
+  Layer.provideMerge(Slots.layer),
+  // CSG-001/CSG-005: the plugin contributes its erasure and export to the composition's registries.
   Layer.provideMerge(Erasure.registryLayer),
   Layer.provideMerge(DataExport.registryLayer),
 );
@@ -57,6 +59,18 @@ describe("Roles (SubjectResolver override)", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("ECS-006: holders lists exactly the users holding the role", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const userA = Users.UserId("88888888-8888-8888-8888-888888888888");
+      const userB = Users.UserId("99999999-9999-9999-9999-999999999999");
+      yield* roles.assign(userA, "owner");
+      yield* roles.assign(userB, "editor");
+      assert.deepStrictEqual(yield* roles.holders("owner"), [userA]);
+      assert.deepStrictEqual(yield* roles.holders("nobody"), []);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("BEH-EA-137: a user with no assigned roles still resolves id-only", () =>
     Effect.gen(function* () {
       const resolver = yield* QadiSubjectResolver.SubjectResolver;
@@ -74,7 +88,7 @@ describe("Roles (SubjectResolver override)", () => {
       const roles = yield* Roles.Roles;
       const userId = Users.UserId("33333333-3333-3333-3333-333333333333");
       const failure = yield* roles.assign(userId, "does-not-exist-in-catalog").pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "UnknownRole");
+      assert.strictEqual(failure._tag, "Roles/UnknownRole");
       assert.strictEqual(failure.roleName, "does-not-exist-in-catalog");
       assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
       assert.deepStrictEqual(yield* roles.listUnknownAssignments, []);

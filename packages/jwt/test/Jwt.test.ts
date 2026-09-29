@@ -207,7 +207,7 @@ describe("Jwt verifyLive", () => {
         yield* TestClock.adjust(Duration.days(8));
 
         const liveCheckFails = yield* jwt.verifyLive(token).pipe(Effect.flip);
-        assert.strictEqual(liveCheckFails._tag, "JwtInvalidError");
+        if (liveCheckFails._tag !== "JwtInvalidError") return assert.fail(liveCheckFails._tag);
         assert.strictEqual(liveCheckFails.reason, "session no longer live");
       }).pipe(Effect.provide(buildLayer({ ttl: Duration.days(30) }))),
   );

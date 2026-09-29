@@ -72,6 +72,10 @@ Notable behavior:
 - **Registration requires user presence** except for Conditional Create; a registration whose credential id is already registered fails `PasskeyAlreadyRegistered`.
 - **Signals.** `GET /passkey/signals` feeds the browser's WebAuthn Signals API (see the client below) so a deleted passkey stops being offered.
 
+## Native clients
+
+`POST /passkey/authenticate/verify` honours `X-Awthaq-Token-Delivery: bearer`: the session token comes back in the response body's `token` field and no cookie is set (the session is delivered through `@awthaq/server`'s shared `SessionDelivery`, like every other sign-in). Storage (Keychain/Keystore) is the app's responsibility. Any other header value answers `400 InvalidTokenDelivery` before the ceremony is consumed.
+
 ## Client
 
 `passkeyClient` in `@awthaq/client` wraps `@simplewebauthn/browser`: feature detection (`getClientCapabilities`), `registerPasskey`, `registerPasskeyConditional`, `authenticate` (button flow, or conditional-UI autofill with `autoFill: true` — give the username input `autocomplete="username webauthn"`), `reauthenticate`, credential management, and fire-and-forget Signals (`allAcceptedCredentials` after a delete and after every sign-in; `signalCurrentUserDetails()` for a profile change; `unknownCredential` only from the signed-in `reauthenticate`).

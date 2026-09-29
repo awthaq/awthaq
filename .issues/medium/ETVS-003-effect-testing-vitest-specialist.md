@@ -3,7 +3,7 @@ ID: "ETVS-003"
 Title: "Five packages ship vitest configs with no tests; contract stratum @awthaq/api untested directly"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "api"
 Source: "packages/api/vitest.config.ts:6"
 Auditor: "effect-testing-vitest-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `api` · reported by **Effect Testing & @effect/vitest Specialist** (`effect-testing-vitest-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -44,3 +44,5 @@ Add a focused packages/api/test suite (Principal decode of every member tag, Una
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `api-contract-tests`. Evidence at HEAD ec065a7: `packages/api/vitest.config.ts:3`. Fix: Give @awthaq/api a direct test suite for its security-relevant contract. The placeholder-package half goes to the tooling slice. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/api/test/Api.test.ts (Principal round-trips, undeclared tag refused, optional actingAs, CurrentPrincipal has no default, error statuses via OpenApi.fromApi plus typed fields, security key order of the three auth middlewares, CsrfProtection requiredForClient) and Contracts.test.ts (AuthCoreApi id and session/account endpoint inventory, Authentication then CsrfProtection last on every endpoint, DTO round trips, the MW-008 timestamp tests) added; api already had Email.test.ts; both run in pnpm run test. Not done: wiring BEH-EA-025..029 scenarios into the skipped 04-contract-stratum.feature (no step definitions exist, see AH-003) and the placeholder-package vitest configs and CI guard (tooling slice 13, as the dossier hands off).

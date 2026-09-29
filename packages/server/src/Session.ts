@@ -7,7 +7,6 @@
 
 import { AuthCore, Api, SessionContract } from "@awthaq/api";
 import { Sessions } from "@awthaq/core";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -27,9 +26,9 @@ export const toSessionDto = (
 ): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
     id: view.id,
-    createdAt: DateTime.formatIso(view.createdAt),
-    lastActiveAt: DateTime.formatIso(view.lastActiveAt),
-    expiresAt: DateTime.formatIso(view.absoluteExpiresAt),
+    createdAt: view.createdAt,
+    lastActiveAt: view.lastActiveAt,
+    expiresAt: view.absoluteExpiresAt,
     userAgent: Option.getOrNull(view.userAgent),
     amr: view.amr,
     current,
@@ -38,9 +37,9 @@ export const toSessionDto = (
 const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
     id: item.id,
-    createdAt: DateTime.formatIso(item.createdAt),
-    lastActiveAt: DateTime.formatIso(item.lastActiveAt),
-    expiresAt: DateTime.formatIso(item.expiresAt),
+    createdAt: item.createdAt,
+    lastActiveAt: item.lastActiveAt,
+    expiresAt: item.expiresAt,
     userAgent: Option.getOrNull(item.userAgent),
     amr: item.amr,
     current: item.current,
@@ -95,7 +94,7 @@ export const SessionHandlers = HttpApiBuilder.group(
         const { sessionId } = yield* currentUser;
         yield* sessions
           .revoke(sessionId, "signOut")
-          .pipe(Effect.catchTag("SessionNotFound", () => Effect.void));
+          .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void));
         yield* expireSessionCookie;
       }),
 
@@ -116,7 +115,7 @@ export const SessionHandlers = HttpApiBuilder.group(
         // id are indistinguishable.
         yield* sessions
           .revokeOwned(userId, targetId, targetId === sessionId ? "signOut" : "userRevoked")
-          .pipe(Effect.catchTag("SessionNotFound", () => new SessionContract.SessionNotFound()));
+          .pipe(Effect.catchTag("Sessions/NotFound", () => new SessionContract.SessionNotFound()));
         // CSS-002: revoking one's own current session ends it too; revoking a
         // different device's session leaves this cookie alone.
         if (targetId === sessionId) yield* expireSessionCookie;

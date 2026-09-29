@@ -10,8 +10,8 @@
 // (BEH-EA-026's `SubjectDto` shape, as its own standalone contract — see
 // that module's own header comment for why it is not `SessionView`'s single
 // combined struct).
-// Planned next: `SessionView` itself (BEH-EA-026), folding `session` into `Auth.make`'s
-// full plugin-composed `api` (BEH-EA-032) rather than the standalone `AuthCoreApi` here.
+// `Auth.make` seeds its composed `api` with `AuthCore.AuthCoreApi`'s groups (MW-002, BEH-EA-032).
+// Planned next: `SessionView` itself (BEH-EA-026).
 // See spec/overview.md for the full package map.
 
 export * as AccountContract from "./Account.ts";

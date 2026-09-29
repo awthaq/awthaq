@@ -6,7 +6,7 @@
 // `Repositories.file.test.ts` on a WAL file, `Repositories.postgres.test.ts`
 // on a real server) calls with its own migrated `SqlClient` layer, so a new
 // case lands on every dialect at once.
-import { Encryption, KeyProvider } from "@awthaq/ports";
+import { Encryption, KeyProvider, Tenant } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -104,6 +104,140 @@ export const contractCases = (
         const found = yield* users.findByEmail("MIXED@EXAMPLE.COM");
         assert.isTrue(Option.isSome(found));
       }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    // ---- FAMS-002/SCP-001/SCP-003: the identity, status and idempotent-insert operations ----
+
+    it.effect(
+      "FAMS-002: email-less rows (phone / anonymous) persist; email and phone are each unique",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Repositories.UsersRepository;
+          const anonymous = yield* users.insert(yield* M.User.insert.makeEffect({ name: "Guest" }));
+          const anonymous2 = yield* users.insert(
+            yield* M.User.insert.makeEffect({ name: "Guest 2" }),
+          );
+          assert.strictEqual(anonymous.email, null);
+          assert.strictEqual(anonymous.phone, null);
+          assert.strictEqual(anonymous.status, "active");
+          assert.notStrictEqual(anonymous.id, anonymous2.id);
+
+          const phone = Schema.decodeUnknownSync(Models.E164)("+15550142");
+          const phoned = yield* users.insert(
+            yield* M.User.insert.makeEffect({ phone, name: "Phoned" }),
+          );
+          assert.strictEqual(phoned.phone, "+15550142");
+          assert.strictEqual(phoned.phoneVerified, false);
+          const duplicate = yield* users
+            .insert(yield* M.User.insert.makeEffect({ phone, name: "Dup" }))
+            .pipe(Effect.flip);
+          assert.strictEqual(duplicate._tag, "SqlError");
+          assert.strictEqual(
+            Option.getOrThrow(yield* users.findByPhone("+15550142")).id,
+            phoned.id,
+          );
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect(
+      "SCP-003: insertIfAbsent returns None on any unique conflict instead of erroring",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Repositories.UsersRepository;
+          const first = yield* users.insertIfAbsent(
+            yield* M.User.insert.makeEffect({ email: "once@example.com", name: "Once" }),
+          );
+          assert.isTrue(Option.isSome(first));
+          const second = yield* users.insertIfAbsent(
+            yield* M.User.insert.makeEffect({ email: "ONCE@example.com", name: "Twice" }),
+          );
+          assert.isTrue(Option.isNone(second));
+          // Still usable afterwards — the conflict did not poison the connection/transaction.
+          const sql = yield* SqlClient.SqlClient;
+          const rows = yield* sql.withTransaction(
+            Effect.gen(function* () {
+              yield* users.insertIfAbsent(
+                yield* M.User.insert.makeEffect({ email: "once@example.com", name: "Again" }),
+              );
+              return yield* users.findByEmail("once@example.com");
+            }),
+          );
+          assert.strictEqual(Option.getOrThrow(rows).name, "Once");
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect("FAMS-002: promoteIdentity sets an identity only on a row that has none", () =>
+      Effect.gen(function* () {
+        const users = yield* Repositories.UsersRepository;
+        const guest = yield* users.insert(yield* M.User.insert.makeEffect({ name: "Guest" }));
+        const promoted = yield* users.promoteIdentity(guest.id, {
+          _tag: "Email",
+          email: "promoted@example.com",
+        });
+        assert.strictEqual(Option.getOrThrow(promoted).email, "promoted@example.com");
+        assert.strictEqual(Option.getOrThrow(promoted).emailVerified, false);
+        // Already has one: the guarded UPDATE matches nothing.
+        const again = yield* users.promoteIdentity(guest.id, {
+          _tag: "Phone",
+          phone: Schema.decodeUnknownSync(Models.E164)("+15550143"),
+        });
+        assert.isTrue(Option.isNone(again));
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect(
+      "BAM-009: changeEmail replaces the address and clears emailVerified in one statement",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Repositories.UsersRepository;
+          const created = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "before@example.com", name: "Change" }),
+          );
+          yield* users.verifyEmail(created.id);
+          const changed = yield* users.changeEmail(created.id, "after@example.com");
+          assert.strictEqual(Option.getOrThrow(changed).email, "after@example.com");
+          assert.strictEqual(Option.getOrThrow(changed).emailVerified, false);
+          const guest = yield* users.insert(yield* M.User.insert.makeEffect({ name: "G" }));
+          assert.isTrue(Option.isNone(yield* users.changeEmail(guest.id, "g@example.com")));
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect(
+      "SCP-001: setStatus is the only writer of status; the generic update leaves it alone",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Repositories.UsersRepository;
+          const created = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "status@example.com", name: "Status" }),
+          );
+          const until = DateTime.makeUnsafe("2030-01-02T03:04:05.000Z");
+          const suspended = yield* users.setStatus(created.id, {
+            status: "suspended",
+            reason: "abuse",
+            until,
+          });
+          assert.strictEqual(suspended.status, "suspended");
+          assert.strictEqual(suspended.statusReason, "abuse");
+          assert.isTrue(
+            DateTime.Equivalence(suspended.suspendedUntil ?? DateTime.makeUnsafe(0), until),
+          );
+
+          const renamed = yield* users.update(
+            yield* M.User.update.makeEffect({ id: created.id, name: "Renamed" }),
+          );
+          assert.strictEqual(renamed.name, "Renamed");
+          assert.strictEqual(renamed.status, "suspended");
+          assert.strictEqual(renamed.statusReason, "abuse");
+          assert.isNotNull(renamed.suspendedUntil);
+
+          const active = yield* users.setStatus(created.id, {
+            status: "active",
+            reason: null,
+            until: null,
+          });
+          assert.strictEqual(active.status, "active");
+          assert.strictEqual(active.suspendedUntil, null);
+        }).pipe(Effect.provide(RepositoriesLive)),
     );
 
     it.effect(
@@ -1135,6 +1269,155 @@ export const contractCases = (
         assert.strictEqual((yield* sessions.findById(row.id)).id, row.id);
         assert.isTrue(yield* sessions.deleteOwned(row.id, owner.id));
         assert.isFalse(yield* sessions.deleteOwned(row.id, owner.id));
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    // ---- DRS-001 (ADR-EA-018): the ambient tenant is stamped on every insert path ----
+
+    /** One row of every partitioned table, written under whatever tenant is ambient. */
+    const insertEveryTable = (label: string) =>
+      Effect.gen(function* () {
+        const users = yield* Repositories.UsersRepository;
+        const accounts = yield* Repositories.AccountsRepository;
+        const verification = yield* Repositories.VerificationRepository;
+        const reservations = yield* Repositories.VerificationReservationsRepository;
+        const auditLog = yield* Repositories.AuditLogRepository;
+        const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
+        const user = yield* users.insert(
+          yield* M.User.insert.makeEffect({ email: `${label}@tenant.test`, name: label }),
+        );
+        const orphan = yield* users.insertIfAbsent(
+          yield* M.User.insert.makeEffect({ email: `${label}-absent@tenant.test`, name: label }),
+        );
+        const account = yield* accounts.insert(
+          yield* M.Account.insert.makeEffect({
+            userId: user.id,
+            providerId: "github",
+            subject: `${label}-subject`,
+            issuer: "",
+            passwordHash: null,
+            accessToken: null,
+            refreshToken: null,
+          }),
+        );
+        const session = yield* insertLiveSession(user.id, {
+          absoluteExpiresAt: future,
+          idleExpiresAt: future,
+        });
+        const token = yield* verification.insert(
+          yield* M.VerificationToken.insert.makeEffect({
+            identifier: `verify-email:${label}`,
+            valueHash: "h",
+            expiresAt: future,
+            consumedAt: null,
+          }),
+        );
+        const live = yield* verification.upsertLive({
+          id: Schema.decodeUnknownSync(Models.VerificationTokenId)(`${label}-live`),
+          identifier: `reset-password:${label}`,
+          userId: null,
+          valueHash: "h",
+          expiresAt: future,
+          createdAt: now,
+          payload: null,
+        });
+        yield* reservations.claim({ identifier: `signup:${label}`, expiresAt: future, now });
+        yield* auditLog.insert({
+          id: `${label}-audit`,
+          eventTag: "auth.test",
+          actorUserId: null,
+          occurredAt: now,
+          correlationId: null,
+          payload: null,
+        });
+        return {
+          users: [user.tenantId, ...(Option.isSome(orphan) ? [orphan.value.tenantId] : [])],
+          accounts: [account.tenantId],
+          sessions: [session.tenantId],
+          verification: [token.tenantId, live.tenantId],
+        };
+      });
+
+    /** `tenantId` of the reservation and audit rows, which no repository reads back. */
+    const rawTenantOf = (table: "verification_reservations" | "auth_audit_log", label: string) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const column = table === "auth_audit_log" ? "id" : "identifier";
+        const key = table === "auth_audit_log" ? `${label}-audit` : `signup:${label}`;
+        const rows = yield* sql.unsafe<{ readonly tenantId: string | null }>(
+          `SELECT "tenantId" FROM ${table} WHERE ${column} = '${key}'`,
+        );
+        return rows.map((row) => row.tenantId);
+      });
+
+    it.effect("DRS-001: every insert path stamps the ambient tenantId, NULL when none", () =>
+      Effect.gen(function* () {
+        const tenanted = yield* insertEveryTable("t1").pipe(Tenant.withTenant("tenant-1"));
+        assert.deepStrictEqual(tenanted, {
+          users: ["tenant-1", "tenant-1"],
+          accounts: ["tenant-1"],
+          sessions: ["tenant-1"],
+          verification: ["tenant-1", "tenant-1"],
+        });
+        assert.deepStrictEqual(yield* rawTenantOf("verification_reservations", "t1"), ["tenant-1"]);
+        assert.deepStrictEqual(yield* rawTenantOf("auth_audit_log", "t1"), ["tenant-1"]);
+
+        // Single-tenant behaviour is untouched: nothing provides the context, so NULL.
+        const plain = yield* insertEveryTable("plain");
+        assert.deepStrictEqual(plain, {
+          users: [null, null],
+          accounts: [null],
+          sessions: [null],
+          verification: [null, null],
+        });
+        assert.deepStrictEqual(yield* rawTenantOf("verification_reservations", "plain"), [null]);
+        assert.deepStrictEqual(yield* rawTenantOf("auth_audit_log", "plain"), [null]);
+
+        // An explicit tenant on the input wins over the ambient one.
+        const users = yield* Repositories.UsersRepository;
+        const explicit = yield* users
+          .insert(
+            yield* M.User.insert.makeEffect({
+              email: "explicit@tenant.test",
+              name: "E",
+              tenantId: "tenant-explicit",
+            }),
+          )
+          .pipe(Tenant.withTenant("tenant-1"));
+        assert.strictEqual(explicit.tenantId, "tenant-explicit");
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect("DRS-005: the login lookups stay global — a tenant never narrows the directory", () =>
+      Effect.gen(function* () {
+        const users = yield* Repositories.UsersRepository;
+        const accounts = yield* Repositories.AccountsRepository;
+        const created = yield* users
+          .insert(yield* M.User.insert.makeEffect({ email: "global@tenant.test", name: "G" }))
+          .pipe(Tenant.withTenant("tenant-a"));
+        yield* accounts
+          .insert(
+            yield* M.Account.insert.makeEffect({
+              userId: created.id,
+              providerId: "github",
+              subject: "global-subject",
+              issuer: "",
+              passwordHash: null,
+              accessToken: null,
+              refreshToken: null,
+            }),
+          )
+          .pipe(Tenant.withTenant("tenant-a"));
+        // The same email / provider subject resolves from another tenant's request.
+        const byEmail = yield* users
+          .findByEmail("global@tenant.test")
+          .pipe(Tenant.withTenant("tenant-b"));
+        const bySubject = yield* accounts
+          .findByProviderSubject("github", "global-subject", "")
+          .pipe(Tenant.withTenant("tenant-b"));
+        assert.isTrue(Option.isSome(byEmail));
+        assert.isTrue(Option.isSome(bySubject));
       }).pipe(Effect.provide(RepositoriesLive)),
     );
 

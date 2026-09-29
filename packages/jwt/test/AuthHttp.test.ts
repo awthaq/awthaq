@@ -50,12 +50,12 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 );
 
 /**
- * `Jwt`'s own `jwt`/`jwt.token` groups are GET-only and were deliberately
- * NOT given `Api.CsrfProtection` (CSRF only ever rejects unsafe methods,
- * BEH-EA-077), so the plain `AppLayer` below (JwtApi alone) never needs
- * this. `CrossPluginAppLayer` further down composes `AuthCore.AuthCoreApi`
- * (`SessionGroup`/`AccountGroup`, both now CSRF-protected) alongside it, so
- * only that layer needs it.
+ * `Jwt`'s own `jwt`/`jwt.token` groups are deliberately NOT given
+ * `Api.CsrfProtection`: minting and introspection sign or read a token and change no
+ * server state, and the response is unreadable cross-origin (no CORS by default), so
+ * the plain `AppLayer` below (JwtApi alone) never needs this. `CrossPluginAppLayer`
+ * further down composes `AuthCore.AuthCoreApi` (`SessionGroup`/`AccountGroup`, both
+ * CSRF-protected) alongside it, so only that layer needs it.
  */
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
@@ -225,17 +225,27 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
       }),
   );
 
-  it("GET /jwt/token requires authentication", async () => {
+  it("POST /jwt/token requires authentication", async () => {
     const { handler } = buildHandler();
-    const response = await handler(new Request(`${ORIGIN}/jwt/token`));
+    const response = await handler(new Request(`${ORIGIN}/jwt/token`, { method: "POST" }));
     assert.strictEqual(response.status, 401);
   });
 
-  it("GET /jwt/token mints a token verifiable against /jwt/jwks", async () => {
+  // AVS-007: minting a credential is an action, so it is POST-only — a GET must not reach it.
+  it("GET /jwt/token is not served (minting is POST-only)", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler();
+    const cookie = await issueSessionCookieHeader("user-1");
+    const response = await handler(new Request(`${ORIGIN}/jwt/token`, { headers: { cookie } }));
+    assert.strictEqual(response.status, 404);
+  });
+
+  it("POST /jwt/token mints a token verifiable against /jwt/jwks", async () => {
     const { handler, issueSessionCookieHeader, verifyToken } = buildHandler();
     const cookie = await issueSessionCookieHeader("user-1");
 
-    const minted = await handler(new Request(`${ORIGIN}/jwt/token`, { headers: { cookie } }));
+    const minted = await handler(
+      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie } }),
+    );
     assert.strictEqual(minted.status, 200);
     // PDR-003: response mirroring is opt-in now (`mirrorResponses`, default
     // "off"), so this endpoint's token arrives in the body only.
@@ -264,7 +274,7 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
     const cookie = await issueSessionCookieHeader("user-1");
 
     const mintedResponse = await handler(
-      new Request(`${ORIGIN}/jwt/token`, { headers: { cookie } }),
+      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie } }),
     );
     const { token } = (await mintedResponse.json()) as { token: string };
 
@@ -303,7 +313,7 @@ describe("POST /jwt/introspect session liveness (TIR-007)", () => {
     const minting = await issueSession("user-1");
     const caller = await issueSession("user-1");
     const mintedResponse = await handler(
-      new Request(`${ORIGIN}/jwt/token`, { headers: { cookie: minting.cookie } }),
+      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie: minting.cookie } }),
     );
     const { token } = (await mintedResponse.json()) as { token: string };
     const introspect = async (): Promise<boolean> => {

@@ -87,7 +87,10 @@ export interface InvitationRecordsShape {
    * (`inviterId`) or one addressed to their email (compared case-insensitively;
    * the row holds the invitee's address in plaintext). Idempotent.
    */
-  readonly removeAllForUser: (userId: Users.UserId, email: string) => Effect.Effect<void>;
+  readonly removeAllForUser: (
+    userId: Users.UserId,
+    email: string | undefined,
+  ) => Effect.Effect<void>;
 }
 
 export class InvitationRecords extends Context.Service<InvitationRecords, InvitationRecordsShape>()(
@@ -225,7 +228,8 @@ export const layerMemory = Layer.effect(
       Ref.update(state, (s) =>
         Array.from(HashMap.entries(s)).reduce(
           (acc, [key, row]) =>
-            row.inviterId === userId || row.email.toLowerCase() === email.toLowerCase()
+            row.inviterId === userId ||
+            (email !== undefined && row.email.toLowerCase() === email.toLowerCase())
               ? HashMap.remove(acc, key)
               : acc,
           s,
@@ -462,10 +466,10 @@ export const layerSql = Layer.effect(
       );
 
     const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (userId, email) =>
-      sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId} OR lower("email") = lower(${email})`.pipe(
-        Effect.orDie,
-        Effect.asVoid,
-      );
+      (email === undefined
+        ? sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId}`
+        : sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId} OR lower("email") = lower(${email})`
+      ).pipe(Effect.orDie, Effect.asVoid);
 
     return {
       create,

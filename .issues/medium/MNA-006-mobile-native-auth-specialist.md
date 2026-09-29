@@ -3,7 +3,7 @@ ID: "MNA-006"
 Title: "Client SDK assumes a browser cookie jar; no React Native story"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "client"
 Source: "packages/client/src/AuthClient.ts:77"
 Auditor: "mobile-native-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `client` · reported by **Mobile/Native Auth Specialist** (`mobile-native-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Document the React Native recipe explicitly (bearer mode + Keychain/Keystore ada
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `client-native-bearer-mode`. Evidence at HEAD ec065a7: `packages/client/src/AuthClient.ts:76`. Fix: Ship a client-side bearer mode: a pluggable token-store service, a transformClient that attaches it, and the request header that opts into ticket 17's body token delivery; document the React Native recipe. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Client bearer mode finished on top of P13's BearerTokenStore/bearerTransformClient (MNA-005): the transform now sends X-Awthaq-Token-Delivery: bearer (Api.TOKEN_DELIVERY_HEADER) on every request, which is what makes session-minting responses return the token in the body (MNA-001); new AuthClient.captureSessionToken(effect) stores the body token of a sign-in/passkey-verify/OAuth exchange in the ambient BearerTokenStore and returns the response unchanged (no token or empty token stores nothing; failures pass through). README: 'Getting the first token' + React Native / Expo recipe (Keychain/Keystore-backed TokenStore is the app's; CSRF bootstrap note; OAuth native flow). The dossier's 'pluggable token-store service' already existed as BearerTokenStore (kept, not renamed to TokenStore). Tests (packages/client/test/AuthClient.test.ts, 4 new): header on every request with/without a stored token; captureSessionToken stores then next request is authenticated; nothing stored without a token; failed sign-in untouched. Gates: typecheck 0, client tests 69 passed, package:smoke (README snippet import check), check:readmes.

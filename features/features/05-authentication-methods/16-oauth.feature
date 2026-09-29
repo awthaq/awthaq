@@ -252,6 +252,15 @@ Feature: OAuth and OIDC
       Then the handler does not redirect to "https://attacker.example.com/phish"
       And the callback is not treated as authorizing an arbitrary redirect target
 
+    # MNA-003/MNA-004 (wayfinder ticket 17): a native app can only receive the
+    # deep-link URL, so the redirect carries a one-time exchange code, never a token.
+    @REQ-EA-633
+    Scenario: A native-mode flow returns to an allowlisted deep link with a one-time exchange code
+      Given a native redirect allowlist including "myapp://oauth/callback"
+      When a native-mode sign-in request specifies "callbackURL=myapp://oauth/callback"
+      Then the post-login redirect to "myapp://oauth/callback" carries a one-time exchange code and no session
+      And redeeming that code returns a session token exactly once
+
     @REQ-EA-354
     Scenario: redirect_uri is always derived from the configured base URL, never from request input
       Given an authorization request under construction for provider "google"

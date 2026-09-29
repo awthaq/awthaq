@@ -19,6 +19,7 @@
 // keeps only a nominal constructor over each, so a key rename on either side
 // breaks the bridge at compile time.
 
+import { Defects } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
@@ -35,6 +36,18 @@ export type SessionId = typeof SessionId.Type;
 
 export const VerificationTokenId = Schema.String.pipe(Schema.brand("VerificationTokenId"));
 export type VerificationTokenId = typeof VerificationTokenId.Type;
+
+/**
+ * SOS-008/FAMS-002: the stored shape of `users.phone` — E.164 (`+` and 2-15
+ * digits, no leading zero after the `+`). Declared here for the same reason
+ * `UserId` is: the model's `phone` column and core's `Phone` identity share one
+ * brand, and `@awthaq/core`'s `Phone.ts` owns the normalizer that mints it.
+ */
+export const E164 = Schema.String.pipe(
+  Schema.check(Schema.isPattern(/^\+[1-9]\d{1,14}$/)),
+  Schema.brand("E164"),
+);
+export type E164 = typeof E164.Type;
 
 /** The SQL dialects this stratum implements (mysql is a named target, not yet wired — see `CoreMigrations.ts`). */
 export type Dialect = "pg" | "sqlite";
@@ -78,6 +91,17 @@ const nullableDateTimeFields = <C extends Schema.Top>(codec: C) => {
       jsonUpdate: json,
     }),
     /**
+     * SCP-001: `NULL` unless set at insert or by a dedicated targeted write —
+     * no `update`/`jsonUpdate` variant, so the generic `update` can never
+     * clobber it (`users.suspendedUntil`).
+     */
+    nullableDateTimeInsertOnly: Model.Field({
+      select: nullable,
+      insert: nullable.pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+      json: jsonNullable,
+      jsonCreate: jsonNullable,
+    }),
+    /**
      * As `nullableDateTime`, with a `null` constructor default in every
      * variant — exactly what the single plain schema this replaces gave the
      * pre-TS-001 model (including `update`, which the repository's own
@@ -105,6 +129,13 @@ const sqliteFields = {
     json: Schema.Boolean,
     jsonCreate: Schema.Boolean,
   }),
+  // FAMS-002: `phoneVerified` mirrors `emailVerified` exactly (BEH-EA-042).
+  phoneVerified: Model.Field({
+    select: Schema.BooleanFromBit,
+    insert: Schema.BooleanFromBit.pipe(Schema.withConstructorDefault(Effect.succeed(false))),
+    json: Schema.Boolean,
+    jsonCreate: Schema.Boolean,
+  }),
   dateTimeInsert: Model.DateTimeInsert,
   dateTimeUpdate: Model.DateTimeUpdate,
   ...dateTimeFields(Schema.DateTimeUtcFromString),
@@ -118,6 +149,12 @@ const pgFields = {
   // `@effect/sql-pg` decodes OID 16 (bool) to a JS boolean and binds one
   // as-is; `BooleanFromBit` would reject every row.
   emailVerified: Model.Field({
+    select: Schema.Boolean,
+    insert: Schema.Boolean.pipe(Schema.withConstructorDefault(Effect.succeed(false))),
+    json: Schema.Boolean,
+    jsonCreate: Schema.Boolean,
+  }),
+  phoneVerified: Model.Field({
     select: Schema.Boolean,
     insert: Schema.Boolean.pipe(Schema.withConstructorDefault(Effect.succeed(false))),
     json: Schema.Boolean,
@@ -162,7 +199,7 @@ export const resolveDialect = (sql: SqlClient.SqlClient): Effect.Effect<Dialect>
   sql.onDialectOrElse({
     pg: () => Effect.succeed<Dialect>("pg"),
     sqlite: () => Effect.succeed<Dialect>("sqlite"),
-    orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for models")),
+    orElse: () => Defects.unsupportedDialect("models"),
   });
 
 // ---- dialect-independent field declarations ---------------------------------
@@ -179,10 +216,38 @@ export const resolveDialect = (sql: SqlClient.SqlClient): Effect.Effect<Dialect>
  * `emailVerified` is excluded from the generic `update`/`jsonUpdate`
  * variants so a repository's ordinary `update` call cannot flip it —
  * only a dedicated operation (BEH-EA-042) may.
+ *
+ * FAMS-002/SAM-003 (wayfinder ticket 09): the domain layer's `UserIdentity`
+ * union (Email | Phone | Anonymous) is stored flattened, so `users_email_unique`
+ * and `users_phone_unique` stay real database constraints. Both columns are
+ * nullable with a `null` constructor default (an Anonymous row sets neither),
+ * and — like `emailVerified` — excluded from `update`/`jsonUpdate`: an identity
+ * only changes through the repository's dedicated `promoteIdentity`/
+ * `changeEmail`/`verify*` writes. SCP-001: `status` (and its reason/expiry) is
+ * likewise write-gated to `setStatus`; no generic update field can touch it.
  */
+const insertOnly = <S extends Schema.Top>(schema: S) =>
+  schema.pipe(Model.FieldExcept(["update", "jsonUpdate"]));
+
+/**
+ * DRS-001/EP-001 (ADR-EA-018): the opaque tenant attribution column. Database
+ * variants only — no JSON variant, so a client-supplied body can never name its
+ * own tenant — and no `update`: a row is stamped once, at insert, from the
+ * ambient `TenantContext` (`Repositories.ts` reads it; `NULL` when unset). The
+ * constructor default keeps every existing insert call site compiling.
+ */
+const tenantIdField = Model.Field({
+  select: Schema.NullOr(Schema.String),
+  insert: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+});
+
 const userFields = {
   id: Model.UuidV7Insert(UserId),
-  email: Schema.String,
+  tenantId: tenantIdField,
+  email: insertOnly(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
+  phone: insertOnly(Schema.NullOr(E164).pipe(Schema.withConstructorDefault(Effect.succeed(null)))),
   name: Schema.String,
   // AOMS-002 (.issues/high): free-form per-user metadata this service
   // stores opaquely and never parses — the same
@@ -193,6 +258,19 @@ const userFields = {
   // `User.insert` call site that predates this field keeps compiling
   // unchanged, matching `emailVerified`'s own default.
   metadata: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  // BAM-009/NAM-009: an avatar URL. Client-writable like `name`, so it keeps
+  // its `update` variant; `NULL` means none.
+  image: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  // SCP-001/BAM-005: ban and SCIM `active:false` are one state. The reason is
+  // an operator note, never sent over the wire to the suspended user.
+  status: insertOnly(
+    Schema.Literals(["active", "suspended"]).pipe(
+      Schema.withConstructorDefault(Effect.succeed("active")),
+    ),
+  ),
+  statusReason: insertOnly(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
 };
 
 /**
@@ -218,6 +296,7 @@ const userFields = {
  */
 const accountFields = {
   id: Model.UuidV7Insert(AccountId),
+  tenantId: tenantIdField,
   userId: UserId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   providerId: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   subject: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
@@ -265,6 +344,7 @@ const accountFields = {
  */
 const sessionFields = {
   id: Model.UuidV7Insert(SessionId),
+  tenantId: tenantIdField,
   userId: UserId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   // Ticket 01: rotation overwrites this on the same throttled touch write
   // that already refreshes `lastActiveAt`/`idleExpiresAt`, so — unlike
@@ -333,6 +413,7 @@ const sessionFields = {
  */
 const verificationTokenFields = {
   id: Model.UuidV7Insert(VerificationTokenId),
+  tenantId: tenantIdField,
   identifier: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   /**
    * BCR-003 (.issues/high): nullable — not every token names a real user at
@@ -383,6 +464,8 @@ const pgModels = () => {
   class User extends Model.Class<User>("User")({
     ...userFields,
     emailVerified: pgFields.emailVerified,
+    phoneVerified: pgFields.phoneVerified,
+    suspendedUntil: pgFields.nullableDateTimeInsertOnly,
     createdAt: pgFields.dateTimeInsert,
     updatedAt: pgFields.dateTimeUpdate,
   }) {}
@@ -425,6 +508,7 @@ const pgModels = () => {
     "VerificationReservation",
   )({
     identifier: Schema.String,
+    tenantId: tenantIdField,
     expiresAt: pgFields.dateTime,
   }) {}
 
@@ -443,6 +527,8 @@ const sqliteModels = () => {
   class User extends Model.Class<User>("User")({
     ...userFields,
     emailVerified: sqliteFields.emailVerified,
+    phoneVerified: sqliteFields.phoneVerified,
+    suspendedUntil: sqliteFields.nullableDateTimeInsertOnly,
     createdAt: sqliteFields.dateTimeInsert,
     updatedAt: sqliteFields.dateTimeUpdate,
   }) {}
@@ -477,6 +563,7 @@ const sqliteModels = () => {
     "VerificationReservation",
   )({
     identifier: Schema.String,
+    tenantId: tenantIdField,
     expiresAt: sqliteFields.dateTime,
   }) {}
 
@@ -499,9 +586,12 @@ const sqliteModels = () => {
  * never overridden globally, because the ambient client is shared with the
  * host application's tables.
  */
-export const makeModels = (dialect: Dialect) => (dialect === "pg" ? pgModels() : sqliteModels());
+export type SqlModels = ReturnType<typeof pgModels> | ReturnType<typeof sqliteModels>;
 
-export type SqlModels = ReturnType<typeof makeModels>;
+// DRS-001: annotated because adding the tenant column to six entities pushed the
+// inferred union past the compiler's declaration-serialization limit (TS7056).
+export const makeModels = (dialect: Dialect): SqlModels =>
+  dialect === "pg" ? pgModels() : sqliteModels();
 
 // The decoded `Type` side is identical across dialects (only `Encoded`
 // differs), so these dialect-independent aliases are what callers name.

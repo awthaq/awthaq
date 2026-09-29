@@ -1,10 +1,10 @@
-# ADR-EA-027: Observability Reuses Effect's HTTP Middleware, Adds Business-Logic Spans and a Fixed Field Vocabulary, and Ships Metric Definitions Without a Backend
+# ADR-EA-032: Observability Reuses Effect's HTTP Middleware, Adds Business-Logic Spans and a Fixed Field Vocabulary, and Ships Metric Definitions Without a Backend
 
 > **Document Control**
 >
 > | Property | Value |
 > |---|---|
-> | Document ID | EFAUTH-ADR-027 |
+> | Document ID | EFAUTH-ADR-032 |
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |

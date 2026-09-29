@@ -242,7 +242,39 @@ describe("RateLimiter.layer store outage (RBS-004, BEH-EA-105)", () => {
   );
 });
 
+describe("RateLimiter.layerMemory (RBS-007)", () => {
+  it.effect("is the one-line real limiter: the N+1th consume fails RateLimitExceeded", () =>
+    Effect.gen(function* () {
+      const limiter = yield* RateLimiter.RateLimiter;
+      const input = { key: "signin:carol", limit: 2, window: Duration.seconds(10) };
+      yield* limiter.consume(input);
+      yield* limiter.consume(input);
+      const failure = yield* limiter.consume(input).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "RateLimitExceeded");
+    }).pipe(Effect.provide(RateLimiter.layerMemory)),
+  );
+});
+
 describe("RateLimiter.layerPermissive (BEH-EA-112)", () => {
+  // RBS-007: copying a test composition into production must not silently disable every rule.
+  it.effect("warns once, on the first consume, that every rate-limit rule is disabled", () =>
+    Effect.gen(function* () {
+      const messages: Array<string> = [];
+      const capture = Logger.make<unknown, void>((options) => {
+        if (options.logLevel === "Warn") messages.push(String(options.message));
+      });
+      const limiter = yield* RateLimiter.RateLimiter;
+      const consume = limiter
+        .consume({ key: "loop", limit: 3, window: Duration.seconds(10) })
+        .pipe(Effect.provide(Logger.layer([capture])));
+      yield* consume;
+      yield* consume;
+      assert.strictEqual(messages.length, 1);
+      assert.match(messages[0] ?? "", /layerPermissive/);
+    }).pipe(Effect.provide(RateLimiter.layerPermissive)),
+  );
+
+
   it.effect("never rejects, no matter how many times it is consumed", () =>
     Effect.gen(function* () {
       const limiter = yield* RateLimiter.RateLimiter;

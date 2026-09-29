@@ -23,16 +23,21 @@ const view: Sessions.SessionView = {
   userAgent: Option.some("test-agent"),
   actingAs: Option.none(),
   amr: ["pwd"],
+  tenantId: Option.none(),
 };
 
 const session = (): Session => ({
   principal: Api.anonymousPrincipal,
   user: {
     id: Users.UserId("user-1"),
-    email: "user@example.com",
-    emailVerified: true,
+    identity: { _tag: "Email", email: "user@example.com", emailVerified: true },
     name: "User",
     metadata: Option.none(),
+    image: Option.none(),
+    tenantId: Option.none(),
+    status: "active",
+    statusReason: Option.none(),
+    suspendedUntil: Option.none(),
     createdAt: at("2024-01-01T00:00:00.000Z"),
     updatedAt: at("2024-01-01T00:00:00.000Z"),
   },

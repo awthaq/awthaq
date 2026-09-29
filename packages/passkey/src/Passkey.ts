@@ -24,22 +24,23 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import {
+  Accounts,
   AuthEvents,
   AuthPlugin,
-  Accounts,
+  ConfigDescriptor,
   DataExport,
   Erasure,
+  Errors,
   HookPoint,
   Hooks,
   Migrations,
   Observability,
   RateLimits,
-  SessionCookie,
   Sessions,
   Users,
 } from "@awthaq/core";
-import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
-import { Session } from "@awthaq/server";
+import { ClientAddress, Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
+import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -460,12 +461,6 @@ export interface PasskeySignals {
   readonly allAcceptedCredentialIds: ReadonlyArray<string>;
 }
 
-// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
-// wrapper also keeps `SessionContract` in scope so declaration emit can name
-// `SessionDto` in the handler group's inferred type (TS2883 otherwise).
-const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
-  Session.toSessionDto(view);
-
 export interface IssuedSession {
   readonly session: Sessions.SessionView;
   readonly token: Redacted.Redacted<string>;
@@ -477,14 +472,16 @@ export interface PasskeyShape {
     sessionId: string,
   ) => Effect.Effect<
     PasskeyApi.PublicKeyCredentialCreationOptions,
-    PasskeyApi.PasskeyReauthRequired
+    PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable
   >;
   readonly registerOptionsConditional: (
     userId: Users.UserId,
     sessionId: string,
   ) => Effect.Effect<
     PasskeyApi.PublicKeyCredentialCreationOptions,
-    PasskeyApi.PasskeyConditionalCreateDisabled | PasskeyApi.PasskeyReauthRequired
+    | PasskeyApi.PasskeyConditionalCreateDisabled
+    | PasskeyApi.PasskeyReauthRequired
+    | Errors.StoreUnavailable
   >;
   readonly registerVerify: (
     userId: Users.UserId,
@@ -500,6 +497,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyAttestationRejected
     | PasskeyApi.PasskeyAlreadyRegistered
     | PasskeyApi.PasskeyReauthRequired
+    | Errors.StoreUnavailable
   >;
   /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -524,6 +522,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCredentialNotFound
     | PasskeyApi.PasskeyCounterAnomaly
+    | Errors.StoreUnavailable
   >;
   readonly authenticateOptions: (input: {
     readonly email?: string | undefined;
@@ -534,7 +533,7 @@ export interface PasskeyShape {
       readonly ceremonyId: string;
       readonly options: PasskeyApi.PublicKeyCredentialRequestOptions;
     },
-    Api.RateLimited
+    Api.RateLimited | Errors.StoreUnavailable
   >;
   readonly authenticateVerify: (
     input: PasskeyApi.AuthenticateVerifyPayload & { readonly ip?: string | undefined },
@@ -548,7 +547,9 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCounterAnomaly
     | HookPoint.HookAborted
+    | Users.UserSuspended
     | Hooks.TwoFactorRequired
+    | Errors.StoreUnavailable
   >;
   readonly listCredentials: (
     userId: Users.UserId,
@@ -566,7 +567,7 @@ export interface PasskeyShape {
   readonly removeCredential: (
     userId: Users.UserId,
     id: string,
-  ) => Effect.Effect<void, PasskeyApi.PasskeyCredentialNotFound | PasskeyApi.PasskeyLastCredential>;
+  ) => Effect.Effect<void, PasskeyApi.PasskeyCredentialNotFound | PasskeyApi.PasskeyLastCredential | Errors.StoreUnavailable>;
 }
 
 /** Same forward-reference pattern `@awthaq/password`'s own `PasswordHandlers` documents. */
@@ -574,9 +575,7 @@ const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentP
   Effect.gen(function* () {
     const principal = yield* Api.CurrentPrincipal;
     if (principal._tag !== "User") {
-      return yield* Effect.die(
-        new Error(`awthaq: passkey group reached with a non-User principal: ${principal._tag}`),
-      );
+      return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: passkey group reached with a non-User principal: ${principal._tag}`);
     }
     return principal;
   });
@@ -649,14 +648,16 @@ export const PasskeyHandlers = Layer.mergeAll(
         }) {
           // CSD-003: address via the application-provided `ClientAddress`
           // port (trusted-proxy aware), user agent from the header.
+          const delivery = yield* SessionDelivery.mode(request);
           const resolvedAddress = yield* clientAddress.resolve(request);
           const userAgent = Headers.get(request.headers, "user-agent");
           const issued = yield* passkey.authenticateVerify(
             { ...payload, ip: Option.getOrUndefined(resolvedAddress) },
             Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
           );
-          yield* SessionCookie.set(issued.session, issued.token);
-          return sessionResponse(issued.session);
+          // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+          const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+          return response;
         }),
       });
     }),
@@ -793,7 +794,7 @@ const passkeyMigrations: Migrations.Migrations = [
             "createdAt" TEXT NOT NULL,
             "lastUsedAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -804,7 +805,7 @@ const passkeyMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential("userId")`,
         sqlite: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential("userId")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -827,7 +828,7 @@ const passkeyMigrations: Migrations.Migrations = [
             "expiresAt" TEXT NOT NULL,
             "createdAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -839,7 +840,7 @@ const passkeyMigrations: Migrations.Migrations = [
         pg: () => sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge("expiresAt")`,
         sqlite: () =>
           sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge("expiresAt")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -850,7 +851,7 @@ const passkeyMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyAt" TIMESTAMPTZ`,
         sqlite: () => sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyAt" TEXT`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -863,7 +864,7 @@ const passkeyMigrations: Migrations.Migrations = [
           sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyCount" INTEGER NOT NULL DEFAULT 0`,
         sqlite: () =>
           sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyCount" INTEGER NOT NULL DEFAULT 0`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -884,7 +885,7 @@ const passkeyMigrations: Migrations.Migrations = [
             "webauthnUserId" TEXT NOT NULL UNIQUE,
             "createdAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -943,6 +944,32 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   contract: PasskeyApi.PasskeyApi,
   tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
   migrations: passkeyMigrations,
+  // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
+  config: [
+    ConfigDescriptor.make(PasskeyConfig, {
+      sensitive: [],
+      audit: (value, environment) => [
+        ...(environment.production && value.rpId === "localhost"
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "passkey-rp-id-localhost",
+                "the relying-party id is still the development default `localhost`",
+              ),
+            ]
+          : []),
+        ...(environment.production && value.origins.some((origin) => origin.startsWith("http://"))
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "passkey-origin-not-https",
+                "an allowed origin uses plain http",
+              ),
+            ]
+          : []),
+      ],
+    }),
+  ],
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
     handlers: PasskeyHandlers,
@@ -972,11 +999,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       if (
         Duration.toMillis(config.ceremonyTimeout) > Duration.toMillis(ChallengeStore.CHALLENGE_TTL)
       ) {
-        return yield* Effect.die(
-          new Error(
-            "awthaq: PasskeyConfig.ceremonyTimeout must not exceed the challenge TTL (five minutes, BEH-EA-132)",
-          ),
-        );
+        return yield* Defects.invalidConfiguration("ceremonyTimeout", "awthaq: PasskeyConfig.ceremonyTimeout must not exceed the challenge TTL (five minutes, BEH-EA-132)");
       }
       // HSK-002: conveyance is a request, not a verification.
       if (config.attestation !== "none" && config.attestationPolicy === undefined) {
@@ -1082,7 +1105,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const requireFreshSession = (
         userId: Users.UserId,
         sessionId: string,
-      ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired> =>
+      ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable> =>
         Effect.gen(function* () {
           const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAgeSeconds);
           const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));
@@ -1117,7 +1140,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           rpName: config.rpName,
           challenge: Redacted.value(challenge),
           userId: webauthnUserId,
-          userName: user.email,
+          userName: Users.accountLabel(user),
           userDisplayName: user.name,
           excludeCredentials: existing.map((row) => ({ id: row.id, transports: row.transports })),
           attestation: config.attestation,
@@ -1221,7 +1244,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               requireUserPresence: !conditional,
             })
             .pipe(
-              Effect.catchTag("PasskeyVerificationFailed", () =>
+              Effect.catchTag("WebAuthn/VerificationFailed", () =>
                 Effect.fail(new PasskeyApi.PasskeyVerificationFailed()),
               ),
             );
@@ -1442,7 +1465,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               },
             })
             .pipe(
-              Effect.catchTag("PasskeyVerificationFailed", () =>
+              Effect.catchTag("WebAuthn/VerificationFailed", () =>
                 Effect.fail(new Api.InvalidCredentials()),
               ),
             );
@@ -1481,15 +1504,20 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // session for a dead `userId` with no existence check of its
           // own: same uniform `InvalidCredentials` collapse BEH-EA-136
           // already applies to every other failure in this ceremony.
-          const signedInUser = yield* users
+          const user = yield* users
             .findById(stored.userId)
             .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
 
+          // SCP-001/BAM-005: THE shared sign-in gate, after the credential is
+          // proven and before any session exists.
+          yield* Users.assertCanSignIn(user);
+
           // NAM-002: the sign-in veto, before the MFA divert point below.
+          const signedInEmail = Users.emailOf(user);
           yield* HookPoint.aborted(Hooks.BeforeSignIn)(
             beforeSignIn.run({
               userId: stored.userId,
-              email: signedInUser.email,
+              ...(Option.isSome(signedInEmail) ? { email: signedInEmail.value } : {}),
               strategy: "passkey",
             }),
           );
@@ -1563,7 +1591,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         return {
           rpId: config.rpId,
           userId: yield* handles.getOrCreate(userId),
-          name: user.email,
+          name: Users.accountLabel(user),
           displayName: user.name,
           allAcceptedCredentialIds: owned.map((row) => row.id),
         };
@@ -1573,7 +1601,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         credentials
           .rename(id, userId, name)
           .pipe(
-            Effect.catchTag("PasskeyCredentialNotFound", () =>
+            Effect.catchTag("PasskeyCredentials/NotFound", () =>
               Effect.fail(new PasskeyApi.PasskeyCredentialNotFound()),
             ),
           );
@@ -1674,7 +1702,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               },
             })
             .pipe(
-              Effect.catchTag("PasskeyVerificationFailed", () =>
+              Effect.catchTag("WebAuthn/VerificationFailed", () =>
                 Effect.fail(new PasskeyApi.PasskeyVerificationFailed()),
               ),
             );
@@ -1703,13 +1731,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               verified.userVerified ? ["hwk", "user"] : ["hwk"],
             )
             .pipe(
-              Effect.catchTag("SessionNotFound", () =>
+              Effect.catchTag("Sessions/NotFound", () =>
                 // `passkey.reauthenticate`'s own `Authentication` middleware
                 // already proved this exact session live moments ago — see
                 // `Password.ts`'s own identical `reauthenticate` comment.
-                Effect.die(
-                  new Error(`awthaq: reauthenticate's own current session vanished: ${sessionId}`),
-                ),
+                Defects.invariantViolation("RowVanished", "awthaq: reauthenticate's own current session vanished"),
               ),
             );
         },

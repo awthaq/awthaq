@@ -178,4 +178,6 @@ REQUIREMENT: `TestAuth.layer` MUST provide a `RateLimiter` implementation that
 
 A limiter tuned for production (three attempts per ten seconds) would make a test that signs in fifty times in a `for` loop flaky or fail outright, for a reason that has nothing to do with what the test is checking. `TestAuth.layer(plugins)` (PRD §19, `usage-examples-v4.md` §22.1) exists precisely to remove this class of incidental failure: memory repositories, a memory mailer, and a permissive rate limiter, so a test that wants to exercise rate limiting specifically does so by providing a stricter `RateLimiter` Layer of its own, not by fighting the default.
 
+RBS-007: the permissive limiter is for tests only, and the documented non-test default is a real one. `RateLimiter.layerMemory` is `layer` over the bounded memory store, one line for a single-process deployment (`layerPermissive` is what `TestAuth` bundles); `layerPermissive` logs one warning the first time a rule runs against it (`awthaq: RateLimiter.layerPermissive is active — every registered rate-limit rule is disabled`), so a test composition copied into production is not silently unprotected.
+
 _Previous: [BEH-EA-111](14-rate-limiting.md#beh-ea-111-registry-ordering) | Next: [BEH-EA-113](15-password.md#beh-ea-113-sign-up-issues-a-pending-user-and-a-verification-mail)_

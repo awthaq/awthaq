@@ -55,7 +55,7 @@
 // so it reports the full, precise BEH-EA-136 taxonomy.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { HookPoint, Hooks } from "@awthaq/core";
+import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -430,9 +430,13 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
         // CB-004: only under `counterAnomalyPolicy: "reject"`.
         PasskeyCounterAnomaly,
         Api.InvalidCredentials,
+        // SCP-001: `Users.assertCanSignIn` refused a suspended user.
+        Users.UserSuspended,
         Api.RateLimited,
         HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
+        // MNA-001: an unrecognised `X-Awthaq-Token-Delivery` value.
+        Api.InvalidTokenDelivery,
       ],
     }),
   )

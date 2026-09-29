@@ -10,7 +10,7 @@ Covers Q95–Q100 (CLI, docs, monorepo/release, plugin author experience, refere
 - Community Effect libs show the peer-range trap: `effect-http` froze at `effect ^3.14.0`, `@sqlfx/sql` died on `effect ^2`; Effect's own packages use `workspace:^` and lockstep majors. awthaq should support exactly one Effect major per major line.
 - ESM-only is now safe: Effect v4 and better-auth 1.7.4 ship ESM-only, and Node ≥ 20.19 / 22.12 `require()` ESM by default.
 - better-auth's docs run on fumadocs + Next.js with a concepts/plugins/guides/reference IA; effect.website is an Astro app with versioned docs channels. fumadocs is the pragmatic 2026 pick for a TS framework.
-- `@effect/cli` is still Effect-3-only (0.77.1); in Effect v4 the CLI moved to an unstable export (`effect/unstable/cli`). Build the MVP CLI on `@effect/cli`, keep the command layer thin.
+- `@effect/cli` is still Effect-3-only (0.77.1); in Effect v4 the CLI moved to an unstable export (`effect/unstable/cli`). Build the MVP CLI on `@effect/cli`, keep the command layer thin. **[Superseded 2026-09-29 — ADR-EA-027: `@awthaq/cli` is built on `effect/unstable/cli`, see `research/19-dbc-to-effect-mapping.md` line 231; the `@effect/cli` advice below is stale.]**
 - Lucia deprecated its npm package and became a learning resource — a cautionary tale: docs ARE the product for auth frameworks.
 - Security posture lessons from better-auth: a critical 2025 CVE in its API-keys plugin (third-party find), a coordinated multi-advisory "security update" cycle in June 2026 — disclosure infra (SECURITY.md → GitHub CNA advisories) and a plugin-code threat model are day-one needs.
 - Redaction should be a type, not a convention: Effect's `Redacted<A>` (since 3.3.0) already redacts string/JSON/inspect output; awthaq should standardize on it plus a deny-by-default redactor at the log/span/event boundary.
@@ -30,7 +30,7 @@ Covers Q95–Q100 (CLI, docs, monorepo/release, plugin author experience, refere
 | oclif | 5.0.0 | heavyweight plugin/CLI framework (Salesforce lineage) |
 | clipanion | 4.0.0-rc.4 | powerful typed parser (Yarn's), still RC ([npm](https://www.npmjs.com/package/clipanion)) |
 
-Since the CLI (`doctor`, `schema`, `migration`) must read plugin configs, `@effect/cli`'s `Config` integration and shared Effect primitives avoid duplicating parsing logic that `Auth.make` also needs. Its cost: it is 0.x and v4-unstable, but the command layer can be kept thin (each command = a function taking typed args), making a port to `effect/unstable/cli` mechanical. Post-MVP: `init` (scaffold app + adapter selection, like `nuxi init`/`create-astro`) and `client codegen` — but codegen mostly comes free from `HttpApiClient`, so it is low priority (see Q96/Q39 research in siblings).
+Since the CLI (`doctor`, `schema`, `migration`) must read plugin configs, `@effect/cli`'s `Config` integration and shared Effect primitives avoid duplicating parsing logic that `Auth.make` also needs. Its cost: it is 0.x and v4-unstable, but the command layer can be kept thin (each command = a function taking typed args), making a port to `effect/unstable/cli` mechanical. Post-MVP: `init` (scaffold app + adapter selection, like `nuxi init`/`create-astro`) and `client codegen` — but codegen mostly comes free from `HttpApiClient`, so it is low priority (see Q96/Q39 research in siblings). **[Superseded 2026-09-29 — ADR-EA-027: `@awthaq/cli` is built on `effect/unstable/cli`, see `research/19-dbc-to-effect-mapping.md` line 231; the `@effect/cli` advice below is stale.]**
 
 MVP command surface (design target):
 
@@ -46,7 +46,7 @@ MVP command surface (design target):
 
 All commands run non-interactively (CI mode) and share exit codes; every validation failure prints the offending plugin id plus a docs link (this is PRD Q22's compile-error UX reused by the CLI).
 
-**Recommendation:** MVP commands: `awthaq doctor`, `schema generate|diff`, `migration create|status|apply` (with destructive-op guard), `plugin list|validate`. Build on `@effect/cli` while awthaq targets Effect 3 stable; wrap every command in a plain function so the eventual Effect 4 port to `effect/unstable/cli` is a rewrite of wiring only. Skip `init` and `codegen` at MVP.
+**Recommendation:** MVP commands: `awthaq doctor`, `schema generate|diff`, `migration create|status|apply` (with destructive-op guard), `plugin list|validate`. Build on `@effect/cli` while awthaq targets Effect 3 stable; wrap every command in a plain function so the eventual Effect 4 port to `effect/unstable/cli` is a rewrite of wiring only. Skip `init` and `codegen` at MVP. **[Superseded 2026-09-29 — ADR-EA-027: `@awthaq/cli` is built on `effect/unstable/cli`, see `research/19-dbc-to-effect-mapping.md` line 231; the `@effect/cli` advice below is stale.]**
 **Confidence:** high (scope), medium (framework — depends on which Effect major awthaq v1 targets).
 
 ### Q96 — Docs platform, structure, examples/playground
@@ -205,7 +205,7 @@ Maintainer mechanics: CODEOWNERS maps security-sensitive paths (crypto, session,
 | fumadocs | Next.js docs framework (16.15.9) | MIT | High | Docs platform pick (better-auth uses it) |
 | Starlight (@astrojs/starlight 0.42.0) | Astro docs theme | MIT | High | Runner-up docs platform |
 | Nextra | Next.js MDX docs (4.6.1) | MIT | High | Lighter alternative |
-| @effect/cli | Effect CLI framework (0.77.1, Effect 3) | MIT | 0.x but stable in practice | MVP CLI |
+| @effect/cli | Effect CLI framework (0.77.1, Effect 3) | MIT | 0.x but stable in practice | MVP CLI (superseded: ADR-EA-027, `effect/unstable/cli`) |
 | effect/unstable/cli | Effect v4 in-core CLI (unstable) | MIT | Preview | Future CLI migration target |
 | citty / commander / oclif | Alternative CLIs (0.2.2 / 15.0.0 / 5.0.0) | MIT | High / Very high / High | Considered, not chosen |
 | fast-check | Property-based testing (4.10.0) | MIT | Very high | Security invariant tests, Schema fuzzing |
@@ -254,7 +254,7 @@ Maintainer mechanics: CODEOWNERS maps security-sensitive paths (crypto, session,
 3. Channels: `latest` / `rc` (changesets `pre` mode) / `beta`; per-PR installs via pkg-pr-new; npm `snapshot` tag optional after demand exists.
 4. Packaging: ESM-only, `engines.node >= 20.19`, `moduleResolution: nodenext`, declaration maps, `publint` + `attw` + dist-type checks as merge gates.
 5. Effect peers: `effect ^3.<floor>` on v1; never cross-major ranges; CI tracks `effect@latest` (required) and `effect@rc` (advisory); awthaq v2 majors with Effect 4.
-6. CLI: `@effect/cli` with a thin command-function layer; MVP = `doctor`, `schema generate|diff`, `migration create|status|apply`, `plugin list|validate`; `init`/codegen post-MVP.
+6. CLI: `@effect/cli` with a thin command-function layer; MVP = `doctor`, `schema generate|diff`, `migration create|status|apply`, `plugin list|validate`; `init`/codegen post-MVP. **[Superseded 2026-09-29 — ADR-EA-027: `@awthaq/cli` is built on `effect/unstable/cli`, see `research/19-dbc-to-effect-mapping.md` line 231; the `@effect/cli` advice below is stale.]**
 7. Docs: fumadocs on Next.js; better-auth-shaped IA extended with plugin-dev and adapter-dev sections; examples live in-repo (`examples/*`), docs channel-split only when a second Effect major is supported.
 8. Plugin DX: `npm create awthaq-plugin` template with contract harness + release workflow prewired; `plugin validate`/`plugin test` CLI commands; PR-based community listing (Nuxt-modules model), Official tier gated by security review; reserve `@awthaq` npm org + GitHub org + unscoped name day one.
 9. Release security: SECURITY.md + private reporting → embargoed GitHub advisory → CVE via GitHub CNA → coordinated release → postmortem for high severity; Renovate + osv-scanner + gitleaks in CI; near-zero runtime deps in core.

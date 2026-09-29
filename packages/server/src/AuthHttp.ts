@@ -19,6 +19,16 @@
 // produce; see `test/AuthHttp.test.ts` for both exercised end to end.
 
 import { Api } from "@awthaq/api";
+import type {
+  Accounts,
+  AuthEvents,
+  DataExport,
+  Erasure,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
+import type { RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Headers from "effect/unstable/http/Headers";
@@ -26,7 +36,9 @@ import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
+import * as Account from "./Account.ts";
 import * as Csrf from "./Csrf.ts";
+import * as Session from "./Session.ts";
 
 /** BEH-EA-083/084: registers `api`'s routes with the ambient `HttpRouter`. */
 export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;
@@ -44,6 +56,33 @@ export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;
  */
 export const tracer: typeof HttpMiddleware.tracer = HttpMiddleware.tracer;
 export const requestLogger: typeof HttpMiddleware.logger = HttpMiddleware.logger;
+
+/**
+ * The domain services `coreHandlers` needs, beside the `Api.Authentication`/
+ * `Api.CsrfProtection` implementations the two groups' middleware declare.
+ * Named so `coreHandlers`'s inferred type stays portable for declaration emit
+ * (TS2883), the way `Account.AccountPrincipal` does for its module. Account
+ * erasure and export (CSG-001/CSG-005) are core services the `account` group's
+ * handlers call, and the export endpoint is rate limited per account.
+ */
+export type CoreHandlerServices =
+  | Accounts.Accounts
+  | AuthEvents.AuthEvents
+  | Sessions.Sessions
+  | Users.Users
+  | Verification.Verification
+  | DataExport.AccountExport
+  | Erasure.AccountErasure
+  | RateLimiter.RateLimiter
+  | SqlTransaction.SqlTransaction;
+
+/**
+ * MW-002 (wayfinder ticket 26): the handlers for the `session` and `account`
+ * groups `Auth.make(...).api` always carries. Merge this beside the composed
+ * `layer` wherever `routes(built.api)` is served; a composition that leaves it
+ * out fails at layer build (missing group service), not as a silent 404.
+ */
+export const coreHandlers = Layer.mergeAll(Session.SessionHandlers, Account.AccountHandlers);
 
 /**
  * BEH-EA-084: serves generated OpenAPI/Scalar documentation from the same

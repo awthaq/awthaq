@@ -3,7 +3,7 @@ ID: "GC-004"
 Title: "Memory and SQL implementations of Users diverge on race failure modes"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Users.ts:260"
 Auditor: "giulio-canti"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Giulio Canti — Creator of fp-ts and io-ts** (`giulio-canti`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Map NoSuchElementError from repo.update/repo.delete to `UserNotFound` in layerSq
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `core-error-taxonomy`. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:320`. Fix: Give UsersRepository a targeted, Option-returning profile update and map a missing row to UserNotFound so layerSql honors the Shape's declared E like layerMemory. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** UsersRepository.updateProfile: one UPDATE ... RETURNING * (findOneOption; two statements so metadata is bound and sealed only when supplied, null clears, undefined leaves it), None means the row is gone. Users.layerSql.updateProfile calls it directly and maps None to UserNotFound (no read-modify-write of email, no defect). Tests (red first: NoSuchElementError defect): a repository whose updateProfile finds no row gives UserNotFound; a real-DB round trip of name/metadata semantics. delete_ left as is: DELETE of a missing row is a no-op in both layers, it never died, so there was no divergence to align.

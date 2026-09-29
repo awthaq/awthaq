@@ -31,6 +31,13 @@ export class OrganizationNotFound extends Schema.TaggedError<OrganizationNotFoun
   { httpApiStatus: 404 },
 ) {}
 
+/** DRS-007: the `homeRegion` is not in `OrganizationConfig.regions`. */
+export class UnknownRegion extends Schema.TaggedError<UnknownRegion>()(
+  "UnknownRegion",
+  { region: Schema.String },
+  { httpApiStatus: 422 },
+) {}
+
 export class OrganizationDeletionDisabled extends Schema.TaggedError<OrganizationDeletionDisabled>()(
   "OrganizationDeletionDisabled",
   {},
@@ -257,6 +264,7 @@ export const CreateOrganizationPayload = Schema.Struct({
   slug: Schema.String,
   logo: Schema.optional(Schema.String),
   metadata: Schema.optional(Schema.String),
+  homeRegion: Schema.optional(Schema.String),
 });
 export type CreateOrganizationPayload = typeof CreateOrganizationPayload.Type;
 
@@ -265,6 +273,7 @@ export const UpdateOrganizationPayload = Schema.Struct({
   slug: Schema.optional(Schema.String),
   logo: Schema.optional(Schema.NullOr(Schema.String)),
   metadata: Schema.optional(Schema.NullOr(Schema.String)),
+  homeRegion: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type UpdateOrganizationPayload = typeof UpdateOrganizationPayload.Type;
 
@@ -306,6 +315,9 @@ export class OrganizationDto extends Schema.Class<OrganizationDto>("Organization
   slug: Schema.String,
   logo: Schema.NullOr(Schema.String),
   metadata: Schema.NullOr(Schema.String),
+  homeRegion: Schema.NullOr(Schema.String),
+  /** EP-003: a platform administrator suspended the organization; every organization-scoped operation is refused until it is reinstated. */
+  suspended: Schema.Boolean,
   createdAt: Schema.String,
 }) {}
 
@@ -475,6 +487,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationSlugTaken,
         OrganizationCreationNotAllowed,
         OrganizationLimitReached,
+        UnknownRegion,
         HookPoint.HookAborted,
       ],
     }),
@@ -545,6 +558,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationNotFound,
         OrganizationSlugTaken,
         OrganizationPermissionDenied,
+        UnknownRegion,
         HookPoint.HookAborted,
       ],
     }),

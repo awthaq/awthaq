@@ -53,3 +53,5 @@ Prioritize the api-key plugin above cosmetic plugins: key hashing can reuse the 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `apikey-machine-identity`. Duplicate of `MAPS-003` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/api/src/Api.ts:27`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `MAPS-003-microservices-auth-propagation-specialist` — closed by its fix (see that issue's Resolved comment).

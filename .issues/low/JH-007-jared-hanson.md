@@ -3,7 +3,7 @@ ID: "JH-007"
 Title: "dependsOn de-facto governs only migration order while requirements go through RIn"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/Admin.ts:4"
 Auditor: "jared-hanson"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `admin` · reported by **Jared Hanson — Creator of Passport.js** (`jared-hanson`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Document dependsOn as migration/persistence-ordering only (and rename if a break
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `plugin-contract-docs`. Evidence at HEAD ec065a7: `spec/behaviors/01-plugin-contract.md:148`. Fix: Align BEH-EA-008 with the shipped convention and make the plugin-to-plugin data dependency explicit where it matters. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-008 example now plugin-to-plugin (TwoFactor dependsOn Password) with the shipped convention stated (core services via yield*, dependsOn = other plugins + sole migration order); AuthPlugin.Service option readsTables + Auth.UndeclaredTableDependency thrown by Auth.make when an installed plugin owns a read table without being in dependsOn (test in AuthPlugin.test.ts). No shipped plugin declares readsTables yet (none is real today, per dossier). docs/plugin-authoring.md updated with the JH-006/007/008/MA-005 rules.

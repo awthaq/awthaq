@@ -22,8 +22,8 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
+import { storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import type { UserId } from "./Users.ts";
 import type { VerificationShape, VerificationTokenView } from "./Verification.ts";
 
@@ -87,9 +87,11 @@ export const issue = (
     readonly userId?: UserId;
     readonly payload?: unknown;
   },
-): Effect.Effect<IssuedLink, PlatformError.PlatformError> =>
+): Effect.Effect<IssuedLink, StoreUnavailable> =>
   Effect.gen(function* () {
-    const publicId = yield* newPublicId(deps.crypto);
+    const publicId = yield* newPublicId(deps.crypto).pipe(
+      Effect.catchTag("PlatformError", storeUnavailable("VerificationLink.issue")),
+    );
     const { token, value } = yield* deps.verification.issue({
       identifier: identifierOf(input.purpose, publicId),
       ttl: input.ttl,

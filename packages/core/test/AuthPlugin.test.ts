@@ -6,6 +6,7 @@
 // and fails just as loudly if a fix makes one of them compile when it
 // shouldn't (an unused `@ts-expect-error` is itself a `tsc` error).
 import { assert, describe, it } from "@effect/vitest";
+import { expectTypeOf } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -15,6 +16,8 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as Auth from "../src/Auth.ts";
 import * as AuthPlugin from "../src/AuthPlugin.ts";
+import * as Slots from "../src/Slots.ts";
+import { Mailer } from "@awthaq/ports";
 
 // --- Ping: a toy plugin with no dependencies -------------------------------
 
@@ -160,6 +163,136 @@ class Ops extends AuthPlugin.Service<Ops, OpsShape>()("ops", {
   });
 }
 
+// --- MW-002: extra (non-plugin) group, and plugins colliding with core -----
+
+const ExtraGroup = HttpApiGroup.make("extra").add(
+  HttpApiEndpoint.get("extra", "/extra", { success: Schema.String }),
+);
+
+const SessionImposterApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("session").add(
+    HttpApiEndpoint.get("imposter", "/imposter", { success: Schema.String }),
+  ),
+);
+
+class SessionImposter extends AuthPlugin.Service<
+  SessionImposter,
+  { readonly imposter: () => Effect.Effect<string> }
+>()("session", { apiVersion: 1, contract: SessionImposterApi }) {
+  static readonly layer = AuthPlugin.layer(SessionImposter, {
+    make: Effect.succeed({ imposter: () => Effect.succeed("x") }),
+    handlers: HttpApiBuilder.group(SessionImposterApi, "session", (handlers) =>
+      handlers.handle("imposter", () => Effect.succeed("x")),
+    ),
+  });
+}
+
+const RouteImposterApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("routeImposter").add(
+    HttpApiEndpoint.get("list", "/session/list", { success: Schema.String }),
+  ),
+);
+
+class RouteImposter extends AuthPlugin.Service<
+  RouteImposter,
+  { readonly list: () => Effect.Effect<string> }
+>()("routeImposter", { apiVersion: 1, contract: RouteImposterApi }) {
+  static readonly layer = AuthPlugin.layer(RouteImposter, {
+    make: Effect.succeed({ list: () => Effect.succeed("x") }),
+    handlers: HttpApiBuilder.group(RouteImposterApi, "routeImposter", (handlers) =>
+      handlers.handle("list", () => Effect.succeed("x")),
+    ),
+  });
+}
+
+// --- MA-005: two plugins overriding one slot, composed only through Auth.make --
+
+const TestResolver = Slots.define<{ readonly who: string }>()("TestResolver", {
+  defaultValue: () => ({ who: "default" }),
+});
+
+class SlotA extends AuthPlugin.Service<SlotA, Record<string, never>>()("slotA", {
+  apiVersion: 1,
+  contract: HttpApi.make("auth"),
+}) {
+  static readonly layer = Slots.override(
+    SlotA,
+    TestResolver,
+    Effect.succeed({ who: "slotA" }),
+  ).pipe(Layer.provideMerge(AuthPlugin.layer(SlotA, { make: Effect.succeed({}) })));
+}
+
+class SlotB extends AuthPlugin.Service<SlotB, Record<string, never>>()("slotB", {
+  apiVersion: 1,
+  contract: HttpApi.make("auth"),
+}) {
+  static readonly layer = Slots.override(
+    SlotB,
+    TestResolver,
+    Effect.succeed({ who: "slotB" }),
+  ).pipe(Layer.provideMerge(AuthPlugin.layer(SlotB, { make: Effect.succeed({}) })));
+}
+
+// --- hand-built plugin values (BEH-EA-016's cycle needs deps that point at each other) --
+
+type FakePlugin<Id extends string> = AuthPlugin.Any & { readonly id: Id };
+
+const fakePlugin = <const Id extends string>(
+  id: Id,
+  dependsOn: () => ReadonlyArray<AuthPlugin.Any>,
+): FakePlugin<Id> => ({
+  id,
+  apiVersion: 1,
+  contract: { identifier: "auth", groups: {} },
+  tables: [],
+  migrations: [],
+  get dependsOn() {
+    return dependsOn();
+  },
+  layer: Layer.empty,
+});
+
+// --- JH-007: a plugin reading another plugin's table -----------------------
+
+class Reader extends AuthPlugin.Service<Reader, Record<string, never>>()("reader", {
+  apiVersion: 1,
+  contract: HttpApi.make("auth"),
+  // Reads `ping_state`, which the `ping` plugin owns.
+  readsTables: ["ping_state"],
+}) {
+  static readonly layer = AuthPlugin.layer(Reader, { make: Effect.succeed({}) });
+}
+
+class DeclaredReader extends AuthPlugin.Service<DeclaredReader, Record<string, never>>()(
+  "declaredReader",
+  {
+    apiVersion: 1,
+    contract: HttpApi.make("auth"),
+    readsTables: ["ping_state"],
+  },
+) {
+  static readonly layer = AuthPlugin.layer(DeclaredReader, {
+    dependsOn: [Ping],
+    make: Effect.gen(function* () {
+      yield* Ping;
+      return {};
+    }),
+  });
+}
+
+// --- JH-008 / BEH-EA-020: a plugin whose layer provides a port -----------------
+
+class Evil extends AuthPlugin.Service<Evil, Record<string, never>>()("evil", {
+  apiVersion: 1,
+  contract: HttpApi.make("auth"),
+}) {
+  // Smuggles a `Mailer` implementation into the composition through its own `ROut`.
+  static readonly layer = Layer.provideMerge(
+    Mailer.layerMemory,
+    AuthPlugin.layer(Evil, { make: Effect.succeed({}) }),
+  );
+}
+
 // --- BEH-EA-010: two plugins sharing an id refuses to type-check -----------
 
 class PingDuplicate extends AuthPlugin.Service<PingDuplicate, PingShape>()("ping", {
@@ -183,7 +316,13 @@ describe("Auth.make", () => {
     Effect.gen(function* () {
       const auth = Auth.make([Ping, Pong]);
 
-      assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["ping", "pong"]);
+      // MW-002: core's own groups ride along with the plugins'.
+      assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), [
+        "account",
+        "ping",
+        "pong",
+        "session",
+      ]);
 
       const result = yield* Effect.gen(function* () {
         const pong = yield* Pong;
@@ -198,18 +337,28 @@ describe("Auth.make", () => {
 
       assert.deepStrictEqual(auth.manifest, {
         plugins: [
-          { id: "ping", apiVersion: 1, tables: ["ping_state"], dependsOn: [] },
-          { id: "pong", apiVersion: 1, tables: [], dependsOn: ["ping"] },
+          { id: "ping", apiVersion: 1, tables: ["ping_state"], dependsOn: [], groups: ["ping"] },
+          { id: "pong", apiVersion: 1, tables: [], dependsOn: ["ping"], groups: ["pong"] },
         ],
         hooks: {},
+        config: [],
       });
     }),
   );
 
   it("AR-003: admin-tier groups are split into adminApi, the rest into publicApi, api keeps all", () => {
     const auth = Auth.make([Ping, Ops]);
-    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["ops.admin", "ping"]);
-    assert.deepStrictEqual(Object.keys(auth.publicApi.groups), ["ping"]);
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), [
+      "account",
+      "ops.admin",
+      "ping",
+      "session",
+    ]);
+    assert.deepStrictEqual(Object.keys(auth.publicApi.groups).sort(), [
+      "account",
+      "ping",
+      "session",
+    ]);
     assert.deepStrictEqual(Object.keys(auth.adminApi.groups), ["ops.admin"]);
 
     // The split is typed, not just runtime: only the tier's own groups are in each type.
@@ -228,41 +377,167 @@ describe("Auth.make", () => {
 
     // A composition with no admin group has an empty admin tier (nothing to firewall).
     assert.deepStrictEqual(Object.keys(Auth.make([Ping]).adminApi.groups), []);
-    assert.deepStrictEqual(Object.keys(Auth.make([Ops]).publicApi.groups), []);
+    // ...and the public tier is never empty: core's groups live there.
+    assert.deepStrictEqual(Object.keys(Auth.make([Ops]).publicApi.groups).sort(), [
+      "account",
+      "session",
+    ]);
+  });
+
+  it("MW-002 / BEH-EA-031/032: the composed api always carries core's session and account groups", () => {
+    const auth = Auth.make([Ping]);
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["account", "ping", "session"]);
+    // The public tier keeps them (they are not admin-tier); the admin tier stays plugin-only.
+    assert.deepStrictEqual(Object.keys(auth.publicApi.groups).sort(), ["account", "ping", "session"]);
+    assert.deepStrictEqual(Object.keys(auth.adminApi.groups), []);
+    // Typed, not just runtime: `session` is a group id of `api`.
+    const ids: keyof typeof auth.api.groups = "session";
+    assert.strictEqual(ids, "session");
+  });
+
+  it("MW-002: extraGroups joins the composed api, typed", () => {
+    const auth = Auth.make([Ping], { extraGroups: [ExtraGroup] });
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), [
+      "account",
+      "extra",
+      "ping",
+      "session",
+    ]);
+    const id: keyof typeof auth.api.groups = "extra";
+    assert.strictEqual(id, "extra");
+  });
+
+  it("MW-002: a plugin contributing a group named session is refused with GroupIdConflict naming core", () => {
+    let thrown: unknown;
+    try {
+      Auth.make([SessionImposter]);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.instanceOf(thrown, Auth.GroupIdConflict);
+    assert.strictEqual(thrown.groupId, "session");
+    assert.strictEqual(thrown.firstPluginId, "core");
+    assert.strictEqual(thrown.secondPluginId, "session");
+  });
+
+  it("MW-002: a plugin route colliding with a core route is refused with RouteConflict naming core", () => {
+    assert.throws(() => Auth.make([RouteImposter]), /E_ROUTE_CONFLICT: GET \/session\/list contributed by plugin "core"/);
   });
 
   it("BEH-EA-016: a circular dependsOn is refused at runtime with the full cycle path", () => {
-    // `dependsOn` is read-only from the outside (BEH-EA-007) — there is no
-    // backdoor to force a cycle by mutating it directly. A real circular
-    // dependency only ever arises from a circular import between two
-    // plugins' own modules, which is why this instead reuses `AuthPlugin.layer`
-    // itself, the same public call each plugin's own `static readonly layer`
-    // makes: calling it again for `Ping` re-keys `dependsOnByPlugin` for it,
-    // making `Ping -> Pong -> Ping` real without touching any private state.
-    const cyclicPingLayer = AuthPlugin.layer(Ping, {
-      dependsOn: [Pong],
-      make: Effect.succeed({ ping: () => Effect.succeed("pong") }),
-    });
-    assert.isDefined(cyclicPingLayer);
+    // `dependsOn` is read-only from the outside (BEH-EA-007) and, since ELC-006,
+    // `AuthPlugin.layer` refuses to re-register a class with different deps, so
+    // a real plugin cannot be forced into a cycle. Two hand-built plugin values
+    // (the shape `AuthPlugin.Any` names) whose `dependsOn` point at each other
+    // are what a circular import between two plugin modules would produce.
+    const pingLike: FakePlugin<"ping"> = fakePlugin("ping", () => [pongLike]);
+    const pongLike: FakePlugin<"pong"> = fakePlugin("pong", () => [pingLike]);
+    let thrown: unknown;
     try {
-      let thrown: unknown;
-      try {
-        Auth.make([Ping, Pong]);
-      } catch (error) {
-        thrown = error;
-      }
-      assert.instanceOf(thrown, Auth.CircularPluginDependency);
-      const error = thrown as Auth.CircularPluginDependency;
-      assert.strictEqual(error._tag, "CircularPluginDependency");
-      assert.deepStrictEqual(error.cycle, ["ping", "pong", "ping"]);
-      assert.match(error.message, /awthaq: circular plugin dependency: ping -> pong -> ping/);
-    } finally {
-      const restoredPingLayer = AuthPlugin.layer(Ping, {
-        make: Effect.succeed({ ping: () => Effect.succeed("pong") }),
-      });
-      assert.isDefined(restoredPingLayer);
+      Auth.make([pingLike, pongLike]);
+    } catch (error) {
+      thrown = error;
     }
+    assert.instanceOf(thrown, Auth.CircularPluginDependency);
+    assert.strictEqual(thrown._tag, "CircularPluginDependency");
+    assert.deepStrictEqual(thrown.cycle, ["ping", "pong", "ping"]);
+    assert.match(thrown.message, /awthaq: circular plugin dependency: ping -> pong -> ping/);
   });
+
+  it("JH-006: the composed layer's type is exactly the runtime fold (Ping is provided to Pong, not left in RIn)", () => {
+    const auth = Auth.make([Ping, Pong]);
+    // `Layer.Services` of the folded layer no longer mentions `Ping` or `Pong`: the
+    // static fold nets each dependency out against the plugin listed before it.
+    type Needs = Layer.Services<typeof auth.layer>;
+    const needsNothing: [Needs] extends [never] ? true : false = true;
+    assert.isTrue(needsNothing);
+  });
+
+  it("JH-006: a tuple listing a dependent before its dependency is refused at compile time, naming both", () => {
+    // @ts-expect-error - plugin "pong" depends on plugin "ping", which must be listed before it
+    assert.doesNotThrow(() => Auth.make([Pong, Ping]));
+  });
+
+  it("JH-007: a plugin reading another plugin's table without dependsOn is refused at composition", () => {
+    let thrown: unknown;
+    try {
+      Auth.make([Ping, Reader]);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.instanceOf(thrown, Auth.UndeclaredTableDependency);
+    assert.strictEqual(thrown._tag, "UndeclaredTableDependency");
+    assert.strictEqual(thrown.pluginId, "reader");
+    assert.strictEqual(thrown.ownerId, "ping");
+    assert.strictEqual(thrown.table, "ping_state");
+    assert.match(thrown.message, /plugin "reader" reads table "ping_state" owned by plugin "ping"/);
+    // Declaring the dependency makes the same read legitimate, and orders the migrations.
+    assert.doesNotThrow(() => Auth.make([Ping, DeclaredReader]));
+    // A table no installed plugin owns is not this check's business.
+    assert.doesNotThrow(() => Auth.make([Reader]));
+  });
+
+  it("JH-008: a plugin whose layer provides a port is refused at compile time, naming plugin and port", () => {
+    // @ts-expect-error - plugin "evil" provides port "awthaq/ports/Mailer" (BEH-EA-020)
+    assert.doesNotThrow(() => Auth.make([Evil]));
+    expectTypeOf<Auth.Validate<readonly [typeof Evil]>>().toEqualTypeOf<{
+      readonly awthaq: 'plugin "evil" provides port "awthaq/ports/Mailer" — a plugin may only require ports, never provide them';
+    }>();
+    // Ports the plugin merely requires (Ping has none; Roles/Jwt compositions elsewhere) are fine.
+    assert.doesNotThrow(() => Auth.make([Ping, Pong]));
+  });
+
+  it("ELC-006: two AuthPlugin.layer calls for one class with different dependsOn throw ConflictingDependsOn", () => {
+    class Twin extends AuthPlugin.Service<Twin, Record<string, never>>()("twin", {
+      apiVersion: 1,
+      contract: HttpApi.make("auth"),
+    }) {}
+    AuthPlugin.layer(Twin, { make: Effect.succeed({}) });
+    let thrown: unknown;
+    try {
+      AuthPlugin.layer(Twin, { dependsOn: [Ping], make: Effect.succeed({}) });
+    } catch (error) {
+      thrown = error;
+    }
+    assert.instanceOf(thrown, AuthPlugin.ConflictingDependsOn);
+    assert.strictEqual(thrown._tag, "ConflictingDependsOn");
+    assert.strictEqual(thrown.pluginId, "twin");
+    assert.deepStrictEqual(thrown.first, []);
+    assert.deepStrictEqual(thrown.second, ["ping"]);
+  });
+
+  it("ELC-006: an identical dependsOn re-registration is allowed (Roles' two layers)", () => {
+    class Twin2 extends AuthPlugin.Service<Twin2, Record<string, never>>()("twin2", {
+      apiVersion: 1,
+      contract: HttpApi.make("auth"),
+    }) {}
+    AuthPlugin.layer(Twin2, { dependsOn: [Ping], make: Effect.succeed({}) });
+    assert.doesNotThrow(() => AuthPlugin.layer(Twin2, { dependsOn: [Ping], make: Effect.succeed({}) }));
+    assert.deepStrictEqual(
+      Twin2.dependsOn.map((dep) => dep.id),
+      ["ping"],
+    );
+  });
+
+  it.effect("INV-EA-004/MA-005: Auth.make of two plugins overriding one slot fails layer build with SlotConflict, with no Slots.layer provided", () =>
+    Effect.gen(function* () {
+      const auth = Auth.make([SlotA, SlotB]);
+      const failure = yield* Effect.scoped(Layer.build(auth.layer)).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "SlotConflict");
+      assert.strictEqual(failure.firstOwner, "slotA");
+      assert.strictEqual(failure.secondOwner, "slotB");
+    }),
+  );
+
+  it.effect("MA-005: a single overrider composes through Auth.make with no Slots.layer, and its override resolves", () =>
+    Effect.gen(function* () {
+      const auth = Auth.make([SlotA]);
+      const resolved = yield* Effect.gen(function* () {
+        return yield* TestResolver;
+      }).pipe(Effect.provide(auth.layer));
+      assert.strictEqual(resolved.who, "slotA");
+    }),
+  );
 
   it("BEH-EA-032: two plugins contributing the same group id refuses at runtime with a typed GroupIdConflict, naming both plugins", () => {
     let thrown: unknown;

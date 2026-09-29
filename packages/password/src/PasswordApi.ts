@@ -9,7 +9,7 @@
 // schemas, errors, and contract `HttpApi`").
 
 import { Api, EmailContract, SessionContract } from "@awthaq/api";
-import { HookPoint, Hooks } from "@awthaq/core";
+import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -174,7 +174,15 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // Wayfinder ticket 03 (AOMS-006/BCR-004): `HookPoint.HookAborted`
       // from a `Hooks.BeforeSignUp` veto tap (e.g. an email-domain
       // allow-list).
-      error: [WeakPassword, EmailAlreadyExists, Api.RateLimited, HookPoint.HookAborted],
+      // MNA-001: `Api.InvalidTokenDelivery` (400) for an unrecognised
+      // `X-Awthaq-Token-Delivery` value.
+      error: [
+        WeakPassword,
+        EmailAlreadyExists,
+        Api.RateLimited,
+        HookPoint.HookAborted,
+        Api.InvalidTokenDelivery,
+      ],
     }),
   )
   .add(
@@ -186,12 +194,16 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // `Hooks.TwoFactorRequired` when a `Hooks.BeforeSessionIssue` tap
       // (a future `TwoFactor` plugin) diverts. NAM-002: `HookPoint.HookAborted`
       // from a `Hooks.BeforeSignIn` veto tap.
+      // SCP-001: `Users.UserSuspended` when `Users.assertCanSignIn` refuses.
+      // MNA-001: `Api.InvalidTokenDelivery` for an unrecognised `X-Awthaq-Token-Delivery` value.
       error: [
         Api.InvalidCredentials,
         EmailNotVerified,
+        Users.UserSuspended,
         Api.RateLimited,
         HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
+        Api.InvalidTokenDelivery,
       ],
     }),
   )
@@ -267,7 +279,7 @@ export const PasswordAccountGroup = HttpApiGroup.make("password.account")
       // response carries the new session the same way signUp/signIn's do.
       success: SessionContract.SessionDto,
       // Ticket 14: rate-limited.
-      error: [WrongPassword, WeakPassword, Api.RateLimited],
+      error: [WrongPassword, WeakPassword, Api.RateLimited, Api.InvalidTokenDelivery],
     }),
   )
   .add(
