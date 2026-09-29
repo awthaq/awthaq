@@ -1,6 +1,6 @@
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-138 through BEH-EA-141.
 import { Api } from "@awthaq/api";
-import { AuditLog, Erasure, AuthEvents, Users } from "@awthaq/core";
+import { AuditLog, DataExport, Erasure, AuthEvents, Users } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -22,6 +22,7 @@ const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
   // CSG-001: the plugin contributes its erasure to the composition's registry.
   Layer.provideMerge(Erasure.registryLayer),
+  Layer.provideMerge(DataExport.registryLayer),
 );
 
 const layerFor = (catalog: ReadonlyArray<ReturnType<typeof role>>) =>
@@ -202,6 +203,25 @@ describe("Roles audit events (RRM-005)", () => {
 
       assert.deepStrictEqual(yield* roles.listRoleNames(erased), []);
       assert.deepStrictEqual(yield* roles.listRoleNames(kept), ["editor"]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSG-005: the plugin's section of the data-subject export.
+  it.effect("registers a `roles` export listing the user's role names", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const registry = yield* DataExport.DataExportRegistry;
+      const mine = Users.UserId("f1f1f1f1-f1f1-f1f1-f1f1-f1f1f1f1f1f1");
+      const other = Users.UserId("f2f2f2f2-f2f2-f2f2-f2f2-f2f2f2f2f2f2");
+      yield* roles.assign(mine, "owner");
+      yield* roles.assign(other, "editor");
+      const contributions = yield* registry.contributions;
+      const roleSection = contributions.find((c) => c.id === "roles");
+      assert.isDefined(roleSection);
+      assert.deepStrictEqual(
+        yield* roleSection!.collect({ userId: mine, email: "m@example.com" }),
+        { roles: ["owner"] },
+      );
     }).pipe(Effect.provide(TestLayer)),
   );
 });

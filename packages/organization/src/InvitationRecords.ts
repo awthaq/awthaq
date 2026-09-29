@@ -73,6 +73,8 @@ export interface InvitationRecordsShape {
     organizationId: string,
   ) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
   readonly listByEmail: (email: string) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
+  /** CSG-005: every invitation the user sent, any status — the data-subject export's "invitations sent". */
+  readonly listByInviter: (inviterId: Users.UserId) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
   readonly countPendingByInviter: (inviterId: Users.UserId) => Effect.Effect<number>;
   readonly updateStatus: (
     id: string,
@@ -182,6 +184,11 @@ export const layerMemory = Layer.effect(
         ),
       );
 
+    const listByInviter: InvitationRecordsShape["listByInviter"] = (inviterId) =>
+      Ref.get(state).pipe(
+        Effect.map((s) => Array.from(HashMap.values(s)).filter((row) => row.inviterId === inviterId)),
+      );
+
     const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>
       Ref.get(state).pipe(
         Effect.map(
@@ -233,6 +240,7 @@ export const layerMemory = Layer.effect(
       findPendingByEmailAndOrg,
       listByOrganization,
       listByEmail,
+      listByInviter,
       countPendingByInviter,
       updateStatus,
       removeAllForOrganization,
@@ -347,6 +355,13 @@ export const layerSql = Layer.effect(
       execute: (email) => sql`SELECT * FROM organization_invitation WHERE email = ${email}`,
     });
 
+    const listByInviterQuery = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: InvitationRow,
+      execute: (inviterId) =>
+        sql`SELECT * FROM organization_invitation WHERE "inviterId" = ${inviterId}`,
+    });
+
     // MTI-005: a COUNT(*), never a full-row materialization.
     const countPendingByInviterQuery = SqlSchema.findOne({
       Request: Schema.String,
@@ -418,6 +433,12 @@ export const layerSql = Layer.effect(
         Effect.orDie,
       );
 
+    const listByInviter: InvitationRecordsShape["listByInviter"] = (inviterId) =>
+      listByInviterQuery(inviterId).pipe(
+        Effect.map((rows) => rows.map(toRecord)),
+        Effect.orDie,
+      );
+
     const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>
       countPendingByInviterQuery(inviterId).pipe(
         Effect.map((row) => row.count),
@@ -454,6 +475,7 @@ export const layerSql = Layer.effect(
       findPendingByEmailAndOrg,
       listByOrganization,
       listByEmail,
+      listByInviter,
       countPendingByInviter,
       updateStatus,
       removeAllForOrganization,

@@ -10,6 +10,7 @@ import { Api, AuthCore } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  DataExport,
   Erasure,
   Hooks,
   AuthEvents,
@@ -17,7 +18,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction, RateLimiter } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes } from "node:crypto";
@@ -88,7 +89,10 @@ const csrfHeaders = (cookie?: string): Record<string, string> => ({
   "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
 });
 
-const makeAppLayer = (sessionsLayer: typeof Sessions.layerMemory) =>
+const makeAppLayer = (
+  sessionsLayer: typeof Sessions.layerMemory,
+  limiterLayer: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
+) =>
   Layer.mergeAll(
     AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Session.SessionHandlers),
@@ -99,8 +103,10 @@ const makeAppLayer = (sessionsLayer: typeof Sessions.layerMemory) =>
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
     Layer.provide(CsrfProtectionLive),
-    // CSG-001: `Account.deleteUser` runs core's `AccountErasure`.
-    Layer.provide(Erasure.layer),
+    // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
+    Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
+    // CSG-005: the export endpoint rate-limits per account.
+    Layer.provide(limiterLayer),
     // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
     // `SqlTransaction` — a no-op wrapper for this in-memory composition.
     Layer.provide(SqlTransaction.layerNoop),
@@ -465,6 +471,97 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         assertSessionCookieExpired(response);
       }),
     ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
+// CSG-005: GDPR Art. 15/20 self-service export.
+describe("GET /user/export (CSG-005)", () => {
+  it.effect(
+    "returns the caller's user, accounts (no secrets), sessions and activity as an attachment, and audits it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const accounts = yield* Accounts.Accounts;
+          const sessions = yield* Sessions.Sessions;
+          const audit = yield* AuditLog.AuditLog;
+          const user = yield* users.create({ email: "export-me@example.com", name: "Exp" });
+          const other = yield* users.create({ email: "not-me@example.com", name: "Other" });
+          yield* accounts.link({ userId: user.id, providerId: "google", subject: "sub-exp" });
+          yield* accounts.link({ userId: other.id, providerId: "google", subject: "sub-other" });
+          const { token } = yield* sessions.issue({ userId: user.id });
+
+          const response = yield* sendHandled("/user/export", { method: "GET", token });
+
+          assert.strictEqual(response.status, 200);
+          assert.strictEqual(
+            response.headers["content-disposition"],
+            'attachment; filename="account-export.json"',
+          );
+          assert.strictEqual(response.headers["cache-control"], "no-store");
+          const body = (yield* jsonBody(response)) as {
+            readonly user: { readonly id: string; readonly email: string };
+            readonly accounts: ReadonlyArray<{
+              readonly providerId: string;
+              readonly subject: string;
+            }>;
+            readonly sessions: ReadonlyArray<unknown>;
+            readonly activity: ReadonlyArray<{ readonly event: string }>;
+            readonly sections: Record<string, unknown>;
+          };
+          assert.strictEqual(body.user.id, user.id);
+          assert.strictEqual(body.user.email, "export-me@example.com");
+          assert.deepStrictEqual(
+            body.accounts.map((account) => account.subject),
+            ["sub-exp"],
+          );
+          assert.strictEqual(body.sessions.length, 1);
+          assert.isTrue(body.activity.some((row) => row.event === "auth.session.issued"));
+          assert.deepStrictEqual(body.sections, {});
+          // never another person's data, never a secret
+          const text = JSON.stringify(body);
+          assert.notInclude(text, "not-me@example.com");
+          assert.notInclude(text, "secretHash");
+          assert.notInclude(text, Redacted.value(token));
+
+          const exported = yield* audit.list({ eventTag: "auth.user.dataExported" });
+          assert.strictEqual(exported.length, 1);
+          assert.deepStrictEqual(exported[0]?.payload, {
+            _tag: "auth.user.dataExported",
+            userId: user.id,
+            requestedBy: "self",
+          });
+        }),
+      ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("answers 401 without a valid session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const response = yield* sendHandled("/user/export", {
+          method: "GET",
+          token: Redacted.make("unknown.session"),
+        });
+        assert.strictEqual(response.status, 401);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("is rate limited per account: the sixth export in an hour answers 429", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const user = yield* users.create({ email: "hammer@example.com", name: "H" });
+        const { token } = yield* sessions.issue({ userId: user.id });
+        for (let i = 0; i < 5; i += 1) {
+          const ok = yield* sendHandled("/user/export", { method: "GET", token });
+          assert.strictEqual(ok.status, 200);
+        }
+        const limited = yield* sendHandled("/user/export", { method: "GET", token });
+        assert.strictEqual(limited.status, 429);
+      }),
+    ).pipe(Effect.provide(makeAppLayer(Sessions.layerMemory, RateLimiter.layerMemory))),
   );
 });
 

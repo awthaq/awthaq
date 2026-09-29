@@ -60,6 +60,10 @@ const ALLOWLIST: ReadonlyArray<{ readonly match: RegExp; readonly why: string }>
     why: "erasure sweep (CSG-001): removes every invitation an erased user sent or received, across organizations",
   },
   {
+    match: /^SELECT \* FROM organization_invitation WHERE inviterId = /,
+    why: "data-subject export (CSG-005): the invitations a user sent, across organizations, keyed by their own identity",
+  },
+  {
     match: /^SELECT teamId AS teamId FROM organization_team_membership WHERE userId = /,
     why: "erasure sweep (CSG-001): the teams an erased user belongs to, across organizations",
   },

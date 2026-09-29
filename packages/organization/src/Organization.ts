@@ -14,7 +14,15 @@
 // their shape.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Erasure, HookPoint, Migrations, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  DataExport,
+  Erasure,
+  HookPoint,
+  Migrations,
+  Users,
+} from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1560,6 +1568,49 @@ export const organizationErasure = Erasure.contribute({
   }),
 });
 
+/**
+ * CSG-005: this plugin's section of the data-subject export — the organizations the person
+ * belongs to and their role in each, the teams they are on, and the invitations they sent
+ * or received. An invitation carries no third party's address (the invitee's email is
+ * their data, not the subject's), and a role is a name, never a permission secret.
+ */
+export const organizationExport = DataExport.contribute({
+  id: "organization",
+  make: Effect.gen(function* () {
+    const members = yield* MembershipRecords.MembershipRecords;
+    const teams = yield* TeamRecords.TeamRecords;
+    const invitations = yield* InvitationRecords.InvitationRecords;
+    const invitationView = (row: InvitationRecords.InvitationRecord) => ({
+      organizationId: row.organizationId,
+      role: [...row.role],
+      status: row.status,
+      createdAt: DateTime.formatIso(row.createdAt),
+      expiresAt: DateTime.formatIso(row.expiresAt),
+    });
+    return (subject: DataExport.DataExportSubject) =>
+      Effect.gen(function* () {
+        const memberships = yield* members.listByUser(subject.userId);
+        const teamRows = yield* Effect.forEach(memberships, (membership) =>
+          teams.listTeamsByUser(membership.organizationId, subject.userId),
+        );
+        return {
+          memberships: memberships.map((membership) => ({
+            organizationId: membership.organizationId,
+            role: [...membership.role],
+            createdAt: DateTime.formatIso(membership.createdAt),
+          })),
+          teams: teamRows.flat().map((team) => ({
+            id: team.id,
+            organizationId: team.organizationId,
+            name: team.name,
+          })),
+          invitationsSent: (yield* invitations.listByInviter(subject.userId)).map(invitationView),
+          invitationsReceived: (yield* invitations.listByEmail(subject.email)).map(invitationView),
+        };
+      });
+  }),
+});
+
 // ---- plugin ---------------------------------------------------------------------
 
 export class Organization extends AuthPlugin.Service<Organization, OrganizationShape>()(
@@ -1582,7 +1633,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 ) {
   static readonly layer = AuthPlugin.layer(Organization, {
     handlers: OrganizationHandlers,
-    contributes: organizationErasure,
+    contributes: Layer.mergeAll(organizationErasure, organizationExport),
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
       const orgs = yield* OrganizationRecords.OrganizationRecords;

@@ -76,6 +76,7 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
   },
   "auth.user.emailVerified": { _tag: "auth.user.emailVerified", userId },
   "auth.user.deleted": { _tag: "auth.user.deleted", userId, deletedBy: "self" },
+  "auth.user.dataExported": { _tag: "auth.user.dataExported", userId, requestedBy: "self" },
   "auth.session.reuse": {
     _tag: "auth.session.reuse",
     sessionId,

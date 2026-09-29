@@ -10,7 +10,7 @@
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (CSG-001, DRS-002, SEA-001, SSMS-002) |
+> | Change History | 1.0 (2026-09-29): Initial release (CSG-001, DRS-002, SEA-001, SSMS-002, CSG-005, CSG-003, ALF-010) |
 
 ---
 
@@ -24,7 +24,8 @@ The account-deletion cascade lived inline in the HTTP handler, and every plugin 
 2. **Plugins contribute to an aggregating registry (ADR-EA-012 style).** `Erasure.contribute({ id, order, make })` returns a `Layer` that requires `ErasureRegistry`, and `AuthPlugin.layer(Self, { contributes })` folds it into the plugin's own layer, so a composition that installs a plugin holding personal data without the registry does not compile, the same compile-time guarantee ADR-EA-028 gives taps. `Hooks.HooksLive` provides the registry, so existing compositions need no edit. Contributions run ordered by `order`, then id; the first read freezes the registry (`ErasureRegistryFrozen` is a defect). `organization`, `passkey`, `roles` and `claims` ship contributions.
 3. **Retained by decision: `admin_impersonation` and its hash chain** (legal-obligation basis, GDPR Art. 17(3)(b)/(e), access-review evidence). They are protected by triggers and their chain payloads embed the ids a rewrite would touch. Follow-up: a ledger whose identifiers are per-user keyed digests, so an erasure can drop the key.
 4. **Not covered, documented**: passkey challenge rows expire on their own (minutes); the JWT revocation store holds token ids, not personal data.
-5. **Retention is separate from erasure.** Expiry-driven purging (sessions past their grace, verification tokens past a forensic window, audit rows past a per-class window) is `Retention.sweep`, opt-in and off by default for the audit log (retain forever unless a window is set), never a side effect of a request.
+5. **Export mirrors erasure (CSG-005).** `DataExport.contribute` adds a section to `DataExportRegistry` (also carried by `HooksLive`), and `AccountExport.exportAccount` assembles core's user, accounts, sessions and the person's own audit activity plus every plugin's section into one document that holds no secret; a failing contribution fails the export; `GET /user/export` rate-limits it per account and `auth.user.dataExported` audits it (BEH-EA-225). Both registries share one mechanism (`internal/contributionRegistry.ts`).
+6. **Retention is separate from erasure.** Expiry-driven purging (sessions past their grace, verification tokens past a forensic window, audit rows past a per-class window) is `Retention.sweep`, opt-in and off by default for the audit log (retain forever unless a window is set), never a side effect of a request.
 
 ## Alternatives considered
 

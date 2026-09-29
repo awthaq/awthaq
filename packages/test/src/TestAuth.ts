@@ -64,6 +64,7 @@ import {
   AuditLog,
   AuthEvents,
   AuthPlugin,
+  DataExport,
   Erasure,
   Hooks,
   Migrations,
@@ -145,7 +146,7 @@ const MemoryStores = Layer.mergeAll(
  * erasure contribution registers into), so a plugin installed in a `TestAuth` composition is
  * erased like any other.
  */
-const MemoryPorts = Erasure.layer.pipe(
+const MemoryPorts = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
   Layer.provideMerge(MemoryStores),
   Layer.provideMerge(NodeCrypto.layer),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.

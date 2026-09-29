@@ -101,6 +101,18 @@ export const UserDeletedEvent = Schema.TaggedStruct("auth.user.deleted", {
 export type UserDeletedEvent = typeof UserDeletedEvent.Type;
 
 /**
+ * CSG-005: published each time a data-subject export (GDPR Art. 15/20) is produced, so the
+ * audit trail records who exported whose data. Ids only — the document itself is never an
+ * event payload. `requestedBy` is the account holder (`"self"`) or an administrator acting
+ * for them (`"admin"`).
+ */
+export const UserDataExportedEvent = Schema.TaggedStruct("auth.user.dataExported", {
+  userId: UserIdSchema,
+  requestedBy: Schema.Literals(["self", "admin"]),
+});
+export type UserDataExportedEvent = typeof UserDataExportedEvent.Type;
+
+/**
  * RRS-003: published by `Sessions.verify` the first time a tombstoned
  * (already-superseded) session token is presented again — refresh-token
  * reuse, the standard signal a token family has been compromised. Every
@@ -561,6 +573,7 @@ export const AuthEventSchema = Schema.Union([
   UserSignInFailedEvent,
   UserEmailVerifiedEvent,
   UserDeletedEvent,
+  UserDataExportedEvent,
   SessionReuseEvent,
   SessionIssuedEvent,
   SessionRotatedEvent,

@@ -27,6 +27,7 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  DataExport,
   Erasure,
   HookPoint,
   Hooks,
@@ -896,6 +897,35 @@ const passkeyMigrations: Migrations.Migrations = [
  * removes the user's `passkey_credential` rows and — since BPAS-003 — their
  * stable WebAuthn user handle, inside `eraseAccount`'s transaction.
  */
+/**
+ * CSG-005: this plugin's section of the data-subject export — each credential's metadata
+ * (a name, when it was registered and last used, device class, transports, authenticator
+ * model). Never the public key, the WebAuthn user handle or the signature counter: they are
+ * key material or a cloning signal, not something a person needs back (Art. 20), and the
+ * export must hold no secret.
+ */
+export const passkeyExport = DataExport.contribute({
+  id: "passkey",
+  make: Effect.gen(function* () {
+    const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+    return (subject: DataExport.DataExportSubject) =>
+      credentials.listByUser(subject.userId).pipe(
+        Effect.map((rows) => ({
+          credentials: rows.map((row) => ({
+            id: row.id,
+            name: row.name,
+            deviceType: row.deviceType,
+            backedUp: row.backedUp,
+            transports: [...row.transports],
+            aaguid: row.aaguid,
+            createdAt: DateTime.formatIso(row.createdAt),
+            lastUsedAt: DateTime.formatIso(row.lastUsedAt),
+          })),
+        })),
+      );
+  }),
+});
+
 export const passkeyErasure = Erasure.contribute({
   id: "passkey",
   make: Effect.gen(function* () {
@@ -916,7 +946,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
     handlers: PasskeyHandlers,
-    contributes: passkeyErasure,
+    contributes: Layer.mergeAll(passkeyErasure, passkeyExport),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;

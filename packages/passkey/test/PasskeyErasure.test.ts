@@ -1,10 +1,11 @@
 // CSG-001/DRS-002 (.issues/high): `PasskeyCredentials.deleteAllByUser` and
 // `Passkey.passkeyErasure` (the plugin's `Erasure` contribution, CSG-001).
-import { Erasure, Users } from "@awthaq/core";
+import { DataExport, Erasure, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
@@ -90,5 +91,55 @@ describe("Passkey erasure contribution", () => {
         assert.notStrictEqual(yield* handles.getOrCreate(erased), handleBefore);
         assert.strictEqual(yield* handles.getOrCreate(kept), keptHandle);
       }).pipe(Effect.scoped, Effect.provide(TestLayer)),
+  );
+});
+
+// CSG-005: the plugin's section of the data-subject export.
+describe("Passkey export contribution", () => {
+  const TestLayer = PasskeyCredentials.layerMemory.pipe(
+    Layer.provideMerge(DataExport.registryLayer),
+    Layer.provide(NodeCrypto.layer),
+  );
+
+  it.effect("registers as `passkey` and exports credential metadata, never key material", () =>
+    Effect.gen(function* () {
+      const registry = yield* DataExport.DataExportRegistry;
+      const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+      const mine = Users.UserId("user-mine");
+      yield* credentials.create(credentialInput("cred-1", mine));
+      yield* credentials.create(credentialInput("cred-other", Users.UserId("user-other")));
+
+      yield* Layer.build(Passkey.passkeyExport);
+      const contributions = yield* registry.contributions;
+      assert.deepStrictEqual(
+        contributions.map((c) => c.id),
+        ["passkey"],
+      );
+      const section = yield* contributions[0]!.collect({ userId: mine, email: "m@example.com" });
+
+      const shape = Schema.decodeUnknownSync(
+        Schema.Struct({
+          credentials: Schema.Array(
+            Schema.Struct({
+              id: Schema.String,
+              name: Schema.String,
+              deviceType: Schema.String,
+              transports: Schema.Array(Schema.String),
+              createdAt: Schema.String,
+              lastUsedAt: Schema.String,
+            }),
+          ),
+        }),
+      )(section);
+      assert.deepStrictEqual(
+        shape.credentials.map((c) => [c.id, c.name, c.deviceType, c.transports]),
+        [["cred-1", "My Passkey", "singleDevice", ["internal"]]],
+      );
+      const text = JSON.stringify(section);
+      for (const secret of ["publicKey", "webauthnUserId", "wau-cred-1", "counter"]) {
+        assert.notInclude(text, secret);
+      }
+      assert.notInclude(text, "cred-other");
+    }).pipe(Effect.scoped, Effect.provide(TestLayer)),
   );
 });

@@ -6,6 +6,7 @@ import { Api, AuthCore } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  DataExport,
   Erasure,
   AuthEvents,
   Hooks,
@@ -13,7 +14,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction, RateLimiter } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -55,8 +56,10 @@ const appLayer = (allowedOrigins: ReadonlyArray<string>) =>
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
     Layer.provide(Csrf.CsrfProtectionLive),
-    // CSG-001: `Account.deleteUser` runs core's `AccountErasure`.
-    Layer.provide(Erasure.layer),
+    // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
+    Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
+    // CSG-005: the export endpoint rate-limits per account.
+    Layer.provide(RateLimiter.layerPermissive),
     Layer.provide(SqlTransaction.layerNoop),
     Layer.provideMerge(Sessions.layerMemory),
     Layer.provideMerge(Users.layerMemory),

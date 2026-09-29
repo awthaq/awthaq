@@ -128,5 +128,27 @@ REQUIREMENT: A field a plugin contributes to `User`, `Account`, or `Session`
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §6.2 documents this as the extension mechanism's sharpest edge and assigns blame precisely: a plugin that omits the write-gate on a system-authority field it contributes is the party responsible for the resulting corruption, "not the base system, and not whichever other plugin later trusts the now-corrupted field as authoritative." awthaq's plan inherits the same default and the same blame rule, while narrowing where a plugin may contribute such a field at all — per BEH-EA-040, a shared-table extension is scalar-only and mediated by a declared extension point, which shrinks, but does not eliminate, the surface this rule has to cover.
 
+## BEH-EA-225: A person can export everything the system holds about them as one document, and no plugin can be left out
+
+```ts
+GET /user/export   // Authentication required; one JSON attachment
+```
+
+```text
+REQUIREMENT: An authenticated user MUST be able to obtain a single document
+             containing the personal data held about them — from core (the
+             user, linked accounts, live sessions, their own audit activity)
+             and from every plugin that stores personal data, each under its
+             own plugin id — and that document MUST NOT contain any secret
+             (a password or credential hash, a provider token, a session
+             secret, key material). A contribution that cannot read its store
+             MUST fail the whole export rather than yield a document that
+             silently omits a category. Producing an export MUST be
+             rate-limited per account and MUST publish `auth.user.dataExported`
+             (ids only), so the audit trail records who exported whose data.
+```
+
+This is GDPR Art. 15 (access) and Art. 20 (portability) as the mirror image of erasure (BEH-EA-095): the same guarantee, that a plugin storing personal data cannot be forgotten, reached the same way. `DataExport.contribute` returns a `Layer` that requires `DataExportRegistry` (carried by `Hooks.HooksLive`), folded into a plugin's own layer with `AuthPlugin.layer(Self, { contributes })`, and `AccountExport.exportAccount` assembles the document, so the HTTP handler, an admin console and a support script produce the same complete export (`packages/core/test/AccountExport.test.ts`, `packages/server/test/AuthHttp.test.ts`). `organization`, `passkey`, `roles` and `claims` ship sections (credential public keys, WebAuthn handles and a third party's invitation address are deliberately left out). Not covered, documented in ADR-EA-031: the IP address stored on a session row (core does not expose it; the same address appears in `activity`), and the impersonation ledger, retained under a legal-obligation basis.
+
 _Previous: [BEH-EA-040](05-persistence-stratum.md#beh-ea-040-a-plugin-migration-may-only-alter-tables-under-its-own-prefix-shared-tables-are-altered-only-through-a-declared-extension-point)_
 _Next: [BEH-EA-049](07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair)_

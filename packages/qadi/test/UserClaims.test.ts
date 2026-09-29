@@ -1,7 +1,16 @@
 // FAMS-004: the opt-in per-user custom-claims store (Firebase `setCustomUserClaims`, routed
 // through qadi). Both layers run the same contract; then a real policy reads a migrated
 // claim through the resolver.
-import { AuditLog, Erasure, AuthEvents, Auth, Hooks, Migrations, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  DataExport,
+  Erasure,
+  AuthEvents,
+  Auth,
+  Hooks,
+  Migrations,
+  Users,
+} from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import {
   AttributeResolver,
@@ -28,6 +37,7 @@ const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
   // CSG-001: the plugin contributes its erasure to the composition's registry.
   Layer.provideMerge(Erasure.registryLayer),
+  Layer.provideMerge(DataExport.registryLayer),
 );
 
 const withResolver = <E, R>(store: Layer.Layer<UserClaims.UserClaims, E, R>) =>
@@ -51,7 +61,11 @@ const admin = Users.UserId("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 const contract = (
   name: string,
   layer: Layer.Layer<
-    UserClaims.UserClaims | AttributeResolver | AuditLog.AuditLog | Erasure.ErasureRegistry,
+    | UserClaims.UserClaims
+    | AttributeResolver
+    | AuditLog.AuditLog
+    | Erasure.ErasureRegistry
+    | DataExport.DataExportRegistry,
     unknown,
     never
   >,
@@ -127,6 +141,22 @@ const contract = (
           yield* c.erase({ userId: alice, email: "alice@example.com" });
         assert.deepStrictEqual(yield* claims.get(alice), {});
         assert.deepStrictEqual(yield* claims.get(admin), { plan: "free" });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // CSG-005: the plugin's section of the data-subject export.
+    it.effect("registers a `claims` export with the user's claims document", () =>
+      Effect.gen(function* () {
+        const claims = yield* UserClaims.UserClaims;
+        const registry = yield* DataExport.DataExportRegistry;
+        yield* claims.set(alice, { plan: "pro" });
+        yield* claims.set(admin, { plan: "free" });
+        const contribution = (yield* registry.contributions).find((c) => c.id === "claims");
+        assert.isDefined(contribution);
+        assert.deepStrictEqual(
+          yield* contribution!.collect({ userId: alice, email: "alice@example.com" }),
+          { claims: { plan: "pro" } },
+        );
       }).pipe(Effect.provide(layer)),
     );
 

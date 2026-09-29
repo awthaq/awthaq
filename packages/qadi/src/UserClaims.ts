@@ -23,7 +23,7 @@
 // Firebase import mapping: `role`-shaped claims -> `Roles.assign`; every other custom claim ->
 // `UserClaims.merge`/`set`. See `packages/qadi/README.md`.
 
-import { AuthEvents, AuthPlugin, Erasure, Hooks, Migrations, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, DataExport, Erasure, Hooks, Migrations, Users } from "@awthaq/core";
 import { AttributeResolveError, AttributeResolver } from "@qadi/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -227,6 +227,15 @@ const sqlMake = Effect.gen(function* () {
  * removes the erased user's claims document. Part of `UserClaims.layer`/`layerSql`,
  * which therefore require `Erasure.ErasureRegistry`.
  */
+export const claimsExport = DataExport.contribute({
+  id: "claims",
+  make: Effect.gen(function* () {
+    const claims = yield* UserClaims;
+    return (subject: DataExport.DataExportSubject) =>
+      claims.get(subject.userId).pipe(Effect.map((document) => ({ claims: document })));
+  }),
+});
+
 export const claimsErasure = Erasure.contribute({
   id: "claims",
   make: Effect.gen(function* () {
@@ -244,13 +253,13 @@ export class UserClaims extends AuthPlugin.Service<UserClaims, UserClaimsShape>(
 }) {
   static readonly layer = AuthPlugin.layer(UserClaims, {
     make: memoryMake,
-    contributes: claimsErasure,
+    contributes: Layer.mergeAll(claimsErasure, claimsExport),
   });
 
   /** The same service over the `claims_user` table (run `UserClaims.migrations`, or `Auth.make`'s aggregate). */
   static readonly layerSql = AuthPlugin.layer(UserClaims, {
     make: sqlMake,
-    contributes: claimsErasure,
+    contributes: Layer.mergeAll(claimsErasure, claimsExport),
   });
 }
 

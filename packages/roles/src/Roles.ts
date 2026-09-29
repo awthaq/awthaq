@@ -29,7 +29,7 @@
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
 import { Users } from "@awthaq/core";
-import { AuthEvents, AuthPlugin, Erasure, Migrations, Slots } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, DataExport, Erasure, Migrations, Slots } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -385,6 +385,15 @@ const subjectResolverMake = Effect.gen(function* () {
  * at the end of the erasure). Part of `Roles.layer`/`layerSql`, which therefore
  * require `Erasure.ErasureRegistry`.
  */
+export const rolesExport = DataExport.contribute({
+  id: "roles",
+  make: Effect.gen(function* () {
+    const roles = yield* Roles;
+    return (subject: DataExport.DataExportSubject) =>
+      roles.listRoleNames(subject.userId).pipe(Effect.map((names) => ({ roles: [...names] })));
+  }),
+});
+
 export const rolesErasure = Erasure.contribute({
   id: "roles",
   make: Effect.gen(function* () {
@@ -440,7 +449,7 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
     QadiSubjectResolver.SubjectResolver,
     subjectResolverMake,
   ).pipe(
-    Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMake, contributes: rolesErasure })),
+    Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMake, contributes: Layer.mergeAll(rolesErasure, rolesExport) })),
   );
 
   /** BAM-006: the same composition as `layer`, over `rolesMakeSql` instead of the in-memory `rolesMake`. */
@@ -449,6 +458,6 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
     QadiSubjectResolver.SubjectResolver,
     subjectResolverMake,
   ).pipe(
-    Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMakeSql, contributes: rolesErasure })),
+    Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMakeSql, contributes: Layer.mergeAll(rolesErasure, rolesExport) })),
   );
 }

@@ -29,6 +29,7 @@
 
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as DataExportRegistry from "./DataExportRegistry.ts";
 import * as ErasureRegistry from "./ErasureRegistry.ts";
 import * as HookPoint from "./HookPoint.ts";
 
@@ -153,4 +154,5 @@ export const HooksLive = Layer.mergeAll(
   // provides `HooksLive`, and each plugin holding personal data contributes its
   // erasure to it (`Erasure.contribute`), so erasure is not something a host opts into.
   ErasureRegistry.registryLayer,
+  DataExportRegistry.registryLayer,
 );

@@ -8,7 +8,7 @@
 // `layerMemory`'s own "assigning an already-held role name is a no-op"
 // contract — the one property `Roles.test.ts`'s in-memory suite cannot
 // itself prove.
-import { AuditLog, AuthEvents, Erasure, Migrations, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, DataExport, Erasure, Migrations, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -39,6 +39,7 @@ const owner = role({
 const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Erasure.registryLayer),
+  Layer.provideMerge(DataExport.registryLayer),
 );
 
 const TestLayer = Roles.Roles.layerSql.pipe(
@@ -184,6 +185,25 @@ describe("Roles.Roles.layerSql", () => {
 
       assert.deepStrictEqual(yield* roles.listRoleNames(erased), []);
       assert.deepStrictEqual(yield* roles.listRoleNames(kept), ["editor"]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSG-005: the plugin's section of the data-subject export.
+  it.effect("registers a `roles` export listing the user's role names", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const registry = yield* DataExport.DataExportRegistry;
+      const mine = Users.UserId("f1f1f1f1-f1f1-f1f1-f1f1-f1f1f1f1f1f1");
+      const other = Users.UserId("f2f2f2f2-f2f2-f2f2-f2f2-f2f2f2f2f2f2");
+      yield* roles.assign(mine, "owner");
+      yield* roles.assign(other, "editor");
+      const contributions = yield* registry.contributions;
+      const roleSection = contributions.find((c) => c.id === "roles");
+      assert.isDefined(roleSection);
+      assert.deepStrictEqual(
+        yield* roleSection!.collect({ userId: mine, email: "m@example.com" }),
+        { roles: ["owner"] },
+      );
     }).pipe(Effect.provide(TestLayer)),
   );
 });

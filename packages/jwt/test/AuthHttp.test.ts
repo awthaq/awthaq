@@ -9,6 +9,7 @@ import { AuthCore } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  DataExport,
   Erasure,
   Hooks,
   AuthEvents,
@@ -17,7 +18,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
-import { SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction, RateLimiter } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -350,8 +351,9 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
       AuthHttp.routes(JwtApi.JwtApi, {}),
     ).pipe(
       Layer.provide(CsrfProtectionLive),
-      // CSG-001: `Account.deleteUser` runs core's `AccountErasure`.
-      Layer.provide(Erasure.layer),
+      // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
+      // CSG-005: the export endpoint rate-limits per account.
+      Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive)),
       // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
       // `SqlTransaction` — a no-op wrapper for this in-memory composition.
       Layer.provide(SqlTransaction.layerNoop),

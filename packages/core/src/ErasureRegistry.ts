@@ -9,8 +9,8 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
+import * as ContributionRegistry from "./internal/contributionRegistry.ts";
 import type { UserId } from "./Users.ts";
 
 /** What a contribution is told about the user being erased. The email is carried so a plugin can sweep rows keyed by address (an invitation addressed to the user). */
@@ -50,29 +50,16 @@ export class ErasureRegistry extends Context.Service<ErasureRegistry, ErasureReg
 /** The registry, one per composition (like a hook point's, ADR-EA-028). */
 export const registryLayer: Layer.Layer<ErasureRegistry> = Layer.effect(
   ErasureRegistry,
-  Effect.gen(function* () {
-    const entries = yield* Ref.make<ReadonlyArray<ErasureContribution>>([]);
-    const frozen = yield* Ref.make(false);
-    const register: ErasureRegistryShape["register"] = (contribution) =>
-      Effect.gen(function* () {
-        if (yield* Ref.get(frozen)) {
-          return yield* Effect.die(
-            new ErasureRegistryFrozen({
-              id: contribution.id,
-              message: `awthaq: erasure contribution "${contribution.id}" registered after the first erasure — every contribution must be installed before the registry is first read`,
-            }),
-          );
-        }
-        yield* Ref.update(entries, (current) => [...current, contribution]);
-      });
-    const contributions: ErasureRegistryShape["contributions"] = Effect.gen(function* () {
-      yield* Ref.set(frozen, true);
-      return (yield* Ref.get(entries)).toSorted(
-        (a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-      );
-    });
-    return ErasureRegistry.of({ register, contributions });
-  }),
+  Effect.map(
+    ContributionRegistry.make<ErasureContribution>(
+      (id) =>
+        new ErasureRegistryFrozen({
+          id,
+          message: `awthaq: erasure contribution "${id}" registered after the first erasure — every contribution must be installed before the registry is first read`,
+        }),
+    ),
+    (store) => ErasureRegistry.of(store),
+  ),
 );
 
 /**
