@@ -17,7 +17,7 @@ import type * as OAuthProvider from "./OAuthProvider.ts";
  * client id and secret to go through *before* they are base64'd into a Basic
  * credential. `HttpClientRequest.basicAuth` would skip that step.
  */
-export const formUrlEncode = (value: string): string =>
+const formUrlEncode = (value: string): string =>
   new URLSearchParams({ v: value }).toString().slice(2);
 
 /**

@@ -28,7 +28,7 @@ export interface JwksCacheEntry {
   readonly fetchedAt: number;
 }
 
-export type JwksCache = Ref.Ref<HashMap.HashMap<string, JwksCacheEntry>>;
+type JwksCache = Ref.Ref<HashMap.HashMap<string, JwksCacheEntry>>;
 
 /**
  * JJS-001/KRS-004/OIT-002: bounds how long a provider-removed JWKS key keeps
@@ -37,7 +37,7 @@ export type JwksCache = Ref.Ref<HashMap.HashMap<string, JwksCacheEntry>>;
  * `kid` cache miss never catches at all — a key the provider has *removed*,
  * with no new kid ever presented to force a refetch.
  */
-export const JWKS_CACHE_TTL = Duration.minutes(15);
+const JWKS_CACHE_TTL = Duration.minutes(15);
 
 /**
  * OIT-003 (OIDC Core 3.1.3.7 rules 3–5): `aud` is a string equal to the
@@ -60,7 +60,7 @@ const audienceProblem = (
   return undefined;
 };
 
-export interface ClaimExpectations {
+interface ClaimExpectations {
   readonly clientId: string;
   /** `undefined` only for a provider that (mis)declared none; then no `iss` can match. */
   readonly issuer: string | undefined;
@@ -77,7 +77,7 @@ export interface ClaimExpectations {
  * The claim checks, as a pure function: the reason the first failing check
  * names, or `undefined` when the claims are acceptable (OIT-008 logs it).
  */
-export const claimProblem = (
+const claimProblem = (
   claims: Record<string, unknown>,
   expected: ClaimExpectations,
 ): CallbackFailure.CallbackFailureReason | undefined => {

@@ -22,7 +22,6 @@ export const TokenResponseSchema = Schema.Struct({
   scope: Schema.optional(Schema.String),
   token_type: Schema.optional(Schema.String),
 });
-export type TokenResponse = typeof TokenResponseSchema.Type;
 
 /** A userinfo response is a JSON object of claims — never an array or a bare scalar. */
 export const UserinfoSchema = Schema.Record(Schema.String, Schema.Unknown);

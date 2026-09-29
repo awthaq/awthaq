@@ -67,6 +67,8 @@ export type {
   OAuthConfigInput,
   OAuthConfigShape,
   OAuthHttpTimeouts,
+  OAuthRateLimit,
+  OAuthRateLimits,
   OAuthRetryPolicy,
 } from "./OAuthConfig.ts";
 

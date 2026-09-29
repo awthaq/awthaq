@@ -91,13 +91,9 @@ export interface OAuthConfigShape {
  * the provider redirects back to — see `OAuth.ts`'s boot validation), and the
  * nested policy objects may be given partially.
  */
-export interface OAuthConfigInput
-  extends Partial<
-    Omit<
-      OAuthConfigShape,
-      "baseUrl" | "httpTimeouts" | "retry" | "rateLimits" | "maxIdTokenAge"
-    >
-  > {
+export interface OAuthConfigInput extends Partial<
+  Omit<OAuthConfigShape, "baseUrl" | "httpTimeouts" | "retry" | "rateLimits" | "maxIdTokenAge">
+> {
   readonly baseUrl: string;
   readonly maxIdTokenAge?: Duration.Duration;
   readonly httpTimeouts?: Partial<OAuthHttpTimeouts>;

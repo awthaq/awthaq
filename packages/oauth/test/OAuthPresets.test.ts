@@ -28,46 +28,50 @@ const credentials = {
 const resolveWith = (routes: FakeRoutes, provider: OAuthProvider.OAuthProviderConfig) =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
-    return yield* OAuthProvider.resolve(client, provider, { discoveryTimeout: Duration.seconds(5) });
+    return yield* OAuthProvider.resolve(client, provider, {
+      discoveryTimeout: Duration.seconds(5),
+    });
   }).pipe(Effect.provide(fakeHttpClient(routes)));
 
 describe("OAuthPresets (IC-003)", () => {
-  it.effect("google resolves against Google's discovery document and maps a Google id_token's claims", () =>
-    Effect.gen(function* () {
-      const preset = google(credentials);
-      const resolved = yield* resolveWith(
-        {
-          ".well-known/openid-configuration": {
-            issuer: "https://accounts.google.com",
-            authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth",
-            token_endpoint: "https://oauth2.googleapis.com/token",
-            userinfo_endpoint: "https://openidconnect.googleapis.com/v1/userinfo",
-            jwks_uri: "https://www.googleapis.com/oauth2/v3/certs",
-            token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+  it.effect(
+    "google resolves against Google's discovery document and maps a Google id_token's claims",
+    () =>
+      Effect.gen(function* () {
+        const preset = google(credentials);
+        const resolved = yield* resolveWith(
+          {
+            ".well-known/openid-configuration": {
+              issuer: "https://accounts.google.com",
+              authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+              token_endpoint: "https://oauth2.googleapis.com/token",
+              userinfo_endpoint: "https://openidconnect.googleapis.com/v1/userinfo",
+              jwks_uri: "https://www.googleapis.com/oauth2/v3/certs",
+              token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+            },
           },
-        },
-        preset,
-      );
-      assert.strictEqual(resolved.id, "google");
-      assert.strictEqual(resolved.kind, "oidc");
-      assert.deepStrictEqual(resolved.scopes, ["openid", "email", "profile"]);
-      assert.isFalse(resolved.skipPkce);
-      assert.deepStrictEqual(
-        resolved.mapProfile({
-          sub: "110169484474386276334",
-          email: "ada@gmail.com",
-          email_verified: true,
-          name: "Ada Lovelace",
-          picture: "https://lh3.googleusercontent.com/a/x",
-        }),
-        {
-          subject: "110169484474386276334",
-          email: "ada@gmail.com",
-          emailVerified: true,
-          name: "Ada Lovelace",
-        },
-      );
-    }),
+          preset,
+        );
+        assert.strictEqual(resolved.id, "google");
+        assert.strictEqual(resolved.kind, "oidc");
+        assert.deepStrictEqual(resolved.scopes, ["openid", "email", "profile"]);
+        assert.isFalse(resolved.skipPkce);
+        assert.deepStrictEqual(
+          resolved.mapProfile({
+            sub: "110169484474386276334",
+            email: "ada@gmail.com",
+            email_verified: true,
+            name: "Ada Lovelace",
+            picture: "https://lh3.googleusercontent.com/a/x",
+          }),
+          {
+            subject: "110169484474386276334",
+            email: "ada@gmail.com",
+            emailVerified: true,
+            name: "Ada Lovelace",
+          },
+        );
+      }),
   );
 
   it.effect("a stale preset fails loudly at boot: a moved discovery issuer is a mismatch", () =>
@@ -87,69 +91,87 @@ describe("OAuthPresets (IC-003)", () => {
     }),
   );
 
-  it.effect("github is a complete oauth2 provider and maps GitHub's numeric id to a string subject", () =>
-    Effect.gen(function* () {
-      const resolved = yield* resolveWith({}, github(credentials));
-      assert.strictEqual(resolved.id, "github");
-      assert.strictEqual(resolved.kind, "oauth2");
-      assert.strictEqual(resolved.tokenEndpoint, "https://github.com/login/oauth/access_token");
-      assert.strictEqual(resolved.tokenEndpointAuthMethod, "client_secret_post");
-      assert.deepStrictEqual(
-        resolved.mapProfile({
-          id: 583231,
-          login: "octocat",
-          name: "The Octocat",
-          email: null,
-          avatar_url: "https://avatars.githubusercontent.com/u/583231",
-        }),
-        { subject: "583231", name: "The Octocat" },
-      );
-      // No login/name falls back to the handle; GitHub never asserts the email verified.
-      assert.deepStrictEqual(
-        resolved.mapProfile({ id: 7, login: "hubot", name: null, email: "hubot@example.com" }),
-        { subject: "7", email: "hubot@example.com", name: "hubot" },
-      );
-    }),
+  it.effect(
+    "github is a complete oauth2 provider and maps GitHub's numeric id to a string subject",
+    () =>
+      Effect.gen(function* () {
+        const resolved = yield* resolveWith({}, github(credentials));
+        assert.strictEqual(resolved.id, "github");
+        assert.strictEqual(resolved.kind, "oauth2");
+        assert.strictEqual(resolved.tokenEndpoint, "https://github.com/login/oauth/access_token");
+        assert.strictEqual(resolved.tokenEndpointAuthMethod, "client_secret_post");
+        assert.deepStrictEqual(
+          resolved.mapProfile({
+            id: 583231,
+            login: "octocat",
+            name: "The Octocat",
+            email: null,
+            avatar_url: "https://avatars.githubusercontent.com/u/583231",
+          }),
+          { subject: "583231", name: "The Octocat" },
+        );
+        // No login/name falls back to the handle; GitHub never asserts the email verified.
+        assert.deepStrictEqual(
+          resolved.mapProfile({ id: 7, login: "hubot", name: null, email: "hubot@example.com" }),
+          { subject: "7", email: "hubot@example.com", name: "hubot" },
+        );
+      }),
   );
 
-  it.effect("microsoft builds its issuer from the tenant id and matches Entra's discovery document", () =>
-    Effect.gen(function* () {
-      const tenant = "9188040d-6c67-4c5b-b112-36a304b66dad";
-      const resolved = yield* resolveWith(
-        {
-          ".well-known/openid-configuration": {
-            issuer: `https://login.microsoftonline.com/${tenant}/v2.0`,
-            authorization_endpoint: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`,
-            token_endpoint: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
-            jwks_uri: `https://login.microsoftonline.com/${tenant}/discovery/v2.0/keys`,
-            userinfo_endpoint: "https://graph.microsoft.com/oidc/userinfo",
+  it.effect(
+    "microsoft builds its issuer from the tenant id and matches Entra's discovery document",
+    () =>
+      Effect.gen(function* () {
+        const tenant = "9188040d-6c67-4c5b-b112-36a304b66dad";
+        const resolved = yield* resolveWith(
+          {
+            ".well-known/openid-configuration": {
+              issuer: `https://login.microsoftonline.com/${tenant}/v2.0`,
+              authorization_endpoint: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`,
+              token_endpoint: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+              jwks_uri: `https://login.microsoftonline.com/${tenant}/discovery/v2.0/keys`,
+              userinfo_endpoint: "https://graph.microsoft.com/oidc/userinfo",
+            },
           },
-        },
-        microsoft({ ...credentials, tenant }),
-      );
-      assert.strictEqual(resolved.id, "microsoft");
-      assert.deepStrictEqual(Option.getOrThrow(resolved.issuer), `https://login.microsoftonline.com/${tenant}/v2.0`);
-      assert.deepStrictEqual(
-        resolved.mapProfile({ sub: "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ", name: "Abe Lincoln", email: "abe@contoso.com" }),
-        { subject: "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ", email: "abe@contoso.com", name: "Abe Lincoln" },
-      );
-    }),
+          microsoft({ ...credentials, tenant }),
+        );
+        assert.strictEqual(resolved.id, "microsoft");
+        assert.deepStrictEqual(
+          Option.getOrThrow(resolved.issuer),
+          `https://login.microsoftonline.com/${tenant}/v2.0`,
+        );
+        assert.deepStrictEqual(
+          resolved.mapProfile({
+            sub: "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ",
+            name: "Abe Lincoln",
+            email: "abe@contoso.com",
+          }),
+          {
+            subject: "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ",
+            email: "abe@contoso.com",
+            name: "Abe Lincoln",
+          },
+        );
+      }),
   );
 
-  it.effect("microsoft with a multi-tenant alias dies at boot: its placeholder issuer never matches", () =>
-    Effect.gen(function* () {
-      const exit = yield* resolveWith(
-        {
-          ".well-known/openid-configuration": {
-            issuer: "https://login.microsoftonline.com/{tenantid}/v2.0",
-            authorization_endpoint: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-            token_endpoint: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+  it.effect(
+    "microsoft with a multi-tenant alias dies at boot: its placeholder issuer never matches",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* resolveWith(
+          {
+            ".well-known/openid-configuration": {
+              issuer: "https://login.microsoftonline.com/{tenantid}/v2.0",
+              authorization_endpoint:
+                "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+              token_endpoint: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            },
           },
-        },
-        microsoft({ ...credentials, tenant: "common" }),
-      ).pipe(Effect.exit);
-      assert.strictEqual(exit._tag, "Failure");
-    }),
+          microsoft({ ...credentials, tenant: "common" }),
+        ).pipe(Effect.exit);
+        assert.strictEqual(exit._tag, "Failure");
+      }),
   );
 
   it.effect("gitlab defaults to gitlab.com and accepts a self-managed base URL", () =>
@@ -170,7 +192,12 @@ describe("OAuthPresets (IC-003)", () => {
         selfManaged,
       );
       assert.deepStrictEqual(
-        resolved.mapProfile({ sub: "42", name: "Grace", email: "grace@acme.test", email_verified: true }),
+        resolved.mapProfile({
+          sub: "42",
+          name: "Grace",
+          email: "grace@acme.test",
+          email_verified: true,
+        }),
         { subject: "42", email: "grace@acme.test", emailVerified: true, name: "Grace" },
       );
     }),

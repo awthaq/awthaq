@@ -19,12 +19,12 @@ import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import type * as OAuthConfig from "./OAuthConfig.ts";
 
 /** The provider answered 5xx/429: its failure, not a malformed answer. */
-export class ProviderServerError extends Data.TaggedError("ProviderServerError")<{
+class ProviderServerError extends Data.TaggedError("ProviderServerError")<{
   readonly status: number;
 }> {}
 
 /** The provider answered, but not 2xx (a 4xx rejection, an unexpected redirect): a protocol failure. */
-export class ProviderRejectedError extends Data.TaggedError("ProviderRejectedError")<{
+class ProviderRejectedError extends Data.TaggedError("ProviderRejectedError")<{
   readonly status: number;
 }> {}
 

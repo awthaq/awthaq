@@ -103,8 +103,7 @@ export const layer = Layer.effect(
     return OAuthProviders.of({
       has: (providerId) => registry.has(providerId),
       get: (providerId) =>
-        registry.get(providerId) ??
-        Effect.fail(new OAuthApi.ProviderNotFound({ providerId })),
+        registry.get(providerId) ?? Effect.fail(new OAuthApi.ProviderNotFound({ providerId })),
     });
   }),
 );

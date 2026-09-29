@@ -14,7 +14,11 @@ const respond = (options: SecurityHeaders.SecurityHeadersOptions | undefined) =>
         HttpRouter.add(
           "GET",
           "/own-referrer",
-          HttpServerResponse.setHeader(HttpServerResponse.text("hi"), "referrer-policy", "no-referrer"),
+          HttpServerResponse.setHeader(
+            HttpServerResponse.text("hi"),
+            "referrer-policy",
+            "no-referrer",
+          ),
         ),
       ),
     );

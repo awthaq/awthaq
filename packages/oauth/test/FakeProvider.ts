@@ -20,7 +20,7 @@ export class FakeReply {
   }
 }
 
-export const HANG = Symbol("hang");
+const HANG = Symbol("hang");
 
 /**
  * A route that never answers, plus `reached` — resolves once a request has
