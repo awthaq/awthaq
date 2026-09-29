@@ -520,9 +520,22 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* fetchAs("caller", String(yield* outcome("path")));
   });
 
-  Then("the response body is empty", function* () {
+  Then("the response body is {string}", function* (shape: string) {
     const world = yield* World;
-    assert.equal((yield* world.responses.get("last")).body, "");
+    const body = (yield* world.responses.get("last")).body;
+    if (shape === "empty") return assert.equal(body, "");
+    // PV-230 / BEH-EA-157: qadi's typed views, none of which carries the cause or the trace.
+    const keys: Record<string, ReadonlyArray<string>> = {
+      "the public denial, no trace": ["_tag", "policyTag", "reason", "subjectId"],
+      "the tag only": ["_tag"],
+      "the tag and one attribute": ["_tag", "attribute"],
+    };
+    const expected = keys[shape];
+    assert.ok(expected !== undefined, `unknown body shape "${shape}"`);
+    const parsed = JSON.parse(body);
+    assert.ok(typeof parsed === "object" && parsed !== null);
+    assert.deepEqual(Object.keys(parsed).sort(), expected);
+    assert.ok(!body.includes("source down"), "the resolver's own message must not reach the body");
   });
 
   Given(

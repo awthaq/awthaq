@@ -21,8 +21,8 @@
     "@awthaq/server": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "@qadi/core": "^0.7.0",
-    "@qadi/http": "^0.7.0",
+    "@qadi/core": "^0.8.0",
+    "@qadi/http": "^0.8.0",
     "effect": "catalog:"
   },
   "devDependencies": {
