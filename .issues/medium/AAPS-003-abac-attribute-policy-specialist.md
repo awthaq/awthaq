@@ -3,7 +3,7 @@ ID: "AAPS-003"
 Title: "Attribute contract is stringly-typed end to end"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "api"
 Source: "packages/api/src/Subject.ts:51"
 Auditor: "abac-attribute-policy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `api` · reported by **ABAC Attribute-Based Policy Specialist** (`abac-attribute-policy-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Publish a const-keyed attribute-name registry per producer (e.g. `UserAttributeN
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `qadi-attribute-typing`. Evidence at HEAD ec065a7: `packages/api/src/Subject.ts:47`. Fix: Add typing on the producer and evaluator side (in @awthaq/qadi and ../qadi). The isomorphic SubjectDto stays an open record, because its attribute set depends on the composition. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Producer/evaluator-side typing in awthaq: Resolvers.UserAttributeSchemas (a schema per name) with derived UserAttributeName / UserAttributeNames (Record.keys) / userAttr(name) and compiler-enforced per-name readers; OrganizationQadi.OrganizationAttributeSchemas/OrganizationAttributeName/OrganizationAttributeNames/orgAttr likewise. A policy typo against a known producer (userAttr('emailVerifed')) is a compile error. SubjectDto.attributes stays an open record. Tests: Resolvers.test.ts 'typed user attribute names (AAPS-003)' x3 incl. @ts-expect-error. NOT DONE (upstream, outside the plan's allowed ../qadi edits): the evaluator's distinct 'unknown attribute name' diagnostic for a policy naming an attribute no registered resolver declares — a hand-typed string can still typo silently at runtime. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 929 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.
