@@ -1348,3 +1348,58 @@ describe("Password", () => {
       ),
   );
 });
+
+describe("Password signIn timing floor (TSS-006)", () => {
+  // A hasher that verifies instantly, standing in for a legacy hash cheaper than the
+  // configured cost: without a floor, its sign-in returns sooner than an argon2 one.
+  const InstantHasher = Layer.succeed(
+    PasswordHasher.PasswordHasher,
+    PasswordHasher.PasswordHasher.of({
+      hash: () => Effect.succeed("instant-hash"),
+      verify: () => Effect.succeed(false),
+      needsRehash: () => false,
+    }),
+  );
+
+  const layerWith = (timingFloor: Partial<Password.PasswordConfigShape>) =>
+    Password.Password.layer.pipe(
+      Layer.provideMerge(AuthenticationLive),
+      Layer.provide(CsrfProtectionLive),
+      Layer.provideMerge(CoreLive),
+      Layer.provideMerge(
+        Layer.mergeAll(InstantHasher, Mailer.layerMemory, RateLimiter.layerPermissive).pipe(
+          Layer.provideMerge(NodeCrypto.layer),
+        ),
+      ),
+      Layer.provideMerge(RateLimits.layer),
+      Layer.provide(NoBreachHttpClient),
+      Layer.provide(SqlTransaction.layerNoop),
+      Layer.provide(ClientAddress.layerDirect),
+      Layer.provide(Password.config(timingFloor)),
+    );
+
+  it.effect("a sign-in completes no sooner than the floor, even when verify is instant", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const fiber = yield* Effect.forkChild(
+        password.signIn({ email: "nobody@example.com", password: strongPassword }).pipe(Effect.flip),
+        { startImmediately: true },
+      );
+      yield* TestClock.adjust(Duration.millis(60));
+      assert.isUndefined(fiber.pollUnsafe());
+      yield* TestClock.adjust(Duration.millis(60));
+      const failure = yield* Fiber.join(fiber);
+      assert.strictEqual(failure._tag, "InvalidCredentials");
+    }).pipe(Effect.provide(layerWith({ signInTimingFloor: Duration.millis(100) }))),
+  );
+
+  it.effect("signInTimingFloor: off restores the unpadded behaviour", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const failure = yield* password
+        .signIn({ email: "nobody@example.com", password: strongPassword })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "InvalidCredentials");
+    }).pipe(Effect.provide(layerWith({ signInTimingFloor: "off" }))),
+  );
+});
