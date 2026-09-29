@@ -3,7 +3,7 @@ ID: "MTS-010"
 Title: "Test-only workspace imports declared as runtime dependencies"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/package.json:36"
 Auditor: "monorepo-tooling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `admin` · reported by **Monorepo Tooling Specialist** (`monorepo-tooling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Move test-only imports (admin's @awthaq/server, test's @awthaq/api) to devDepend
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `package-and-test-hygiene`. Evidence at HEAD ec065a7: `packages/admin/package.json:30`. Fix: Reclassify test-only workspace deps and add a src-imports-vs-dependencies smoke check so the drift cannot recur. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/organization (@awthaq/server), packages/scim (@awthaq/api) and packages/test (@awthaq/api) moved to devDependencies; packages/scim's @awthaq/ports (imported by its built lib) moved the other way to dependencies. scripts/package-smoke.mjs now compares each package's built lib/*.js and *.d.ts imports with dependencies/peerDependencies both ways (red before the moves: it reported scim's ports; test-only deps reported as unused). package:smoke, knip, workspace:check green. packages/admin had already been fixed.

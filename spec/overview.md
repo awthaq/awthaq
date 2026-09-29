@@ -121,7 +121,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `Mailer` | `Context.Service` | `layerNoop`, `layerMemory`; `send` fails with a typed `MailDeliveryFailed` (EEM-002) |
 | `WebAuthn` | `Context.Service` | `layerSimpleWebAuthn` |
 | `Encryption` | `Context.Service` | `layer` (requires `KeyProvider` and `Crypto`); keyed envelopes, lazy re-encryption ([ADR-EA-019](decisions/019-encryption-key-rotation.md)) |
-| `KeyProvider` | `Context.Service` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS`, `AWTHAQ_ENCRYPTION_KEY_ID`); implement the port for a KMS |
+| `KeyProvider` | `Context.Service` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS`, `AWTHAQ_ENCRYPTION_KEY_ID`); `layerEphemeral` (dev only, opt-in, never a fallback; refused under `NODE_ENV=production` without `AWTHAQ_ALLOW_EPHEMERAL_KEY=true`); implement the port for a KMS |
 | `RateLimiter` | `Context.Service` | `layer` over a `RateLimiterStore`, `layerMemory`, `layerStoreMemory`, `layerPermissive` (tests only); `RateLimiterConfig` reference |
 | `SqlTransaction` | `Context.Service` | `layerSql`, `layerNoop` |
 | `ClientAddress` | `Context.Service` | `layerDirect`, `layerTrustedProxy(config)` |

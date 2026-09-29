@@ -1,0 +1,32 @@
+{
+  "name": "@awthaq/example-sql-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runnable example: Password over a real, migrated SQL backend, SQLite file by default and Postgres when DATABASE_URL is set, through a real listening HTTP server.",
+  "type": "module",
+  "scripts": {
+    "prestart": "pnpm run --workspace-root build",
+    "start": "node --experimental-strip-types index.ts",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@awthaq/core": "workspace:*",
+    "@awthaq/password": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-pg": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

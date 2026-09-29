@@ -5,7 +5,8 @@
     "packages/*/test/**/*.test.ts",
     "packages/*/test/**/*.test.tsx",
     "examples/plugin-template/test/**/*.test.ts",
-    "examples/memory-server/test/**/*.test.ts"
+    "examples/memory-server/test/**/*.test.ts",
+    "examples/sql-server/test/**/*.test.ts"
   ],
   "compilerOptions": {
     "noEmit": true,

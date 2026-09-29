@@ -90,6 +90,9 @@
     },
     {
       "path": "examples/plugin-template"
+    },
+    {
+      "path": "examples/sql-server"
     }
   ]
 }
