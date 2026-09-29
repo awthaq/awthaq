@@ -471,6 +471,7 @@ export const userFieldsSteps = defineSteps<World>(({ Given, When, Then }) => {
         "ip",
         "occurredAt",
         "spanId",
+        "tenantId",
         "traceId",
         "userAgent",
       ]);
