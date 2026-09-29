@@ -12,6 +12,26 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+/**
+ * RSC-005: the one `SessionView` -> `SessionDto` mapper. The password/admin/
+ * passkey handlers used to each keep a private identical copy, and
+ * `@awthaq/next`'s `toInitialSession` needs the same mapping to seed
+ * `@awthaq/react`'s `Providers`. `current` defaults to `true` — the view a
+ * sign-in/sign-up/`getSession` returns is, by construction, the caller's own.
+ */
+export const toSessionDto = (
+  view: Sessions.SessionView,
+  current = true,
+): SessionContract.SessionDto =>
+  new SessionContract.SessionDto({
+    id: view.id,
+    createdAt: DateTime.formatIso(view.createdAt),
+    lastActiveAt: DateTime.formatIso(view.lastActiveAt),
+    expiresAt: DateTime.formatIso(view.absoluteExpiresAt),
+    userAgent: Option.getOrNull(view.userAgent),
+    current,
+  });
+
 const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
     id: item.id,

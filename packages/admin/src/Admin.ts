@@ -22,6 +22,7 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, Migrations, Sessions, Users } from "@awthaq/core";
+import { Session } from "@awthaq/server";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
@@ -107,15 +108,11 @@ export interface AdminShape {
   >;
 }
 
-const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
-  new SessionContract.SessionDto({
-    id: session.id,
-    createdAt: DateTime.formatIso(session.createdAt),
-    lastActiveAt: DateTime.formatIso(session.lastActiveAt),
-    expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
-    userAgent: Option.getOrNull(session.userAgent),
-    current: true,
-  });
+// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
+// wrapper also keeps `SessionContract` in scope so declaration emit can name
+// `SessionDto` in `AdminHandlers`' inferred type (TS2883 otherwise).
+const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
+  Session.toSessionDto(view);
 
 const toRecordDto = (
   record: ImpersonationRecords.ImpersonationRecord,
@@ -166,7 +163,7 @@ export const AdminHandlers = HttpApiBuilder.group(
           Redacted.value(issued.token),
           Sessions.SESSION_COOKIE_ATTRIBUTES,
         );
-        return toSessionDto(issued.session);
+        return sessionResponse(issued.session);
       }),
       stopImpersonating: Effect.fnUntraced(function* () {
         const caller = yield* currentUserPrincipal;

@@ -25,6 +25,7 @@
 import { Api, SessionContract } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, Accounts, Hooks, Migrations, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
+import { Session } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -200,15 +201,11 @@ const toCredentialDto = (
     lastUsedAt: DateTime.formatIso(record.lastUsedAt),
   });
 
-const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
-  new SessionContract.SessionDto({
-    id: session.id,
-    createdAt: DateTime.formatIso(session.createdAt),
-    lastActiveAt: DateTime.formatIso(session.lastActiveAt),
-    expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
-    userAgent: Option.getOrNull(session.userAgent),
-    current: true,
-  });
+// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
+// wrapper also keeps `SessionContract` in scope so declaration emit can name
+// `SessionDto` in the handler group's inferred type (TS2883 otherwise).
+const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
+  Session.toSessionDto(view);
 
 export interface IssuedSession {
   readonly session: Sessions.SessionView;
@@ -365,7 +362,7 @@ export const PasskeyHandlers = Layer.mergeAll(
             Redacted.value(issued.token),
             Sessions.SESSION_COOKIE_ATTRIBUTES,
           );
-          return toSessionDto(issued.session);
+          return sessionResponse(issued.session);
         }),
       });
     }),

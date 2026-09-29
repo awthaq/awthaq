@@ -50,7 +50,13 @@ export interface HeadersLike {
   readonly get: (name: string) => string | null;
 }
 
-/** BEH-EA-185: what a valid, database-verified session resolves to. */
+/**
+ * BEH-EA-185: what a valid, database-verified session resolves to.
+ *
+ * RSC-005: a server-only shape — `SessionView`/`UserRecord` carry `DateTime`,
+ * `Option` and the rotated secret, and none of it may become a Client
+ * Component prop. Cross to the client through `toInitialSession` (`Seed.ts`).
+ */
 export interface Session {
   readonly principal: Api.Principal;
   readonly user: Users.UserRecord;

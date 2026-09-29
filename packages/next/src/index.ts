@@ -10,6 +10,9 @@
 // without it a Server Action has no way to deliver `Session.rotated`.
 export { applyRotatedSession, getSession } from "./GetSession.ts";
 export type { HeadersLike, Session } from "./GetSession.ts";
+// RSC-005/NF-11-4: RSC-safe seeds for @awthaq/react's Providers.
+export { toInitialSession, toInitialSubject } from "./Seed.ts";
+export type { SubjectLike } from "./Seed.ts";
 export { hasSessionCookie } from "./HasSessionCookie.ts";
 export { withNextCookies } from "./WithNextCookies.ts";
 export type { CookieJarLike, CookieSetOptions } from "./WithNextCookies.ts";

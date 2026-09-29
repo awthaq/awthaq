@@ -20,6 +20,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { Session } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -370,16 +371,12 @@ const checkPolicy = (
     return hints;
   });
 
-/** The response to `signUp`/`signIn` — the just-created/just-verified session is always `current`. */
-const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
-  new SessionContract.SessionDto({
-    id: session.id,
-    createdAt: DateTime.formatIso(session.createdAt),
-    lastActiveAt: DateTime.formatIso(session.lastActiveAt),
-    expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
-    userAgent: Option.getOrNull(session.userAgent),
-    current: true,
-  });
+// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
+// wrapper also keeps `SessionContract` in scope so declaration emit can name
+// `SessionDto` in the handler group's inferred type (TS2883 otherwise). The
+// response to `signUp`/`signIn` is always the caller's own, `current` session.
+const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
+  Session.toSessionDto(view);
 
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
@@ -418,7 +415,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
           Redacted.value(issued.token),
           Sessions.SESSION_COOKIE_ATTRIBUTES,
         );
-        return toSessionDto(issued.session);
+        return sessionResponse(issued.session);
       }),
 
       signIn: Effect.fnUntraced(function* ({
@@ -442,7 +439,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
           Redacted.value(issued.token),
           Sessions.SESSION_COOKIE_ATTRIBUTES,
         );
-        return toSessionDto(issued.session);
+        return sessionResponse(issued.session);
       }),
 
       requestReset: Effect.fnUntraced(function* ({
@@ -517,7 +514,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
           Redacted.value(issued.token),
           Sessions.SESSION_COOKIE_ATTRIBUTES,
         );
-        return toSessionDto(issued.session);
+        return sessionResponse(issued.session);
       }),
 
       reauthenticate: Effect.fnUntraced(function* ({

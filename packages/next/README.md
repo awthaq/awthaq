@@ -90,6 +90,66 @@ export default async function Page() {
 }
 ```
 
+## Seeding `@awthaq/react`'s `Providers` from a Server Component
+
+`getSession`'s `Session` is a server-only shape, and `Providers`' seed types are
+`Schema.Class` instances — neither can be a Client Component prop (React only
+serializes plain data). `toInitialSession` / `toInitialSubject` produce the
+encoded plain-JSON shape `Providers` accepts as `initialSession` /
+`initialSubject`; it decodes and validates them on the client, so a malformed
+seed is ignored (and reported through `onError`), never trusted.
+
+```tsx
+// app/layout.tsx  (a Server Component)
+import { headers } from "next/headers";
+import { getSession, toInitialSession, toInitialSubject } from "@awthaq/next";
+import { runtime } from "./lib/runtime.ts";
+import { resolveSubject } from "./lib/qadi.ts"; // your own SubjectResolver.resolve(principal), run on the runtime
+import { ClientProviders } from "./client-providers.tsx";
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const session = await getSession(await headers(), runtime);
+  const subject = session === undefined ? undefined : await resolveSubject(session.principal);
+  return (
+    <html>
+      <body>
+        <ClientProviders
+          initialSession={toInitialSession(session)}
+          initialSubject={toInitialSubject(subject)}
+        >
+          {children}
+        </ClientProviders>
+      </body>
+    </html>
+  );
+}
+```
+
+`ClientProviders` is a `"use client"` module of yours that renders
+`<Providers atoms={atoms} ...>` from `@awthaq/react` (your qadi `atoms` are
+built on the client, so they cannot be passed as props). Seeds apply once, at
+first mount: `router.refresh()` does not re-seed a mounted `Providers`.
+`@awthaq/next` stays off `@awthaq/qadi`, which is why the subject comes from your
+own resolver.
+
+### Server-decided gates on first paint
+
+To have a `<Can>` render its verdict on the very first paint (BEH-EA-186/192)
+decide it on the server and hand the dehydrated result to `Providers`. Hydration
+is app-level wiring from `@qadi/react`'s exports — this package adds nothing:
+
+```ts
+// in the Server Component that already resolved `subject`:
+import { dehydrateDecisions } from "@qadi/react";
+const decisions = dehydrateDecisions([{ policy: canEditPost, resource, decision }]);
+// ... <ClientProviders decisions={decisions} ...>  (forward to <Providers decisions={decisions}>)
+```
+
+`decisions` is bound to a subject id: `Providers` hydrates it against the seeded
+subject only, and drops a payload for anyone else (or one with no seeded
+session) — the gate then re-decides on the client exactly as it would without
+hydration.
+
 ## A server action that bridges cookies
 
 ```ts
