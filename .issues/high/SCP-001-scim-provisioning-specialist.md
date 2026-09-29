@@ -3,7 +3,7 @@ ID: "SCP-001"
 Title: "No user deactivation state: SCIM active:false is unrepresentable, only hard delete exists"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Models.ts:40"
 Auditor: "scim-provisioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `sql` · reported by **SCIM Provisioning Specialist** (`scim-provisioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [UserRecord model extension (optional email, phone/anonymous identity, deactivation state)](../../.scratch/resolve-ready-for-human-findings/issues/09-userrecord-model-extension.md) — new `status: "active" | "suspended"` column and dedicated `Users.setStatus` operation (never a generic write path), composed with the existing `Sessions.revokeAll` at the caller site; SCIM-specific external-id tombstoning stays scoped to ticket 08's `packages/scim` rather than leaking into core. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `user-identity-lifecycle`. Evidence at HEAD ec065a7: `packages/sql/src/Models.ts:40`. Fix: Implement ticket 09's decision: `status: "active" | "suspended"` with a dedicated `Users.setStatus` (never a generic write), composed with `Sessions.revokeAll` at the caller. Co-design the sign-in gate and migration with ticket 19's `banned` fields (BAM-005) so there is one gate and one migration. (effort M). Full dossier: `.plan/slices/05-sql.md`.
+
+**Resolved (2026-09-29):** Closed by commit 4b63d9e. Users.status active|suspended (+ operator statusReason and optional suspendedUntil; one migration, 22, shared with the identity columns), Users.setStatus as the ONLY writer (updateProfile has no such field; the sql update/jsonUpdate variants exclude the columns; targeted UPDATE ... RETURNING), and ONE shared gate Users.assertCanSignIn(user) -> UserSuspended (403, empty body) consulted by password signIn (after the credential proof; publishes signInFailed reason=suspended), passkey authenticateVerify and the oauth callback, before Sessions.issue. Deliberately a plain call, not a hook point; deliberately not inside findById (an admin must still resolve a suspended user); admin impersonation is deliberately excluded. Composed with Sessions.revokeAll(id, 'suspended') by the admin ban handler. Tests: core Users.test.ts (setStatus persists, is not reachable via updateProfile, reactivation restores, a timed suspension lapses; both layers), password 'suspended user is refused ... issues no session ... reactivating restores it', passkey PasskeySuspended.test.ts, oauth 'suspended callback is refused', admin AdminUsers/AuthHttp ban tests, sql contract 'setStatus is the only writer'. Spec: BEH-EA-046 revised ('Suspension is never deletion'). Known gap: a legacy better-auth session bridged by Sessions.verify -> LegacySessionBridge mints a session without consulting the gate (Sessions cannot depend on Users) — the bridge implementation would need to do it.
