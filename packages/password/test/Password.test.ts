@@ -646,7 +646,10 @@ describe("Password", () => {
       return Effect.gen(function* () {
         const password = yield* Password.Password;
         const mailer = yield* Mailer.Mailer;
-        const issued = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        const issued = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
         yield* password.signIn({ email, password: strongPassword });
         yield* password
           .signIn({ email, password: Redacted.make("totally wrong password") })
@@ -716,7 +719,10 @@ describe("Password", () => {
         const password = yield* Password.Password;
         const mailer = yield* Mailer.Mailer;
         const auditLog = yield* AuditLog.AuditLog;
-        const issued = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        const issued = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
 
         const verified = yield* auditLog.list({ eventTag: "auth.user.emailVerified" });
         assert.strictEqual(verified.length, 1);

@@ -37,8 +37,7 @@ describe("tapping a point nobody defines (BEH-EA-094, INV-EA-005)", () => {
     const unsatisfied = () =>
       // @ts-expect-error — `Invite` is required but nothing provides it
       Effect.runPromise(Layer.launch(tap));
-    const satisfied = () =>
-      Effect.runPromise(Layer.launch(tap.pipe(Layer.provide(Invite.layer))));
+    const satisfied = () => Effect.runPromise(Layer.launch(tap.pipe(Layer.provide(Invite.layer))));
     void unsatisfied;
     void satisfied;
   });

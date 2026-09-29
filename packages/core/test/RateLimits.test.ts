@@ -199,10 +199,7 @@ describe("RateLimits.enforce (EOTS-007)", () => {
       });
       const before = (yield* Metric.value(counter)).count;
       yield* RateLimits.enforce(input);
-      yield* RateLimits.enforce(input).pipe(
-        Effect.flip,
-        Effect.provide(Logger.layer([capture])),
-      );
+      yield* RateLimits.enforce(input).pipe(Effect.flip, Effect.provide(Logger.layer([capture])));
       assert.strictEqual((yield* Metric.value(counter)).count, before + 1);
       assert.strictEqual(messages.length, 1);
       assert.isFalse(messages[0]?.includes("alice"));

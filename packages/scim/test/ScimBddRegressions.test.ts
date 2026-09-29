@@ -23,27 +23,29 @@ const LegalHold = Hooks.BeforeUserDelete.tap(() =>
 ).pipe(Layer.provideMerge(Hooks.HooksLive));
 
 describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
-  it.effect("a beforeDelete veto is a 403 that leaves the user, its sessions and its mapping in place", () =>
-    Effect.gen(function* () {
-      const { connection } = yield* seedConnection();
-      const scim = yield* Scim.Scim;
-      const users = yield* Users.Users;
-      const sessions = yield* Sessions.Sessions;
-      const created = yield* scim.createUser(connection, { userName: "ada@acme.example" });
-      const id = Users.UserId(created.id);
-      const session = yield* sessions.issue({ userId: id });
+  it.effect(
+    "a beforeDelete veto is a 403 that leaves the user, its sessions and its mapping in place",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const created = yield* scim.createUser(connection, { userName: "ada@acme.example" });
+        const id = Users.UserId(created.id);
+        const session = yield* sessions.issue({ userId: id });
 
-      const refused = yield* scim.deleteUser(connection, created.id).pipe(Effect.flip);
-      assert.strictEqual(refused._tag, "ScimForbidden");
+        const refused = yield* scim.deleteUser(connection, created.id).pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "ScimForbidden");
 
-      assert.strictEqual((yield* users.findById(id)).status, "active");
-      assert.strictEqual((yield* sessions.verify(session.token)).session.userId, id);
-      // Still the connection's user: the refused erasure did not orphan it from its directory.
-      assert.isTrue((yield* scim.getUser(connection, created.id)).active);
-      assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 1);
-    }).pipe(
-      Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, Users.layerMemory, LegalHold)),
-    ),
+        assert.strictEqual((yield* users.findById(id)).status, "active");
+        assert.strictEqual((yield* sessions.verify(session.token)).session.userId, id);
+        // Still the connection's user: the refused erasure did not orphan it from its directory.
+        assert.isTrue((yield* scim.getUser(connection, created.id)).active);
+        assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 1);
+      }).pipe(
+        Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, Users.layerMemory, LegalHold)),
+      ),
   );
 });
 

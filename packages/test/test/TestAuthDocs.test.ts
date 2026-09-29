@@ -70,7 +70,9 @@ describe("TestAuth.layer options (BEH-EA-084)", () => {
     Effect.gen(function* () {
       const handler = serve();
       for (const path of ["/spec.json", "/reference", "/docs", "/openapi.json"]) {
-        const response = yield* Effect.promise(() => handler(new Request(`http://localhost${path}`)));
+        const response = yield* Effect.promise(() =>
+          handler(new Request(`http://localhost${path}`)),
+        );
         assert.strictEqual(response.status, 404, path);
       }
       const ping = yield* Effect.promise(() => handler(new Request("http://localhost/ping/get")));
