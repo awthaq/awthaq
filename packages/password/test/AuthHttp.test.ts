@@ -237,6 +237,35 @@ describe("AuthHttp + Password (real HTTP)", () => {
     }),
   );
 
+  it.effect("CSD-003: sign-up records the request's User-Agent on the session (capped at 512)", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const signUp = (email: string, userAgent: string) =>
+        Effect.promise(() =>
+          handler(
+            new Request("http://localhost/password/sign-up", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "user-agent": userAgent,
+                cookie: withCsrfCookie(),
+                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+              },
+              body: JSON.stringify({ email, password: strongPassword }),
+            }),
+          ),
+        );
+      const plain = yield* signUp("ua-plain@example.com", "TestBrowser/1.0");
+      assert.strictEqual(plain.status, 200);
+      const plainBody = (yield* Effect.promise(() => plain.json())) as { userAgent: string | null };
+      assert.strictEqual(plainBody.userAgent, "TestBrowser/1.0");
+
+      const long = yield* signUp("ua-long@example.com", "x".repeat(2000));
+      const longBody = (yield* Effect.promise(() => long.json())) as { userAgent: string | null };
+      assert.strictEqual(longBody.userAgent?.length, 512);
+    }),
+  );
+
   it.effect("BEH-EA-113/422: a too-short password answers WeakPassword", () =>
     Effect.gen(function* () {
       const { handler } = HttpRouter.toWebHandler(AppLayer);

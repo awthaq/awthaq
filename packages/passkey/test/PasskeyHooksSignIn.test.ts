@@ -5,6 +5,7 @@
 // `packages/password/test/PasswordHooksSignUp.test.ts`'s own header
 // comment gives.
 import { AuditLog, Hooks, AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
+import { ClientAddress } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -63,6 +64,8 @@ const PortsLive = Layer.mergeAll(
 const TestLayer = Passkey.Passkey.layer.pipe(
   Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN] })),
   Layer.provide(AuthenticationLive),
+  // CSD-003: `Passkey.layer` now needs `ClientAddress` (handler records ip/userAgent).
+  Layer.provide(ClientAddress.layerDirect),
   Layer.provide(CsrfProtectionLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(PortsLive),

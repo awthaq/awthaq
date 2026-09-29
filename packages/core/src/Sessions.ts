@@ -49,6 +49,16 @@ const hashSecret = (
  * secret. Never equals any real `hashSecret` output (SHA-256 of a secret
  * whose digest is all zeros is not computable in practice).
  */
+/**
+ * CSD-003: the persisted `userAgent` is caller-supplied (a request header), so
+ * it is capped at the persistence boundary — every issuing plugin benefits,
+ * none has to remember.
+ */
+export const MAX_USER_AGENT_LENGTH = 512;
+
+const cappedUserAgent = (userAgent: string | undefined): string | undefined =>
+  userAgent?.slice(0, MAX_USER_AGENT_LENGTH);
+
 const UNKNOWN_SESSION_HASH = "0".repeat(64);
 
 // BEH-EA-056/ACS-005: both operands are the fixed-length hex output of the
@@ -477,7 +487,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               absoluteExpiresAt,
               idleExpiresAt,
               ipAddress: Option.fromNullishOr(input.request?.ip),
-              userAgent: Option.fromNullishOr(input.request?.userAgent),
+              userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
               actingAs: Option.fromNullishOr(input.actingAs),
               familyId: Option.match(ancestor, {
                 onNone: () => id,
@@ -854,7 +864,7 @@ export const layerSql: Layer.Layer<
             userId: input.userId,
             secretHash,
             ipAddress: input.request?.ip ?? null,
-            userAgent: input.request?.userAgent ?? null,
+            userAgent: cappedUserAgent(input.request?.userAgent) ?? null,
             absoluteExpiresAt,
             idleExpiresAt: Model.Override(idleExpiresAt),
             actingAsType: input.actingAs?.type ?? null,

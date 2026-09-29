@@ -10,7 +10,7 @@
 // wire contract, not the cryptography (ticket 02's own job).
 import { Api } from "@awthaq/api";
 import { Users, Accounts, Sessions, AuditLog, Hooks, AuthEvents } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
+import { ClientAddress, WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -97,6 +97,8 @@ const buildAppLayer = (webAuthn: Layer.Layer<WebAuthn.WebAuthn>) =>
       Layer.provide(Passkey.Passkey.layer),
       Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN] })),
       Layer.provide(AuthenticationLive),
+      // CSD-003: `Passkey.layer` now needs `ClientAddress` (handler records ip/userAgent).
+      Layer.provide(ClientAddress.layerDirect),
     ),
     AuthHttp.docs(PasskeyApi.PasskeyApi),
   ).pipe(

@@ -421,6 +421,42 @@ describe("OAuth", () => {
     );
   });
 
+  describe("CSD-003: the issued session records the callback request's context", () => {
+    it.effect("callback passes ip and userAgent through to Sessions.issue", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        const outcome = yield* oauth.callback("acme", {
+          code: "auth-code",
+          state,
+          iss: undefined,
+          cookieState: state,
+          ip: "203.0.113.20",
+          userAgent: "OAuthBrowser/1.0",
+        });
+        assert.isDefined(outcome.session);
+        assert.deepStrictEqual(outcome.session?.session.ipAddress, Option.some("203.0.113.20"));
+        assert.deepStrictEqual(
+          outcome.session?.session.userAgent,
+          Option.some("OAuthBrowser/1.0"),
+        );
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": { id: "csd003-user", email: "csd003@example.com" },
+            },
+          }),
+        ),
+      ),
+    );
+  });
+
   describe("BEH-EA-123/124: linking is explicit by default, trustedProviders opts in", () => {
     it.effect(
       "REQ-EA-335/336: an unlinked email match fails with AccountExists, nothing is linked",

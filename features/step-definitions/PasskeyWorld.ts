@@ -13,7 +13,7 @@
 // own handler resolves against — the identical technique
 // `AuthHttp.test.ts`'s own `issueSessionCookieHeader` uses.
 import { AuditLog, AuthEvents, Accounts, Hooks, Sessions, Users } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
+import { ClientAddress, WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { Passkey, PasskeyApi, ChallengeStore, PasskeyCredentials } from "@awthaq/passkey";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -170,6 +170,8 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
         }),
       ),
       Layer.provide(AuthenticationLive),
+      // CSD-003: `Passkey.layer` now needs `ClientAddress` (handler records ip/userAgent).
+      Layer.provide(ClientAddress.layerDirect),
     ),
     AuthHttp.docs(PasskeyApi.PasskeyApi),
   ).pipe(

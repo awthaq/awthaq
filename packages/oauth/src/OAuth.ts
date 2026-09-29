@@ -44,6 +44,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Headers from "effect/unstable/http/Headers";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
@@ -451,6 +452,10 @@ export const OAuthHandlers = HttpApiBuilder.group(
           iss: query.iss,
           cookieState,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...Option.match(Headers.get(request.headers, "user-agent"), {
+            onNone: () => ({}),
+            onSome: (userAgent) => ({ userAgent }),
+          }),
         });
         if (outcome.session !== undefined) {
           const response = HttpServerResponse.redirect(outcome.callbackURL);
@@ -494,6 +499,8 @@ export interface OAuthShape {
        * bucket for "unknown origin" requests, never as unthrottled.
        */
       readonly ip?: string;
+      /** CSD-003: the callback request's `User-Agent`, recorded on the issued session (capped by `Sessions.issue`). */
+      readonly userAgent?: string;
     },
   ) => Effect.Effect<
     {
@@ -883,7 +890,17 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
         }
-        const issued = yield* sessions.issue({ userId: targetUserId }).pipe(Effect.orDie);
+        // CSD-003: the callback request is the browser's own, so its
+        // address and user agent are what the device list should show.
+        const issued = yield* sessions
+          .issue({
+            userId: targetUserId,
+            request: {
+              ...(input.ip !== undefined ? { ip: input.ip } : {}),
+              ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
+            },
+          })
+          .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: targetUserId,

@@ -24,7 +24,7 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, Accounts, Hooks, Migrations, Sessions, Users } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
+import { ClientAddress, WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -36,6 +36,8 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Headers from "effect/unstable/http/Headers";
+import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ChallengeStore from "./ChallengeStore.ts";
@@ -268,6 +270,8 @@ export interface PasskeyShape {
   ) => Effect.Effect<{ readonly ceremonyId: string; readonly options: unknown }>;
   readonly authenticateVerify: (
     input: PasskeyApi.AuthenticateVerifyPayload,
+    /** CSD-003: the request context recorded on the issued session (device list, forensics); `Sessions.issue` caps the user agent. */
+    context?: { readonly ip?: string; readonly userAgent?: string },
   ) => Effect.Effect<
     IssuedSession,
     | Api.InvalidCredentials
@@ -346,6 +350,7 @@ export const PasskeyHandlers = Layer.mergeAll(
     "passkey.authenticate",
     Effect.fnUntraced(function* (handlers) {
       const passkey = yield* Passkey;
+      const clientAddress = yield* ClientAddress.ClientAddress;
       return handlers.handleAll({
         authenticateOptions: Effect.fnUntraced(function* ({
           payload,
@@ -356,10 +361,19 @@ export const PasskeyHandlers = Layer.mergeAll(
         }),
         authenticateVerify: Effect.fnUntraced(function* ({
           payload,
+          request,
         }: {
           payload: PasskeyApi.AuthenticateVerifyPayload;
+          request: HttpServerRequest.HttpServerRequest;
         }) {
-          const issued = yield* passkey.authenticateVerify(payload);
+          // CSD-003: address via the application-provided `ClientAddress`
+          // port (trusted-proxy aware), user agent from the header.
+          const resolvedAddress = yield* clientAddress.resolve(request);
+          const userAgent = Headers.get(request.headers, "user-agent");
+          const issued = yield* passkey.authenticateVerify(payload, {
+            ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+            ...(Option.isSome(userAgent) ? { userAgent: userAgent.value } : {}),
+          });
           yield* HttpApiBuilder.securitySetCookie(
             Api.SessionCookie,
             Redacted.value(issued.token),
@@ -739,7 +753,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       );
 
       const authenticateVerify: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
-        function* (input) {
+        function* (input, context) {
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
           if (Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
@@ -828,7 +842,15 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           if (point._tag === "Diverted") {
             return yield* Effect.fail(point.value);
           }
-          const issued = yield* sessions.issue({ userId: stored.userId }).pipe(Effect.orDie);
+          const issued = yield* sessions
+            .issue({
+              userId: stored.userId,
+              request: {
+                ...(context?.ip !== undefined ? { ip: context.ip } : {}),
+                ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
+              },
+            })
+            .pipe(Effect.orDie);
           yield* events.publish({
             _tag: "auth.user.signedIn",
             userId: stored.userId,

@@ -8,7 +8,7 @@
 // logic, not `@simplewebauthn/server`'s cryptography (that's
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
 import { AuditLog, Hooks, AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
+import { ClientAddress, WebAuthn } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -16,6 +16,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -76,6 +77,8 @@ const buildLayer = (
   Passkey.Passkey.layer.pipe(
     Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN], ...configOverrides })),
     Layer.provide(AuthenticationLive),
+    // CSD-003: `Passkey.layer` now needs `ClientAddress` (handler records ip/userAgent).
+    Layer.provide(ClientAddress.layerDirect),
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(PortsLive(webAuthn)),
@@ -192,6 +195,56 @@ describe("Passkey", () => {
       });
 
       assert.strictEqual(issued.session.userId, user.id);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSD-003: the ceremony's request context is recorded on the issued session.
+  it.effect("CSD-003: authenticateVerify records ip and userAgent from its context", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
+      const user = yield* users.create({ email: "csd003-passkey@example.com", name: "C" });
+      const registerSession = yield* sessions.issue({ userId: user.id });
+      const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
+      yield* passkey.registerVerify(user.id, registerSession.session.id, {
+        credential: {
+          id: "cred-mock-1",
+          rawId: "cred-mock-1",
+          type: "public-key",
+          response: {
+            clientDataJSON: buildClientDataJSON({
+              type: "webauthn.create",
+              challenge: extractChallenge(registerOptions),
+              origin: ORIGIN,
+            }),
+            attestationObject: "",
+          },
+        },
+      });
+      const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+      const issued = yield* passkey.authenticateVerify(
+        {
+          ceremonyId,
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: {
+              clientDataJSON: buildClientDataJSON({
+                type: "webauthn.get",
+                challenge: extractChallenge(options),
+                origin: ORIGIN,
+              }),
+              authenticatorData: "",
+              signature: "",
+            },
+          },
+        },
+        { ip: "198.51.100.44", userAgent: "PasskeyBrowser/1.0" },
+      );
+      assert.deepStrictEqual(issued.session.ipAddress, Option.some("198.51.100.44"));
+      assert.deepStrictEqual(issued.session.userAgent, Option.some("PasskeyBrowser/1.0"));
     }).pipe(Effect.provide(TestLayer)),
   );
 
