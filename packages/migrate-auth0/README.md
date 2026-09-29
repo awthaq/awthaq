@@ -109,6 +109,10 @@ population of not-yet-rehashed accounts shrinks toward zero, drop
 comfortable — a deployment that never installs it sees zero behavior
 change, since `PasswordHasher.LegacyPasswordVerifiers` defaults to `[]`.
 
+## MFA enrolments are not importable
+
+Auth0's bulk user export contains no MFA enrolments, and its Management API never returns a TOTP secret or a recovery code once enrolled, so neither can be migrated. An imported user who had Auth0 MFA arrives with a password and **no second factor**: `@awthaq/two-factor` sees them as not enrolled and does not divert their sign-in. Plan for it: tell affected users to enrol again (`POST /two-factor/enable`, then `/confirm`) after their first sign-in, and if a policy requires a second factor, enforce that with your own `BeforeSessionIssue` policy rather than assuming the imported account carries one. See [`@awthaq/two-factor`](../two-factor/README.md).
+
 ## Scope
 
 Session migration (bridging a live Auth0 session token) is a separate,
