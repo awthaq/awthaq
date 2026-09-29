@@ -3,7 +3,7 @@ ID: "TS-001"
 Title: "Reauth obligation handler silently discharges a malformed obligation"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/Resolvers.ts:126"
 Auditor: "torin-sandall"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `qadi` · reported by **Torin Sandall — Co-creator of Open Policy Agent (OPA)** (`torin-sandall`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ When the obligation id matches but no numeric maxAgeSeconds is found, fail with 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-bridge-hardening`. Evidence at HEAD ec065a7: `packages/qadi/src/Resolvers.ts:135`. Fix: Fail closed on an uninterpretable reauth obligation, like the unknown-id branch already does. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Resolvers.ts reauthHandler: every duty must carry a finite, non-negative numeric maxAgeSeconds, otherwise Effect.die (fail closed, like the unknown-id branch); among valid duties the smallest window wins; an empty obligation list stays a no-op; the reauth(...) builder throws on a non-finite/negative window so a malformed obligation cannot be authored through it. Tests: Resolvers.test.ts 'ObligationHandlers.reauth fails closed on a malformed obligation (TS-001)' x4 (red before: silent pass / first-duty-wins). BEH-EA-165 requirement text extended. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 915 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.
