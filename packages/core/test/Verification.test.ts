@@ -406,14 +406,15 @@ const suite = (
           for (const digit of Redacted.value(value))
             counts[Number(digit)] = (counts[Number(digit)] ?? 0) + 1;
         }
-        // 9000 digits, expectation 900 each: a chi-square statistic over 10 buckets (df 9)
-        // stays far below 27.88 (p = 0.001) for an unbiased source.
+        // 9000 digits, expectation 900 each: a chi-square statistic over 10 buckets (df 9).
+        // The bound is p = 1.3e-9 (60), not p = 0.001: an unseeded draw that failed one run in a
+        // thousand made CI flaky, and a digit that is skewed enough to matter is still far above it.
         const expected = 900;
         const chi = counts.reduce(
           (sum, observed) => sum + (observed - expected) ** 2 / expected,
           0,
         );
-        assert.isBelow(chi, 27.88);
+        assert.isBelow(chi, 60);
       }).pipe(Effect.provide(layer)),
     );
 
