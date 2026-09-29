@@ -109,6 +109,8 @@ REQUIREMENT: An `Account` row MUST be keyed uniquely on `(provider, subject,
 
 Email is documented as an unreliable anchor across every provider awthaq targets: Apple strips it after the first login, Entra ID's own docs forbid using `email`/`preferred_username` for authorization, and Facebook exposes no verification flag (research/05-oauth-oidc.md). `subject` — OIDC's `sub`, or a provider's declared immutable field — never gets reassigned by the provider the way an email address can be changed or reused, which is exactly the property a uniqueness constraint needs to hold across the account's lifetime.
 
+**Provider tokens live on the account row (BE-002, BAM-008).** The exchanged token set — access token, refresh token and, for an `oidc` provider, the `id_token` — is persisted on the account, each token encrypted at rest with row-and-column-bound additional data, and readable only through `Accounts.findProviderTokens`. The `id_token` is kept so a better-auth account import (BEH-EA-207, which must not drop a source field) has a destination and a future RP-initiated logout can send it as `id_token_hint`; a refresh response without a new `id_token` keeps the stored one, and one with a fresh `id_token` replaces it.
+
 _Previous: [BEH-EA-124](16-oauth.md#beh-ea-124-trusted-provider-auto-link-is-opt-in-per-provider) | Next: [BEH-EA-126](16-oauth.md#beh-ea-126-provider-secrets-are-configredacted-inside-layers)_
 
 ## BEH-EA-126: Provider secrets are `Config.Redacted`, inside Layers

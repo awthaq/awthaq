@@ -80,6 +80,7 @@ const refresh = (
   accountId: Accounts.AccountId,
   provider: OAuthProvider.ResolvedProvider,
   refreshToken: Redacted.Redacted<string>,
+  previousIdToken: Option.Option<Redacted.Redacted<string>>,
   timeout: Duration.Duration,
 ): Effect.Effect<Redacted.Redacted<string>, OAuthRefreshFailed> =>
   Effect.gen(function* () {
@@ -112,6 +113,10 @@ const refresh = (
     const nextTokens: Accounts.ProviderTokenSet = {
       accessToken,
       refreshToken: nextRefreshToken,
+      // BAM-008: a refresh response usually carries no `id_token` — keep the
+      // stored one then, replace it when the provider sends a fresh one.
+      idToken:
+        body.id_token === undefined ? previousIdToken : Option.some(Redacted.make(body.id_token)),
       accessTokenExpiresAt:
         body.expires_in === undefined
           ? Option.none()
@@ -213,6 +218,7 @@ export const layer: Layer.Layer<
           accountId,
           provider,
           tokens.refreshToken.value,
+          tokens.idToken,
           config_.httpTimeouts.tokenExchange,
         );
         return yield* use(refreshed);

@@ -395,4 +395,15 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // BAM-008: the provider's OIDC `id_token`, stored (encrypted at rest, like
+  // `accessToken`/`refreshToken`) so a better-auth import has a destination
+  // and RP-initiated logout can send `id_token_hint`. Nullable: an existing
+  // row's `NULL` is simply "no stored id_token for this pre-existing link".
+  migration(18, "add_accounts_id_token_column", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`ALTER TABLE accounts ADD COLUMN "idToken" TEXT`,
+      sqlite: () => sql`ALTER TABLE accounts ADD COLUMN idToken TEXT`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

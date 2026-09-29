@@ -85,6 +85,14 @@ export class LastAccountRefusal extends Data.TaggedError("LastAccountRefusal")<{
 export interface ProviderTokenSet {
   readonly accessToken: Redacted.Redacted<string>;
   readonly refreshToken: Option.Option<Redacted.Redacted<string>>;
+  /**
+   * BAM-008: the OIDC `id_token` the provider returned, kept (encrypted at
+   * rest like the other two tokens) so a better-auth account import has a
+   * destination for it and a future RP-initiated logout can send it as
+   * `id_token_hint`. `None` for a plain OAuth2 provider, or when a refresh
+   * response carried none and none was stored.
+   */
+  readonly idToken: Option.Option<Redacted.Redacted<string>>;
   readonly accessTokenExpiresAt: Option.Option<DateTime.Utc>;
   readonly refreshTokenExpiresAt: Option.Option<DateTime.Utc>;
   readonly scope: Option.Option<string>;
@@ -432,6 +440,7 @@ const tokenSetToRow = (
 ): {
   readonly accessToken: string | null;
   readonly refreshToken: string | null;
+  readonly idToken: string | null;
   readonly accessTokenExpiresAt: DateTime.Utc | null;
   readonly refreshTokenExpiresAt: DateTime.Utc | null;
   readonly scope: string | null;
@@ -441,6 +450,7 @@ const tokenSetToRow = (
     ? {
         accessToken: null,
         refreshToken: null,
+        idToken: null,
         accessTokenExpiresAt: null,
         refreshTokenExpiresAt: null,
         scope: null,
@@ -449,6 +459,7 @@ const tokenSetToRow = (
     : {
         accessToken: Redacted.value(tokens.accessToken),
         refreshToken: Option.getOrNull(Option.map(tokens.refreshToken, Redacted.value)),
+        idToken: Option.getOrNull(Option.map(tokens.idToken, Redacted.value)),
         accessTokenExpiresAt: Option.getOrNull(tokens.accessTokenExpiresAt),
         refreshTokenExpiresAt: Option.getOrNull(tokens.refreshTokenExpiresAt),
         scope: Option.getOrNull(tokens.scope),
@@ -461,6 +472,7 @@ const rowToProviderTokenSet = (row: SqlModels.Account): Option.Option<ProviderTo
     Option.map((accessToken): ProviderTokenSet => ({
       accessToken: Redacted.make(accessToken),
       refreshToken: Option.fromNullOr(row.refreshToken).pipe(Option.map(Redacted.make)),
+      idToken: Option.fromNullOr(row.idToken).pipe(Option.map(Redacted.make)),
       accessTokenExpiresAt: Option.fromNullOr(row.accessTokenExpiresAt),
       refreshTokenExpiresAt: Option.fromNullOr(row.refreshTokenExpiresAt),
       scope: Option.fromNullOr(row.scope),
@@ -614,6 +626,7 @@ export const layerSql: Layer.Layer<
               passwordHash: Redacted.value(hash),
               accessToken: existing.accessToken,
               refreshToken: existing.refreshToken,
+              idToken: existing.idToken,
               accessTokenExpiresAt: existing.accessTokenExpiresAt,
               refreshTokenExpiresAt: existing.refreshTokenExpiresAt,
               scope: existing.scope,

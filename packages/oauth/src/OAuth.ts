@@ -294,6 +294,8 @@ const toProviderTokenSet = (tokens: TokenSet, now: DateTime.Utc): Accounts.Provi
     tokens.refreshToken === undefined
       ? Option.none()
       : Option.some(Redacted.make(tokens.refreshToken)),
+  // BAM-008: kept (encrypted at rest by the repository) for import parity and `id_token_hint`.
+  idToken: tokens.idToken === undefined ? Option.none() : Option.some(Redacted.make(tokens.idToken)),
   accessTokenExpiresAt:
     tokens.expiresIn === undefined
       ? Option.none()

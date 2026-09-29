@@ -61,6 +61,7 @@ describe("OAuthTokenAccess", () => {
         tokens: {
           accessToken: Redacted.make("at-live"),
           refreshToken: Option.some(Redacted.make("rt-1")),
+          idToken: Option.none(),
           accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.hours(1))),
           refreshTokenExpiresAt: Option.none(),
           scope: Option.none(),
@@ -93,6 +94,7 @@ describe("OAuthTokenAccess", () => {
           tokens: {
             accessToken: Redacted.make("at-old"),
             refreshToken: Option.some(Redacted.make("rt-old")),
+            idToken: Option.none(),
             // 10s out — inside the port's own 30s skew window, so this
             // must trigger a refresh even though it has not, strictly,
             // expired yet.
@@ -134,6 +136,7 @@ describe("OAuthTokenAccess", () => {
           tokens: {
             accessToken: Redacted.make("at-old"),
             refreshToken: Option.some(Redacted.make("rt-keep")),
+            idToken: Option.none(),
             accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
             refreshTokenExpiresAt: Option.none(),
             scope: Option.none(),
@@ -160,6 +163,7 @@ describe("OAuthTokenAccess", () => {
         tokens: {
           accessToken: Redacted.make("at-expired"),
           refreshToken: Option.none(),
+          idToken: Option.none(),
           accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
           refreshTokenExpiresAt: Option.none(),
           scope: Option.none(),
@@ -214,6 +218,7 @@ describe("OAuthTokenAccess", () => {
           tokens: {
             accessToken: Redacted.make("at-old"),
             refreshToken: Option.some(Redacted.make("rt-old")),
+            idToken: Option.none(),
             accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
             refreshTokenExpiresAt: Option.none(),
             scope: Option.none(),
@@ -243,6 +248,7 @@ describe("OAuthTokenAccess", () => {
         tokens: {
           accessToken: Redacted.make("at-old"),
           refreshToken: Option.some(Redacted.make("rt-old")),
+          idToken: Option.none(),
           accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
           refreshTokenExpiresAt: Option.none(),
           scope: Option.none(),
@@ -268,6 +274,7 @@ describe("OAuthTokenAccess", () => {
         tokens: {
           accessToken: Redacted.make("at-old"),
           refreshToken: Option.some(Redacted.make("rt-old")),
+          idToken: Option.none(),
           accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
           refreshTokenExpiresAt: Option.none(),
           scope: Option.none(),
@@ -298,6 +305,7 @@ describe("OAuthTokenAccess", () => {
         tokens: {
           accessToken: Redacted.make("at-old"),
           refreshToken: Option.some(Redacted.make("rt-old")),
+          idToken: Option.none(),
           accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
           refreshTokenExpiresAt: Option.none(),
           scope: Option.none(),
@@ -334,6 +342,7 @@ describe("OAuthTokenAccess", () => {
         tokens: {
           accessToken: Redacted.make("at-old"),
           refreshToken: Option.some(Redacted.make("rt-old")),
+          idToken: Option.none(),
           accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
           refreshTokenExpiresAt: Option.none(),
           scope: Option.none(),
@@ -362,4 +371,48 @@ describe("OAuthTokenAccess", () => {
       ),
     );
   });
+
+  const refreshWithStoredIdToken = (routes: FakeRoutes, subject: string) =>
+    Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const now = yield* DateTime.now;
+      const account = yield* accounts.link({
+        userId,
+        providerId: "acme",
+        subject,
+        tokens: {
+          accessToken: Redacted.make("at-old"),
+          refreshToken: Option.some(Redacted.make("rt-old")),
+          idToken: Option.some(Redacted.make("stored.id.token")),
+          accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
+          refreshTokenExpiresAt: Option.none(),
+          scope: Option.none(),
+          tokenType: Option.none(),
+        },
+      });
+      const tokenAccess = yield* OAuthTokenAccess.OAuthTokenAccess;
+      yield* tokenAccess.withAccessToken(account.id, () => Effect.void);
+      const stored = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+      return Option.map(stored.idToken, Redacted.value);
+    }).pipe(Effect.provide(buildLayer(routes)));
+
+  it.effect("BAM-008: a refresh response without an id_token keeps the stored one", () =>
+    Effect.gen(function* () {
+      const idToken = yield* refreshWithStoredIdToken(
+        { "/token": { access_token: "at-new" } },
+        "sub-idt-keep",
+      );
+      assert.deepStrictEqual(idToken, Option.some("stored.id.token"));
+    }),
+  );
+
+  it.effect("BAM-008: a refresh response carrying an id_token replaces the stored one", () =>
+    Effect.gen(function* () {
+      const idToken = yield* refreshWithStoredIdToken(
+        { "/token": { access_token: "at-new", id_token: "fresh.id.token" } },
+        "sub-idt-replace",
+      );
+      assert.deepStrictEqual(idToken, Option.some("fresh.id.token"));
+    }),
+  );
 });

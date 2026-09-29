@@ -2207,6 +2207,33 @@ describe("OAuth", () => {
       }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
     );
 
+    it.effect("BAM-008: an oidc sign-up persists the id_token alongside the access token", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = oidcClaims(location, { sub: "idt-sub", email: "idt@example.com" });
+        yield* oauth.callback("okta", { code: "c1", state, iss: undefined, cookieState: state });
+        const accounts = yield* Accounts.Accounts;
+        const account = Option.getOrThrow(
+          yield* accounts.findByProviderSubject(
+            "okta",
+            "idt-sub",
+            "https://okta.example.com/oauth2/default",
+          ),
+        );
+        const tokens = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+        assert.strictEqual(Redacted.value(tokens.accessToken), "at-1");
+        // The stored id_token is the very JWT the provider returned.
+        assert.strictEqual(
+          Redacted.value(Option.getOrThrow(tokens.idToken)),
+          signJwt(currentClaims),
+        );
+      }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
+    );
+
     it.effect("ECF-001: a JWKS endpoint that never answers fails ProviderUnavailable at its deadline", () => {
       const hang = hangingRoute();
       return Effect.gen(function* () {

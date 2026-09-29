@@ -183,11 +183,10 @@ export class AccountsRepository extends Context.Service<
  * swapped between rows (or between the access- and refresh-token columns
  * of the very same row) undetected.
  */
-const tokenAad = (
-  providerId: string,
-  userId: string,
-  field: "accessToken" | "refreshToken",
-): string => `${providerId}:${userId}:${field}`;
+type TokenField = "accessToken" | "refreshToken" | "idToken";
+
+const tokenAad = (providerId: string, userId: string, field: TokenField): string =>
+  `${providerId}:${userId}:${field}`;
 
 export const AccountsRepositoryLive: Layer.Layer<
   AccountsRepository,
@@ -207,7 +206,7 @@ export const AccountsRepositoryLive: Layer.Layer<
     const encryptToken = (
       providerId: string,
       userId: string,
-      field: "accessToken" | "refreshToken",
+      field: TokenField,
       value: string | null,
     ): Effect.Effect<string | null> =>
       value === null
@@ -217,7 +216,7 @@ export const AccountsRepositoryLive: Layer.Layer<
     const decryptToken = (
       providerId: string,
       userId: string,
-      field: "accessToken" | "refreshToken",
+      field: TokenField,
       value: string | null,
     ): Effect.Effect<string | null> =>
       value === null
@@ -240,7 +239,8 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           row.refreshToken,
         );
-        return Account.make({ ...row, accessToken, refreshToken });
+        const idToken = yield* decryptToken(row.providerId, row.userId, "idToken", row.idToken);
+        return Account.make({ ...row, accessToken, refreshToken, idToken });
       });
 
     const insert: AccountsRepositoryShape["insert"] = (input) =>
@@ -257,7 +257,13 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           input.refreshToken,
         );
-        const row = yield* repo.insert({ ...input, accessToken, refreshToken });
+        const idToken = yield* encryptToken(
+          input.providerId,
+          input.userId,
+          "idToken",
+          input.idToken,
+        );
+        const row = yield* repo.insert({ ...input, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
 
@@ -275,7 +281,8 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           input.refreshToken,
         );
-        const row = yield* repo.update({ ...input, accessToken, refreshToken });
+        const idToken = yield* encryptToken(aad.providerId, aad.userId, "idToken", input.idToken);
+        const row = yield* repo.update({ ...input, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
 
