@@ -213,27 +213,20 @@ Feature: Sessions
   @BEH-EA-056
   Rule: Session-secret verification is a constant-time comparison over a fixed-length hash
 
-    # @skip: a constant-time-comparison mechanism claim with no externally observable outcome
-    # a request/response test can tell apart from an ordinary equality check; the observable
-    # half (a tampered secret is rejected, the stored digest is not a credential) is REQ-EA-139/140
-    # and packages/core/test/Sessions.test.ts "BEH-EA-050/056: a tampered secret is rejected"
-    @skip
+    # The mechanism has no request/response signature, so it is pinned at its two ends: Sessions.ts verifies only through SecretHash.equals, which is Hmac.constantTimeEqualString.
     @REQ-EA-157
     Scenario: Verifying a presented secret compares its hash against the stored hash using a constant-time check
       Given a session issued for "alice" with secret "s3cr3t"
       When the token is presented for verification
       Then "SHA-256(presented secret)" is compared against the stored hash using a constant-time equality check
 
-    # @skip: a timing-side-channel assertion is not deterministic in CI (same category as
-    # password's REQ-EA-306/309); the comparison is the shared Hmac primitive's constant-time
-    # equality, covered by packages/core/test/Sessions.test.ts
-    @skip
+    # Work, not wall-clock time: the comparator is fed array-likes that count every element read, so "does not short-circuit" is a deterministic count rather than a timing measurement.
     @REQ-EA-158
     Scenario: Verification timing does not vary with how many leading bytes of the hash match
       Given two presented secrets whose hashes share a different number of leading matching bytes against the stored hash
       When each is presented for verification
       Then the comparison does not short-circuit on the first mismatched byte
-      And the comparison time does not vary based on how many leading bytes matched
+      And the comparison does the same work however many leading bytes matched
 
     # Observed through its consequence: a comparison over raw variable-length secrets would trip on a length mismatch, so any presented length is refused the same way.
     @REQ-EA-159

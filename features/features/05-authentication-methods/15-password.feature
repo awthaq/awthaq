@@ -32,15 +32,11 @@ Feature: Password Authentication
       Then the caller receives a "SessionView" without the response waiting on the verification mail's delivery
       And the mail is dispatched as a detached, fire-and-forget effect
 
-    # @skip: a wall-clock timing side-channel is not deterministically assertable in CI; the
-    # "does not wait on mail delivery" half is proven with a never-resolving mailer by
-    # packages/password/test/Password.test.ts (TSS-001/TSS-002 tests), and the account-existence
-    # half is deliberately open under the default signUpEnumeration "reveal" (TMS-005, ADR-EA-018)
-    # — only "conceal" hides it.
-    @skip
+    # Deterministic stand-in for "timing": the mail provider never answers, yet both sign-ups answer at once. With signUpEnumeration "conceal" (ADR-EA-018) the two answers are also identical; under the default "reveal" the existing address is told 409 by design.
     @REQ-EA-306
     Scenario: Sign-up response time does not reveal whether the email address already had an account
       Given a slow-responding mail provider
+      And the application conceals account existence on sign-up
       And two sign-up requests, one for an email with no existing account and one for an email that already has one
       When both requests are handled
       Then neither response's timing varies with the mail provider's latency
@@ -69,10 +65,7 @@ Feature: Password Authentication
       Then all three responses have the identical status and the identical body
       And none of them reveals which of the three reasons applied
 
-    # @skip: wall-clock latency is not deterministically assertable in CI; the mechanism that
-    # equalises the three failure reasons (the calibrated timing floor) is covered by the
-    # "Password signIn timing floor (TSS-006)" suite in packages/password/test/Password.test.ts.
-    @skip
+    # Asserted as the floor, which is what equalises the reasons: with signInTimingFloor set, no failure (however cheap its path) returns sooner than the floor, so the cheap reasons are padded up to the expensive one. The upper bound depends on the machine and is not asserted; the floor mechanism itself is packages/password/test/Password.test.ts (TSS-006, under TestClock).
     @REQ-EA-309
     Scenario: Response latency does not vary across the three failure reasons
       Given the same three sign-in attempts, differing only in which of the three reasons applies

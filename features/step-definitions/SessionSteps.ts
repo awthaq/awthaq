@@ -2,7 +2,11 @@
 // arranges (or asserts) state, the When performs the action its scenario names, and no Then
 // hardcodes an actor — pronoun steps resolve the current actor from the World's registry.
 import { defineSteps } from "@effect-cucumber/vitest";
+import { Hmac } from "@awthaq/ports";
+import { SecretHash } from "@awthaq/core";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -202,6 +206,89 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     for (const [key, value] of Object.entries(row)) {
       assert.ok(!String(value).includes(secret), `column "${key}" stores the plaintext secret`);
     }
+  });
+
+  // REQ-EA-157: pinned at both ends of the mechanism, plus what it computes.
+  Then(
+    "{string} is compared against the stored hash using a constant-time equality check",
+    function* (_digest: string) {
+      const { actors, responses } = yield* World;
+      const name = yield* actors.current;
+      const { id, secret } = tokenParts((yield* actors.get(name)).cookie);
+      assert.equal((yield* responses.get(name)).status, 200);
+      const stored = column(yield* readSessionRow(id), "secretHash");
+      // The comparator: equal digests match, and one flipped character at either end does not.
+      assert.equal(SecretHash.equals(sha256Hex(secret), stored), true);
+      assert.equal(SecretHash.equals(`0${sha256Hex(secret).slice(1)}`, stored), false);
+      assert.equal(SecretHash.equals(`${sha256Hex(secret).slice(0, -1)}0`, stored), false);
+      // The verifier: every comparison of a presented digest goes through it, and none uses `===`.
+      const sessions = readFileSync(
+        fileURLToPath(new URL("../../packages/core/src/Sessions.ts", import.meta.url)),
+        "utf8",
+      );
+      assert.ok((sessions.match(/secretMatches\(presentedHash, /g) ?? []).length >= 2);
+      assert.doesNotMatch(sessions, /presentedHash\s*[!=]==|[!=]==\s*presentedHash/);
+      // ...and `SecretHash.equals` is the shared constant-time comparator, not an ordinary equality.
+      const recipe = readFileSync(
+        fileURLToPath(new URL("../../packages/core/src/SecretHash.ts", import.meta.url)),
+        "utf8",
+      );
+      assert.match(recipe, /Hmac\.constantTimeEqualString\(presentedHash, storedHash\)/);
+    },
+  );
+
+  // REQ-EA-158: the comparator's *work* — every byte of both operands is read, whatever matched.
+  Given(
+    "two presented secrets whose hashes share a different number of leading matching bytes against the stored hash",
+    function* () {
+      const { texts } = yield* World;
+      yield* texts.set("stored", sha256Hex("s3cr3t"));
+    },
+  );
+
+  When("each is presented for verification", function* () {
+    const { texts } = yield* World;
+    const stored = Uint8Array.from(Buffer.from(yield* texts.get("stored"), "hex"));
+    /** `count` leading bytes equal to `stored`, the rest flipped. */
+    const presentedMatching = (count: number) =>
+      Uint8Array.from(stored, (byte, index) => (index < count ? byte : byte ^ 0xff));
+    const compare = (matching: number) => {
+      let reads = 0;
+      const counted = (bytes: Uint8Array) =>
+        new Proxy(bytes, {
+          get(target, key) {
+            if (typeof key === "string" && /^\d+$/.test(key)) reads += 1;
+            return Reflect.get(target, key);
+          },
+        });
+      const equal = Hmac.constantTimeEqualBytes(
+        counted(presentedMatching(matching)),
+        counted(stored),
+      );
+      return { equal, reads };
+    };
+    const results = [0, 1, 16, 31].map(compare);
+    yield* texts.set("results", JSON.stringify(results));
+  });
+
+  Then("the comparison does not short-circuit on the first mismatched byte", function* () {
+    const { texts } = yield* World;
+    const results: ReadonlyArray<{ equal: boolean; reads: number }> = JSON.parse(
+      yield* texts.get("results"),
+    );
+    // The first byte already differs for the 0-match case: a short-circuiting compare would have read one pair.
+    for (const result of results) {
+      assert.equal(result.equal, false);
+      assert.equal(result.reads, 64, "both 32-byte operands are read in full");
+    }
+  });
+
+  Then("the comparison does the same work however many leading bytes matched", function* () {
+    const { texts } = yield* World;
+    const results: ReadonlyArray<{ equal: boolean; reads: number }> = JSON.parse(
+      yield* texts.get("results"),
+    );
+    assert.equal(new Set(results.map((result) => result.reads)).size, 1);
   });
 
   // REQ-EA-159: a comparison over the raw, variable-length secrets could not survive a length
