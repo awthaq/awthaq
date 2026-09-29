@@ -11,6 +11,7 @@
 //   tsconfig.packages.json    `references` every package's tsconfig.src.json (the `pnpm build` set)
 //   .changeset/config.json    `fixed[0]`   every package (private ones too: `privatePackages.version`
 //                                          is on, so they version with the group)
+//   packages/*/tsconfig.src.json  `paths` + `references`  exactly the workspace packages its own src imports
 //   vitest.config.ts          `projects`   `packages/*` plus each example that has a vitest config
 //   knip.json                 `workspaces` no key may name a directory that no longer exists
 //   README.md                 mentions     every package appears by name (`@awthaq/<x>` or `packages/<x>`)
@@ -108,7 +109,9 @@ const writes = new Map();
 const stage = (file, text) => writes.set(file, text);
 
 const refsRendered = (paths, indent) =>
-  `[\n${paths.map((p) => `${indent}  {\n${indent}    "path": ${JSON.stringify(p)}\n${indent}  }`).join(",\n")}\n${indent}]`;
+  paths.length === 0
+    ? "[]"
+    : `[\n${paths.map((p) => `${indent}  {\n${indent}    "path": ${JSON.stringify(p)}\n${indent}  }`).join(",\n")}\n${indent}]`;
 
 // --- tsconfig.base.json `paths` ---------------------------------------------------
 {
@@ -165,6 +168,75 @@ checkReferences(
   "tsconfig.packages.json",
   packages.map(({ dir }) => `packages/${dir}/tsconfig.src.json`),
 );
+
+// --- each package's tsconfig.src.json: exactly what its src imports ---------------
+// (MM-002, MTS-001) `paths` maps a workspace import to source and `references` orders the
+// project build; both must name exactly the `@awthaq/*` packages the package's own `src/`
+// imports (type-only imports included), no more and no fewer: a dependency's own imports are
+// resolved inside *its* project, so transitive ones are not repeated here. A stale edge is a
+// false build dependency (a change to an unrelated package rebuilds this one); a missing one
+// silently resolves to the built `lib/` instead of the source. Every export of an imported
+// package (its `.` entry and subpaths) gets a `paths` entry.
+{
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  const importsOf = (dir) => {
+    const found = new Set();
+    const walk = (folder) => {
+      for (const entry of readdirSync(folder, { withFileTypes: true })) {
+        const full = path.join(folder, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(ts|tsx)$/.test(entry.name)) {
+          const source = readFileSync(full, "utf8");
+          for (const m of source.matchAll(/(?:from|import\()\s*"(@awthaq\/[a-z0-9-]+)(?:\/[^"]*)?"/g)) found.add(m[1]);
+        }
+      }
+    };
+    const src = path.join(rootDir, "packages", dir, "src");
+    if (existsSync(src)) walk(src);
+    return found;
+  };
+  const direct = new Map(packages.map(({ dir, name }) => [name, [...importsOf(dir)].filter((n) => n !== name && byName.has(n))]));
+  for (const { dir, name } of packages) {
+    const file = `packages/${dir}/tsconfig.src.json`;
+    if (!existsSync(path.join(rootDir, file))) continue;
+    const deps = [...(direct.get(name) ?? [])].sort();
+    const wantPaths = {};
+    for (const dep of deps) {
+      const { dir: depDir, manifest } = byName.get(dep);
+      for (const [subpath, target] of Object.entries(manifest.exports ?? { ".": {} })) {
+        const source = typeof target === "object" && typeof target.bun === "string" ? target.bun : "./src/index.ts";
+        wantPaths[subpath === "." ? dep : `${dep}/${subpath.slice(2)}`] = [`../${depDir}/${source.slice(2)}`];
+      }
+    }
+    const text = read(file);
+    const parsed = parseJsonc(text);
+    const havePaths = parsed.compilerOptions?.paths ?? {};
+    const heldKeys = Object.keys(havePaths).filter((k) => k.startsWith("@awthaq/"));
+    const [missingKeys, extraKeys] = diff(heldKeys, Object.keys(wantPaths));
+    const wrongKeys = Object.keys(wantPaths).filter((k) => k in havePaths && JSON.stringify(havePaths[k]) !== JSON.stringify(wantPaths[k]));
+    const wantRefs = deps.map((dep) => `../${byName.get(dep).dir}/tsconfig.src.json`);
+    const haveRefs = (parsed.references ?? []).map((ref) => ref.path);
+    const [missingRefs, extraRefs] = diff(haveRefs, wantRefs);
+    report(file, [...missingKeys.map((k) => `paths ${k}`), ...missingRefs.map((r) => `reference ${r}`)], [...extraKeys.map((k) => `paths ${k}`), ...extraRefs.map((r) => `reference ${r}`)]);
+    if (wrongKeys.length > 0) problems.push(`${file}: wrong paths target for ${wrongKeys.join(", ")}`);
+    const drifted = missingKeys.length + extraKeys.length + wrongKeys.length + missingRefs.length + extraRefs.length > 0;
+    if (mode === "write" && drifted) {
+      const keys = merged(heldKeys, Object.keys(wantPaths));
+      const lines = [
+        ...(parsed.compilerOptions?.paths?.["@/*"] === undefined ? [] : [`      "@/*": ${JSON.stringify(havePaths["@/*"])}`]),
+        ...keys.map((k) => `      ${JSON.stringify(k)}: ${JSON.stringify(wantPaths[k])}`),
+      ];
+      let next = text;
+      const pathsAt = next.indexOf('"paths"');
+      const pathsOpen = next.indexOf("{", pathsAt);
+      next = next.slice(0, pathsOpen) + `{\n${lines.join(",\n")}\n    }` + next.slice(matching(next, pathsOpen));
+      const refsAt = next.indexOf('"references"');
+      const refsOpen = next.indexOf("[", refsAt);
+      next = next.slice(0, refsOpen) + refsRendered(merged(haveRefs, wantRefs), "  ") + next.slice(matching(next, refsOpen));
+      stage(file, next);
+    }
+  }
+}
 
 // --- changesets `fixed` group ----------------------------------------------------
 {
