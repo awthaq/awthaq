@@ -3,7 +3,7 @@ ID: "ESS-008"
 Title: "Three _tag strings duplicated across the Data and Schema error taxonomies"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Users.ts:38"
 Auditor: "effect-schema-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Effect Schema Specialist** (`effect-schema-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Namespace the domain-side tags (e.g. "UserEmailAlreadyExists", "VerificationToke
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `core-error-taxonomy`. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:70`. Fix: Make internal (Data) and wire (Schema) error tags disjoint by construction and guard it with a test. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Internal Data tags renamed with a service prefix: Sessions/NotFound, Users/EmailAlreadyExists, Verification/TokenConsumed, Roles/UnknownRole, TeamRecords/HasChildren, TeamRecords/HierarchyCycle, PasskeyCredentials/NotFound, WebAuthn/VerificationFailed, PasskeyClient/AlreadyRegistered (9 collisions found, the dossier's list had 5; RateLimited vs RateLimitExceeded were already distinct). Wire Schema tags are unchanged (HTTP contract). Every catchTag/catchTags key and untyped tag assertion updated (typecheck found the typed ones, the test run the string ones; plugin-level tests that read wire errors keep the plain names). Guard: scripts/check-error-tags.mjs (pnpm check:error-tags, wired into pnpm check) scans packages/*/src and fails when a Data and a Schema tag intersect. Convention recorded as an ADR-EA-013 addendum.

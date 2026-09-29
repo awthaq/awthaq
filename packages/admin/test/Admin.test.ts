@@ -245,7 +245,7 @@ describe("Admin", () => {
         yield* admin.stopImpersonating(impersonating);
 
         const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
-        assert.strictEqual(revoked._tag, "SessionNotFound");
+        assert.strictEqual(revoked._tag, "Sessions/NotFound");
 
         const record = yield* records.findBySessionId(issued.session.id);
         assert.isTrue(Option.isSome(record));
@@ -286,7 +286,7 @@ describe("Admin", () => {
         yield* admin.forceStop(anotherAdmin, issued.session.id);
 
         const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
-        assert.strictEqual(revoked._tag, "SessionNotFound");
+        assert.strictEqual(revoked._tag, "Sessions/NotFound");
 
         const notFound = yield* admin.forceStop(anotherAdmin, issued.session.id).pipe(Effect.flip);
         assert.strictEqual(notFound._tag, "AdminImpersonationNotFound");
@@ -569,7 +569,7 @@ describe("Admin", () => {
         }),
       );
       const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
-      assert.strictEqual(revoked._tag, "SessionNotFound");
+      assert.strictEqual(revoked._tag, "Sessions/NotFound");
     }).pipe(Effect.provide(buildLayer(allow))),
   );
 
@@ -623,7 +623,7 @@ describe("Admin", () => {
         const failure = yield* admin.forceStop(caller, issued.session.id).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AdminImpersonationNotFound");
         const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
-        assert.strictEqual(revoked._tag, "SessionNotFound");
+        assert.strictEqual(revoked._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(buildLayer(allow))),
   );
 });

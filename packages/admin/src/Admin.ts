@@ -686,7 +686,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           yield* sessions
             .revoke(Sessions.SessionId(sessionId), "admin")
             // Gone between the check and the revoke: the desired end state, not an error.
-            .pipe(Effect.catchTag("SessionNotFound", () => Effect.void));
+            .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void));
           yield* events.publish({
             _tag: "auth.admin.sessionRevoked",
             adminUserId: Users.UserId(caller.ref.id),
@@ -705,7 +705,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
             (session) =>
               sessions
                 .revoke(session.id, "admin")
-                .pipe(Effect.catchTag("SessionNotFound", () => Effect.void)),
+                .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void)),
             { discard: true },
           );
           yield* events.publish({
@@ -793,7 +793,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const revokeQuietly = (sessionId: string) =>
         sessions
           .revoke(Sessions.SessionId(sessionId), "impersonationStopped")
-          .pipe(Effect.catchTag("SessionNotFound", () => Effect.void));
+          .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void));
 
       const stopImpersonating: AdminShape["stopImpersonating"] = Effect.fnUntraced(
         function* (caller) {

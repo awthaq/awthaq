@@ -104,7 +104,7 @@ const suite = (name: string, layer: Layer.Layer<Sessions.Sessions, unknown, neve
         // Single-use: presenting the exact same legacy token again fails —
         // `consume` already ran, so a second bridge lookup misses too.
         const replay = yield* sessions.verify(Redacted.make(LEGACY_TOKEN)).pipe(Effect.flip);
-        assert.strictEqual(replay._tag, "SessionNotFound");
+        assert.strictEqual(replay._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -114,7 +114,7 @@ const suite = (name: string, layer: Layer.Layer<Sessions.Sessions, unknown, neve
         const failure = yield* sessions
           .verify(Redacted.make("some-other-unbridgeable-token"))
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
   });

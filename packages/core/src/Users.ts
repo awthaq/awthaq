@@ -68,7 +68,7 @@ export interface UserRecord {
   readonly updatedAt: DateTime.Utc;
 }
 
-export class EmailAlreadyExists extends Data.TaggedError("EmailAlreadyExists")<{
+export class EmailAlreadyExists extends Data.TaggedError("Users/EmailAlreadyExists")<{
   readonly message: string;
   readonly email: string;
 }> {}
@@ -171,7 +171,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           Effect.flatMap((s) =>
             Option.match(HashMap.get(s.byId, id), {
               onNone: () =>
-                Effect.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
+                Effect.fail(new UserNotFound({ message: "awthaq: no such user", id })),
               onSome: Effect.succeed,
             }),
           ),
@@ -209,7 +209,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
               return [
                 Result.fail(
                   new EmailAlreadyExists({
-                    message: `awthaq: email already exists: ${email}`,
+                    message: "awthaq: email already exists",
                     email,
                   }),
                 ),
@@ -230,7 +230,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           const existing = HashMap.get(s.byId, id);
           if (Option.isNone(existing)) {
             return [
-              Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
+              Result.fail(new UserNotFound({ message: "awthaq: no such user", id })),
               s,
             ] as const;
           }
@@ -258,7 +258,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
             const existing = HashMap.get(s.byId, id);
             if (Option.isNone(existing)) {
               return [
-                Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
+                Result.fail(new UserNotFound({ message: "awthaq: no such user", id })),
                 s,
               ] as const;
             }
@@ -291,7 +291,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           const existing = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s.byId, id)));
           if (Option.isNone(existing)) {
             return yield* Effect.fail(
-              new UserNotFound({ message: `awthaq: no such user: ${id}`, id }),
+              new UserNotFound({ message: "awthaq: no such user", id }),
             );
           }
           yield* beforeUserDeleteVeto(beforeDelete.run({ id, email: existing.value.email }));
@@ -378,7 +378,7 @@ export const layerSql: Layer.Layer<
           error.reason._tag === "UniqueViolation"
             ? Effect.fail(
                 new EmailAlreadyExists({
-                  message: `awthaq: email already exists: ${email}`,
+                  message: "awthaq: email already exists",
                   email,
                 }),
               )
@@ -393,7 +393,7 @@ export const layerSql: Layer.Layer<
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
+            Effect.fail(new UserNotFound({ message: "awthaq: no such user", id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -405,16 +405,18 @@ export const layerSql: Layer.Layer<
         .findByEmail(email.toLowerCase())
         .pipe(Effect.map(Option.map(toUserRecord)), Effect.orDie);
 
+    // GC-004: one targeted statement, so a row deleted between the caller's read and this write
+    // is `UserNotFound` — what `layerMemory` answers — not a defect, and `email` is never
+    // rewritten from a stale read.
     const updateProfile: UsersShape["updateProfile"] = Effect.fnUntraced(function* (id, input) {
-      const existing = yield* findById(id);
-      const nextMetadata =
-        input.metadata === undefined ? Option.getOrNull(existing.metadata) : input.metadata;
-      const update = yield* repo.models.User.update
-        .makeEffect({ id, email: existing.email, name: input.name, metadata: nextMetadata })
+      const row = yield* repo
+        .updateProfile({ id, name: input.name, metadata: input.metadata })
         .pipe(Effect.orDie);
-      const row = yield* repo.update(update).pipe(Effect.orDie);
+      if (Option.isNone(row)) {
+        return yield* Effect.fail(new UserNotFound({ message: "awthaq: no such user", id }));
+      }
       yield* announce(id, ["name"]);
-      return toUserRecord(row);
+      return toUserRecord(row.value);
     });
 
     // `emailVerified` is excluded from the generic `update`/`jsonUpdate`
@@ -427,7 +429,7 @@ export const layerSql: Layer.Layer<
       const row = yield* repo.verifyEmail(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
+            Effect.fail(new UserNotFound({ message: "awthaq: no such user", id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),

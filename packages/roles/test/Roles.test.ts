@@ -73,7 +73,7 @@ describe("Roles (SubjectResolver override)", () => {
       const roles = yield* Roles.Roles;
       const userId = Users.UserId("33333333-3333-3333-3333-333333333333");
       const failure = yield* roles.assign(userId, "does-not-exist-in-catalog").pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "UnknownRole");
+      assert.strictEqual(failure._tag, "Roles/UnknownRole");
       assert.strictEqual(failure.roleName, "does-not-exist-in-catalog");
       assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
       assert.deepStrictEqual(yield* roles.listUnknownAssignments, []);

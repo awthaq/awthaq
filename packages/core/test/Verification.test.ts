@@ -54,6 +54,19 @@ const suite = (
   layer: Layer.Layer<Verification.Verification | AuthEvents.AuthEvents, unknown, never>,
 ): void => {
   describe(name, () => {
+    // EOTS-004: the identifier embeds `<purpose>:<userId>`; it is a typed field, not message text.
+    it.effect("EOTS-004: TokenConsumed's message never contains the identifier", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const failure = yield* verification
+          .consume("reset-password:user-secret-id", Redacted.make("nope"))
+          .pipe(Effect.flip);
+        if (failure._tag !== "Verification/TokenConsumed") return assert.fail(failure._tag);
+        assert.strictEqual(failure.identifier, "reset-password:user-secret-id");
+        assert.notInclude(failure.message, "user-secret-id");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect(
       "BEH-EA-057/060: a token is scoped to one purpose-encoded identifier, hashed at rest",
       () =>
@@ -106,7 +119,7 @@ const suite = (
         assert.strictEqual(consumed.identifier, identifier);
 
         const replay = yield* verification.consume(identifier, value).pipe(Effect.flip);
-        assert.strictEqual(replay._tag, "TokenConsumed");
+        assert.strictEqual(replay._tag, "Verification/TokenConsumed");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -115,7 +128,7 @@ const suite = (
         const verification = yield* Verification.Verification;
         const bogus = Redacted.make("does-not-exist");
         const failure = yield* verification.consume("verify-email:nobody", bogus).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "TokenConsumed");
+        assert.strictEqual(failure._tag, "Verification/TokenConsumed");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -159,7 +172,7 @@ const suite = (
         const { value } = yield* verification.issue({ identifier, ttl: Duration.millis(10) });
         yield* TestClock.adjust(Duration.millis(20));
         const failure = yield* verification.consume(identifier, value).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "TokenConsumed");
+        assert.strictEqual(failure._tag, "Verification/TokenConsumed");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -172,7 +185,7 @@ const suite = (
           const first = yield* verification.issue({ identifier, ttl: Duration.minutes(10) });
           yield* verification.issue({ identifier, ttl: Duration.minutes(10) });
           const failure = yield* verification.consume(identifier, first.value).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "TokenConsumed");
+          assert.strictEqual(failure._tag, "Verification/TokenConsumed");
         }).pipe(Effect.provide(layer)),
     );
 
@@ -328,7 +341,7 @@ const suite = (
           const targetOutcome = yield* verification
             .consume(targetIdentifier, targetValue)
             .pipe(Effect.flip);
-          assert.strictEqual(targetOutcome._tag, "TokenConsumed");
+          assert.strictEqual(targetOutcome._tag, "Verification/TokenConsumed");
 
           // The unrelated user's own live token is untouched — its real
           // value still consumes successfully.

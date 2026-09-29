@@ -140,7 +140,7 @@ describe("Roles.Roles.layerSql", () => {
       const roles = yield* Roles.Roles;
       const userId = Users.UserId("66666666-6666-6666-6666-666666666666");
       const failure = yield* roles.assign(userId, "typo-role").pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "UnknownRole");
+      assert.strictEqual(failure._tag, "Roles/UnknownRole");
       assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
     }).pipe(Effect.provide(TestLayer)),
   );

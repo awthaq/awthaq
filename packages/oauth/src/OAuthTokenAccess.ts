@@ -162,7 +162,7 @@ export const layer: Layer.Layer<
             () =>
               new OAuthTokenUnavailable({
                 accountId,
-                message: `awthaq: no such account: ${accountId}`,
+                message: "awthaq: no such account",
               }),
           ),
         );
@@ -171,7 +171,7 @@ export const layer: Layer.Layer<
             AccountNotFound: () =>
               new OAuthTokenUnavailable({
                 accountId,
-                message: `awthaq: no such account: ${accountId}`,
+                message: "awthaq: no such account",
               }),
             // SMS-002: an undecryptable stored token means re-consent, not a defect.
             ProviderTokensUnreadable: (error) =>

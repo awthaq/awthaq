@@ -278,7 +278,7 @@ describe("causal handoffs under replica lag (RRC-008)", () => {
         yield* lag.catchUp; // the replica now holds the live session…
         yield* sessions.revoke(session.id, "userRevoked"); // …and is then left behind by the revoke
         const failure = yield* sessions.verify(token).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(MigratedSqlite)),
     ),
   );
@@ -294,7 +294,7 @@ describe("causal handoffs under replica lag (RRC-008)", () => {
         assert.strictEqual(verified.session.id, rotated.session.id);
         // The superseded token is a tombstone on the primary, whatever the replica says.
         const old = yield* sessions.verify(first.token).pipe(Effect.flip);
-        assert.strictEqual(old._tag, "SessionNotFound");
+        assert.strictEqual(old._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(MigratedSqlite)),
     ),
   );

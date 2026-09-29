@@ -644,7 +644,7 @@ describe("Password", () => {
 
         // BEH-EA-117: every *other* session is gone...
         const secondStillValid = yield* sessions.verify(second.token).pipe(Effect.flip);
-        assert.strictEqual(secondStillValid._tag, "SessionNotFound");
+        assert.strictEqual(secondStillValid._tag, "Sessions/NotFound");
 
         // ...and the new password actually works.
         const signedIn = yield* password.signIn({ email, password: newPassword });
@@ -938,7 +938,7 @@ describe("Password", () => {
         });
 
         const hijackedStillValid = yield* sessions.verify(hijacked.token).pipe(Effect.flip);
-        assert.strictEqual(hijackedStillValid._tag, "SessionNotFound");
+        assert.strictEqual(hijackedStillValid._tag, "Sessions/NotFound");
 
         const rotatedIsValid = yield* sessions.verify(rotated.token);
         assert.strictEqual(rotatedIsValid.session.id, rotated.session.id);

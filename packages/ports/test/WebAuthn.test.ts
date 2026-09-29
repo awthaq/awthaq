@@ -98,7 +98,7 @@ describe("WebAuthn.layerSimpleWebAuthn", () => {
             requireUserPresence: true,
           })
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
+        assert.strictEqual(failure._tag, "WebAuthn/VerificationFailed");
       }).pipe(Effect.provide(WebAuthn.layerSimpleWebAuthn)),
   );
 
@@ -122,7 +122,7 @@ describe("WebAuthn.layerSimpleWebAuthn", () => {
           requireUserPresence: true,
         })
         .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
+      assert.strictEqual(failure._tag, "WebAuthn/VerificationFailed");
     }).pipe(Effect.provide(WebAuthn.layerSimpleWebAuthn)),
   );
 
@@ -146,7 +146,7 @@ describe("WebAuthn.layerSimpleWebAuthn", () => {
           requireUserPresence: true,
         })
         .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
+      assert.strictEqual(failure._tag, "WebAuthn/VerificationFailed");
     }).pipe(Effect.provide(WebAuthn.layerSimpleWebAuthn)),
   );
 
@@ -169,7 +169,7 @@ describe("WebAuthn.layerSimpleWebAuthn", () => {
           requireUserPresence: true,
         })
         .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
+      assert.strictEqual(failure._tag, "WebAuthn/VerificationFailed");
     }).pipe(Effect.provide(WebAuthn.layerSimpleWebAuthn)),
   );
 
@@ -256,7 +256,7 @@ describe("WebAuthn.layerSimpleWebAuthn", () => {
           },
         })
         .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
+      assert.strictEqual(failure._tag, "WebAuthn/VerificationFailed");
     }).pipe(Effect.provide(WebAuthn.layerSimpleWebAuthn)),
   );
 
@@ -284,7 +284,7 @@ describe("WebAuthn.layerSimpleWebAuthn", () => {
           },
         })
         .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
+      assert.strictEqual(failure._tag, "WebAuthn/VerificationFailed");
     }).pipe(Effect.provide(WebAuthn.layerSimpleWebAuthn)),
   );
 });
@@ -317,7 +317,7 @@ describe("WebAuthn.layerSimpleWebAuthn — user presence (CB-002/BPAS-004)", () 
           requireUserPresence: true,
         })
         .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
+      assert.strictEqual(failure._tag, "WebAuthn/VerificationFailed");
     }).pipe(Effect.provide(WebAuthn.layerSimpleWebAuthn)),
   );
 
@@ -393,7 +393,7 @@ describe("WebAuthn.layerSimpleWebAuthn — user presence (CB-002/BPAS-004)", () 
             credential: credentialFor(authenticator),
           })
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
+        assert.strictEqual(failure._tag, "WebAuthn/VerificationFailed");
       }).pipe(Effect.provide(WebAuthn.layerSimpleWebAuthn)),
   );
 
@@ -582,7 +582,7 @@ describe("WebAuthn.layerSimpleWebAuthn — cross-origin top origin (CB-003)", ()
             credential: credentialFor(authenticator),
           })
           .pipe(Effect.flip);
-        assert.strictEqual(rejected._tag, "PasskeyVerificationFailed");
+        assert.strictEqual(rejected._tag, "WebAuthn/VerificationFailed");
 
         const accepted = yield* webAuthn.verifyAuthentication({
           response: build(challenge),

@@ -254,7 +254,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
             return [
               Result.fail(
                 new AccountAlreadyLinked({
-                  message: `awthaq: account already linked: ${key}`,
+                  message: "awthaq: account already linked",
                   providerId: input.providerId,
                   subject: input.subject,
                 }),
@@ -311,7 +311,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
           const existing = HashMap.get(s.byId, id);
           if (Option.isNone(existing)) {
             return [
-              Result.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+              Result.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
               s,
             ] as const;
           }
@@ -322,7 +322,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
             return [
               Result.fail(
                 new LastAccountRefusal({
-                  message: `awthaq: refusing to unlink the last account for user ${existing.value.userId}`,
+                  message: "awthaq: refusing to unlink the last account",
                   userId: existing.value.userId,
                 }),
               ),
@@ -354,7 +354,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
           HashMap.get(s.byId, id).pipe(
             Option.match({
               onNone: () =>
-                Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+                Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
               onSome: Effect.succeed,
             }),
           ),
@@ -366,7 +366,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
         Effect.flatMap((s) =>
           HashMap.has(s.byId, id)
             ? Effect.succeed(HashMap.get(s.credentialHashes, id))
-            : Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            : Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
         ),
       );
 
@@ -374,7 +374,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
       Ref.modify(state, (s): readonly [Result.Result<void, AccountNotFound>, State] => {
         if (!HashMap.has(s.byId, id)) {
           return [
-            Result.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Result.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
             s,
           ] as const;
         }
@@ -389,7 +389,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
         Effect.flatMap((s) =>
           HashMap.has(s.byId, id)
             ? Effect.succeed(HashMap.get(s.providerTokens, id))
-            : Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            : Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
         ),
       );
 
@@ -397,7 +397,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
       Ref.modify(state, (s): readonly [Result.Result<void, AccountNotFound>, State] => {
         if (!HashMap.has(s.byId, id)) {
           return [
-            Result.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Result.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
             s,
           ] as const;
         }
@@ -541,7 +541,7 @@ export const layerSql: Layer.Layer<
           error.reason._tag === "UniqueViolation"
             ? Effect.fail(
                 new AccountAlreadyLinked({
-                  message: `awthaq: account already linked: ${input.providerId}:${input.subject}`,
+                  message: "awthaq: account already linked",
                   providerId: input.providerId,
                   subject: input.subject,
                 }),
@@ -572,7 +572,7 @@ export const layerSql: Layer.Layer<
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -583,7 +583,7 @@ export const layerSql: Layer.Layer<
       const account = yield* repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -592,7 +592,7 @@ export const layerSql: Layer.Layer<
       if (siblings.length <= 1) {
         return yield* Effect.fail(
           new LastAccountRefusal({
-            message: `awthaq: refusing to unlink the last account for user ${account.userId}`,
+            message: "awthaq: refusing to unlink the last account",
             userId: UserId(account.userId),
           }),
         );
@@ -610,7 +610,7 @@ export const layerSql: Layer.Layer<
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -630,7 +630,7 @@ export const layerSql: Layer.Layer<
       repo.updatePasswordHash(id, Redacted.value(hash)).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -641,7 +641,7 @@ export const layerSql: Layer.Layer<
       repo.findTokensById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           AccountTokenUndecryptable: (error) =>
             Effect.fail(
               new ProviderTokensUnreadable({ id, field: error.field, reason: error.reason }),
@@ -660,7 +660,7 @@ export const layerSql: Layer.Layer<
         Effect.flatMap((aad) => repo.updateProviderTokens(id, aad, tokenSetToRow(tokens))),
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),

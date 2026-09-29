@@ -716,7 +716,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         if (!cookieMatches) return yield* CallbackFailure.callbackFailed("state-cookie-mismatch");
         const { identifier, value } = decoded.value;
         const consumed = yield* verification.consume(identifier, value).pipe(
-          Effect.catchTag("TokenConsumed", () => CallbackFailure.callbackFailed("flow-consumed")),
+          Effect.catchTag("Verification/TokenConsumed", () => CallbackFailure.callbackFailed("flow-consumed")),
           Effect.catchTag("PlatformError", Effect.die),
         );
         const decodedFlow = decodeFlowPayload(consumed.payload);
@@ -944,7 +944,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     const user = yield* users
                       .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })
                       .pipe(
-                        Effect.catchTag("EmailAlreadyExists", () =>
+                        Effect.catchTag("Users/EmailAlreadyExists", () =>
                           // A concurrent sign-up claimed the address between
                           // our lookup and this insert: report whatever the
                           // winner has, or nothing if it isn't visible yet.

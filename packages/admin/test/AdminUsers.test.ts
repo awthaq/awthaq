@@ -243,14 +243,14 @@ describe("Admin user administration (BAM-005)", () => {
         yield* admin.revokeUserSession(caller, targetId, first.session.id);
         assert.strictEqual(
           (yield* sessions.verify(first.token).pipe(Effect.flip))._tag,
-          "SessionNotFound",
+          "Sessions/NotFound",
         );
         assert.strictEqual((yield* sessions.verify(second.token)).session.id, second.session.id);
 
         yield* admin.revokeUserSessions(caller, targetId);
         assert.strictEqual(
           (yield* sessions.verify(second.token).pipe(Effect.flip))._tag,
-          "SessionNotFound",
+          "Sessions/NotFound",
         );
         // Other users' sessions and the support episode are untouched.
         assert.strictEqual((yield* sessions.verify(foreign.token)).session.id, foreign.session.id);

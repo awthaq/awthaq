@@ -104,6 +104,18 @@ const suite = (
   shortLivedLayer: Layer.Layer<Sessions.Sessions, unknown, never>,
 ): void => {
   describe(name, () => {
+    // EOTS-004: the session id is the public half of a bearer credential and error messages reach logs.
+    it.effect("EOTS-004: SessionNotFound's message never contains the session id", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const failure = yield* sessions
+          .verify(Redacted.make("enumerable-session-id.deadbeefdeadbeef"))
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+        assert.notInclude(failure.message, "enumerable-session-id");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect(
       "BEH-EA-049/050: issues an opaque id.secret token, never storing the secret itself",
       () =>
@@ -159,7 +171,7 @@ const suite = (
         const { session } = yield* sessions.issue({ userId });
         const bogus = Redacted.make(`${session.id}.not-the-real-secret`);
         const failure = yield* sessions.verify(bogus).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -207,7 +219,7 @@ const suite = (
           yield* TestClock.adjust(Duration.millis(600));
           const forged = Redacted.make(`${session.id}.deadbeef`);
           const failure = yield* sessions.verify(forged).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "SessionNotFound");
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(shortLivedLayer)),
     );
 
@@ -297,7 +309,7 @@ const suite = (
         const failure = yield* sessions
           .reauthenticate(Sessions.SessionId("does-not-exist"))
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -340,7 +352,7 @@ const suite = (
 
           // The old token no longer verifies — no grace window.
           const oldFails = yield* sessions.verify(token).pipe(Effect.flip);
-          assert.strictEqual(oldFails._tag, "SessionNotFound");
+          assert.strictEqual(oldFails._tag, "Sessions/NotFound");
 
           // The freshly-rotated token verifies and resolves the same session.
           const rotatedToken = Option.getOrThrow(touched.rotated);
@@ -363,7 +375,7 @@ const suite = (
           const newWorks = yield* sessions.verify(second.token);
           assert.strictEqual(newWorks.session.id, second.session.id);
           const oldFails = yield* sessions.verify(first.token).pipe(Effect.flip);
-          assert.strictEqual(oldFails._tag, "SessionNotFound");
+          assert.strictEqual(oldFails._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(layer)),
     );
 
@@ -380,13 +392,13 @@ const suite = (
 
         yield* sessions.revokeOthers(userId, a.session.id, "userRevoked");
         const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
-        assert.strictEqual(bFails._tag, "SessionNotFound");
+        assert.strictEqual(bFails._tag, "Sessions/NotFound");
         const aStillWorks = yield* sessions.verify(a.token);
         assert.strictEqual(aStillWorks.session.id, a.session.id);
 
         yield* sessions.revoke(a.session.id, "signOut");
         const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
-        assert.strictEqual(aFails._tag, "SessionNotFound");
+        assert.strictEqual(aFails._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -401,9 +413,9 @@ const suite = (
           yield* sessions.revokeAll(userId, "userRevoked");
 
           const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(aFails._tag, "SessionNotFound");
+          assert.strictEqual(aFails._tag, "Sessions/NotFound");
           const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
-          assert.strictEqual(bFails._tag, "SessionNotFound");
+          assert.strictEqual(bFails._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(layer)),
     );
 
@@ -622,7 +634,7 @@ const suite = (
         const mine = yield* sessions.issue({ userId });
         yield* sessions.revokeOwned(userId, mine.session.id, "userRevoked");
         const failure = yield* sessions.verify(mine.token).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -632,7 +644,7 @@ const suite = (
         const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
         const theirs = yield* sessions.issue({ userId: otherUser });
         const failure = yield* sessions.revokeOwned(userId, theirs.session.id, "userRevoked").pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
         yield* sessions.verify(theirs.token);
       }).pipe(Effect.provide(layer)),
     );
@@ -643,7 +655,7 @@ const suite = (
         const failure = yield* sessions
           .revokeOwned(userId, Sessions.SessionId("missing"), "userRevoked")
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -719,19 +731,19 @@ const reuseSuite = (
           // A's own token, presented again — A is already tombstoned
           // (superseded by B), so this is the reuse signal.
           const firstReplay = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(firstReplay._tag, "SessionNotFound");
+          assert.strictEqual(firstReplay._tag, "Sessions/NotFound");
 
           // C — the only still-live member of the family — is revoked as
           // a side effect of that one reuse.
           const cFails = yield* sessions.verify(c.token).pipe(Effect.flip);
-          assert.strictEqual(cFails._tag, "SessionNotFound");
+          assert.strictEqual(cFails._tag, "Sessions/NotFound");
 
           // A second presentation of the same already-flagged row is
           // still met with the uniform `SessionNotFound` — no
           // distinguishable signal leaked — but does not publish a
           // second event.
           const secondReplay = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(secondReplay._tag, "SessionNotFound");
+          assert.strictEqual(secondReplay._tag, "Sessions/NotFound");
 
           const collected = yield* Fiber.join(reused);
           assert.strictEqual(collected.length, 1);
@@ -770,7 +782,7 @@ const reuseSuite = (
 
           const forged = Redacted.make(`${a.session.id}.deadbeef`);
           const failure = yield* sessions.verify(forged).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "SessionNotFound");
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
 
           // The successor is untouched.
           const successor = yield* sessions.verify(b.token);
@@ -788,9 +800,9 @@ const reuseSuite = (
         const b = yield* sessions.issue({ userId, supersedes: a.session.id });
 
         const replay = yield* sessions.verify(a.token).pipe(Effect.flip);
-        assert.strictEqual(replay._tag, "SessionNotFound");
+        assert.strictEqual(replay._tag, "Sessions/NotFound");
         const successor = yield* sessions.verify(b.token).pipe(Effect.flip);
-        assert.strictEqual(successor._tag, "SessionNotFound");
+        assert.strictEqual(successor._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -1056,7 +1068,7 @@ const capSuite = (
           );
           assert.strictEqual(live.length, 2);
           const failure = yield* sessions.verify(b.token).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "SessionNotFound");
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
 
           for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
           const revoked = yield* Ref.get(seen);

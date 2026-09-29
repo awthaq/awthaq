@@ -84,7 +84,7 @@ const toMutable = (value: string | ReadonlyArray<string>): string | Array<string
   typeof value === "string" ? value : [...value];
 
 /** BEH-EA-136: this port's one failure mode — see this module's own header comment. */
-export class PasskeyVerificationFailed extends Data.TaggedError("PasskeyVerificationFailed")<{
+export class PasskeyVerificationFailed extends Data.TaggedError("WebAuthn/VerificationFailed")<{
   readonly message: string;
 }> {}
 

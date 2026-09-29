@@ -2948,7 +2948,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .pipe(
               Effect.catchTags({
                 TeamRecordNotFound: () => Effect.fail(new OrganizationApi.TeamNotFound()),
-                TeamHierarchyCycle: () => Effect.fail(new OrganizationApi.TeamHierarchyCycle()),
+                "TeamRecords/HierarchyCycle": () =>
+                  Effect.fail(new OrganizationApi.TeamHierarchyCycle()),
               }),
             );
           yield* events.publish({
@@ -3062,7 +3063,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                   Effect.catchTags({
                     TeamRecordNotFound: () =>
                       Effect.die(new Error("awthaq: team vanished between check and write")),
-                    TeamHasChildren: () => Effect.fail(new OrganizationApi.TeamHasChildren()),
+                    "TeamRecords/HasChildren": () =>
+                      Effect.fail(new OrganizationApi.TeamHasChildren()),
                   }),
                 );
                 // CWM-003/OHS-007: no session may keep the deleted team active.

@@ -797,7 +797,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               const user = yield* users
                 .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
                 .pipe(
-                  Effect.catchTag("EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                  Effect.catchTag("Users/EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
                   Effect.catchTag("PlatformError", Effect.die),
                 );
               yield* accounts
@@ -838,7 +838,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               const user = yield* users
                 .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
                 .pipe(
-                  Effect.catchTag("EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                  Effect.catchTag("Users/EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
                   Effect.catchTag("PlatformError", Effect.die),
                 );
               yield* accounts
@@ -854,6 +854,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           )
           .pipe(
             Effect.map(Option.some),
+            // The wire tag: the inner `catchTag` above already mapped the core error to it.
             Effect.catchTag("EmailAlreadyExists", () => Effect.succeed(Option.none())),
             Effect.catchTag("SqlError", Effect.die),
           );
@@ -1070,7 +1071,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           .withTransaction(
             Effect.gen(function* () {
               const consumed = yield* verification.consume(identifier, value).pipe(
-                Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
+                Effect.catchTag("Verification/TokenConsumed", () => new PasswordApi.TokenConsumed()),
                 Effect.catchTag("PlatformError", Effect.die),
               );
               // ARF-009: the user comes from the consumed row, never from the
@@ -1155,7 +1156,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           .withTransaction(
             Effect.gen(function* () {
               const consumed = yield* verification.consume(identifier, value).pipe(
-                Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
+                Effect.catchTag("Verification/TokenConsumed", () => new PasswordApi.TokenConsumed()),
                 Effect.catchTag("PlatformError", Effect.die),
               );
               // ARF-009: the user comes from the consumed row, not the token.
@@ -1269,7 +1270,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.WrongPassword());
         }
         yield* sessions.reauthenticate(input.currentSessionId, ["pwd"]).pipe(
-          Effect.catchTag("SessionNotFound", () =>
+          Effect.catchTag("Sessions/NotFound", () =>
             // `changePassword`'s own `Authentication` middleware already
             // proved this exact session live moments ago — a
             // `SessionNotFound` here would mean it was revoked in the

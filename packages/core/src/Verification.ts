@@ -64,7 +64,7 @@ const { toHex } = Hmac;
  * reasoning applies here too: the distinction is exactly what a token-guessing
  * attacker should not be able to observe).
  */
-export class TokenConsumed extends Data.TaggedError("TokenConsumed")<{
+export class TokenConsumed extends Data.TaggedError("Verification/TokenConsumed")<{
   readonly message: string;
   readonly identifier: string;
 }> {}
@@ -231,7 +231,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
                 return [
                   Result.fail(
                     new TokenConsumed({
-                      message: `awthaq: token replay or unknown token: ${identifier}`,
+                      message: "awthaq: token replay or unknown token",
                       identifier,
                     }),
                   ),
@@ -348,7 +348,7 @@ export const layerSql = Layer.effect(
         onNone: () =>
           Result.fail(
             new TokenConsumed({
-              message: `awthaq: token replay or unknown token: ${identifier}`,
+              message: "awthaq: token replay or unknown token",
               identifier,
             }),
           ),

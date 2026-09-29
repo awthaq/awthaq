@@ -57,3 +57,5 @@ Prefer structured fields (ids, kid, reason enum) over message strings on interna
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `core-error-taxonomy`. Duplicate of `ESS-008-effect-schema-specialist` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:142`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ESS-008-effect-schema-specialist` — closed by its fix (see that issue's Resolved comment).

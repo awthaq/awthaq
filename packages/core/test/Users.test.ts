@@ -51,6 +51,24 @@ const SqlTestLayer = Users.layerSql.pipe(
 
 const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): void => {
   describe(name, () => {
+    // EOTS-004: identifiers and emails are typed fields, never part of a message that reaches logs.
+    it.effect("EOTS-004: error messages never contain the id or the email", () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        yield* users.create({ email: "pii-holder@example.com", name: "P" });
+        const duplicate = yield* users
+          .create({ email: "pii-holder@example.com", name: "P2" })
+          .pipe(Effect.flip);
+        if (duplicate._tag !== "Users/EmailAlreadyExists") return assert.fail(duplicate._tag);
+        assert.strictEqual(duplicate.email, "pii-holder@example.com");
+        assert.notInclude(duplicate.message, "pii-holder");
+        const missingId = Users.UserId("99999999-9999-9999-9999-999999999999");
+        const missing = yield* users.updateProfile(missingId, { name: "x" }).pipe(Effect.flip);
+        assert.strictEqual(missing._tag, "UserNotFound");
+        assert.notInclude(missing.message, "99999999");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BEH-EA-041: email is lower-cased and case-insensitively unique", () =>
       Effect.gen(function* () {
         const users = yield* Users.Users;
@@ -61,7 +79,7 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
         const duplicate = yield* users
           .create({ email: "ADA@EXAMPLE.COM", name: "Ada 2" })
           .pipe(Effect.flip);
-        assert.strictEqual(duplicate._tag, "EmailAlreadyExists");
+        assert.strictEqual(duplicate._tag, "Users/EmailAlreadyExists");
 
         const found = yield* users.findByEmail("ada@example.com");
         assert.isTrue(Option.isSome(found));
@@ -203,3 +221,49 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
 
 suite("Users (layerMemory)", MemoryLayer);
 suite("Users (layerSql)", SqlTestLayer);
+
+// GC-004: `layerSql` read the row, then updated it in a second statement; a delete landing between
+// the two made `repo.update` die (`SqlModel.update` turns the missing row into a defect), where
+// `layerMemory` answers `UserNotFound`. The update is one statement now, and a row that is gone
+// by then comes back as `None`; a repository stub forces exactly that outcome for a row that
+// still exists when `create` returns.
+describe("Users (layerSql) profile update racing a delete (GC-004)", () => {
+  const VanishingRepository = Layer.effect(
+    Repositories.UsersRepository,
+    Effect.gen(function* () {
+      const real = yield* Repositories.UsersRepository;
+      return { ...real, updateProfile: () => Effect.succeedNone };
+    }),
+  ).pipe(Layer.provide(Repositories.UsersRepositoryLive));
+
+  const VanishingLayer = Users.layerSql.pipe(
+    Layer.provide(VanishingRepository),
+    Layer.provide(Hooks.BeforeUserDelete.layer),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  it.effect("updateProfile on a user deleted concurrently fails UserNotFound, never a defect", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const created = yield* users.create({ email: "racer@example.com", name: "Racer" });
+      const failure = yield* users.updateProfile(created.id, { name: "Renamed" }).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "UserNotFound");
+    }).pipe(Effect.provide(VanishingLayer)),
+  );
+
+  it.effect("updateProfile changes name and metadata in one statement, leaving email alone", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const created = yield* users.create({ email: "keep@example.com", name: "Keep" });
+      const renamed = yield* users.updateProfile(created.id, { name: "Kept", metadata: "{}" });
+      assert.strictEqual(renamed.name, "Kept");
+      assert.strictEqual(renamed.email, "keep@example.com");
+      assert.deepStrictEqual(renamed.metadata, Option.some("{}"));
+      const untouched = yield* users.updateProfile(created.id, { name: "Kept again" });
+      assert.deepStrictEqual(untouched.metadata, Option.some("{}"));
+      const cleared = yield* users.updateProfile(created.id, { name: "Kept again", metadata: null });
+      assert.deepStrictEqual(cleared.metadata, Option.none());
+    }).pipe(Effect.provide(SqlTestLayer)),
+  );
+});

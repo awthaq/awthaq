@@ -247,8 +247,14 @@ const refuseSelfActingAs = (input: {
     ? Effect.die(new InvalidActingAs({ reason: "self" }))
     : Effect.void;
 
-export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
+/**
+ * EOTS-004: messages are constant strings — a session id is the public half of a bearer
+ * credential (and enough, for a superseded session, to be probed), and error messages reach
+ * logs. Identifiers ride only in typed fields, for in-process correlation; never log them.
+ */
+export class SessionNotFound extends Data.TaggedError("Sessions/NotFound")<{
   readonly message: string;
+  readonly id?: SessionId;
 }> {}
 
 export class SessionExpired extends Data.TaggedError("SessionExpired")<{
@@ -755,12 +761,12 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           const bridged = yield* bridgeLegacySession(raw);
           if (Option.isSome(bridged)) return bridged.value;
           return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+            new SessionNotFound({ message: "awthaq: no such session", id }),
           );
         }
         if (!secretMatches(presentedHash, row.value.secretHash)) {
           return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+            new SessionNotFound({ message: "awthaq: no such session", id }),
           );
         }
         const now = yield* DateTime.now;
@@ -797,7 +803,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             });
           }
           return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+            new SessionNotFound({ message: "awthaq: no such session", id }),
           );
         }
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
@@ -808,7 +814,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             kind: "absolute",
           });
           return yield* Effect.fail(
-            new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
+            new SessionExpired({ message: "awthaq: session expired", id }),
           );
         }
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
@@ -819,7 +825,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             kind: "idle",
           });
           return yield* Effect.fail(
-            new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
+            new SessionExpired({ message: "awthaq: session idle-expired", id }),
           );
         }
         // BEH-EA-210: a session carrying `actingAs` never idle-refreshes — its
@@ -867,7 +873,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           const current = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
           if (Option.isNone(current)) {
             return yield* Effect.fail(
-              new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+              new SessionNotFound({ message: "awthaq: no such session", id }),
             );
           }
           return { session: toView(current.value), rotated: Option.none() };
@@ -895,7 +901,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             const row = HashMap.get(s, id);
             if (Option.isNone(row) || (userId !== undefined && row.value.userId !== userId)) {
               return [
-                Result.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+                Result.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
                 s,
               ] as const;
             }
@@ -1014,7 +1020,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           );
           if (Option.isNone(updated)) {
             return yield* Effect.fail(
-              new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+              new SessionNotFound({ message: "awthaq: no such session", id }),
             );
           }
           return toView(updated.value);
@@ -1215,13 +1221,13 @@ export const layerSql: Layer.Layer<
         const bridged = yield* bridgeLegacySession(raw);
         if (Option.isSome(bridged)) return bridged.value;
         return yield* Effect.fail(
-          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+          new SessionNotFound({ message: "awthaq: no such session", id }),
         );
       }
       const row = found.value;
       if (!secretMatches(presentedHash, row.secretHash)) {
         return yield* Effect.fail(
-          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+          new SessionNotFound({ message: "awthaq: no such session", id }),
         );
       }
       const now = yield* DateTime.now;
@@ -1251,7 +1257,7 @@ export const layerSql: Layer.Layer<
           });
         }
         return yield* Effect.fail(
-          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+          new SessionNotFound({ message: "awthaq: no such session", id }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
@@ -1262,7 +1268,7 @@ export const layerSql: Layer.Layer<
           kind: "absolute",
         });
         return yield* Effect.fail(
-          new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
+          new SessionExpired({ message: "awthaq: session expired", id }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
@@ -1273,7 +1279,7 @@ export const layerSql: Layer.Layer<
           kind: "idle",
         });
         return yield* Effect.fail(
-          new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
+          new SessionExpired({ message: "awthaq: session idle-expired", id }),
         );
       }
       // BEH-EA-210: a session carrying `actingAs` never idle-refreshes.
@@ -1312,7 +1318,7 @@ export const layerSql: Layer.Layer<
         const current = yield* repo.findById(id).pipe(
           Effect.catchTags({
             NoSuchElementError: () =>
-              Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+              Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
             SchemaError: Effect.die,
             SqlError: Effect.die,
           }),
@@ -1331,7 +1337,7 @@ export const layerSql: Layer.Layer<
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+            Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -1363,7 +1369,7 @@ export const layerSql: Layer.Layer<
                 scope: "one",
                 reason,
               })
-            : Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+            : Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
         ),
       );
 
@@ -1471,7 +1477,7 @@ export const layerSql: Layer.Layer<
     const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id, amr) {
       const now = yield* DateTime.now;
       const notFound = () =>
-        Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` }));
+        Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id }));
       // THS-003: union the newly proven methods into the stored `amr` (monotone).
       const unioned =
         amr === undefined || amr.length === 0

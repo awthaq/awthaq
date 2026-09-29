@@ -551,7 +551,7 @@ describe("AuthHttp + Session: point queries never go through list (TIR-003/GC-00
         );
         assert.strictEqual(response.status, 204);
         const failure = yield* sessions.verify(other.token).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }),
     ).pipe(Effect.provide(ListlessAppLayer)),
   );
@@ -697,7 +697,7 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           const verifyOutcome = yield* verification
             .consume(verifyIdentifier, verifyValue)
             .pipe(Effect.flip);
-          assert.strictEqual(verifyOutcome._tag, "TokenConsumed");
+          assert.strictEqual(verifyOutcome._tag, "Verification/TokenConsumed");
 
           const sessionCheck = yield* router
             .asHttpEffect()

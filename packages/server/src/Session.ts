@@ -94,7 +94,7 @@ export const SessionHandlers = HttpApiBuilder.group(
         const { sessionId } = yield* currentUser;
         yield* sessions
           .revoke(sessionId, "signOut")
-          .pipe(Effect.catchTag("SessionNotFound", () => Effect.void));
+          .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void));
         yield* expireSessionCookie;
       }),
 
@@ -115,7 +115,7 @@ export const SessionHandlers = HttpApiBuilder.group(
         // id are indistinguishable.
         yield* sessions
           .revokeOwned(userId, targetId, targetId === sessionId ? "signOut" : "userRevoked")
-          .pipe(Effect.catchTag("SessionNotFound", () => new SessionContract.SessionNotFound()));
+          .pipe(Effect.catchTag("Sessions/NotFound", () => new SessionContract.SessionNotFound()));
         // CSS-002: revoking one's own current session ends it too; revoking a
         // different device's session leaves this cookie alone.
         if (targetId === sessionId) yield* expireSessionCookie;

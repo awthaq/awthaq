@@ -166,6 +166,17 @@ export interface UsersRepositoryShape {
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
   readonly delete: (id: UserId) => Effect.Effect<void, RepositoryError>;
   /**
+   * GC-004: one `UPDATE ... RETURNING *` on `name` (and `metadata` when given: `null` clears it,
+   * `undefined` leaves it), so a row deleted since the caller last read it is `None`, not a
+   * defect the way the generic `update` reports it, and no other column is rewritten from a
+   * stale read.
+   */
+  readonly updateProfile: (input: {
+    readonly id: UserId;
+    readonly name: string;
+    readonly metadata: string | null | undefined;
+  }) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /**
    * BAM-005/BEH-EA-036: keyset page over every user, oldest first —
    * `cursor` is opaque and derived from `(createdAt, id)`; at most `limit`
    * rows are returned (`nextCursor` present iff a full page came back and
@@ -329,6 +340,44 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         traced("Users.verifyEmail", { id }),
       );
 
+    // GC-004: two statements rather than a conditional column, so `metadata` is bound (and
+    // sealed, for the encrypted variant) only when the caller supplied it.
+    const updateNameQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ id: UserId, name: Schema.String, updatedAt: models.wire.dateTime }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET name = ${r.name}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
+    });
+    const updateNameAndMetadataQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        name: Schema.String,
+        metadata: Schema.NullOr(Schema.String),
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET name = ${r.name}, metadata = ${r.metadata}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
+    });
+
+    const updateProfile: UsersRepositoryShape["updateProfile"] = (input) =>
+      Effect.gen(function* () {
+        const updatedAt = yield* DateTime.now;
+        const row =
+          input.metadata === undefined
+            ? yield* updateNameQuery({ id: input.id, name: input.name, updatedAt })
+            : yield* updateNameAndMetadataQuery({
+                id: input.id,
+                name: input.name,
+                metadata: yield* concealMetadata(input.id, input.metadata),
+                updatedAt,
+              });
+        return yield* Option.match(row, {
+          onNone: () => Effect.succeedNone,
+          onSome: (updated) => revealUser(updated).pipe(Effect.map(Option.some)),
+        });
+      }).pipe(traced("Users.updateProfile", { id: input.id }));
+
     return {
       models,
       insert,
@@ -337,6 +386,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
       delete: repo.delete,
       findByEmail,
       verifyEmail,
+      updateProfile,
       listPage,
     };
   });

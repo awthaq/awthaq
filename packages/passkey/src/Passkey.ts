@@ -1166,7 +1166,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               requireUserPresence: !conditional,
             })
             .pipe(
-              Effect.catchTag("PasskeyVerificationFailed", () =>
+              Effect.catchTag("WebAuthn/VerificationFailed", () =>
                 Effect.fail(new PasskeyApi.PasskeyVerificationFailed()),
               ),
             );
@@ -1387,7 +1387,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               },
             })
             .pipe(
-              Effect.catchTag("PasskeyVerificationFailed", () =>
+              Effect.catchTag("WebAuthn/VerificationFailed", () =>
                 Effect.fail(new Api.InvalidCredentials()),
               ),
             );
@@ -1481,7 +1481,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         credentials
           .rename(id, userId, name)
           .pipe(
-            Effect.catchTag("PasskeyCredentialNotFound", () =>
+            Effect.catchTag("PasskeyCredentials/NotFound", () =>
               Effect.fail(new PasskeyApi.PasskeyCredentialNotFound()),
             ),
           );
@@ -1582,7 +1582,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               },
             })
             .pipe(
-              Effect.catchTag("PasskeyVerificationFailed", () =>
+              Effect.catchTag("WebAuthn/VerificationFailed", () =>
                 Effect.fail(new PasskeyApi.PasskeyVerificationFailed()),
               ),
             );
@@ -1611,7 +1611,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               verified.userVerified ? ["hwk", "user"] : ["hwk"],
             )
             .pipe(
-              Effect.catchTag("SessionNotFound", () =>
+              Effect.catchTag("Sessions/NotFound", () =>
                 // `passkey.reauthenticate`'s own `Authentication` middleware
                 // already proved this exact session live moments ago — see
                 // `Password.ts`'s own identical `reauthenticate` comment.

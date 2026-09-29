@@ -46,7 +46,7 @@ import type { Role } from "@qadi/core";
 import { fromRoles, withAttributes } from "@qadi/core";
 
 /** RRM-003: the role name is not in this deployment's catalog — a typo, or a role since removed. */
-export class UnknownRole extends Data.TaggedError("UnknownRole")<{
+export class UnknownRole extends Data.TaggedError("Roles/UnknownRole")<{
   readonly roleName: string;
 }> {}
 

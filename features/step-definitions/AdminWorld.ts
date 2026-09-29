@@ -258,7 +258,7 @@ export const signIn = Effect.fn("features.admin.signIn")(function* (userId: stri
             const users = yield* Users.Users;
             yield* users
               .create({ email: `${userId}@example.com`, name: userId })
-              .pipe(Effect.catchTag("EmailAlreadyExists", () => Effect.void));
+              .pipe(Effect.catchTag("Users/EmailAlreadyExists", () => Effect.void));
             const sessions = yield* Sessions.Sessions;
             const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
             return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
