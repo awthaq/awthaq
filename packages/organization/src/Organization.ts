@@ -89,8 +89,23 @@ export const OrganizationConfig: Context.Reference<OrganizationConfigShape> = Co
   { defaultValue: () => defaultOrganizationConfig },
 );
 
-export const config = (partial: Partial<OrganizationConfigShape>) =>
-  Layer.succeed(OrganizationConfig, { ...defaultOrganizationConfig, ...partial });
+export const config = (partial: Partial<OrganizationConfigShape>) => {
+  // RZS-005/N8: a static custom role may not redefine a built-in tier — fail
+  // at layer build rather than silently ignoring (or honoring) the override.
+  const reserved = Object.keys(partial.permissionStatements ?? {}).filter(
+    PermissionEngine.isBuiltInRole,
+  );
+  return reserved.length > 0
+    ? Layer.effect(
+        OrganizationConfig,
+        Effect.die(
+          new Error(
+            `awthaq: Organization.config permissionStatements may not redefine the built-in role(s): ${reserved.join(", ")}`,
+          ),
+        ),
+      )
+    : Layer.succeed(OrganizationConfig, { ...defaultOrganizationConfig, ...partial });
+};
 
 // ---- shape --------------------------------------------------------------------
 
@@ -305,6 +320,7 @@ export interface OrganizationShape {
     | OrganizationApi.DynamicAccessControlDisabled
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OrgRoleNameTaken
+    | OrganizationApi.ReservedOrgRoleName
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.RoleLimitReached
     | HookPoint.HookAborted
@@ -2076,6 +2092,15 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           yield* requireDynamicAccessControlEnabled;
           const callerId = Users.UserId(caller.ref.id);
           const membership = yield* requirePermission(callerId, organizationId, "role", "create");
+
+          // RZS-005/N8: a dynamic role never takes a built-in tier's name or an
+          // application-defined static role's name.
+          if (
+            PermissionEngine.isBuiltInRole(input.role) ||
+            Object.hasOwn(orgConfig.permissionStatements, input.role)
+          ) {
+            return yield* Effect.fail(new OrganizationApi.ReservedOrgRoleName());
+          }
 
           const granterPermissions = yield* effectivePermissionsOf(organizationId, membership);
           if (!PermissionEngine.canGrant(input.permission, granterPermissions)) {

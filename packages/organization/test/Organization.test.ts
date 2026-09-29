@@ -838,6 +838,144 @@ describe("Organization", () => {
     );
   });
 
+  // OHS-005: owner is strictly above admin.
+  describe("OHS-005: admin is not owner", () => {
+    const setup = Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      yield* organization.addMember({
+        organizationId: org.id,
+        userId: Users.UserId("admin-1"),
+        role: ["admin"],
+      });
+      yield* organization.addMember({
+        organizationId: org.id,
+        userId: Users.UserId("member-1"),
+        role: ["member"],
+      });
+      return { organization, owner, admin: asCaller("admin-1"), org };
+    });
+
+    it.effect("an admin cannot delete the organization", () =>
+      Effect.gen(function* () {
+        const { organization, admin, org } = yield* setup;
+        const failure = yield* organization.delete(admin, org.id).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OrganizationPermissionDenied");
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("an admin cannot promote a member (or themselves) to owner", () =>
+      Effect.gen(function* () {
+        const { organization, admin, org } = yield* setup;
+        const promote = yield* organization
+          .updateMemberRole(admin, org.id, Users.UserId("member-1"), ["owner"])
+          .pipe(Effect.flip);
+        assert.strictEqual(promote._tag, "RolePermissionEscalation");
+        const self = yield* organization
+          .updateMemberRole(admin, org.id, Users.UserId("admin-1"), ["owner"])
+          .pipe(Effect.flip);
+        assert.strictEqual(self._tag, "RolePermissionEscalation");
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("an admin cannot invite an owner, but can invite an admin", () =>
+      Effect.gen(function* () {
+        const { organization, admin, org } = yield* setup;
+        const failure = yield* organization
+          .invite(admin, org.id, { email: "boss@example.com", role: ["owner"] })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RolePermissionEscalation");
+        const ok = yield* organization.invite(admin, org.id, {
+          email: "peer@example.com",
+          role: ["admin"],
+        });
+        assert.deepStrictEqual(ok.role, ["admin"]);
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("an admin can still update the organization", () =>
+      Effect.gen(function* () {
+        const { organization, admin, org } = yield* setup;
+        const updated = yield* organization.update(admin, org.id, { name: "Acme 2" });
+        assert.strictEqual(updated.name, "Acme 2");
+      }).pipe(Effect.provide(buildLayer())),
+    );
+  });
+
+  // RZS-005/N8: dynamic and custom roles can never shadow a built-in tier.
+  describe("RZS-005/N8: reserved role names", () => {
+    const dac = {
+      dynamicAccessControl: {
+        enabled: true,
+        maximumRolesPerOrganization: Number.POSITIVE_INFINITY,
+      },
+    };
+
+    it.effect("createRole named owner/admin/member fails ReservedOrgRoleName", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        for (const role of ["owner", "admin", "member"]) {
+          const failure = yield* organization
+            .createRole(owner, org.id, { role, permission: {} })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "ReservedOrgRoleName");
+        }
+      }).pipe(Effect.provide(buildLayer(dac))),
+    );
+
+    it.effect("createRole named after a static custom role fails ReservedOrgRoleName", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const failure = yield* organization
+          .createRole(owner, org.id, { role: "hr", permission: {} })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "ReservedOrgRoleName");
+      }).pipe(
+        Effect.provide(
+          buildLayer({ ...dac, permissionStatements: { hr: { member: ["update"] } } }),
+        ),
+      ),
+    );
+
+    it.effect("a stored dynamic role named owner cannot change the owner's statements", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        // A row that predates the reservation (or was written around the plugin).
+        yield* orgRoles.create({
+          organizationId: org.id,
+          role: "owner",
+          permission: { member: [] },
+        });
+        const attrs = yield* organization.attributesFor(org.id, Users.UserId("owner-1"));
+        assert.isTrue(Option.isSome(attrs));
+        if (Option.isSome(attrs)) {
+          assert.isTrue((attrs.value.permissions["organization"] ?? []).includes("delete"));
+        }
+      }).pipe(Effect.provide(buildLayer(dac))),
+    );
+
+    it.effect("Organization.config refuses permissionStatements that redefine a built-in", () =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          Effect.gen(function* () {
+            return yield* Organization.OrganizationConfig;
+          }).pipe(
+            Effect.provide(Organization.config({ permissionStatements: { owner: {} } })),
+          ),
+        );
+        assert.isTrue(exit._tag === "Failure");
+      }),
+    );
+  });
+
   it.effect("createRole rejects granting a permission the caller doesn't hold", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;

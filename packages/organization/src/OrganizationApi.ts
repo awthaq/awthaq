@@ -131,6 +131,13 @@ export class OrgRoleNotFound extends Schema.TaggedError<OrgRoleNotFound>()(
   { httpApiStatus: 404 },
 ) {}
 
+/** RZS-005/N8: a dynamic role may not take a built-in tier's name (`owner`/`admin`/`member`) or an `OrganizationConfig.permissionStatements` key. */
+export class ReservedOrgRoleName extends Schema.TaggedError<ReservedOrgRoleName>()(
+  "ReservedOrgRoleName",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
 /** RRM-001/RRM-002: a role name that is not built-in, static-custom, or a live dynamic role of this organization. */
 export class UnknownOrgRole extends Schema.TaggedError<UnknownOrgRole>()(
   "UnknownOrgRole",
@@ -616,6 +623,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         DynamicAccessControlDisabled,
         OrganizationPermissionDenied,
         OrgRoleNameTaken,
+        ReservedOrgRoleName,
         RolePermissionEscalation,
         RoleLimitReached,
         HookPoint.HookAborted,
