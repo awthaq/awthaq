@@ -49,6 +49,8 @@ PRD §10 states this directly: "`InvalidCredentials` is uniform to prevent enume
 
 **Timing floor (TSS-006).** A verify runs at the *stored* hash's cost, so a row still on a cheaper legacy hash (bcrypt awaiting rehash) would answer faster than the dummy-hash path an unknown email takes. `PasswordConfig.signInTimingFloor` closes that: by default (`"calibrated"`) the layer times a verify of its boot-time dummy hash and holds `signIn`'s credential check (lookup plus verify, success and failure alike) to at least 1.25 times that; a `Duration` fixes the floor and `"off"` disables it. `changePassword` and `reauthenticate` hold their verify to the same floor. The residual: a hash *costlier* than the floor (a high-cost legacy bcrypt) still takes longer than the floor and stays distinguishable until it has been rehashed.
 
+**Verified-email gate (FAMS-003).** After the credentials are confirmed, `signIn` refuses an unverified account (`403 EmailNotVerified`), so the gate can never be used to probe a password. `PasswordConfig.requireVerifiedEmail` (default `true`) turns it off for a deployment whose imported users were never verified in the source system; such a deployment either calls `Users.verifyEmail` for the users the source had verified, or keeps the gate off and restricts unverified users downstream.
+
 _Previous: [BEH-EA-113](15-password.md#beh-ea-113-sign-up-issues-a-pending-user-and-a-verification-mail) | Next: [BEH-EA-115](15-password.md#beh-ea-115-passwordhasher-is-a-port-the-plugin-never-provides)_
 
 ## BEH-EA-115: PasswordHasher is a port the plugin never provides
@@ -136,8 +138,9 @@ _Previous: [BEH-EA-117](15-password.md#beh-ea-117-reset-revokes-other-sessions-i
 ## BEH-EA-119: Breach-check is fail-open by default, fail-closed by config
 
 ```ts
-password({ breachCheck: true })                                       // HIBP unreachable → fail-open
+password({ breachCheck: true })                                       // the default: HIBP unreachable → fail-open
 password({ breachCheck: { onUnavailable: "reject" } })                 // fail-closed
+password({ breachCheck: false })                                      // opt out (air-gapped deployments)
 ```
 
 ```text
@@ -146,6 +149,8 @@ REQUIREMENT: When `breachCheck` is enabled and the breach-database provider is
              application has explicitly configured `onUnavailable: "reject"`;
              the default posture MUST be documented, not silently chosen.
 ```
+
+PHS-006/PHS-004: screening is **on by default** (NIST SP 800-63B §3.1.1.2 makes checking against compromised-password lists a SHALL; the k-anonymity range API discloses only a 5-character SHA-1 prefix), fail-open, and turning it off is the one line `breachCheck: false`. "Unavailable" means everything short of a well-formed range listing: a transport error, a non-2xx status, a 200 whose body is not a listing (an HTML error page, an empty or truncated body), and a lookup that exceeds `breachCheckTimeout` (3 s by default) — so a black-holed egress can neither hang sign-up nor read as "not breached".
 
 `usage-examples-v4.md` §6.3 states the default outcome directly — "HIBP unreachable → fail-open by default" — and gives the escape hatch for operators who would rather block sign-up than risk admitting a breached password. Fail-open is the default because a third-party outage should not be able to take down account creation for an application that has no other dependency on that provider; fail-closed is available because some deployments' risk posture prefers exactly that trade in the other direction. Either way the choice is explicit configuration, never an accident of how the HTTP call to the provider happened to fail.
 

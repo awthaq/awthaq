@@ -148,6 +148,7 @@ One row per `spec/decisions/ADR-EA-NNN` file (`archive/PRD.md` §22).
 | [ADR-EA-016](decisions/016-verification-sql-claiming.md) | Verification Reservations Are a Dedicated Table, Claimed by a Conditional Upsert | [BEH-EA-057 through 064](behaviors/08-verification-tokens.md) |
 | [ADR-EA-017](decisions/017-jwt-signing-key-rotation.md) | JWT Signing Keys Rotate on a Grace Period Sized to Token Lifetime, With an Emergency Retire-Now Path | `packages/jwt/test/KeyRing.test.ts`, `packages/jwt/test/JwtCodec.test.ts` (no BEH-EA range; model [08](models/08-jwt-bearer.md)) |
 | [ADR-EA-019](decisions/019-encryption-key-rotation.md) | Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption | `packages/ports/test/KeyProvider.test.ts`, `packages/ports/test/Encryption.test.ts` (no BEH-EA range) |
+| [ADR-EA-026](decisions/026-signup-enumeration-posture.md) | Sign-Up Reveals an Existing Address by Default, With an Opt-In Conceal Mode | `packages/password/test/AuthHttp.test.ts` (no BEH-EA range) |
 
 ---
 

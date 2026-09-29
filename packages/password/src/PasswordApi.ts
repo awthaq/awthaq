@@ -150,7 +150,10 @@ export const PasswordGroup = HttpApiGroup.make("password")
   .add(
     HttpApiEndpoint.post("signUp", "/password/sign-up", {
       payload: SignUpPayload,
-      success: SessionContract.SessionDto,
+      // TMS-005: `200` with the session (`signUpEnumeration: "reveal"`, the
+      // default) or an empty `202` (`"conceal"`: same answer for a fresh and
+      // an existing address, no session until the mailbox is proven).
+      success: [SessionContract.SessionDto, HttpApiSchema.Empty(202)],
       // Each error's own `httpApiStatus` is only honored per member when
       // `error` is a plain array — `HttpApiEndpoint.getErrorSchemas` reads
       // `endpoint.error` as a `Set` of individually-annotated schemas

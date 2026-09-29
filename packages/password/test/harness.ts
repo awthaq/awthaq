@@ -39,7 +39,8 @@ export const httpClientReturning = (
     ),
   );
 
-export const NoBreachHttpClient = httpClientReturning(() => "");
+/** A well-formed range listing that never matches a real suffix (PHS-004: an empty body now counts as unavailable). */
+export const NoBreachHttpClient = httpClientReturning(() => `${"F".repeat(35)}:1`);
 
 export const UnavailableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,

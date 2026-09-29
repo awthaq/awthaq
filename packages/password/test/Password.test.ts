@@ -53,7 +53,7 @@ const httpClientReturning = (body: (url: string) => string): Layer.Layer<HttpCli
   );
 
 /** BEH-EA-119: nothing in the corpus ever matches — the default, "not breached" transport. */
-const NoBreachHttpClient = httpClientReturning(() => "");
+const NoBreachHttpClient = httpClientReturning(() => `${"F".repeat(35)}:1`);
 
 const UnavailableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,

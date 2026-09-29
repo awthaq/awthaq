@@ -128,7 +128,9 @@ const RateLimiterLive = RateLimiter.layer.pipe(
 
 //    Swap the remaining ports for your own: a real mailer
 //    (SMTP/SES/Resend/...) in place of this console stand-in, and — if you
-//    want breach checking — `Password.config(...)`.
+//    want to tune the password policy — `Password.config(...)`. Breach
+//    screening (HIBP, k-anonymity) is on by default and fails open;
+//    `Password.config({ breachCheck: false })` turns it off.
 const consoleMailer = Layer.succeed(
   Mailer.Mailer,
   Mailer.Mailer.of({
@@ -246,7 +248,7 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 
 To rotate: add a new entry, point `AWTHAQ_ENCRYPTION_KEY_ID` at it, and keep the old entry. Existing ciphertext stays readable under the old key and is re-encrypted under the new one the next time it is read. Remove the old entry only once nothing written under it remains (retirement, not a timer; see `spec/decisions/019-encryption-key-rotation.md`). Raw key bytes cannot be scrubbed from a JS process; deployments that must not hold them in memory should implement `KeyProvider` over a KMS.
 
-`Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach checking, off by default) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
+`Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach screening, on by default and fail-open; `signUpEnumeration`, `requireVerifiedEmail`, ...) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
 
 ### Cross-origin SPAs (CORS)
 

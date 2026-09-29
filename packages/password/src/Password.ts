@@ -24,6 +24,7 @@ import {
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -39,7 +40,21 @@ import * as PasswordRateLimits from "./PasswordRateLimits.ts";
 
 export interface PasswordConfigShape {
   readonly minLength: number;
+  /**
+   * BEH-EA-119/PHS-006: screening a new password against the HIBP corpus is on
+   * by default (NIST SP 800-63B section 3.1.1.2 makes checking against
+   * compromised-password lists a SHALL; the k-anonymity range API discloses
+   * only a 5-character SHA-1 prefix). `true` fails open when the provider is
+   * unavailable, `{ onUnavailable: "reject" }` fails closed, `false` disables
+   * it (air-gapped deployments).
+   */
   readonly breachCheck: boolean | { readonly onUnavailable: "allow" | "reject" };
+  /**
+   * PHS-004: how long the breach lookup (request plus body) may take before
+   * it counts as "unavailable" and follows `breachCheck`'s `onUnavailable`,
+   * so a black-holed egress never hangs sign-up.
+   */
+  readonly breachCheckTimeout: Duration.Duration;
   readonly resetTtl: Duration.Duration;
   readonly rehashOnLogin: boolean;
   /**
@@ -70,16 +85,37 @@ export interface PasswordConfigShape {
     readonly verifyEmail?: (token: string) => string;
     readonly resetPassword?: (token: string) => string;
   };
+  /**
+   * FAMS-003: whether `signIn` refuses an account whose email is unverified
+   * (after the credentials are confirmed, so it is never a password oracle).
+   * Default `true`. A deployment that imported users from a source that
+   * never verified them (or verified differently) may set `false` and
+   * restrict unverified users downstream instead, or call
+   * `Users.verifyEmail` for the imported users the source had verified.
+   */
+  readonly requireVerifiedEmail: boolean;
+  /**
+   * TMS-005: how `signUp` answers an address that already has an account.
+   * `"reveal"` (default) fails with 409 `EmailAlreadyExists` and issues the
+   * session at once. `"conceal"` answers 202 for a fresh and an existing
+   * address alike, issues no session until the mailbox is proven (the
+   * verification mail), and mails the existing owner an `account-exists`
+   * notice. See ADR-EA-018.
+   */
+  readonly signUpEnumeration: "reveal" | "conceal";
 }
 
 const defaultPasswordConfig: PasswordConfigShape = {
   minLength: 12,
-  breachCheck: false,
+  breachCheck: true,
+  breachCheckTimeout: Duration.seconds(3),
   resetTtl: Duration.hours(1),
   rehashOnLogin: true,
   signInTimingFloor: "calibrated",
   rateLimitEmailKey: PasswordRateLimits.defaultEmailRateKey,
   links: {},
+  requireVerifiedEmail: true,
+  signUpEnumeration: "reveal",
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -114,6 +150,22 @@ export interface PasswordShape {
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
     | HookPoint.HookAborted
+  >;
+  /**
+   * TMS-005: the `signUpEnumeration: "conceal"` flavour of `signUp` — the same
+   * checks, then the same outcome for a fresh and an already-registered
+   * address: nothing is returned and no session is issued (a fresh account
+   * gets its verification mail, an existing owner an `account-exists` notice),
+   * so the response cannot tell them apart. The HTTP handler routes here when
+   * the config says `"conceal"`; `signUp` above is the reveal flavour.
+   */
+  readonly signUpConcealed: (input: {
+    readonly email: string;
+    readonly password: Redacted.Redacted<string>;
+    readonly ip?: string;
+  }) => Effect.Effect<
+    void,
+    PasswordApi.WeakPassword | Api.RateLimited | HookPoint.HookAborted
   >;
   /**
    * BEH-EA-114/116: uniform `InvalidCredentials`, constant real hashing cost
@@ -226,6 +278,12 @@ const RESET_PURPOSE = "reset-password";
 const VERIFY_PURPOSE = "verify-email";
 const VERIFY_TTL = Duration.hours(24);
 
+/** PHS-004: internal only — routed to `onUnavailable` by `isBreached`, never surfaced. */
+class MalformedBreachResponse extends Data.TaggedError("MalformedBreachResponse")<{}> {}
+
+/** One HIBP range line: the 35-hex-character SHA-1 suffix and its breach count. */
+const HIBP_LINE = /^[0-9A-F]{35}:\d+$/i;
+
 /**
  * BEH-EA-119: the k-anonymity HIBP check — only a 5-character SHA-1 prefix
  * ever leaves the process, per the API's own design; a real network/parse
@@ -238,6 +296,7 @@ const isBreached = (
   crypto: Crypto.Crypto,
   password: Redacted.Redacted<string>,
   onUnavailable: "allow" | "reject",
+  timeout: Duration.Duration,
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const digest = yield* crypto.digest(
@@ -258,8 +317,23 @@ const isBreached = (
       .get(`https://api.pwnedpasswords.com/range/${prefix}`)
       .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
     const body = yield* response.text;
-    return body.split("\n").some((line) => line.split(":")[0]?.trim().toUpperCase() === suffix);
-  }).pipe(Effect.catch(() => Effect.succeed(onUnavailable === "reject")));
+    // PHS-004: a 200 that is not a range listing (an HTML error page from a
+    // proxy, a truncated body) is no evidence of anything — treat it as
+    // unavailable rather than as "not breached". Every real prefix has
+    // hundreds of entries, so an empty body is malformed too.
+    const lines = body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+    if (lines.length === 0 || !lines.every((line) => HIBP_LINE.test(line))) {
+      return yield* new MalformedBreachResponse();
+    }
+    return lines.some((line) => line.split(":")[0]?.toUpperCase() === suffix);
+  }).pipe(
+    // PHS-004: a black-holed egress follows `onUnavailable` too, not a hang.
+    Effect.timeout(timeout),
+    Effect.catch(() => Effect.succeed(onUnavailable === "reject")),
+  );
 
 const checkPolicy = (
   httpClient: HttpClient.HttpClient,
@@ -275,7 +349,9 @@ const checkPolicy = (
     if (config.breachCheck !== false) {
       const onUnavailable =
         config.breachCheck === true ? "allow" : config.breachCheck.onUnavailable;
-      if (yield* isBreached(httpClient, crypto, password, onUnavailable)) {
+      if (
+        yield* isBreached(httpClient, crypto, password, onUnavailable, config.breachCheckTimeout)
+      ) {
         hints.push("appears in known breaches");
       }
     }
@@ -311,6 +387,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const password = yield* Password;
     const clientAddress = yield* ClientAddress.ClientAddress;
+    const config = yield* PasswordConfig;
 
     return handlers.handleAll({
       signUp: Effect.fnUntraced(function* ({
@@ -321,10 +398,16 @@ export const PasswordHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         const resolvedAddress = yield* clientAddress.resolve(request);
-        const issued = yield* password.signUp({
+        const signUpInput = {
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-        });
+        };
+        // TMS-005: `conceal` answers 202 with no session for a fresh and an
+        // existing address alike (ADR-EA-026).
+        if (config.signUpEnumeration === "conceal") {
+          return yield* password.signUpConcealed(signUpInput);
+        }
+        const issued = yield* password.signUp(signUpInput);
         yield* HttpApiBuilder.securitySetCookie(
           Api.SessionCookie,
           Redacted.value(issued.token),
@@ -629,7 +712,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           }),
         );
 
-      const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
+      /**
+       * The checks `signUp` and `signUpConcealed` share, in the same order:
+       * rate limits, password policy, the `BeforeSignUp` veto, then the hash.
+       */
+      const prepareSignUp = Effect.fnUntraced(function* (input: {
+        readonly email: string;
+        readonly password: Redacted.Redacted<string>;
+        readonly ip?: string;
+      }) {
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
         // account creation from one source before the per-email check.
         yield* rateLimit(rules.signUpByIp, input);
@@ -651,6 +742,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           beforeSignUp.run({ email: input.email, name }),
         );
         const hash = yield* hasher.hash(input.password);
+        return { vetoedSignUp, hash };
+      });
+
+      const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
+        const { vetoedSignUp, hash } = yield* prepareSignUp(input);
 
         // RRC-002/BEH-EA-113: "MUST create the user and session in one
         // transaction" — create+link+issue previously committed
@@ -695,6 +791,54 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* dispatchVerificationMail(user);
 
         return issued;
+      });
+
+      const signUpConcealed: PasswordShape["signUpConcealed"] = Effect.fnUntraced(function* (input) {
+        const { vetoedSignUp, hash } = yield* prepareSignUp(input);
+        // TMS-005: the hash above is computed in both branches, so the
+        // expensive work does not depend on whether the address exists. The
+        // duplicate is caught outside the transaction (which rolls back), and
+        // no session is issued either way.
+        const created = yield* sqlTransaction
+          .withTransaction(
+            Effect.gen(function* () {
+              const user = yield* users
+                .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
+                .pipe(
+                  Effect.catchTag("EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                  Effect.catchTag("PlatformError", Effect.die),
+                );
+              yield* accounts
+                .link({
+                  userId: user.id,
+                  providerId: Accounts.PASSWORD_PROVIDER_ID,
+                  subject: user.id,
+                  credentialHash: Redacted.make(hash),
+                })
+                .pipe(Effect.orDie);
+              return user;
+            }),
+          )
+          .pipe(
+            Effect.map(Option.some),
+            Effect.catchTag("EmailAlreadyExists", () => Effect.succeed(Option.none())),
+            Effect.catchTag("SqlError", Effect.die),
+          );
+        if (Option.isSome(created)) {
+          yield* events.publish({ _tag: "auth.user.created", userId: created.value.id });
+          yield* dispatchVerificationMail(created.value);
+          return;
+        }
+        // The address is taken: tell its owner (no token, nothing to act on),
+        // looked up inside the background work so the response path is the same.
+        yield* mailDispatcher.dispatch(
+          { template: "account-exists" },
+          Effect.gen(function* () {
+            const owner = yield* users.findByEmail(vetoedSignUp.email);
+            if (Option.isNone(owner)) return;
+            yield* mailer.send({ to: owner.value.email, template: "account-exists" });
+          }),
+        );
       });
 
       const signIn: PasswordShape["signIn"] = Effect.fnUntraced(function* (input) {
@@ -751,7 +895,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // Upstream-hardening ticket 04: checked only now that a genuinely
         // correct password is confirmed — never before, so this can't be
         // used to probe whether a guessed password is even close to right.
-        if (!user.emailVerified) {
+        if (config.requireVerifiedEmail && !user.emailVerified) {
           yield* events.publish({
             _tag: "auth.user.signInFailed",
             strategy: "password",
@@ -1119,6 +1263,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
       return Password.of({
         signUp,
+        signUpConcealed,
         signIn,
         requestReset,
         resendVerification,

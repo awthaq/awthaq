@@ -19,6 +19,17 @@ This package ships two pieces:
 - `ImportAuth0User` — one Auth0 export record in, one awthaq `User` +
   `Account` pair out, with the exported bcrypt hash stored byte-for-byte.
 
+## Email verification of imported users
+
+`@awthaq/password` refuses to sign in an account whose email is unverified
+(`requireVerifiedEmail`, on by default). Carry each user's verified state across
+with `emailVerified: exported.email_verified` (as below) — or call
+`Users.verifyEmail` for the users your source system had verified. If part of
+your population was never verified upstream and you do not want to lock it out,
+set `Password.config({ requireVerifiedEmail: false })` and restrict unverified
+users downstream instead. (The same applies to Firebase and Supabase/GoTrue
+imports.)
+
 ## The recipe
 
 **1. Export** your Auth0 database connection's users (Auth0's bulk user

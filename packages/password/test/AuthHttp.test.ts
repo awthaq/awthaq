@@ -113,10 +113,13 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const buildAppLayer = (mailerLayer: Layer.Layer<Mailer.Mailer>) =>
+const buildAppLayer = (
+  mailerLayer: Layer.Layer<Mailer.Mailer>,
+  passwordConfig: Partial<Password.PasswordConfigShape> = {},
+) =>
   Layer.mergeAll(
     AuthHttp.routes(PasswordApi.PasswordApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Password.Password.layer),
+      Layer.provide(Password.Password.layer.pipe(Layer.provide(Password.config(passwordConfig)))),
     ),
     AuthHttp.docs(PasswordApi.PasswordApi),
   ).pipe(
@@ -532,5 +535,42 @@ describe("AuthHttp + Password (real HTTP)", () => {
         const docs = yield* Effect.promise(() => handler(new Request("http://localhost/docs")));
         assert.strictEqual(docs.status, 200);
       }),
+  );
+
+  // TMS-005 (ADR-EA-026): `conceal` answers a fresh and an already-registered
+  // address identically, and issues no session for either.
+  it.effect("TMS-005: with signUpEnumeration conceal, a duplicate and a fresh sign-up look identical", () => {
+    const mailer = capturingMailer();
+    return Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(
+        buildAppLayer(mailer.layer, { signUpEnumeration: "conceal" }),
+      );
+      const signUp = () =>
+        post(handler, "/password/sign-up", { email: "dupe@example.com", password: strongPassword });
+      const fresh = yield* Effect.promise(signUp);
+      const duplicate = yield* Effect.promise(signUp);
+      assert.strictEqual(fresh.status, 202);
+      assert.strictEqual(duplicate.status, 202);
+      assert.strictEqual(yield* Effect.promise(() => fresh.text()), "");
+      assert.strictEqual(yield* Effect.promise(() => duplicate.text()), "");
+      assert.isNull(fresh.headers.get("set-cookie"));
+      assert.isNull(duplicate.headers.get("set-cookie"));
+
+      yield* letForkedFibersRun;
+      const templates = (yield* mailer.sent).map((m) => m.template);
+      assert.deepStrictEqual(templates, ["verify-email", "account-exists"]);
+    });
+  });
+
+  it.effect("TMS-005: conceal still reports a weak password, and reveal stays the default", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(
+        buildAppLayer(Mailer.layerMemory, { signUpEnumeration: "conceal" }),
+      );
+      const weak = yield* Effect.promise(() =>
+        post(handler, "/password/sign-up", { email: "weak@example.com", password: "short" }),
+      );
+      assert.strictEqual(weak.status, 422);
+    }),
   );
 });
