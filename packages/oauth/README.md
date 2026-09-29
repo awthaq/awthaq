@@ -74,6 +74,11 @@ Deliberately **not** validated, and why:
 - `clockSkew` (default 60s) — leeway on an `id_token`'s `exp`/`nbf`/`iat`; `maxIdTokenAge` — optionally also reject an `id_token` whose `iat` is older than this.
 - Provider `discovery: { mode: "lazy", refresh }` resolves a provider's discovery document on first use instead of at boot, answering `ProviderUnavailable` while it is unreachable (an issuer mismatch still disables the provider permanently).
 
+## Known limitations
+
+- **First landing request after sign-in may look signed out.** The callback sets the `SameSite=Strict` `__Host-session` cookie on a `302` to your `callbackURL`. Browsers evaluate `SameSite` over the whole redirect chain, and this one began on the provider's site, so the cookie is stored but withheld from that first landing request; every later navigation carries it. If your landing page is server-rendered behind an auth check, land on a route that resolves the session client-side with a same-site `fetch` (or tolerate one re-render). A configurable session-cookie policy or an interstitial bounce page would remove the wrinkle; both are tracked separately (see BEH-EA-122 in the spec).
+- ES256/EdDSA `id_token` signatures and POST (`form_post`) callbacks are not supported.
+
 ## Migrating from Auth.js
 
 | Auth.js | awthaq |
