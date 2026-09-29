@@ -211,6 +211,20 @@ export class LastTeamCannotBeRemoved extends Schema.TaggedError<LastTeamCannotBe
   { httpApiStatus: 409 },
 ) {}
 
+/** OHS-001: a move would place a team under itself or one of its own descendants. */
+export class TeamHierarchyCycle extends Schema.TaggedError<TeamHierarchyCycle>()(
+  "TeamHierarchyCycle",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
+/** OHS-001: a team that still has child teams cannot be removed. */
+export class TeamHasChildren extends Schema.TaggedError<TeamHasChildren>()(
+  "TeamHasChildren",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
 export class TeamMembershipNotFound extends Schema.TaggedError<TeamMembershipNotFound>()(
   "TeamMembershipNotFound",
   {},
@@ -371,11 +385,19 @@ export class OrgRoleDto extends Schema.Class<OrgRoleDto>("OrgRoleDto")({
 
 // ---- teams --------------------------------------------------------------------
 
-export const CreateTeamPayload = Schema.Struct({ name: Schema.String });
+export const CreateTeamPayload = Schema.Struct({
+  name: Schema.String,
+  /** OHS-001: create the team under this parent (same organization). */
+  parentId: Schema.optional(Schema.String),
+});
 export type CreateTeamPayload = typeof CreateTeamPayload.Type;
 
 export const UpdateTeamPayload = Schema.Struct({ name: Schema.String });
 export type UpdateTeamPayload = typeof UpdateTeamPayload.Type;
+
+/** OHS-001: `null` moves the team to the root. */
+export const MoveTeamPayload = Schema.Struct({ parentId: Schema.NullOr(Schema.String) });
+export type MoveTeamPayload = typeof MoveTeamPayload.Type;
 
 export const TeamIdParams = Schema.Struct({
   organizationId: Schema.String,
@@ -401,6 +423,8 @@ export class TeamDto extends Schema.Class<TeamDto>("TeamDto")({
   name: Schema.String,
   organizationId: Schema.String,
   memberCount: Schema.Number,
+  /** OHS-001: `null` for a root team. */
+  parentId: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 }) {}
@@ -718,6 +742,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationNotFound,
         TeamsDisabled,
         OrganizationPermissionDenied,
+        TeamNotFound,
         TeamLimitReached,
         HookPoint.HookAborted,
       ],
@@ -761,9 +786,43 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationPermissionDenied,
         TeamNotFound,
         LastTeamCannotBeRemoved,
+        TeamHasChildren,
         HookPoint.HookAborted,
       ],
     }),
+  )
+  .add(
+    HttpApiEndpoint.patch("moveTeam", "/organization/:organizationId/teams/:teamId/parent", {
+      params: TeamIdParams,
+      payload: MoveTeamPayload,
+      success: TeamDto,
+      error: [
+        OrganizationNotFound,
+        TeamsDisabled,
+        OrganizationPermissionDenied,
+        TeamNotFound,
+        TeamHierarchyCycle,
+        HookPoint.HookAborted,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("listTeamAncestors", "/organization/:organizationId/teams/:teamId/ancestors", {
+      params: TeamIdParams,
+      success: Schema.Array(TeamDto),
+      error: [OrganizationNotFound, TeamsDisabled, TeamNotFound, OrganizationPermissionDenied],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "listTeamDescendants",
+      "/organization/:organizationId/teams/:teamId/descendants",
+      {
+        params: TeamIdParams,
+        success: Schema.Array(TeamDto),
+        error: [OrganizationNotFound, TeamsDisabled, TeamNotFound, OrganizationPermissionDenied],
+      },
+    ),
   )
   .add(
     HttpApiEndpoint.get("listTeamMembers", "/organization/:organizationId/teams/:teamId/members", {

@@ -1149,6 +1149,102 @@ describe("Organization", () => {
     }).pipe(Effect.provide(withTeams())),
   );
 
+  // OHS-001 (ticket 34): teams nest; structure changes need team:update; reads are member-only.
+  describe("team hierarchy (OHS-001)", () => {
+    const tree = Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const eng = yield* organization.createTeam(owner, org.id, "Engineering");
+      const platform = yield* organization.createTeam(owner, org.id, "Platform", eng.id);
+      const infra = yield* organization.createTeam(owner, org.id, "Infra", platform.id);
+      const sales = yield* organization.createTeam(owner, org.id, "Sales");
+      return { organization, owner, org, eng, platform, infra, sales };
+    });
+    const names = (rows: ReadonlyArray<{ readonly name: string }>) => rows.map((row) => row.name);
+
+    it.effect("nested create, ancestors/descendants, and move re-parent a subtree", () =>
+      Effect.gen(function* () {
+        const { organization, owner, org, eng, platform, infra, sales } = yield* tree;
+        assert.deepStrictEqual(platform.parentId, Option.some(eng.id));
+        assert.deepStrictEqual(
+          names(yield* organization.listTeamAncestors(owner, org.id, infra.id)),
+          ["Platform", "Engineering"],
+        );
+        assert.deepStrictEqual(
+          names(yield* organization.listTeamDescendants(owner, org.id, eng.id)),
+          ["Platform", "Infra"],
+        );
+
+        const moved = yield* organization.moveTeam(owner, org.id, platform.id, Option.some(sales.id));
+        assert.deepStrictEqual(moved.parentId, Option.some(sales.id));
+        assert.deepStrictEqual(
+          names(yield* organization.listTeamAncestors(owner, org.id, infra.id)),
+          ["Platform", "Sales"],
+        );
+        yield* organization.moveTeam(owner, org.id, platform.id, Option.none());
+        assert.deepStrictEqual(
+          names(yield* organization.listTeamDescendants(owner, org.id, eng.id)),
+          [],
+        );
+      }).pipe(Effect.provide(withTeams())),
+    );
+
+    it.effect("a cycle is TeamHierarchyCycle; a parent with children cannot be removed", () =>
+      Effect.gen(function* () {
+        const { organization, owner, org, eng, platform, infra } = yield* tree;
+        const cycle = yield* organization
+          .moveTeam(owner, org.id, eng.id, Option.some(infra.id))
+          .pipe(Effect.flip);
+        assert.strictEqual(cycle._tag, "TeamHierarchyCycle");
+
+        const blocked = yield* organization.removeTeam(owner, org.id, platform.id).pipe(Effect.flip);
+        assert.strictEqual(blocked._tag, "TeamHasChildren");
+        yield* organization.removeTeam(owner, org.id, infra.id);
+        yield* organization.removeTeam(owner, org.id, platform.id);
+      }).pipe(Effect.provide(withTeams())),
+    );
+
+    it.effect("a parent from another organization is TeamNotFound", () =>
+      Effect.gen(function* () {
+        const { organization, owner, org, eng } = yield* tree;
+        const other = yield* organization.create({ caller: owner, name: "Other", slug: "other" });
+        const foreign = yield* organization.createTeam(owner, other.id, "Foreign");
+        const onCreate = yield* organization
+          .createTeam(owner, org.id, "Nested", foreign.id)
+          .pipe(Effect.flip);
+        assert.strictEqual(onCreate._tag, "TeamNotFound");
+        const onMove = yield* organization
+          .moveTeam(owner, org.id, eng.id, Option.some(foreign.id))
+          .pipe(Effect.flip);
+        assert.strictEqual(onMove._tag, "TeamNotFound");
+      }).pipe(Effect.provide(withTeams())),
+    );
+
+    it.effect("moving needs team:update; reading relatives is member-only", () =>
+      Effect.gen(function* () {
+        const { organization, org, eng, platform } = yield* tree;
+        const member = asCaller("member-1");
+        const outsider = asCaller("outsider-1");
+        yield* organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId("member-1"),
+          role: ["member"],
+        });
+        const denied = yield* organization
+          .moveTeam(member, org.id, platform.id, Option.none())
+          .pipe(Effect.flip);
+        assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
+
+        yield* organization.listTeamDescendants(member, org.id, eng.id);
+        const hidden = yield* organization
+          .listTeamAncestors(outsider, org.id, platform.id)
+          .pipe(Effect.flip);
+        assert.strictEqual(hidden._tag, "OrganizationNotFound");
+      }).pipe(Effect.provide(withTeams())),
+    );
+  });
+
   // MTI-002: listTeams/listTeamMembers used to take no caller at all — any
   // authenticated principal of the deployment could enumerate another
   // tenant's team names and rosters. Mirrors the identical

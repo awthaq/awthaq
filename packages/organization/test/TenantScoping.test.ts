@@ -84,6 +84,18 @@ const ALLOWLIST: ReadonlyArray<{ readonly match: RegExp; readonly why: string }>
     why: "findTeamByIdAnyOrg: existence-only lookup for the qadi team-member relation (RZS-005)",
   },
   {
+    match: /^SELECT CAST\(COUNT\(\*\) AS INTEGER\) AS count FROM organization_team_closure WHERE ancestorId = /,
+    why: "isInSubtree (OHS-001): keyed by two team ids that Organization.moveTeam has already tenant-checked",
+  },
+  {
+    match: /^DELETE FROM organization_team_closure WHERE descendantId IN /,
+    why: "moveTeam closure detach (OHS-001): keyed by the moved team's id, inside the tenant-scoped transaction",
+  },
+  {
+    match: /^DELETE FROM organization_team_closure WHERE descendantId = /,
+    why: "removeTeam closure cleanup (OHS-001): keyed by the removed team's id, after its tenant-scoped delete",
+  },
+  {
     match: /^UPDATE organization_team SET memberCount = memberCount \+ /,
     why: "adjustMemberCount: keyed by the team's unique id, only called after tenant-scoped checks",
   },

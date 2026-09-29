@@ -115,6 +115,7 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.organization.roleDeleted":
     case "auth.organization.teamCreated":
     case "auth.organization.teamUpdated":
+    case "auth.organization.teamMoved":
     case "auth.organization.teamDeleted":
       return Option.none();
     default: {

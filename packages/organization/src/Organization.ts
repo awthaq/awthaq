@@ -390,17 +390,59 @@ export interface OrganizationShape {
     | OrganizationApi.OrgRoleNotFound
     | HookPoint.HookAborted
   >;
+  /** OHS-001: with a `parentId`, the team is created under that parent (`TeamNotFound` when it is not in this organization). */
   readonly createTeam: (
     caller: Api.UserPrincipal,
     organizationId: string,
     name: string,
+    parentId?: string | undefined,
   ) => Effect.Effect<
     TeamRecords.TeamRecord,
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.TeamNotFound
     | OrganizationApi.TeamLimitReached
     | HookPoint.HookAborted
+  >;
+  /** OHS-001: re-parents a team with its whole subtree; `None` moves it to the root. Needs `team:update`. */
+  readonly moveTeam: (
+    caller: Api.UserPrincipal,
+    organizationId: string,
+    teamId: string,
+    parentId: Option.Option<string>,
+  ) => Effect.Effect<
+    TeamRecords.TeamRecord,
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.TeamsDisabled
+    | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.TeamNotFound
+    | OrganizationApi.TeamHierarchyCycle
+    | HookPoint.HookAborted
+  >;
+  /** OHS-001: member-only, nearest first. */
+  readonly listTeamAncestors: (
+    caller: Api.UserPrincipal,
+    organizationId: string,
+    teamId: string,
+  ) => Effect.Effect<
+    ReadonlyArray<TeamRecords.TeamRecord>,
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.TeamsDisabled
+    | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.TeamNotFound
+  >;
+  /** OHS-001: member-only, nearest first. */
+  readonly listTeamDescendants: (
+    caller: Api.UserPrincipal,
+    organizationId: string,
+    teamId: string,
+  ) => Effect.Effect<
+    ReadonlyArray<TeamRecords.TeamRecord>,
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.TeamsDisabled
+    | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.TeamNotFound
   >;
   /** MTI-002: member-only — a full team roster/directory is confidential to the organization, not deployment-public. */
   readonly listTeams: (
@@ -443,6 +485,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.TeamNotFound
     | OrganizationApi.LastTeamCannotBeRemoved
+    | OrganizationApi.TeamHasChildren
     | HookPoint.HookAborted
   >;
   /** MTI-002: member-only — a team roster is personal data about the organization's own staff, not deployment-public. */
@@ -598,6 +641,7 @@ const toTeamDto = (record: TeamRecords.TeamRecord): OrganizationApi.TeamDto =>
     name: record.name,
     organizationId: record.organizationId,
     memberCount: record.memberCount,
+    parentId: Option.getOrNull(record.parentId),
     createdAt: DateTime.formatIso(record.createdAt),
     updatedAt: DateTime.formatIso(record.updatedAt),
   });
@@ -921,8 +965,55 @@ export const OrganizationHandlers = HttpApiBuilder.group(
         payload: OrganizationApi.CreateTeamPayload;
       }) {
         const caller = yield* currentUserPrincipal;
-        const record = yield* organization.createTeam(caller, params.organizationId, payload.name);
+        const record = yield* organization.createTeam(
+          caller,
+          params.organizationId,
+          payload.name,
+          payload.parentId,
+        );
         return toTeamDto(record);
+      }),
+      moveTeam: Effect.fnUntraced(function* ({
+        params,
+        payload,
+      }: {
+        params: OrganizationApi.TeamIdParams;
+        payload: OrganizationApi.MoveTeamPayload;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        const record = yield* organization.moveTeam(
+          caller,
+          params.organizationId,
+          params.teamId,
+          Option.fromNullOr(payload.parentId),
+        );
+        return toTeamDto(record);
+      }),
+      listTeamAncestors: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: OrganizationApi.TeamIdParams;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        const records = yield* organization.listTeamAncestors(
+          caller,
+          params.organizationId,
+          params.teamId,
+        );
+        return records.map(toTeamDto);
+      }),
+      listTeamDescendants: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: OrganizationApi.TeamIdParams;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        const records = yield* organization.listTeamDescendants(
+          caller,
+          params.organizationId,
+          params.teamId,
+        );
+        return records.map(toTeamDto);
       }),
       listTeams: Effect.fnUntraced(function* ({
         params,
@@ -1352,6 +1443,29 @@ const organizationMigrations: Migrations.Migrations = [
       yield* sql`CREATE UNIQUE INDEX organization_team_membership_team_user ON organization_team_membership(teamId, userId)`;
     }),
   },
+  // OHS-001 (wayfinder ticket 34): a team may sit under one parent. `parentId` is
+  // the write-side adjacency; `organization_team_closure` is the read model — one
+  // row per (ancestor, descendant) pair, self rows at depth 0 — so ancestors and
+  // descendants are single indexed lookups on both dialects with no recursive CTE.
+  // No foreign keys, like every other table here: TeamRecords maintains both in
+  // one transaction. Every existing team gets its self row.
+  {
+    name: "organization_team_hierarchy",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE organization_team ADD COLUMN parentId TEXT`;
+      yield* sql`CREATE INDEX organization_team_parent_id ON organization_team(parentId)`;
+      yield* sql`
+        CREATE TABLE organization_team_closure (
+          ancestorId TEXT NOT NULL,
+          descendantId TEXT NOT NULL,
+          depth INTEGER NOT NULL,
+          PRIMARY KEY (ancestorId, descendantId)
+        )`;
+      yield* sql`CREATE INDEX organization_team_closure_descendant_id ON organization_team_closure(descendantId)`;
+      yield* sql`INSERT INTO organization_team_closure (ancestorId, descendantId, depth) SELECT id, id, 0 FROM organization_team`;
+    }),
+  },
 ];
 
 // ---- plugin ---------------------------------------------------------------------
@@ -1368,6 +1482,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       "organization_invitation",
       "organization_team",
       "organization_team_membership",
+      "organization_team_closure",
       "organization_role",
       "organization_active_context",
     ],
@@ -1420,6 +1535,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const afterCreateTeam = yield* OrganizationHooks.AfterCreateTeam;
       const beforeUpdateTeam = yield* OrganizationHooks.BeforeUpdateTeam;
       const afterUpdateTeam = yield* OrganizationHooks.AfterUpdateTeam;
+      const beforeMoveTeam = yield* OrganizationHooks.BeforeMoveTeam;
+      const afterMoveTeam = yield* OrganizationHooks.AfterMoveTeam;
       const beforeDeleteTeam = yield* OrganizationHooks.BeforeDeleteTeam;
       const afterDeleteTeam = yield* OrganizationHooks.AfterDeleteTeam;
       const beforeAddTeamMember = yield* OrganizationHooks.BeforeAddTeamMember;
@@ -2597,26 +2714,85 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         );
 
       const createTeam: OrganizationShape["createTeam"] = Effect.fnUntraced(
-        function* (caller, organizationId, name) {
+        function* (caller, organizationId, name, parentId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "create");
+          if (parentId !== undefined) yield* requireTeam(organizationId, parentId);
           const count = yield* teams.countTeamsByOrganization(organizationId);
           if (count >= orgConfig.teams.maximumTeams) {
             return yield* Effect.fail(new OrganizationApi.TeamLimitReached());
           }
           const vetoed = yield* veto(
             "organization.team.create.before",
-            beforeCreateTeam.run({ organizationId, name }),
+            beforeCreateTeam.run({ organizationId, name, parentId }),
           );
-          const record = yield* teams.createTeam({ organizationId, name: vetoed.name });
+          const record = yield* teams
+            .createTeam({ organizationId, name: vetoed.name, parentId: vetoed.parentId })
+            .pipe(Effect.catchTag("TeamRecordNotFound", () => Effect.fail(new OrganizationApi.TeamNotFound())));
           yield* events.publish({
             _tag: "auth.organization.teamCreated",
             organizationId,
             teamId: record.id,
           });
-          yield* afterCreateTeam.run({ organizationId, name: vetoed.name, teamId: record.id });
+          yield* afterCreateTeam.run({
+            organizationId,
+            name: vetoed.name,
+            parentId: vetoed.parentId,
+            teamId: record.id,
+          });
           return record;
+        },
+      );
+
+      const moveTeam: OrganizationShape["moveTeam"] = Effect.fnUntraced(
+        function* (caller, organizationId, teamId, parentId) {
+          yield* requireOrganization(organizationId);
+          yield* requireTeamsEnabled;
+          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "update");
+          yield* requireTeam(organizationId, teamId);
+          if (Option.isSome(parentId)) yield* requireTeam(organizationId, parentId.value);
+          const vetoed = yield* veto(
+            "organization.team.move.before",
+            beforeMoveTeam.run({ organizationId, teamId, parentId: Option.getOrNull(parentId) }),
+          );
+          const moved = yield* teams
+            .moveTeam({ organizationId, id: teamId, parentId: Option.fromNullOr(vetoed.parentId) })
+            .pipe(
+              Effect.catchTags({
+                TeamRecordNotFound: () => Effect.fail(new OrganizationApi.TeamNotFound()),
+                TeamHierarchyCycle: () => Effect.fail(new OrganizationApi.TeamHierarchyCycle()),
+              }),
+            );
+          yield* events.publish({
+            _tag: "auth.organization.teamMoved",
+            organizationId,
+            teamId,
+            parentId: vetoed.parentId,
+          });
+          yield* afterMoveTeam.run({ organizationId, teamId, parentId: vetoed.parentId });
+          return moved;
+        },
+      );
+
+      // OHS-001: relatives are read like `listTeams` — member-only, never public.
+      const listTeamAncestors: OrganizationShape["listTeamAncestors"] = Effect.fnUntraced(
+        function* (caller, organizationId, teamId) {
+          yield* requireOrganization(organizationId);
+          yield* requireTeamsEnabled;
+          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
+          yield* requireTeam(organizationId, teamId);
+          return yield* teams.getAncestors(organizationId, teamId);
+        },
+      );
+
+      const listTeamDescendants: OrganizationShape["listTeamDescendants"] = Effect.fnUntraced(
+        function* (caller, organizationId, teamId) {
+          yield* requireOrganization(organizationId);
+          yield* requireTeamsEnabled;
+          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
+          yield* requireTeam(organizationId, teamId);
+          return yield* teams.getDescendants(organizationId, teamId);
         },
       );
 
@@ -2673,6 +2849,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (count <= 1 && !orgConfig.teams.allowRemovingAllTeams) {
             return yield* Effect.fail(new OrganizationApi.LastTeamCannotBeRemoved());
           }
+          // OHS-001: refuse before the veto hook runs; the records layer re-checks atomically.
+          const below = yield* teams.getDescendants(organizationId, teamId);
+          if (below.length > 0) return yield* Effect.fail(new OrganizationApi.TeamHasChildren());
           yield* veto(
             "organization.team.delete.before",
             beforeDeleteTeam.run({ organizationId, teamId }),
@@ -2683,9 +2862,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 yield* teams
                   .removeTeam(organizationId, teamId)
                   .pipe(
-                    Effect.catchTag("TeamRecordNotFound", () =>
-                      Effect.die(new Error("awthaq: team vanished between check and write")),
-                    ),
+                    Effect.catchTags({
+                      TeamRecordNotFound: () =>
+                        Effect.die(new Error("awthaq: team vanished between check and write")),
+                      TeamHasChildren: () => Effect.fail(new OrganizationApi.TeamHasChildren()),
+                    }),
                   );
                 // CWM-003/OHS-007: no session may keep the deleted team active.
                 yield* activeContext.clearTeam(teamId);
@@ -2838,6 +3019,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         updateRole,
         deleteRole,
         createTeam,
+        moveTeam,
+        listTeamAncestors,
+        listTeamDescendants,
         listTeams,
         listUserTeams,
         updateTeam,

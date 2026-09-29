@@ -201,7 +201,12 @@ export class AfterDeleteRole extends HookPoint.observe<AfterDeleteRole>()(
 
 // ---- teams --------------------------------------------------------------------
 
-const CreateTeamInput = Schema.Struct({ organizationId: Schema.String, name: Schema.String });
+const CreateTeamInput = Schema.Struct({
+  organizationId: Schema.String,
+  name: Schema.String,
+  /** OHS-001: the parent team, when created nested. */
+  parentId: Schema.optional(Schema.String),
+});
 const CreateTeamResult = Schema.Struct({ ...CreateTeamInput.fields, teamId: Schema.String });
 export class BeforeCreateTeam extends HookPoint.veto<BeforeCreateTeam>()(
   "organization.team.create.before",
@@ -224,6 +229,21 @@ export class BeforeUpdateTeam extends HookPoint.veto<BeforeUpdateTeam>()(
 export class AfterUpdateTeam extends HookPoint.observe<AfterUpdateTeam>()(
   "organization.team.update.after",
   UpdateTeamInput,
+) {}
+
+/** OHS-001: `parentId` is `null` when the team is moved to the root. */
+const MoveTeamInput = Schema.Struct({
+  organizationId: Schema.String,
+  teamId: Schema.String,
+  parentId: Schema.NullOr(Schema.String),
+});
+export class BeforeMoveTeam extends HookPoint.veto<BeforeMoveTeam>()(
+  "organization.team.move.before",
+  MoveTeamInput,
+) {}
+export class AfterMoveTeam extends HookPoint.observe<AfterMoveTeam>()(
+  "organization.team.move.after",
+  MoveTeamInput,
 ) {}
 
 const DeleteTeamInput = Schema.Struct({ organizationId: Schema.String, teamId: Schema.String });
@@ -298,6 +318,8 @@ export const OrganizationHooksLive = Layer.mergeAll(
   AfterCreateTeam.layer,
   BeforeUpdateTeam.layer,
   AfterUpdateTeam.layer,
+  BeforeMoveTeam.layer,
+  AfterMoveTeam.layer,
   BeforeDeleteTeam.layer,
   AfterDeleteTeam.layer,
   BeforeAddTeamMember.layer,

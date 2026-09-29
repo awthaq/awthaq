@@ -592,6 +592,82 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     assert.strictEqual(removeRes.status, 204);
   });
 
+  it("teams hierarchy (OHS-001): nested create, ancestors/descendants, move, cycle and has-children conflicts", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler({
+      teams: {
+        enabled: true,
+        maximumTeams: Number.POSITIVE_INFINITY,
+        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+        allowRemovingAllTeams: true,
+      },
+    });
+    const cookie = await issueSessionCookieHeader("owner-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie },
+    );
+    const record = (await created.json()) as { id: string };
+    const base = `/organization/${record.id}/teams`;
+    const makeTeam = async (name: string, parentId?: string) => {
+      const res = await request(
+        handler,
+        "POST",
+        base,
+        parentId === undefined ? { name } : { name, parentId },
+        { cookie },
+      );
+      assert.strictEqual(res.status, 200);
+      return (await res.json()) as { id: string; parentId: string | null };
+    };
+    const get = async (path: string, headers: Record<string, string>) =>
+      handler(new Request(`${ORIGIN}${path}`, { headers }));
+
+    const eng = await makeTeam("Engineering");
+    const platform = await makeTeam("Platform", eng.id);
+    assert.strictEqual(platform.parentId, eng.id);
+
+    const ancestors = await get(`${base}/${platform.id}/ancestors`, { cookie });
+    assert.strictEqual(ancestors.status, 200);
+    assert.strictEqual(((await ancestors.json()) as ReadonlyArray<unknown>).length, 1);
+    const descendants = await get(`${base}/${eng.id}/descendants`, { cookie });
+    assert.strictEqual(descendants.status, 200);
+    assert.strictEqual(((await descendants.json()) as ReadonlyArray<unknown>).length, 1);
+
+    // Under its own descendant: 409.
+    const cycle = await request(
+      handler,
+      "PATCH",
+      `${base}/${eng.id}/parent`,
+      { parentId: platform.id },
+      { cookie },
+    );
+    assert.strictEqual(cycle.status, 409);
+
+    // A parent with children cannot be deleted: 409.
+    const blocked = await request(handler, "DELETE", `${base}/${eng.id}`, undefined, { cookie });
+    assert.strictEqual(blocked.status, 409);
+
+    const toRoot = await request(
+      handler,
+      "PATCH",
+      `${base}/${platform.id}/parent`,
+      { parentId: null },
+      { cookie },
+    );
+    assert.strictEqual(toRoot.status, 200);
+    assert.strictEqual(((await toRoot.json()) as { parentId: string | null }).parentId, null);
+    const removed = await request(handler, "DELETE", `${base}/${eng.id}`, undefined, { cookie });
+    assert.strictEqual(removed.status, 204);
+
+    // A non-member cannot read the hierarchy.
+    const outsider = await issueSessionCookieHeader("outsider-1");
+    const hidden = await get(`${base}/${platform.id}/ancestors`, { cookie: outsider });
+    assert.strictEqual(hidden.status, 404);
+  });
+
   it.effect("serves generated OpenAPI JSON including the organization group", () =>
     Effect.gen(function* () {
       const { handler } = buildHandler();

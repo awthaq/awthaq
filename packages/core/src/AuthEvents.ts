@@ -253,6 +253,14 @@ export interface OrganizationTeamUpdatedEvent {
   readonly teamId: string;
 }
 
+/** OHS-001: published by `@awthaq/organization`'s `moveTeam`; `parentId` is `null` when the team became a root. */
+export interface OrganizationTeamMovedEvent {
+  readonly _tag: "auth.organization.teamMoved";
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly parentId: string | null;
+}
+
 /** Published by `@awthaq/organization`'s `removeTeam`. */
 export interface OrganizationTeamDeletedEvent {
   readonly _tag: "auth.organization.teamDeleted";
@@ -360,6 +368,7 @@ export type AuthEvent =
   | OrganizationRoleDeletedEvent
   | OrganizationTeamCreatedEvent
   | OrganizationTeamUpdatedEvent
+  | OrganizationTeamMovedEvent
   | OrganizationTeamDeletedEvent
   | OrganizationTeamMemberAddedEvent
   | OrganizationTeamMemberRemovedEvent
