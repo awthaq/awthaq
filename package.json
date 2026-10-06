@@ -48,7 +48,7 @@
     "madge": "^8.0.0",
     "oxfmt": "^0.71.0",
     "oxlint": "^1.86.0",
-    "publint": "^0.3.24",
+    "publint": "^0.3.25",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
