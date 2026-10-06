@@ -29,7 +29,7 @@
     "@awthaq/core": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/sql": "workspace:*",
-    "@qadi/core": "^0.8.0",
+    "@qadi/core": "^0.9.0",
     "effect": "catalog:"
   },
   "devDependencies": {
