@@ -30,7 +30,7 @@
     "@awthaq/organization": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/sql": "workspace:*",
-    "@qadi/core": "^0.8.0",
+    "@qadi/core": "^0.9.0",
     "@xmldom/xmldom": "0.8.15",
     "effect": "catalog:",
     "xml-crypto": "6.3.2"
