@@ -44,7 +44,7 @@
     "@types/node": "catalog:",
     "@vitest/coverage-v8": "catalog:",
     "glob": "^13.0.0",
-    "knip": "^6.38.0",
+    "knip": "^6.39.0",
     "madge": "^8.0.0",
     "oxfmt": "^0.71.0",
     "oxlint": "^1.86.0",
