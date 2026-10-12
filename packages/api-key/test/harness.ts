@@ -164,12 +164,20 @@ export const makeApp = (options: HarnessOptions) => {
       ),
     );
 
-  /** A real session (cookie) for `userId`, against the same running `Sessions`. */
-  const sessionCookie = (userId: string): Promise<string> =>
+  /**
+   * A real session (cookie) for the user named `label`, against the same running `Sessions`. The
+   * user is a stored one (created on first use): a key resolves only while its owner exists.
+   */
+  const sessionCookie = (label: string): Promise<string> =>
     withContext(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
+        const users = yield* Users.Users;
+        const { user } = yield* users.createOrGet({
+          identity: { _tag: "Email", email: `${label}@example.com` },
+          name: label,
+        });
+        const issued = yield* sessions.issue({ userId: user.id });
         return `${Api.SESSION_COOKIE_NAME}=${encodeURIComponent(Redacted.value(issued.token))}`;
       }),
     );
@@ -208,3 +216,13 @@ export const makeApp = (options: HarnessOptions) => {
 
   return { handler, withContext, sessionCookie, request, layer };
 };
+
+/**
+ * Registers real users for the key owners: a key resolves only while its owner exists and
+ * may sign in, so a fixture owner must be a stored user, not just an id string.
+ */
+export const seedUser = (email: string) =>
+  Effect.gen(function* () {
+    const users = yield* Users.Users;
+    return (yield* users.create({ identity: { _tag: "Email", email }, name: email })).id;
+  });

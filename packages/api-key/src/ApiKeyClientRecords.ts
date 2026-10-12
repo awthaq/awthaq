@@ -44,6 +44,8 @@ export interface ApiKeyClientRecordsShape {
     readonly secretHash: string;
     readonly previousExpiresAt: DateTime.Utc;
   }) => Effect.Effect<void>;
+  /** Erasure: every client the user owns, revoked or not. Idempotent. */
+  readonly deleteByOwner: (ownerId: Users.UserId) => Effect.Effect<void>;
 }
 
 export class ApiKeyClientRecords extends Context.Service<
@@ -92,6 +94,10 @@ export const layerMemory = Layer.effect(
           previousSecretHash: Option.some(record.secretHash),
           previousExpiresAt: Option.some(previousExpiresAt),
         })),
+      deleteByOwner: (ownerId) =>
+        Ref.update(state, (records) =>
+          HashMap.filter(records, (record) => record.ownerId !== ownerId),
+        ),
     });
   }),
 );
@@ -180,6 +186,11 @@ export const layerSql = Layer.effect(
       `,
     });
 
+    const deleteByOwnerQuery = SqlSchema.void({
+      Request: Schema.String,
+      execute: (ownerId) => sql`DELETE FROM apikey_client WHERE "ownerId" = ${ownerId}`,
+    });
+
     return ApiKeyClientRecords.of({
       insert: (record) =>
         insertQuery({
@@ -202,6 +213,7 @@ export const layerSql = Layer.effect(
         ),
       revoke: (clientId, at) => revokeQuery({ clientId, at }).pipe(Effect.orDie),
       rotateSecret: (input) => rotateQuery(input).pipe(Effect.orDie),
+      deleteByOwner: (ownerId) => deleteByOwnerQuery(ownerId).pipe(Effect.orDie),
     });
   }),
 );

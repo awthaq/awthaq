@@ -44,6 +44,8 @@ import {
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
+  DataExport,
+  Erasure,
   Migrations,
   RateLimits,
   SecretHash,
@@ -205,12 +207,14 @@ export interface ApiKeyShape {
   ) => Effect.Effect<CreatedApiKey, ApiKeyApi.ApiKeyNotFound | ApiKeyApi.ApiKeyLifetimeInvalid>;
   /**
    * The per-request resolution: `None` for anything that is not a live key (malformed,
-   * unknown id, wrong secret, revoked, expired), indistinguishably. Does the same hash and
-   * constant-time compare work whether or not the id exists.
+   * unknown id, wrong secret, revoked, expired, or owned by a user who is suspended or gone),
+   * indistinguishably. Does the same hash and constant-time compare work whether or not the id
+   * exists; the owner is looked up only after the secret matched. An outage reading the owner
+   * is `StoreUnavailable` (503), never a silent `None`.
    */
   readonly resolve: (
     presented: Redacted.Redacted<string>,
-  ) => Effect.Effect<Option.Option<Api.ApiKeyPrincipal>>;
+  ) => Effect.Effect<Option.Option<Api.ApiKeyPrincipal>, Api.StoreUnavailable>;
 
   readonly registerClient: (
     ownerId: Users.UserId,
@@ -240,7 +244,10 @@ export interface ApiKeyShape {
     readonly clientId: string;
     readonly clientSecret: Redacted.Redacted<string>;
     readonly requestedScope?: ReadonlyArray<string> | undefined;
-  }) => Effect.Effect<IssuedServiceToken, ApiKeyApi.InvalidClient | ApiKeyApi.InvalidScope>;
+  }) => Effect.Effect<
+    IssuedServiceToken,
+    ApiKeyApi.InvalidClient | ApiKeyApi.InvalidScope | Api.StoreUnavailable
+  >;
 }
 
 // ---- helpers --------------------------------------------------------------------
@@ -688,6 +695,57 @@ const CredentialContributionsLive = Layer.unwrap(
   }),
 );
 
+/**
+ * ADR-EA-031's one cascade: erasing a user deletes every key and client they own. Without this a
+ * deleted user's keys kept authenticating until they expired. Part of `ApiKey.layer`, which
+ * therefore requires `Erasure.ErasureRegistry`.
+ */
+export const apiKeyErasure = Erasure.contribute({
+  id: "apikey",
+  make: Effect.gen(function* () {
+    const records = yield* ApiKeyRecords.ApiKeyRecords;
+    const clients = yield* ApiKeyClientRecords.ApiKeyClientRecords;
+    return (subject: Erasure.ErasureSubject) =>
+      records
+        .deleteByOwner(subject.userId)
+        .pipe(Effect.andThen(clients.deleteByOwner(subject.userId)));
+  }),
+});
+
+/** CSG-005: the data-subject export lists keys and clients by name, prefix and scopes, never a secret or hash. */
+export const apiKeyExport = DataExport.contribute({
+  id: "apikey",
+  make: Effect.gen(function* () {
+    const records = yield* ApiKeyRecords.ApiKeyRecords;
+    const clients = yield* ApiKeyClientRecords.ApiKeyClientRecords;
+    return (subject: DataExport.DataExportSubject) =>
+      Effect.all({
+        keys: records.listByOwner(subject.userId),
+        clients: clients.listByOwner(subject.userId),
+      }).pipe(
+        Effect.map(({ keys, clients: ownClients }) => ({
+          keys: keys.map((key) => ({
+            id: key.id,
+            name: key.name,
+            start: key.start,
+            scopes: [...key.scopes],
+            createdAt: DateTime.formatIso(key.createdAt),
+            expiresAt: Option.getOrNull(Option.map(key.expiresAt, DateTime.formatIso)),
+            revokedAt: Option.getOrNull(Option.map(key.revokedAt, DateTime.formatIso)),
+            lastUsedAt: Option.getOrNull(Option.map(key.lastUsedAt, DateTime.formatIso)),
+          })),
+          clients: ownClients.map((client) => ({
+            clientId: client.clientId,
+            name: client.name,
+            scopes: [...client.scopes],
+            createdAt: DateTime.formatIso(client.createdAt),
+            revokedAt: Option.getOrNull(Option.map(client.revokedAt, DateTime.formatIso)),
+          })),
+        })),
+      );
+  }),
+});
+
 export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", {
   apiVersion: 1,
   contract: ApiKeyApi.ApiKeyApi,
@@ -741,6 +799,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
       // PV-241: the token endpoint and the credential contributions throttle by address.
       ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
       handlers: ApiKeyHandlers,
+      contributes: Layer.mergeAll(apiKeyErasure, apiKeyExport),
       make: Effect.gen(function* () {
         const records = yield* ApiKeyRecords.ApiKeyRecords;
         const clients = yield* ApiKeyClientRecords.ApiKeyClientRecords;
@@ -749,6 +808,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
         const events = yield* AuthEvents.AuthEvents;
         const jwt = yield* Jwt.Jwt;
         const rateLimits = yield* RateLimits.RateLimitsRegistry;
+        const users = yield* Users.Users;
 
         if (!/^[A-Za-z0-9_-]+$/.test(settings.prefix)) {
           return yield* Defects.invalidConfiguration(
@@ -926,6 +986,20 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           },
         );
 
+        /**
+         * A key or client is only as good as its owner: a suspended owner (BEH-EA-046) or one who
+         * is gone (erased, or an orphan row) authenticates nothing. The same shared gate sign-in uses.
+         */
+        const ownerMayAuthenticate = (ownerId: Users.UserId) =>
+          users.findById(ownerId).pipe(
+            Effect.flatMap(Users.assertCanSignIn),
+            Effect.as(true),
+            Effect.catchTags({
+              UserNotFound: () => Effect.succeed(false),
+              UserSuspended: () => Effect.succeed(false),
+            }),
+          );
+
         const resolve: ApiKeyShape["resolve"] = Effect.fnUntraced(function* (presented) {
           const parsed = parseKey(Redacted.value(presented), settings.prefix);
           // A string that is not shaped like a key costs nothing and says nothing.
@@ -943,6 +1017,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           const record = found.value;
           const now = yield* DateTime.now;
           if (!isLive(record, now)) return Option.none();
+          if (!(yield* ownerMayAuthenticate(record.ownerId))) return Option.none();
           const stale = Option.match(record.lastUsedAt, {
             onNone: () => true,
             onSome: (usedAt) =>
@@ -1063,6 +1138,9 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
             );
             const secretOk = matchesCurrent || (matchesPrevious && previousStillValid);
             if (!secretOk || Option.isSome(client.revokedAt)) {
+              return yield* new ApiKeyApi.InvalidClient();
+            }
+            if (!(yield* ownerMayAuthenticate(client.ownerId))) {
               return yield* new ApiKeyApi.InvalidClient();
             }
             const requested = input.requestedScope;

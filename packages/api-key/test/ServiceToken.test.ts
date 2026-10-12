@@ -11,14 +11,21 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as ApiKey from "../src/ApiKey.ts";
 import * as ApiKeyClientRecords from "../src/ApiKeyClientRecords.ts";
-import { buildLayer, type HarnessOptions } from "./harness.ts";
+import { buildLayer, seedUser, type HarnessOptions, type HarnessServices } from "./harness.ts";
 
-const owner = Users.UserId("owner-1");
-const someoneElse = Users.UserId("owner-2");
+// Re-seeded as real users by every test's `provide`, so these are `let`, not constants.
+let owner = Users.UserId("owner-1");
+let someoneElse = Users.UserId("owner-2");
 
 const suite = (store: HarnessOptions["store"]) => {
-  const provide = (config: Partial<ApiKey.ApiKeyConfigShape> = {}) =>
-    Effect.provide(buildLayer({ store, suite: "api_key_clients", config }));
+  const provide =
+    (config: Partial<ApiKey.ApiKeyConfigShape> = {}) =>
+    <A, E>(effect: Effect.Effect<A, E, HarnessServices>) =>
+      Effect.gen(function* () {
+        owner = yield* seedUser("owner-1@example.com");
+        someoneElse = yield* seedUser("owner-2@example.com");
+        return yield* effect;
+      }).pipe(Effect.provide(buildLayer({ store, suite: "api_key_clients", config })));
 
   const secretOf = (created: ApiKey.CreatedClient) => Redacted.value(created.clientSecret);
 
@@ -35,6 +42,30 @@ const suite = (store: HarnessOptions["store"]) => {
         assert.strictEqual(stored.secretHash, yield* SecretHash.digest(crypto, secret));
         assert.notInclude(JSON.stringify(stored), secret);
         assert.notInclude(JSON.stringify(yield* apiKey.listClients(owner)), secret);
+      }).pipe(provide()),
+    );
+
+    it.effect("a client of a suspended or missing owner is refused as InvalidClient", () =>
+      Effect.gen(function* () {
+        const apiKey = yield* ApiKey.ApiKey;
+        const users = yield* Users.Users;
+        const created = yield* apiKey.registerClient(owner, { name: "billing", scopes: ["a:b"] });
+        const credentials = {
+          clientId: created.view.clientId,
+          clientSecret: created.clientSecret,
+        };
+        yield* apiKey.issueServiceToken(credentials);
+
+        yield* users.setStatus(owner, "suspended");
+        const refused = yield* Effect.flip(apiKey.issueServiceToken(credentials));
+        assert.strictEqual(refused._tag, "InvalidClient");
+
+        yield* users.setStatus(owner, "active");
+        yield* apiKey.issueServiceToken(credentials);
+
+        yield* users.delete(owner);
+        const orphan = yield* Effect.flip(apiKey.issueServiceToken(credentials));
+        assert.strictEqual(orphan._tag, "InvalidClient");
       }).pipe(provide()),
     );
 
@@ -83,7 +114,7 @@ const suite = (store: HarnessOptions["store"]) => {
         // Nothing in common: invalid_scope.
         const none = yield* Effect.flip(grant(["admin:all"]));
         assert.strictEqual(none._tag, "InvalidScope");
-        assert.strictEqual(none.error, "invalid_scope");
+        if (none._tag === "InvalidScope") assert.strictEqual(none.error, "invalid_scope");
       }).pipe(provide()),
     );
 
@@ -95,7 +126,7 @@ const suite = (store: HarnessOptions["store"]) => {
           Effect.flip(apiKey.issueServiceToken({ clientId, clientSecret: Redacted.make(secret) }));
         const wrong = yield* attempt(created.view.clientId, "cs_wrong");
         assert.strictEqual(wrong._tag, "InvalidClient");
-        assert.strictEqual(wrong.error, "invalid_client");
+        if (wrong._tag === "InvalidClient") assert.strictEqual(wrong.error, "invalid_client");
         const unknown = yield* attempt("svc_unknown", secretOf(created));
         assert.strictEqual(unknown._tag, "InvalidClient");
         const empty = yield* attempt(created.view.clientId, "");

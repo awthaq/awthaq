@@ -49,6 +49,8 @@ export interface ApiKeyRecordsShape {
   /** OCM-005: shortens (never extends) the key's expiry, for a rotation's grace window. */
   readonly limitExpiry: (id: string, expiresAt: DateTime.Utc) => Effect.Effect<void>;
   readonly touch: (id: string, at: DateTime.Utc) => Effect.Effect<void>;
+  /** Erasure: every key the user owns, revoked or not. Idempotent. */
+  readonly deleteByOwner: (ownerId: Users.UserId) => Effect.Effect<void>;
 }
 
 export class ApiKeyRecords extends Context.Service<ApiKeyRecords, ApiKeyRecordsShape>()(
@@ -95,6 +97,10 @@ export const layerMemory = Layer.effect(
             : { ...record, expiresAt: Option.some(expiresAt) },
         ),
       touch: (id, at) => update(id, (record) => ({ ...record, lastUsedAt: Option.some(at) })),
+      deleteByOwner: (ownerId) =>
+        Ref.update(state, (records) =>
+          HashMap.filter(records, (record) => record.ownerId !== ownerId),
+        ),
     });
   }),
 );
@@ -181,6 +187,11 @@ export const layerSql = Layer.effect(
       execute: (r) => sql`UPDATE apikey_key SET "lastUsedAt" = ${r.at} WHERE id = ${r.id}`,
     });
 
+    const deleteByOwnerQuery = SqlSchema.void({
+      Request: Schema.String,
+      execute: (ownerId) => sql`DELETE FROM apikey_key WHERE "ownerId" = ${ownerId}`,
+    });
+
     return ApiKeyRecords.of({
       insert: (record) =>
         insertQuery({
@@ -205,6 +216,7 @@ export const layerSql = Layer.effect(
       revoke: (id, at) => revokeQuery({ id, at }).pipe(Effect.orDie),
       limitExpiry: (id, expiresAt) => limitExpiryQuery({ id, expiresAt }).pipe(Effect.orDie),
       touch: (id, at) => touchQuery({ id, at }).pipe(Effect.orDie),
+      deleteByOwner: (ownerId) => deleteByOwnerQuery(ownerId).pipe(Effect.orDie),
     });
   }),
 );

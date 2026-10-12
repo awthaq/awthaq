@@ -76,7 +76,7 @@ const suite = (store: HarnessOptions["store"]) =>
         headers: { "x-api-key": key.key },
       });
       assert.strictEqual(response.status, 200);
-      assert.match(await json<string>(response), /^User:user-1:/);
+      assert.match(await json<string>(response), /^User:[0-9a-f-]+:/);
     });
 
     it("a garbage, wrong-secret or missing key is 401", async () => {

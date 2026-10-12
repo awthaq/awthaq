@@ -164,7 +164,11 @@ export interface CredentialResolverContribution {
   readonly claims: (credential: string) => boolean;
   readonly resolve: (
     credential: Redacted.Redacted<string>,
-  ) => Effect.Effect<Api.Principal, Api.Unauthenticated, HttpServerRequest.HttpServerRequest>;
+  ) => Effect.Effect<
+    Api.Principal,
+    Api.Unauthenticated | Api.StoreUnavailable,
+    HttpServerRequest.HttpServerRequest
+  >;
 }
 
 /** Two contributions on one carrier share an `id`: a composition mistake, surfaced at layer build. */
