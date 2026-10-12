@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-31 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch |
+> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) |
 ---
 
 > Status: the `@awthaq/two-factor` plugin is implemented and tested (`packages/two-factor/test/`). The decisions behind it are [ADR-EA-020](../decisions/020-two-factor-state.md); the credential-reset veto it taps is [BEH-EA-259](15-password.md#beh-ea-259-a-credential-reset-consults-beforecredentialreset-before-anything-is-rewritten). SMS is deliberately not part of it ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -61,7 +61,7 @@ REQUIREMENT: Every first-factor flow that consults `BeforeSessionIssue`
              composing the plugin without a gate is a compile error.
 ```
 
-Hook points freeze at first use (BEH-EA-024), so the taps cannot be folded into the plugin's own layer; the markers are what keep a forgotten gate from being a silent MFA bypass (type-system-first plugins, ADR-EA-020 decision 5). The divert passes the first factor's `amr` (`Hooks.BeforeSessionIssue`'s context), so the session finally minted records how *both* factors were proven. `bypassStrategies` (default none) lets an application declare, say, `["passkey"]` — a user-verified passkey is already multi-factor — and is the only way a first factor skips the divert. Infrastructure failures inside the divert die (the divert has no error channel): failing closed, a `500` rather than a session.
+Hook points freeze at first use (BEH-EA-024), so the taps cannot be folded into the plugin's own layer; the markers are what keep a forgotten gate from being a silent MFA bypass (type-system-first plugins, ADR-EA-020 decision 5). The divert passes the first factor's `amr` (`Hooks.BeforeSessionIssue`'s context; every first factor, SAML (`["fed"]`) included, passes the same `amr` it issues with), so the session finally minted records how *both* factors were proven. `bypassStrategies` (default none) lets an application declare, say, `["passkey"]` — a user-verified passkey is already multi-factor — and is the only way a first factor skips the divert. Infrastructure failures inside the divert die (the divert has no error channel): failing closed, a `500` rather than a session.
 
 _Previous: [BEH-EA-260](31-two-factor.md#beh-ea-260-totp-is-rfc-6238-computed-by-a-pure-module-checked-against-the-published-vectors) | Next: [BEH-EA-262](31-two-factor.md#beh-ea-262-the-challenge-is-a-single-use-verification-row-consumed-before-the-code-is-checked)_
 

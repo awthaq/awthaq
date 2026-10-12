@@ -130,12 +130,15 @@ const OrganizationLive = Organization.Organization.layer.pipe(
   Layer.provide(CsrfProtectionLive),
 );
 
-export const SamlLive = (
+export const SamlLive = <Wrapped extends Sessions.Sessions | Users.Users = never>(
   samlConfig: Partial<Omit<Saml.SamlConfigInput, "baseUrl">> = {},
   limiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
   fetcher: Layer.Layer<SamlMetadataFetcher.SamlMetadataFetcher> = fakeFetcher({}).layer,
+  /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
+  coreOverride?: Layer.Layer<Wrapped, never, Wrapped>,
 ) =>
   Saml.Saml.layer.pipe(
+    Layer.provide(coreOverride ?? Layer.empty),
     Layer.provide(AdminAuthenticationLive),
     Layer.provide(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),

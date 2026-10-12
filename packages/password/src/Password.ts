@@ -1158,7 +1158,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             const hashOpt = yield* Option.match(accountOpt, {
               onNone: () =>
                 Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-              onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
+              onSome: (account) =>
+                accounts
+                  .findCredentialHash(account.id)
+                  .pipe(Effect.catchTag("AccountNotFound", Effect.die)),
             });
             // BEH-EA-114: this call happens on every attempt, real or not —
             // see `dummyHash`'s own comment.
@@ -1214,7 +1217,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           const rehashed = yield* hasher.hash(input.password);
           yield* accounts
             .updateCredentialHash(account.id, Redacted.make(rehashed))
-            .pipe(Effect.orDie);
+            .pipe(Effect.catchTag("AccountNotFound", Effect.die));
         }
 
         // NAM-002: the sign-in veto (an Auth.js `signIn` callback returning
@@ -1242,9 +1245,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
         }
-        const issued = yield* sessions
-          .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
-          .pipe(Effect.orDie);
+        const issued = yield* sessions.issue({
+          userId: user.id,
+          request: sessionRequest(input),
+          amr: ["pwd"],
+        });
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: user.id,

@@ -77,9 +77,12 @@ export const buildLayer = (
   options?: {
     readonly challengeStore?: Layer.Layer<ChallengeStore.ChallengeStore, never, Crypto.Crypto>;
     readonly rateLimiter?: Layer.Layer<RateLimiter.RateLimiter>;
+    /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
+    readonly coreOverride?: Layer.Layer<Sessions.Sessions, never, Sessions.Sessions>;
   },
 ) =>
   Passkey.Passkey.layer.pipe(
+    Layer.provide(options?.coreOverride ?? Layer.empty),
     Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN], ...configOverrides })),
     Layer.provide(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),

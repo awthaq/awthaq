@@ -8,7 +8,7 @@
 // RSA keypair signing a real RS256 `id_token` that `Jwt.ts`'s own verifier
 // checks — not a stub that always returns `true`.
 import { createHmac, generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
-import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, Errors, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Authentication } from "@awthaq/server";
@@ -123,7 +123,7 @@ const baseUrl = "https://app.example.com";
 /** The claims the FAMS-006 test's fake token endpoint signs (the nonce is only known after `authorize`). */
 let currentAnchorClaims: Record<string, unknown> = {};
 
-const buildLayer = (options: {
+const buildLayer = <Wrapped extends Sessions.Sessions | Users.Users = never>(options: {
   readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
   readonly linking?: "explicit" | { readonly trustedProviders: ReadonlyArray<string> };
   readonly trustedOrigins?: ReadonlyArray<string>;
@@ -135,8 +135,11 @@ const buildLayer = (options: {
   readonly config?: Partial<OAuth.OAuthConfigInput>;
   /** EP-004: per-organization connections, consulted after the static registry. */
   readonly connections?: OAuthConnections.OAuthConnectionResolverShape;
+  /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
+  readonly coreOverride?: Layer.Layer<Wrapped, never, Wrapped>;
 }) =>
   OAuth.OAuth.layer.pipe(
+    Layer.provide(options.coreOverride ?? Layer.empty),
     Layer.provide(
       options.connections === undefined ? Layer.empty : OAuthConnections.layer(options.connections),
     ),
@@ -3678,4 +3681,63 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
       );
     },
   );
+
+  describe("ADR-EA-028: a store outage during the callback is StoreUnavailable, not a defect", () => {
+    const sessionsDown = Layer.effect(
+      Sessions.Sessions,
+      Effect.gen(function* () {
+        const real = yield* Sessions.Sessions;
+        return Sessions.Sessions.of({
+          ...real,
+          issue: () => Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" })),
+        });
+      }),
+    );
+    const usersDown = Layer.effect(
+      Users.Users,
+      Effect.gen(function* () {
+        const real = yield* Users.Users;
+        return Users.Users.of({
+          ...real,
+          findById: () => Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findById" })),
+        });
+      }),
+    );
+    const callbackUnder = <Wrapped extends Sessions.Sessions | Users.Users>(
+      coreOverride: Layer.Layer<Wrapped, never, Wrapped>,
+    ) =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        return yield* oauth
+          .callback("acme", { code: "auth-code", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
+            },
+            coreOverride,
+          }),
+        ),
+      );
+
+    it.effect("ADR-EA-028: Sessions.issue outage is StoreUnavailable", () =>
+      Effect.gen(function* () {
+        assert.strictEqual((yield* callbackUnder(sessionsDown))._tag, "StoreUnavailable");
+      }),
+    );
+
+    it.effect("ADR-EA-028: Users.findById outage is StoreUnavailable", () =>
+      Effect.gen(function* () {
+        assert.strictEqual((yield* callbackUnder(usersDown))._tag, "StoreUnavailable");
+      }),
+    );
+  });
 });

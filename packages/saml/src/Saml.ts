@@ -1024,7 +1024,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         // SCP-001/BAM-005: THE shared sign-in gate — the IdP proved the identity; a suspended user still gets no session.
         const user = yield* users
           .findById(targetUserId)
-          .pipe(Effect.orDie, Effect.tap(Users.assertCanSignIn));
+          .pipe(Effect.catchTag("UserNotFound", Effect.die), Effect.tap(Users.assertCanSignIn));
         const userEmail = Users.emailOf(user);
         yield* HookPoint.aborted(Hooks.BeforeSignIn)(
           beforeSignIn.run({
@@ -1033,7 +1033,13 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             strategy: providerId,
           }),
         );
-        const point = yield* beforeSessionIssue.run({ userId: targetUserId, strategy: providerId });
+        // The divert context and the issued session must agree on how the first factor was proven.
+        const amr = ["fed"] satisfies ReadonlyArray<Sessions.AuthMethod>;
+        const point = yield* beforeSessionIssue.run({
+          userId: targetUserId,
+          strategy: providerId,
+          amr,
+        });
         if (point._tag === "Diverted") return yield* Effect.fail(point.value);
         yield* applyRoleMapping(connection, assertion, targetUserId);
         const issued = yield* sessions.issue({
@@ -1042,7 +1048,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             ...(input.ip !== undefined ? { ip: input.ip } : {}),
             ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
           },
-          amr: ["fed"],
+          amr,
         });
         // BEH-EA-315: remember which identity the IdP knows this session by, so a Single Logout can find it again.
         yield* records.saveSession({

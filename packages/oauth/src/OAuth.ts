@@ -1353,7 +1353,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         // identity; a suspended user still gets no session.
         const signedInUser = yield* users
           .findById(targetUserId)
-          .pipe(Effect.orDie, Effect.tap(Users.assertCanSignIn));
+          .pipe(Effect.catchTag("UserNotFound", Effect.die), Effect.tap(Users.assertCanSignIn));
         // NAM-002: the sign-in veto, before the MFA divert point below.
         const signedInEmail = Users.emailOf(signedInUser);
         yield* HookPoint.aborted(Hooks.BeforeSignIn)(
@@ -1377,16 +1377,14 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         }
         // CSD-003: the callback request is the browser's own, so its
         // address and user agent are what the device list should show.
-        const issued = yield* sessions
-          .issue({
-            userId: targetUserId,
-            request: {
-              ...(input.ip !== undefined ? { ip: input.ip } : {}),
-              ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
-            },
-            amr: ["fed"],
-          })
-          .pipe(Effect.orDie);
+        const issued = yield* sessions.issue({
+          userId: targetUserId,
+          request: {
+            ...(input.ip !== undefined ? { ip: input.ip } : {}),
+            ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
+          },
+          amr: ["fed"],
+        });
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: targetUserId,

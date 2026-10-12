@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-028 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented for `Sessions`, `Verification`, `Users`, `Accounts` and `AuditLog` |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006); 1.1 (2026-09-29): `AuditLog` converted, the audit-write failure policy, the transient-retry helper (MA-004, SEA-002) |
+> | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006); 1.1 (2026-09-29): `AuditLog` converted, the audit-write failure policy, the transient-retry helper (MA-004, SEA-002) <br> 1.2 (2026-10-13): the sign-in completions of the first-party plugins converted (plan 10 item 2) |
 
 ---
 
@@ -42,7 +42,7 @@ Core services fail in two different ways. A *domain* failure (`SessionNotFound`,
 
 **Negative**: every Shape that reaches a core service widens by one error, a one-time cascade through the plugin Shapes; `StoreUnavailable` is declared on the middleware rather than per endpoint, so a public endpoint behind neither cannot fail with it without declaring it itself (none does today).
 
-**Rollout**: `Sessions` (the hot path), `Verification`, `VerificationLink`, `Users`, `Accounts` and `AuditLog` are done, in both layers (`Users.create`'s crypto `PlatformError` included). Every `AuditLog` method (`record`, `list`, `replay`, `pseudonymizeActor`, `purge`) fails with `StoreUnavailable` instead of dying; `DataExport`, `Retention` and `EventRelay` carry it in their own `E`.
+**Rollout**: `Sessions` (the hot path), `Verification`, `VerificationLink`, `Users`, `Accounts` and `AuditLog` are done, in both layers (`Users.create`'s crypto `PlatformError` included). Every `AuditLog` method (`record`, `list`, `replay`, `pseudonymizeActor`, `purge`) fails with `StoreUnavailable` instead of dying; `DataExport`, `Retention` and `EventRelay` carry it in their own `E`. The sign-in completions of the first-party plugins (`password`, `passkey`, `oauth`, `saml`) no longer `orDie` the `Sessions.issue`, `Users.findById` and `Accounts` reads on the hot path; a domain error impossible by construction dies on its own tag only.
 
 ## Audit-write failure policy (1.1)
 

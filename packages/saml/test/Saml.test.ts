@@ -1,7 +1,7 @@
 // BEH-EA-238 through 245 (spec/behaviors/29-saml-sp.md), through the service: SP-initiated login, then the ACS
 // chain against signed responses the fixtures' IdP produces — and against every way of getting one wrong. The
 // invariant asserted throughout: every rejection is the SAME `SamlAssertionRejected`, and never a session.
-import { AuthEvents, Users } from "@awthaq/core";
+import { AuthEvents, Errors, Hooks, Sessions, Users } from "@awthaq/core";
 import { OrganizationRecords } from "@awthaq/organization";
 import { RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
@@ -32,6 +32,7 @@ import {
 } from "./samlFixtures.ts";
 import {
   atNow,
+  fakeFetcher,
   idpResponse,
   SamlLive,
   seedConnection,
@@ -699,5 +700,86 @@ describe("rate limits", () => {
         ),
       ),
     ),
+  );
+});
+
+describe("a sign-in consulting BeforeSessionIssue (plan 10 item 1)", () => {
+  it.effect("BEH-EA-240: the divert context carries the same amr the session records", () => {
+    const seen: Array<{ userId: string; strategy: string; amr?: ReadonlyArray<string> }> = [];
+    const recorder = Hooks.BeforeSessionIssue.tap((input) =>
+      Effect.sync(() => {
+        seen.push(input);
+        return Option.none();
+      }),
+    );
+    return Effect.gen(function* () {
+      yield* atNow;
+      const saml = yield* Saml.Saml;
+      const { connection } = yield* seedConnection();
+      const started = yield* startLogin(connection.id);
+      const outcome = yield* saml.acs({
+        samlResponse: idpResponse(started, connection.id),
+        cookieState: started.state,
+      });
+      assert.strictEqual(seen.length, 1);
+      assert.deepStrictEqual(seen[0]?.amr, ["fed"]);
+      assert.deepStrictEqual(seen[0]?.amr, outcome.session.session.amr);
+      assert.strictEqual(seen[0]?.userId, outcome.session.session.userId);
+    }).pipe(Effect.provide(recorder.pipe(Layer.provideMerge(SamlLive()))));
+  });
+});
+
+/** The real in-memory `Sessions`, except that minting a session reports an outage. */
+const SessionsDownOnIssue = Layer.effect(
+  Sessions.Sessions,
+  Effect.gen(function* () {
+    const real = yield* Sessions.Sessions;
+    return Sessions.Sessions.of({
+      ...real,
+      issue: () => Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" })),
+    });
+  }),
+);
+
+/** The real in-memory `Users`, except that reading by id reports an outage. */
+const UsersDownOnFindById = Layer.effect(
+  Users.Users,
+  Effect.gen(function* () {
+    const real = yield* Users.Users;
+    return Users.Users.of({
+      ...real,
+      findById: () => Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findById" })),
+    });
+  }),
+);
+
+describe("ADR-EA-028: a store outage during sign-in is StoreUnavailable, not a defect", () => {
+  const outage = <Wrapped extends Sessions.Sessions | Users.Users>(
+    override: Layer.Layer<Wrapped, never, Wrapped>,
+  ) =>
+    Effect.gen(function* () {
+      yield* atNow;
+      const saml = yield* Saml.Saml;
+      const { connection } = yield* seedConnection();
+      const started = yield* startLogin(connection.id);
+      return yield* saml
+        .acs({ samlResponse: idpResponse(started, connection.id), cookieState: started.state })
+        .pipe(Effect.flip);
+    }).pipe(
+      Effect.provide(SamlLive({}, RateLimiter.layerPermissive, fakeFetcher({}).layer, override)),
+    );
+
+  it.effect("ADR-EA-028: Sessions.issue outage is StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const failure = yield* outage(SessionsDownOnIssue);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+    }),
+  );
+
+  it.effect("ADR-EA-028: Users.findById outage is StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const failure = yield* outage(UsersDownOnFindById);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+    }),
   );
 });

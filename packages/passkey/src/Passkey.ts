@@ -1651,18 +1651,16 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           if (point._tag === "Diverted") {
             return yield* Effect.fail(point.value);
           }
-          const issued = yield* sessions
-            .issue({
-              userId: stored.userId,
-              request: {
-                ...(input.ip !== undefined ? { ip: input.ip } : {}),
-                ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
-              },
-              // THS-003/HSK-005: the kind of key (hardware-bound or synced), plus user
-              // verification when the authenticator performed it.
-              amr,
-            })
-            .pipe(Effect.orDie);
+          const issued = yield* sessions.issue({
+            userId: stored.userId,
+            request: {
+              ...(input.ip !== undefined ? { ip: input.ip } : {}),
+              ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
+            },
+            // THS-003/HSK-005: the kind of key (hardware-bound or synced), plus user
+            // verification when the authenticator performed it.
+            amr,
+          });
           yield* events.publish({
             _tag: "auth.user.signedIn",
             userId: stored.userId,

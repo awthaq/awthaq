@@ -20,6 +20,7 @@
 import { Api, SessionContract } from "@awthaq/api";
 import {
   AuditLog,
+  Errors,
   Hooks,
   AuthEvents,
   RateLimits,
@@ -118,10 +119,16 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 const buildAppLayer = (
   mailerLayer: Layer.Layer<Mailer.Mailer>,
   passwordConfig: Partial<Password.PasswordConfigShape> = {},
+  coreOverride?: Layer.Layer<Sessions.Sessions, never, Sessions.Sessions>,
 ) =>
   Layer.mergeAll(
     AuthHttp.routes(PasswordApi.PasswordApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Password.Password.layer.pipe(Layer.provide(Password.config(passwordConfig)))),
+      Layer.provide(
+        Password.Password.layer.pipe(
+          Layer.provide(Password.config(passwordConfig)),
+          Layer.provide(coreOverride ?? Layer.empty),
+        ),
+      ),
     ),
     AuthHttp.docs(PasswordApi.PasswordApi),
   ).pipe(
@@ -968,6 +975,43 @@ describe("AuthHttp + Password (real HTTP)", () => {
         post(handler, "/password/sign-up", { email: "typo@example.com", password: strongPassword }),
       );
       assert.strictEqual(retry.status, 200);
+    }),
+  );
+
+  it.effect("ADR-EA-028: a session-store outage during sign-in answers 503 StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const mailer = capturingMailer();
+      const down = { value: false };
+      const sessionsDown = Layer.effect(
+        Sessions.Sessions,
+        Effect.gen(function* () {
+          const real = yield* Sessions.Sessions;
+          return Sessions.Sessions.of({
+            ...real,
+            issue: (input) =>
+              down.value
+                ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
+                : real.issue(input),
+          });
+        }),
+      );
+      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer, {}, sessionsDown));
+      const signedUp = yield* Effect.promise(() =>
+        post(handler, "/password/sign-up", { email: "cy@example.com", password: strongPassword }),
+      );
+      assert.strictEqual(signedUp.status, 200);
+      yield* verifyLatestSignUp(handler, mailer);
+
+      down.value = true;
+      const response = yield* Effect.promise(() =>
+        post(handler, "/password/sign-in", { email: "cy@example.com", password: strongPassword }),
+      );
+      assert.strictEqual(response.status, 503);
+      // The wire error carries only its static `operation` label, never a cause.
+      assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+        _tag: "StoreUnavailable",
+        operation: "Sessions.issue",
+      });
     }),
   );
 });

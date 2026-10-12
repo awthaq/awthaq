@@ -79,16 +79,19 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-export const makeTestLayer = (
+export const makeTestLayer = <Wrapped extends Sessions.Sessions | Accounts.Accounts = never>(
   options: {
     readonly httpClient?: Layer.Layer<HttpClient.HttpClient>;
     readonly config?: Partial<Password.PasswordConfigShape>;
     readonly mailer?: Layer.Layer<Mailer.Mailer>;
     readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
     readonly hasher?: Layer.Layer<PasswordHasher.PasswordHasher, never, Crypto.Crypto>;
+    /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
+    readonly coreOverride?: Layer.Layer<Wrapped, never, Wrapped>;
   } = {},
 ) =>
   Password.Password.layer.pipe(
+    Layer.provide(options.coreOverride ?? Layer.empty),
     Layer.provideMerge(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
