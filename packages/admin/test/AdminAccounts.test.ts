@@ -246,7 +246,10 @@ describe("AdminAccounts: deleteUser (BAM-005)", () => {
         assert.isTrue(
           events.some(
             (e) =>
-              e._tag === "auth.user.deleted" && e.userId === targetId && e.deletedBy === "admin",
+              e._tag === "auth.user.deleted" &&
+              e.userId === targetId &&
+              e.deletedBy === "admin" &&
+              e.adminUserId === adminId,
           ),
         );
         assert.isTrue(

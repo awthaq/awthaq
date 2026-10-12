@@ -21,15 +21,25 @@
 //   `active: true` reactivates only a suspension this connection itself made
 //   (its `statusReason` marker), so an administrator's ban is never lifted by a
 //   directory sync.
-// - `DELETE` is configurable: `deactivate` (default) or `erase` (`Users.delete`,
-//   running the `BeforeUserDelete` erasure taps).
+// - `DELETE` is configurable: `deactivate` (default) or `erase` (`AccountErasure.eraseAccount`
+//   with a `Directory` initiator, the ADR-EA-031 cascade; a `BeforeUserDelete` veto is `403` and
+//   touches nothing).
 // - Group changes only ever touch the users this connection provisioned: a
 //   `PUT /Groups` member list replaces *those*; other members of the team stay.
 //
 // `ScimConfig` is a `Context.Reference` with defaults (ADR-EA-011), read at layer
 // build like every plugin's config.
 
-import { AuthEvents, AuthPlugin, Errors, Migrations, Sessions, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  DataExport,
+  Erasure,
+  Errors,
+  Migrations,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import {
   ActiveContextRecords,
   MembershipRecords,
@@ -409,7 +419,47 @@ const scimMigrations: Migrations.Migrations = [
       yield* sql`CREATE UNIQUE INDEX scim_resource_external_id_unique ON scim_resource("scimConnectionId", kind, "externalId")`;
     }),
   },
+  {
+    // ADR-EA-031: erasure and export look a user up across every connection.
+    name: "index_scim_resource_by_resource",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE INDEX scim_resource_by_resource ON scim_resource(kind, "resourceId")`;
+    }),
+  },
 ];
+
+/**
+ * ADR-EA-031/CSG-001: this plugin's part of `AccountErasure.eraseAccount`. A `scim_resource` user
+ * row holds the directory's `userName` (usually the email) and `externalId`; it goes with the user,
+ * whoever started the erasure, inside the erasure's transaction.
+ */
+export const scimErasure = Erasure.contribute({
+  id: "scim",
+  make: Effect.gen(function* () {
+    const records = yield* ScimRecords.ScimRecords;
+    return (subject: Erasure.ErasureSubject) => records.unlinkResource("User", subject.userId);
+  }),
+});
+
+/** CSG-005: which directory connections provisioned the person, under which userName/externalId. */
+export const scimExport = DataExport.contribute({
+  id: "scim",
+  make: Effect.gen(function* () {
+    const records = yield* ScimRecords.ScimRecords;
+    return (subject: DataExport.DataExportSubject) =>
+      records.linksOfResource("User", subject.userId).pipe(
+        Effect.map((links) => ({
+          provisionedBy: links.map((link) => ({
+            connectionId: link.connectionId,
+            userName: Option.getOrNull(link.name),
+            externalId: Option.getOrNull(link.externalId),
+            createdAt: DateTime.formatIso(link.createdAt),
+          })),
+        })),
+      );
+  }),
+});
 
 export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
   apiVersion: 1,
@@ -419,6 +469,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
 }) {
   static readonly layer = AuthPlugin.layer(Scim, {
     dependsOn: [Organization.Organization],
+    contributes: Layer.mergeAll(scimErasure, scimExport),
     handlers: HttpApiBuilder.group(
       ScimApi.ScimApi,
       "scim",
@@ -525,6 +576,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       const events = yield* AuthEvents.AuthEvents;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
+      const erasure = yield* Erasure.AccountErasure;
       const organization = yield* Organization.Organization;
       const records = yield* ScimRecords.ScimRecords;
       const members = yield* MembershipRecords.MembershipRecords;
@@ -884,18 +936,25 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       const deleteUser: ScimShape["deleteUser"] = Effect.fnUntraced(function* (connection, id) {
         const owned = yield* ownedUser(connection, id);
         if (cfg.deleteBehavior === "erase") {
-          // P20a (BEH-EA-250): the veto hooks run inside `users.delete`, so ask first. Revoking
-          // the sessions and dropping the mapping beforehand meant a refused erasure (a legal
-          // hold) still logged the user out and hid it from its own directory.
-          yield* users.delete(owned.user.id).pipe(
-            Effect.catchTags({
-              UserNotFound: () => Effect.void,
-              // A veto hook (ADR-EA-005 `beforeDelete`) refused the erasure: the directory may not do this.
-              HookAborted: (aborted) => Effect.fail(ScimApi.forbidden(aborted.message)),
-            }),
-          );
-          yield* sessions.revokeAll(owned.user.id, "userDeleted");
-          yield* records.unlink(connection.id, "User", owned.user.id);
+          // BEH-EA-250 (P20a): the veto is consulted inside `eraseAccount` before anything is touched,
+          // so a refused erasure (a legal hold) leaves the sessions, the mapping and the memberships
+          // in place. The erasure also removes the mapping (`scimErasure`) and revokes the sessions.
+          yield* erasure
+            .eraseAccount(
+              owned.user.id,
+              Erasure.ErasureInitiator.Directory({
+                connectionId: connection.id,
+                organizationId: connection.organizationId,
+              }),
+            )
+            .pipe(
+              Effect.catchTags({
+                // Erased by someone else since `ownedUser` read it; their erasure dropped the mapping too.
+                UserNotFound: () => Effect.fail(ScimApi.notFound(`User ${id} not found`)),
+                // A veto hook (ADR-EA-005 `beforeDelete`) refused the erasure: the directory may not do this.
+                HookAborted: (aborted) => Effect.fail(ScimApi.forbidden(aborted.message)),
+              }),
+            );
           yield* events.publish({
             _tag: "auth.scim.userDeleted",
             connectionId: connection.id,

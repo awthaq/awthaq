@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-30 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) |
+> | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-10-13): `DELETE` in `erase` mode runs `AccountErasure.eraseAccount` with a `Directory` initiator (BEH-EA-250), is announced by core's `auth.user.deleted` ahead of `auth.scim.userDeleted` (BEH-EA-253), and `@awthaq/scim` takes part in every erasure and export (architecture plan 03) |
 ---
 
 > `@awthaq/scim` composes as `Auth.make([Organization, Scim])` (`Scim` `dependsOn: [Organization]`), serves `/scim/v2` per RFC 7644, and stands on the user status of [BEH-EA-46](06-domain-users-accounts.md) and `Sessions.revokeAll`. Everything below is what a directory service (Okta, Entra ID, OneLogin) relies on, plus the safety rules that keep an organization's directory from reaching accounts it did not create.
@@ -100,13 +100,19 @@ _Previous: [BEH-EA-248](30-scim.md#beh-ea-248-username-is-immutable-and-the-othe
 REQUIREMENT: `DELETE /Users/:id` MUST, by default, behave as `active: false`
              (BEH-EA-249): the user, its accounts and history remain, and the
              resource stays readable as inactive. When `ScimConfig.deleteBehavior`
-             is `"erase"`, it MUST revoke every session, remove the mapping and
-             delete the user through `Users.delete` (so the `BeforeUserDelete`
-             erasure taps run, and a tap that vetoes is `403`); the user's external id is then free to be
-             provisioned again as a new user.
+             is `"erase"`, it MUST erase the user through
+             `AccountErasure.eraseAccount` with a `Directory` initiator naming
+             the connection and its organization: every registered erasure
+             contribution (organization memberships and invitations, the
+             connection's mapping, ...), accounts, sessions, verification
+             tokens, the user and the audit pseudonymization, in one
+             transaction. A `BeforeUserDelete` veto MUST be `403` and leave the
+             user, its sessions, its memberships and the mapping as they were;
+             a user erased in the meantime is `404`. Afterwards the user's
+             external id is free to be provisioned again as a new user.
 ```
 
-The two observable postconditions differ on purpose (a deleted user's row, accounts and history are gone), which is why erasure is opt-in.
+The two observable postconditions differ on purpose (a deleted user's row, accounts and history are gone), which is why erasure is opt-in. The cascade is the same one a self-service or administrator deletion runs ([ADR-EA-031](../decisions/031-erasure-registry-and-retention.md)): a directory erasure frees the organization's seat and unlinks the person's SAML accounts, and `@awthaq/scim` contributes to every erasure (so a self-service deletion also drops the directory's mapping, whose `userName` is usually the email) and to the data-subject export (the connections that provisioned the person).
 
 _Previous: [BEH-EA-249](30-scim.md#beh-ea-249-active-is-suspension-that-ends-every-session-and-only-its-own-suspension-is-lifted) | Next: [BEH-EA-251](30-scim.md#beh-ea-251-groups-are-organization-teams-and-a-connection-only-changes-the-users-it-provisioned)_
 
@@ -164,6 +170,8 @@ REQUIREMENT: The plugin MUST publish `auth.scim.userProvisioned`,
              A repeat `POST` that converges on an existing user MUST NOT
              publish `userProvisioned` again.
 ```
+
+An erasing `DELETE` is also announced by core's `auth.user.deleted` (`deletedBy: "directory"`, with the connection and organization ids), which precedes `auth.scim.userDeleted`; the latter is published only for a deletion this request performed.
 
 The audit actor is the connection, not a user: the connection id rides in the event payload, and no user id is recorded as the actor.
 

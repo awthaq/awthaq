@@ -733,6 +733,29 @@ describe("AuditLog (layerSql) — ESA-007 stored-row decoding", () => {
         assert.deepStrictEqual(row?.payload, { _tag: "auth.user.created", userId });
       }).pipe(Effect.provide(SqlLayer)),
   );
+
+  it.effect(
+    "an auth.user.deleted row written before the initiator fields existed still decodes",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* Repositories.AuditLogRepository;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* repo.insert({
+          id: "018f0000-0000-7000-8000-000000000097",
+          eventTag: "auth.user.deleted",
+          actorUserId: userId,
+          occurredAt: DateTime.makeUnsafe(1_700_000_000_000),
+          correlationId: null,
+          payload: { _tag: "auth.user.deleted", userId, deletedBy: "self" },
+        });
+        const [row] = yield* auditLog.list({ eventTag: "auth.user.deleted" });
+        assert.deepStrictEqual(row?.payload, {
+          _tag: "auth.user.deleted",
+          userId,
+          deletedBy: "self",
+        });
+      }).pipe(Effect.provide(SqlLayer)),
+  );
 });
 
 // AuthEvents integration: BEH-EA-100's own point is that `publish` itself

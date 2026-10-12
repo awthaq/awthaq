@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1260 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1267; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1263 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1270; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1278,3 +1278,6 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1265 | [BEH-EA-313](../spec/behaviors/34-webhooks.md#beh-ea-313-an-endpoint-can-carry-custom-request-headers-sealed-at-rest-and-never-returned) | [15-webhooks/34-webhooks.feature](features/15-webhooks/34-webhooks.feature) | The headers are sent with every delivery beneath the delivery's own |
 | REQ-EA-1266 | [BEH-EA-313](../spec/behaviors/34-webhooks.md#beh-ea-313-an-endpoint-can-carry-custom-request-headers-sealed-at-rest-and-never-returned) | [15-webhooks/34-webhooks.feature](features/15-webhooks/34-webhooks.feature) | A header the delivery sets itself, or that could change the request, is refused |
 | REQ-EA-1267 | [BEH-EA-313](../spec/behaviors/34-webhooks.md#beh-ea-313-an-endpoint-can-carry-custom-request-headers-sealed-at-rest-and-never-returned) | [15-webhooks/34-webhooks.feature](features/15-webhooks/34-webhooks.feature) | A header value that could split the request is refused |
+| REQ-EA-1268 | [BEH-EA-250](../spec/behaviors/30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | An erasing DELETE runs the whole account erasure |
+| REQ-EA-1269 | [BEH-EA-250](../spec/behaviors/30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | An erasing DELETE frees the organization seat |
+| REQ-EA-1270 | [BEH-EA-250](../spec/behaviors/30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | A user who deletes their own account loses the directory's mapping too |

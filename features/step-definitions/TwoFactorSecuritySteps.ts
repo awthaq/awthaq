@@ -132,7 +132,9 @@ export const twoFactorSecuritySteps = defineSteps<World>(({ Given, When, Then })
   When("{string}'s account is erased", function* (name: string) {
     const person = yield* getPerson(name);
     yield* direct(
-      Effect.flatMap(Erasure.AccountErasure, (erasure) => erasure.eraseAccount(person.userId)),
+      Effect.flatMap(Erasure.AccountErasure, (erasure) =>
+        erasure.eraseAccount(person.userId, Erasure.ErasureInitiator.Self()),
+      ),
     );
   });
 

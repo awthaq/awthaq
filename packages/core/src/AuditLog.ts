@@ -166,6 +166,7 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.user.signedIn":
     case "auth.user.emailVerified":
     case "auth.user.emailChanged":
+    // receipt: the erased id stays the actor, whoever initiated (ADR-EA-029 §4).
     case "auth.user.deleted":
     case "auth.user.dataExported":
     case "auth.session.reuse":

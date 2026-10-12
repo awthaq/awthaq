@@ -113,7 +113,7 @@ export const AccountHandlers = HttpApiBuilder.group(
       // same guaranteed-complete cascade; this handler is only the HTTP edge.
       deleteUser: Effect.fnUntraced(function* () {
         const { userId } = yield* currentUser;
-        yield* erasure.eraseAccount(userId, { deletedBy: "self" }).pipe(
+        yield* erasure.eraseAccount(userId, Erasure.ErasureInitiator.Self()).pipe(
           // `@awthaq/api` (the contract stratum) sits below core and cannot name core's
           // `HookAborted`, so the endpoint declares no error for a `BeforeUserDelete` veto
           // (a legal hold): as before this refactor, it surfaces as a server defect.

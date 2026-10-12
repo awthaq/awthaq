@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-023 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — SCIM and SAML (SP) implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (AOMS-009, CWM-002, SFS-003, SFS-006, SFS-007; wayfinder tickets 08 and 18). The plan proposed ADR-EA-019, which [ADR-EA-019](019-encryption-key-rotation.md) already holds. <br> 1.1 (2026-09-29): SAML is built; the port is `XmlSignature` (generic XML-DSig) rather than `SamlSigner`, verified over `xml-crypto`, with the library evaluation recorded in Decision 3 (SFS-003) |
+> | Change History | 1.0 (2026-09-29): Initial release (AOMS-009, CWM-002, SFS-003, SFS-006, SFS-007; wayfinder tickets 08 and 18). The plan proposed ADR-EA-019, which [ADR-EA-019](019-encryption-key-rotation.md) already holds. <br> 1.1 (2026-09-29): SAML is built; the port is `XmlSignature` (generic XML-DSig) rather than `SamlSigner`, verified over `xml-crypto`, with the library evaluation recorded in Decision 3 (SFS-003) <br> 1.2 (2026-10-13): `DELETE` in `erase` mode is `AccountErasure.eraseAccount`, the ADR-EA-031 cascade, not `Users.delete` (architecture plan 03) |
 
 ---
 
@@ -42,7 +42,7 @@ Enterprise buyers of a self-hosted auth runtime routinely gate the purchase on S
 
 **4. `Sso` is a thin dispatcher, not a third protocol implementation (SFS-006).** `Saml` and `OAuth` own their protocol routes (`saml.*`, `oauth.*` groups, [BEH-EA-4](../behaviors/01-plugin-contract.md)). `Sso` (`spec/models/09-sso.md`, still Planned) is a connection-resolver plugin over the organization's connections (`organization_oauth_connection` today, kind `oidc | oauth2`, with `saml` reserved): `POST /auth/sso/start { email | organizationId }` resolves the connection (by email domain or organization id) and returns the redirect the owning plugin produces. The resolver half already exists — `OrganizationConnectionStore.discover` ([BEH-EA-235](../behaviors/28-tenancy.md)) maps an organization id or an email's domain to a provider id — so `Sso` is the HTTP shell around it.
 
-**5. Deprovisioning is a first-class act.** A SCIM `active: false` is suspension (`Users.setStatus(userId, "suspended")` then `Sessions.revokeAll(userId, "suspended")`), never a deletion; `DELETE` is configured to deactivate (the default) or erase (`Users.delete`, running the `BeforeUserDelete` taps). SCIM only ever acts on users **its connection provisioned**: it neither adopts an existing account by email (a directory must not be able to claim, then suspend, someone else's global identity — [ADR-EA-018](018-tenancy-is-an-organization.md) Decision 4) nor changes a provisioned user's `userName` (an IdP-driven email change would be an account-takeover path), and it reactivates only a suspension it made itself. The contracts are in `spec/behaviors/30-scim.md` and `spec/models/12-scim.md`.
+**5. Deprovisioning is a first-class act.** A SCIM `active: false` is suspension (`Users.setStatus(userId, "suspended")` then `Sessions.revokeAll(userId, "suspended")`), never a deletion; `DELETE` is configured to deactivate (the default) or erase (`AccountErasure.eraseAccount`, the ADR-EA-031 cascade). SCIM only ever acts on users **its connection provisioned**: it neither adopts an existing account by email (a directory must not be able to claim, then suspend, someone else's global identity — [ADR-EA-018](018-tenancy-is-an-organization.md) Decision 4) nor changes a provisioned user's `userName` (an IdP-driven email change would be an account-takeover path), and it reactivates only a suspension it made itself. The contracts are in `spec/behaviors/30-scim.md` and `spec/models/12-scim.md`.
 
 **6. Roadmap.** SAML and SCIM move from "Planned-Phase3, not v1 scope" to a scheduled sequence: user status (done, ticket 09) → SCIM (done) → SAML SP (done, with its `XmlSignature` port over `xml-crypto`) → the `Sso` dispatcher. `spec/roadmap.md` and `spec/models/00-adoption-matrix.md` reflect it. OIDC Provider and Device Authorization keep their own rows.
 

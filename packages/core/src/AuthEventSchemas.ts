@@ -101,13 +101,19 @@ export const UserEmailChangedEvent = Schema.TaggedStruct("auth.user.emailChanged
 export type UserEmailChangedEvent = typeof UserEmailChangedEvent.Type;
 
 /**
- * SCP-006: published once a user's deletion has committed (`@awthaq/server`'s
- * account deletion). Deliberately no email: the row is being erased (ESA-005),
- * and the audit rows that outlive it are pseudonymized, not deleted.
+ * SCP-006: published once a user's erasure has committed (`Erasure.AccountErasure`, the only
+ * path). Deliberately no email: the row is being erased (ESA-005), and the audit rows that
+ * outlive it are pseudonymized, not deleted. `deletedBy` names the initiator kind; the
+ * initiator's own ids ride along (identifiers only, ADR-EA-029): `adminUserId` for "admin",
+ * `connectionId`/`organizationId` for "directory". Rows written before these fields existed
+ * decode unchanged (all optional).
  */
 export const UserDeletedEvent = Schema.TaggedStruct("auth.user.deleted", {
   userId: UserIdSchema,
-  deletedBy: Schema.Literals(["self", "admin"]),
+  deletedBy: Schema.Literals(["self", "admin", "directory"]),
+  adminUserId: Schema.optionalKey(UserIdSchema),
+  connectionId: Schema.optionalKey(Schema.String),
+  organizationId: Schema.optionalKey(Schema.String),
 });
 export type UserDeletedEvent = typeof UserDeletedEvent.Type;
 

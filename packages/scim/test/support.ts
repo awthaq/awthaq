@@ -2,7 +2,16 @@
 // plugin (`Scim` `dependsOn: [Organization]`), the SCIM records, connection store and
 // bearer authentication — the same layer graph an application builds.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  Erasure,
+  Hooks,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -16,7 +25,7 @@ import * as ScimConnections from "../src/ScimConnections.ts";
 import * as ScimRecords from "../src/ScimRecords.ts";
 
 const CoreLive = (users: typeof Users.layerMemory, hooks: typeof Hooks.HooksLive) =>
-  Layer.mergeAll(Sessions.layerMemory, users).pipe(
+  Layer.mergeAll(Sessions.layerMemory, Accounts.layerMemory, Verification.layerMemory, users).pipe(
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layerMemory),
     Layer.provideMerge(hooks),
@@ -65,6 +74,9 @@ export const ScimLive = (
     Layer.provideMerge(OrganizationLive(organizationConfig)),
     Layer.provideMerge(ScimRecords.layerMemory),
     Layer.provideMerge(OrganizationMemory.layer),
+    // `AccountErasure` (SCIM `erase` runs the ADR-EA-031 cascade) shares the one `ErasureRegistry`
+    // from `hooks` with the organization and SCIM contributions.
+    Layer.provideMerge(Erasure.layer),
     Layer.provideMerge(CoreLive(users, hooks)),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),

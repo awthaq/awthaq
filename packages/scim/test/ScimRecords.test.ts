@@ -164,6 +164,28 @@ const suite = (name: string, layer: Layer.Layer<ScimRecords.ScimRecords, unknown
       }).pipe(Effect.provide(layer)),
     );
 
+    it.effect(
+      "unlinkResource drops a user's links across connections and leaves groups and other users",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* ScimRecords.ScimRecords;
+          yield* records.link({ connectionId: "c1", kind: "User", resourceId: "u1", name: "a" });
+          yield* records.link({ connectionId: "c2", kind: "User", resourceId: "u1", name: "a" });
+          yield* records.link({ connectionId: "c1", kind: "User", resourceId: "u2", name: "b" });
+          yield* records.link({ connectionId: "c1", kind: "Group", resourceId: "u1" });
+          assert.deepStrictEqual(
+            (yield* records.linksOfResource("User", "u1")).map((row) => row.connectionId),
+            ["c1", "c2"],
+          );
+          yield* records.unlinkResource("User", "u1");
+          assert.deepStrictEqual(yield* records.linksOfResource("User", "u1"), []);
+          assert.isTrue(Option.isSome(yield* records.find("c1", "User", "u2")));
+          assert.isTrue(Option.isSome(yield* records.find("c1", "Group", "u1")));
+          // Idempotent.
+          yield* records.unlinkResource("User", "u1");
+        }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("list pages oldest-first and reports the total", () =>
       Effect.gen(function* () {
         const records = yield* ScimRecords.ScimRecords;

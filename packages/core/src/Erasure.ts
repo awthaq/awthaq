@@ -45,6 +45,7 @@
 
 import { SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -79,17 +80,47 @@ export const ErasureConfig = Context.Reference<ErasureConfigShape>("awthaq/core/
 export const config = (partial: Partial<ErasureConfigShape>) =>
   Layer.succeed(ErasureConfig, { auditLog: "pseudonymize", ...partial });
 
+/**
+ * Who asked for the erasure. Required, so no caller is silently labelled "self".
+ * `Self` is the account holder (`DELETE /user`), `Admin` an administrator
+ * (`AdminAccounts.deleteUser`), `Directory` a directory connection
+ * (`@awthaq/scim` `DELETE /Users/:id` with `deleteBehavior: "erase"`).
+ */
+export type ErasureInitiator = Data.TaggedEnum<{
+  Self: {};
+  Admin: { readonly adminUserId: UserId };
+  Directory: { readonly connectionId: string; readonly organizationId: string };
+}>;
+export const ErasureInitiator = Data.taggedEnum<ErasureInitiator>();
+
 export interface AccountErasureShape {
   /**
    * Erases `userId` everywhere (see the module header for the order). Fails
    * `UserNotFound` for an unknown user and `HookAborted` when a
    * `BeforeUserDelete` tap vetoes; anything else dies and rolls back.
+   * `initiator` is recorded on `auth.user.deleted`.
    */
   readonly eraseAccount: (
     userId: UserId,
-    options?: { readonly deletedBy?: "self" | "admin" },
+    initiator: ErasureInitiator,
   ) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted | StoreUnavailable>;
 }
+
+/** The `deletedBy` half of `auth.user.deleted`, one case per initiator. */
+const deletedByOf = (initiator: ErasureInitiator) => {
+  switch (initiator._tag) {
+    case "Self":
+      return { deletedBy: "self" } as const;
+    case "Admin":
+      return { deletedBy: "admin", adminUserId: initiator.adminUserId } as const;
+    case "Directory":
+      return {
+        deletedBy: "directory",
+        connectionId: initiator.connectionId,
+        organizationId: initiator.organizationId,
+      } as const;
+  }
+};
 
 export class AccountErasure extends Context.Service<AccountErasure, AccountErasureShape>()(
   "awthaq/core/AccountErasure",
@@ -109,7 +140,7 @@ export const layer = Layer.effect(
     const beforeDelete = yield* Hooks.BeforeUserDelete;
     const { auditLog: auditPolicy } = yield* ErasureConfig;
 
-    const eraseAccount: AccountErasureShape["eraseAccount"] = (userId, options) =>
+    const eraseAccount: AccountErasureShape["eraseAccount"] = (userId, initiator) =>
       Effect.gen(function* () {
         const user = yield* users.findById(userId);
         const email = Option.getOrUndefined(emailOf(user));
@@ -138,7 +169,7 @@ export const layer = Layer.effect(
         yield* events.publish({
           _tag: "auth.user.deleted",
           userId,
-          deletedBy: options?.deletedBy ?? "self",
+          ...deletedByOf(initiator),
         });
       });
 

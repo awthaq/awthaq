@@ -131,6 +131,13 @@ export interface ScimRecordsShape {
     kind: ResourceKind,
     resourceId: string,
   ) => Effect.Effect<void>;
+  /** ADR-EA-031: every link to `resourceId` of `kind`, across all connections (erasure and export). */
+  readonly linksOfResource: (
+    kind: ResourceKind,
+    resourceId: string,
+  ) => Effect.Effect<ReadonlyArray<ResourceLink>>;
+  /** ADR-EA-031: drops every link to `resourceId` of `kind`, across all connections. Idempotent. */
+  readonly unlinkResource: (kind: ResourceKind, resourceId: string) => Effect.Effect<void>;
 }
 
 export class ScimRecords extends Context.Service<ScimRecords, ScimRecordsShape>()(
@@ -385,6 +392,22 @@ export const layerMemory = Layer.effect(
         links: s.links.filter((row) => !sameResource(row, connectionId, kind, resourceId)),
       }));
 
+    const linksOfResource: ScimRecordsShape["linksOfResource"] = (kind, resourceId) =>
+      Ref.get(state).pipe(
+        Effect.map((s) =>
+          byCreation(
+            s.links.filter((row) => row.kind === kind && row.resourceId === resourceId),
+            (row) => row.connectionId,
+          ),
+        ),
+      );
+
+    const unlinkResource: ScimRecordsShape["unlinkResource"] = (kind, resourceId) =>
+      Ref.update(state, (s) => ({
+        ...s,
+        links: s.links.filter((row) => !(row.kind === kind && row.resourceId === resourceId)),
+      }));
+
     return {
       createConnection,
       findConnectionByTokenHash,
@@ -397,6 +420,8 @@ export const layerMemory = Layer.effect(
       list,
       setExternalId,
       unlink,
+      linksOfResource,
+      unlinkResource,
     };
   }),
 );
@@ -529,6 +554,15 @@ export const layerSql = Layer.effect(
           SELECT * FROM scim_resource WHERE "scimConnectionId" = ${r.connectionId} AND kind = ${r.kind}
           ORDER BY "createdAt", "resourceId" LIMIT ${r.limit} OFFSET ${r.offset}
         `,
+    });
+    const linksOfResourceQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        kind: Schema.Literals(["User", "Group"]),
+        resourceId: Schema.String,
+      }),
+      Result: ResourceRow,
+      execute: (r) =>
+        sql`SELECT * FROM scim_resource WHERE kind = ${r.kind} AND "resourceId" = ${r.resourceId} ORDER BY "createdAt", "scimConnectionId"`,
     });
     const countLinks = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -687,6 +721,18 @@ export const layerSql = Layer.effect(
         Effect.asVoid,
       );
 
+    const linksOfResource: ScimRecordsShape["linksOfResource"] = (kind, resourceId) =>
+      linksOfResourceQuery({ kind, resourceId }).pipe(
+        Effect.map((rows) => rows.map(toLink)),
+        Effect.orDie,
+      );
+
+    const unlinkResource: ScimRecordsShape["unlinkResource"] = (kind, resourceId) =>
+      sql`DELETE FROM scim_resource WHERE kind = ${kind} AND "resourceId" = ${resourceId}`.pipe(
+        Effect.orDie,
+        Effect.asVoid,
+      );
+
     return {
       createConnection,
       findConnectionByTokenHash,
@@ -699,6 +745,8 @@ export const layerSql = Layer.effect(
       list,
       setExternalId,
       unlink,
+      linksOfResource,
+      unlinkResource,
     };
   }),
 );

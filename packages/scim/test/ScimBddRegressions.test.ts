@@ -4,7 +4,8 @@
 //     asking, so a refused DELETE still logged the user out and hid it from the directory.
 //   - BEH-EA-252: `/ServiceProviderConfig` must report the `filter.maxResults` the plugin
 //     actually enforces (`ScimConfig.maxResults`), not a hard-coded 200.
-import { Hooks, HookPoint, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, HookPoint, Sessions, Users } from "@awthaq/core";
+import { MembershipRecords } from "@awthaq/organization";
 import { AuthHttp } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -24,13 +25,15 @@ const LegalHold = Hooks.BeforeUserDelete.tap(() =>
 
 describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
   it.effect(
-    "a beforeDelete veto is a 403 that leaves the user, its sessions and its mapping in place",
+    "a beforeDelete veto is a 403 that leaves the user, its sessions, its mapping and its membership in place",
     () =>
       Effect.gen(function* () {
         const { connection } = yield* seedConnection();
         const scim = yield* Scim.Scim;
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
+        const members = yield* MembershipRecords.MembershipRecords;
+        const auditLog = yield* AuditLog.AuditLog;
         const created = yield* scim.createUser(connection, { userName: "ada@acme.example" });
         const id = Users.UserId(created.id);
         const session = yield* sessions.issue({ userId: id });
@@ -43,6 +46,9 @@ describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
         // Still the connection's user: the refused erasure did not orphan it from its directory.
         assert.isTrue((yield* scim.getUser(connection, created.id)).active);
         assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 1);
+        assert.strictEqual((yield* members.listByUser(id)).length, 1);
+        assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.deleted" }), []);
+        assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.scim.userDeleted" }), []);
       }).pipe(
         Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, Users.layerMemory, LegalHold)),
       ),

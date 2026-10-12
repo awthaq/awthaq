@@ -54,7 +54,7 @@ import * as AdminApi from "./AdminApi.ts";
 
 export interface AdminAccountsShape {
   /**
-   * Erases the account through `AccountErasure` (`deletedBy: "admin"`), then publishes
+   * Erases the account through `AccountErasure` (`ErasureInitiator.Admin`), then publishes
    * `auth.admin.userDeleted`. Gate (`canDeleteUsers`) -> self-refusal -> existence. A
    * `BeforeUserDelete` veto surfaces as `HookAborted`, with nothing touched.
    */
@@ -206,7 +206,10 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
           }
           yield* existing(userId);
           yield* erasure
-            .eraseAccount(userId, { deletedBy: "admin" })
+            .eraseAccount(
+              userId,
+              Erasure.ErasureInitiator.Admin({ adminUserId: Users.UserId(caller.ref.id) }),
+            )
             // Gone between the check and the erasure: the desired end state was reached by someone else.
             .pipe(
               Effect.catchTag("UserNotFound", () =>

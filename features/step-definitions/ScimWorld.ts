@@ -8,7 +8,18 @@
 // live sessions) and for the Thens that observe what HTTP cannot show (an account's status,
 // its sessions, its membership, the audit log).
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Errors, Hooks, HookPoint, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  Erasure,
+  Errors,
+  Hooks,
+  HookPoint,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import {
   ActiveContextRecords,
   InvitationRecords,
@@ -87,7 +98,12 @@ const buildLive = (options: AppOptions) => {
     options.vetoDelete === true
       ? VetoDelete.pipe(Layer.provideMerge(Hooks.HooksLive))
       : Hooks.HooksLive;
-  const CoreLive = Layer.mergeAll(Sessions.layerMemory, users).pipe(
+  const CoreLive = Layer.mergeAll(
+    Sessions.layerMemory,
+    Accounts.layerMemory,
+    Verification.layerMemory,
+    users,
+  ).pipe(
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layerMemory),
     Layer.provideMerge(hooks),
@@ -107,6 +123,7 @@ const buildLive = (options: AppOptions) => {
     Layer.provideMerge(ScimConnections.layerStore),
     Layer.provideMerge(OrganizationLive),
     Layer.provideMerge(ScimRecords.layerMemory),
+    Layer.provideMerge(Erasure.layer),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(OrganizationRecordsLive),
     Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
@@ -130,6 +147,9 @@ export type AppServices =
   | TeamRecords.TeamRecords
   | Users.Users
   | Sessions.Sessions
+  | Accounts.Accounts
+  | Erasure.AccountErasure
+  | InvitationRecords.InvitationRecords
   | AuditLog.AuditLog;
 
 export interface AppHandle {

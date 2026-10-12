@@ -20,6 +20,7 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Accounts from "../src/Accounts.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as AuthEventSchemas from "../src/AuthEventSchemas.ts";
 import * as Erasure from "../src/Erasure.ts";
 import * as HookPoint from "../src/HookPoint.ts";
 import * as Hooks from "../src/Hooks.ts";
@@ -203,7 +204,10 @@ const suite = (
         const other = yield* seedUser("keep@example.com");
         yield* Effect.sleep(0);
 
-        yield* erasure.eraseAccount(user.id, { deletedBy: "admin" });
+        yield* erasure.eraseAccount(
+          user.id,
+          Erasure.ErasureInitiator.Admin({ adminUserId: other.user.id }),
+        );
 
         // order, then id
         assert.deepStrictEqual(probe.ran, ["a", "c", "b"]);
@@ -233,13 +237,66 @@ const suite = (
       }).pipe(Effect.provide(layer));
     });
 
+    it.effect(
+      "auth.user.deleted names the initiator: self, admin with adminUserId, directory with connectionId and organizationId",
+      () => {
+        const probe = makeProbe();
+        const layer = build(probe, Layer.empty);
+        return Effect.gen(function* () {
+          const erasure = yield* Erasure.AccountErasure;
+          const auditLog = yield* AuditLog.AuditLog;
+          const self = yield* seedUser("self@example.com");
+          const admin = yield* seedUser("admin@example.com");
+          const directory = yield* seedUser("directory@example.com");
+          const adminUserId = Users.UserId("11111111-1111-4111-8111-111111111111");
+
+          yield* erasure.eraseAccount(self.user.id, Erasure.ErasureInitiator.Self());
+          yield* erasure.eraseAccount(
+            admin.user.id,
+            Erasure.ErasureInitiator.Admin({ adminUserId }),
+          );
+          yield* erasure.eraseAccount(
+            directory.user.id,
+            Erasure.ErasureInitiator.Directory({ connectionId: "conn-1", organizationId: "org-1" }),
+          );
+
+          const deleted = (yield* auditLog.list({ eventTag: "auth.user.deleted" })).map((row) =>
+            AuthEventSchemas.payloadOf(row.payload),
+          );
+          const of = (userId: Users.UserId) =>
+            deleted.find((event) => event._tag === "auth.user.deleted" && event.userId === userId);
+          assert.deepStrictEqual(of(self.user.id), {
+            _tag: "auth.user.deleted",
+            userId: self.user.id,
+            deletedBy: "self",
+          });
+          assert.deepStrictEqual(of(admin.user.id), {
+            _tag: "auth.user.deleted",
+            userId: admin.user.id,
+            deletedBy: "admin",
+            adminUserId,
+          });
+          assert.deepStrictEqual(of(directory.user.id), {
+            _tag: "auth.user.deleted",
+            userId: directory.user.id,
+            deletedBy: "directory",
+            connectionId: "conn-1",
+            organizationId: "org-1",
+          });
+        }).pipe(Effect.provide(layer));
+      },
+    );
+
     it.effect("an unknown user fails UserNotFound and touches nothing", () => {
       const probe = makeProbe();
       const layer = build(probe, contribution(probe, "a", 1));
       return Effect.gen(function* () {
         const erasure = yield* Erasure.AccountErasure;
         const failure = yield* erasure
-          .eraseAccount(Users.UserId("00000000-0000-4000-8000-000000000000"))
+          .eraseAccount(
+            Users.UserId("00000000-0000-4000-8000-000000000000"),
+            Erasure.ErasureInitiator.Self(),
+          )
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "UserNotFound");
         assert.deepStrictEqual(probe.ran, []);
@@ -256,7 +313,9 @@ const suite = (
           const auditLog = yield* AuditLog.AuditLog;
           const { user } = yield* seedUser("hold@example.com");
 
-          const failure = yield* erasure.eraseAccount(user.id).pipe(Effect.flip);
+          const failure = yield* erasure
+            .eraseAccount(user.id, Erasure.ErasureInitiator.Self())
+            .pipe(Effect.flip);
 
           assert.strictEqual(failure._tag, "HookAborted");
           assert.deepStrictEqual(probe.ran, []);
@@ -307,7 +366,7 @@ describe("AccountErasure over memory: ErasureConfig", () => {
       const { user } = yield* seedUser("retain@example.com");
       const before = (yield* auditLog.list({ actorUserId: user.id })).length;
       assert.isAbove(before, 0);
-      yield* erasure.eraseAccount(user.id);
+      yield* erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self());
       // the same rows are still there, plus the erasure receipt
       assert.isAtLeast((yield* auditLog.list({ actorUserId: user.id })).length, before);
       assert.isTrue(
@@ -348,7 +407,9 @@ describe("AccountErasure over SQLite: atomicity", () => {
         const { user } = yield* seedUser("rollback@example.com");
         const auditBefore = JSON.stringify(yield* auditLog.list({ actorUserId: user.id }));
 
-        const exit = yield* Effect.exit(erasure.eraseAccount(user.id));
+        const exit = yield* Effect.exit(
+          erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self()),
+        );
 
         assert.isTrue(Exit.isFailure(exit));
         assert.deepStrictEqual(probe.ran, ["boom"]);
@@ -376,7 +437,9 @@ describe("AccountErasure over SQLite: atomicity", () => {
         const erasure = yield* Erasure.AccountErasure;
         const { user } = yield* seedUser("late@example.com");
 
-        const failure = yield* erasure.eraseAccount(user.id).pipe(Effect.flip);
+        const failure = yield* erasure
+          .eraseAccount(user.id, Erasure.ErasureInitiator.Self())
+          .pipe(Effect.flip);
 
         assert.strictEqual(failure._tag, "HookAborted");
         assert.strictEqual(probe.consults, 2);

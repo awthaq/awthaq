@@ -677,9 +677,9 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
     const actor = yield* world.users.get(name);
     yield* Effect.promise(() =>
       app.withContext(
-        Erasure.AccountErasure.use((erasure) => erasure.eraseAccount(actor.userId)).pipe(
-          Effect.orDie,
-        ),
+        Erasure.AccountErasure.use((erasure) =>
+          erasure.eraseAccount(actor.userId, Erasure.ErasureInitiator.Self()),
+        ).pipe(Effect.orDie),
       ),
     );
   });
