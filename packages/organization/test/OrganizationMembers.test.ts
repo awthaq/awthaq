@@ -3,7 +3,7 @@
 // the hook order are proved here; the SAML role mapping's cases (BEH-EA-316) live here too, since
 // `setRoles` is its one implementation. `Organization.test.ts` keeps only the authorization half.
 import { HookPoint, Users } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -35,6 +35,7 @@ const buildLayer = (
   OrganizationSystem.layer.pipe(
     Layer.provide(Organization.config(config)),
     Layer.provideMerge(OrganizationMemory.layer),
+    Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(taps),

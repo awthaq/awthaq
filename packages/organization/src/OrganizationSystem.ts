@@ -6,11 +6,12 @@
 // requires them through the Layer type and lists `Organization` in `dependsOn`; none of them
 // touches the records.
 
-import type { AuthEvents } from "@awthaq/core";
-import type { SqlTransaction } from "@awthaq/ports";
+import type { AuthEvents, Users } from "@awthaq/core";
+import type { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import * as OrganizationDeletion from "./OrganizationDeletion.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
+import * as OrganizationInvitations from "./OrganizationInvitations.ts";
 import * as OrganizationMembers from "./OrganizationMembers.ts";
 import * as OrganizationTeams from "./OrganizationTeams.ts";
 import * as Layer from "effect/Layer";
@@ -20,6 +21,7 @@ export const services = [
   OrganizationDirectory.OrganizationDirectory,
   OrganizationTeams.OrganizationTeams,
   OrganizationMembers.OrganizationMembers,
+  OrganizationInvitations.OrganizationInvitations,
   OrganizationAuthority.OrganizationAuthority,
   OrganizationDeletion.OrganizationDeletion,
 ] as const;
@@ -28,6 +30,7 @@ export const services = [
 export const layer = Layer.mergeAll(
   OrganizationTeams.OrganizationTeams.layer,
   OrganizationMembers.OrganizationMembers.layer,
+  OrganizationInvitations.OrganizationInvitations.layer,
 ).pipe(
   Layer.provideMerge(OrganizationAuthority.OrganizationAuthority.layer),
   Layer.provideMerge(OrganizationDirectory.OrganizationDirectory.layer),
@@ -38,4 +41,8 @@ export const layer = Layer.mergeAll(
  * The core services and port `layer` requires beyond the plugin's own records and hook points.
  * Named here so the layer's inferred type can be emitted (it needs both namespaces in scope).
  */
-export type CoreRequirements = AuthEvents.AuthEvents | SqlTransaction.SqlTransaction;
+export type CoreRequirements =
+  | AuthEvents.AuthEvents
+  | Users.Users
+  | Mailer.Mailer
+  | SqlTransaction.SqlTransaction;

@@ -2,7 +2,7 @@
 // organization row's lifecycle: creating one atomically with its creator's membership, updating, deleting
 // with its cascade, and a platform suspension that runs a veto and an observe point (BEH-EA-237).
 import { HookPoint, Migrations, Users } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -36,6 +36,7 @@ const buildLayer = (
   OrganizationSystem.layer.pipe(
     Layer.provide(Organization.config(config)),
     Layer.provideMerge(OrganizationMemory.layer),
+    Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(taps),
@@ -301,6 +302,7 @@ const sqlRecords = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
   layer.pipe(Layer.provide(NodeCrypto.layer));
 const SqlSystemLive = OrganizationSystem.layer.pipe(
   Layer.provide(Organization.config({})),
+  Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(sqlRecords(OrganizationRecords.layerSql)),
   Layer.provideMerge(sqlRecords(MembershipRecords.layerSql)),

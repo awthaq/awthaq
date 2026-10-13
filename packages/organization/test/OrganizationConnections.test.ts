@@ -5,7 +5,14 @@
 // to end by completing a real callback through a stored connection.
 import { Accounts, AuditLog, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { OAuth, OAuthConnections } from "@awthaq/oauth";
-import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import {
+  ClientAddress,
+  Encryption,
+  KeyProvider,
+  Mailer,
+  RateLimiter,
+  SqlTransaction,
+} from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -92,6 +99,7 @@ const ConnectionsLive = Layer.mergeAll(
   Layer.provideMerge(ConnectionRecords.layerMemory),
   Layer.provideMerge(StubDirectoryLive),
   Layer.provideMerge(EncryptionLive),
+  Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(NodeCrypto.layer),
 );
@@ -306,6 +314,7 @@ const RealLive = Layer.mergeAll(
   Layer.provideMerge(OrganizationSystem.layer.pipe(Layer.provide(Organization.config({})))),
   Layer.provideMerge(OrganizationMemory.layer),
   Layer.provideMerge(EncryptionLive),
+  Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),

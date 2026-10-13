@@ -2,7 +2,7 @@
 // gating, the `Bound` a role-conferring operation derives, and `OrganizationQadi` all read it, so
 // they cannot disagree (ADR-EA-009). No principal, no write, no hook point appears here.
 import { Users } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -27,6 +27,7 @@ const buildLayer = (config: Partial<Organization.OrganizationConfigShape> = {}) 
   OrganizationSystem.layer.pipe(
     Layer.provide(Organization.config(config)),
     Layer.provideMerge(OrganizationMemory.layer),
+    Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),

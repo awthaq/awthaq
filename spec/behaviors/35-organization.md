@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-35 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-014](../models/14-organization.md) as `@awthaq/organization`; MTI-011) <br> 1.1 (2026-10-13): BEH-EA-284: the records are Keyed by organization id, every cross-organization method takes a witness, and the stores fail with StoreUnavailable (plan 05 phase 6) <br> 1.2 (2026-10-13): BEH-EA-330, organization state is reached through system modules that take an actor (ADR-EA-040, architecture plan 04 phase 1) <br> 1.3 (2026-10-13): BEH-EA-288: one `Bound` for every role-conferring path, `Unbounded` an explicit choice; membership is `OrganizationMembers` (add, setRoles, remove), so a directory's and an identity provider's changes run the same limit, owner invariant, veto, cascade and observers as a member's; the statement check now precedes the owner invariant (D4) and an unchanged role set is a no-op everywhere (D5) (ADR-EA-040, architecture plan 04 phase 3) <br> 1.4 (2026-10-13): BEH-EA-283: creation is one transaction and the creator's membership is observable (D3, D7); `OrganizationDirectory` is the system module for the organization row (ADR-EA-040, architecture plan 04 phase 4) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-014](../models/14-organization.md) as `@awthaq/organization`; MTI-011) <br> 1.1 (2026-10-13): BEH-EA-284: the records are Keyed by organization id, every cross-organization method takes a witness, and the stores fail with StoreUnavailable (plan 05 phase 6) <br> 1.2 (2026-10-13): BEH-EA-330, organization state is reached through system modules that take an actor (ADR-EA-040, architecture plan 04 phase 1) <br> 1.3 (2026-10-13): BEH-EA-288: one `Bound` for every role-conferring path, `Unbounded` an explicit choice; membership is `OrganizationMembers` (add, setRoles, remove), so a directory's and an identity provider's changes run the same limit, owner invariant, veto, cascade and observers as a member's; the statement check now precedes the owner invariant (D4) and an unchanged role set is a no-op everywhere (D5) (ADR-EA-040, architecture plan 04 phase 3) <br> 1.4 (2026-10-13): BEH-EA-283: creation is one transaction and the creator's membership is observable (D3, D7); `OrganizationDirectory` is the system module for the organization row (ADR-EA-040, architecture plan 04 phase 4) <br> 1.5 (2026-10-13): BEH-EA-286 and BEH-EA-290: acceptance is one transaction, cancellations and expiry are published, every created membership is observable, the veto of a cancellation runs after its authorization (D3, D6, D7, D8; `OrganizationInvitations`, ADR-EA-040, architecture plan 04 phase 6) |
 ---
 
 > `@awthaq/organization` composes as `Auth.make([Organization])` and serves the `organization` HTTP group at `/organization/...`, all behind `Api.Authentication` and `Api.CsrfProtection`. It is the multi-tenant membership plugin ([MOD-EA-014](../models/14-organization.md)): the behaviors below are what an application relies on to treat an organization as a tenant boundary. Roles and statements are the plugin's own `PermissionEngine` ([ADR-EA-025](../decisions/025-global-roles-vs-organization-roles.md)), never a qadi round trip; tenancy resolution and tenant-stamped rows are [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none) through [BEH-EA-237](28-tenancy.md#beh-ea-237-a-suspended-organization-refuses-organization-scoped-access), and the qadi relationship grammar is [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership).
@@ -91,7 +91,12 @@ REQUIREMENT: An invitation MUST be mailed to its address with a random
              address MUST NOT create a second pending invitation: it returns
              the pending one, or (`cancelPendingInvitationsOnReInvite`)
              cancels it and issues a fresh one, or (`resend: true`) mints a
-             new token for it and retires the mailed one.
+             new token for it and retires the mailed one. Accepting MUST be one
+             transaction for the membership, the invitation's status and the
+             team membership, so a failure leaves the invitation pending and no
+             membership behind. An invitation cancelled by a re-invite or by the
+             member check, and one found expired on acceptance, MUST each be
+             published (`invitationCanceled`, `invitationExpired`).
 ```
 
 The token is a capability, so it is treated like the verification tokens of [BEH-EA-060](08-verification-tokens.md#beh-ea-060-a-verification-token-is-hashed-at-rest): hashed at rest, compared in constant time, and never echoed. Binding acceptance to the invited address as well means a forwarded mail does not confer membership on whoever received it.
@@ -168,6 +173,11 @@ REQUIREMENT: Creating an invitation, adding a member (by accepting an
              the operation's outcome ([BEH-EA-090](12-hooks.md#beh-ea-090-a-veto-tap-may-abort-the-operation-with-a-typed-hookabort) and [BEH-EA-092](12-hooks.md#beh-ea-092-an-observe-tap-is-fail-isolated--a-throwing-observer-cannot-fail-the-operation-it-observes)).
              Erasing an account MUST remove its memberships, team memberships,
              invitations and active-context rows in the same transaction.
+             Every membership created, by any path (a direct add, an invitation
+             accepted, an organization's creator), fires `AfterAddMember`, and every
+             team membership created fires `AfterAddTeamMember`; each operation
+             still runs only its own entry veto. A resent invitation runs
+             `AfterCreateInvitation` again.
 ```
 
 Events carry identifiers only so the audit trail names who was added or removed without becoming a second copy of personal data; the erasure clause is the organization plugin's contribution to the erasure registry ([BEH-EA-254](06-domain-users-accounts.md#beh-ea-254-a-person-can-export-everything-the-system-holds-about-them-as-one-document-and-no-plugin-can-be-left-out) is its export-side mirror).

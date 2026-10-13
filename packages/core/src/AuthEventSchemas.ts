@@ -1072,6 +1072,20 @@ export const OrganizationInvitationCanceledEvent = defineEvent(
 );
 export type OrganizationInvitationCanceledEvent = typeof OrganizationInvitationCanceledEvent.Type;
 
+/**
+ * Published by `@awthaq/organization`'s invitation module when a pending invitation is found past its expiry
+ * (an acceptance attempt after `expiresAt`); the invitation becomes `expired`. Identifiers only.
+ */
+export const OrganizationInvitationExpiredEvent = defineEvent(
+  "auth.organization.invitationExpired",
+  { invitationId: Schema.String, organizationId: Schema.String },
+  {
+    actor: Actor.none,
+    pii: [],
+  },
+);
+export type OrganizationInvitationExpiredEvent = typeof OrganizationInvitationExpiredEvent.Type;
+
 /** Published by `@awthaq/organization`'s `createRole`. */
 export const OrganizationRoleCreatedEvent = defineEvent(
   "auth.organization.roleCreated",
@@ -1703,6 +1717,7 @@ const Registry = registry([
   OrganizationInvitationAcceptedEvent,
   OrganizationInvitationRejectedEvent,
   OrganizationInvitationCanceledEvent,
+  OrganizationInvitationExpiredEvent,
   OrganizationRoleCreatedEvent,
   OrganizationRoleUpdatedEvent,
   OrganizationRoleDeletedEvent,

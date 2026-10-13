@@ -141,6 +141,11 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     invitationId: "inv-1",
     organizationId: "org-1",
   },
+  "auth.organization.invitationExpired": {
+    _tag: "auth.organization.invitationExpired",
+    invitationId: "inv-1",
+    organizationId: "org-1",
+  },
   "auth.organization.roleCreated": {
     _tag: "auth.organization.roleCreated",
     organizationId: "org-1",
