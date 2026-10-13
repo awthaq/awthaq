@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-30 |
-> | Revision | 1.3 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-10-13): `DELETE` in `erase` mode runs `AccountErasure.eraseAccount` with a `Directory` initiator (BEH-EA-250), is announced by core's `auth.user.deleted` ahead of `auth.scim.userDeleted` (BEH-EA-253), and `@awthaq/scim` takes part in every erasure and export (architecture plan 03) <br> 1.2 (2026-10-13): a failed `POST` abandons the user through `Users.createWith` (no veto, no event) and leaves invitations to the address alone (BEH-EA-247, architecture plan 03) <br> 1.3 (2026-10-13): provisioning is a sign-up: `BeforeSignUp` (strategy `scim:<organizationId>:<connectionId>`) can veto it with a 403, and `auth.user.created` and `AfterSignUp` follow the commit (BEH-EA-247, BEH-EA-253, ADR-EA-038, architecture plan 01) |
+> | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-10-13): `DELETE` in `erase` mode runs `AccountErasure.eraseAccount` with a `Directory` initiator (BEH-EA-250), is announced by core's `auth.user.deleted` ahead of `auth.scim.userDeleted` (BEH-EA-253), and `@awthaq/scim` takes part in every erasure and export (architecture plan 03) <br> 1.2 (2026-10-13): a failed `POST` abandons the user through `Users.createWith` (no veto, no event) and leaves invitations to the address alone (BEH-EA-247, architecture plan 03) <br> 1.3 (2026-10-13): provisioning is a sign-up: `BeforeSignUp` (strategy `scim:<organizationId>:<connectionId>`) can veto it with a 403, and `auth.user.created` and `AfterSignUp` follow the commit (BEH-EA-247, BEH-EA-253, ADR-EA-038, architecture plan 01) <br> 1.4 (2026-10-13): BEH-EA-246: `scim_connection` is Keyed and `scim_resource` Derived; the token lookup, erasure and export take a witness; the stores fail with StoreUnavailable (plan 05 phase 9) |
 ---
 
 > `@awthaq/scim` composes as `Auth.make([Organization, Scim])` (`Scim` `dependsOn: [Organization]`), serves `/scim/v2` per RFC 7644, and stands on the user status of [BEH-EA-46](06-domain-users-accounts.md) and `Sessions.revokeAll`. Everything below is what a directory service (Okta, Entra ID, OneLogin) relies on, plus the safety rules that keep an organization's directory from reaching accounts it did not create.
@@ -32,6 +32,8 @@ REQUIREMENT: Every `/scim/v2` request MUST carry `Authorization: Bearer
 ```
 
 The token is a bearer credential for a machine, so it is treated like one: hashed at rest (a database read discloses nothing an IdP could present), revocable without deleting what it provisioned, and never accepted in a way that distinguishes "wrong" from "revoked".
+
+The tables declare their tenancy ([BEH-EA-328](28-tenancy.md#beh-ea-328-every-plugin-table-declares-its-tenancy-and-authmake-validates-the-declarations)): `scim_connection` is Keyed by `organizationId` and `scim_resource` is Derived through its connection. Finding a connection by its token hash happens before any tenant is known, and erasure and export read a person's links in every connection, so those three records methods take a `CrossTenant` witness ([BEH-EA-327](28-tenancy.md#beh-ea-327-a-cross-tenant-statement-presents-a-witness-and-the-witness-lifts-rls)); every other resource method is keyed by the calling connection. A store outage while authenticating is `StoreUnavailable` ([BEH-EA-325](05-persistence-stratum.md#beh-ea-325-a-plugin-records-module-fails-with-storeunavailable-never-a-defect-when-its-store-is-down)) and answers `503`, never a `401` that would make a directory service discard a working token.
 
 _Previous: [BEH-EA-245](29-saml-sp.md#beh-ea-245-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | Next: [BEH-EA-247](30-scim.md#beh-ea-247-a-connection-acts-only-on-the-users-it-provisioned-and-never-adopts-an-existing-account)_
 

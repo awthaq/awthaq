@@ -48,6 +48,7 @@ import {
   TeamRecords,
 } from "@awthaq/organization";
 import { Defects, SqlTransaction } from "@awthaq/ports";
+import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -430,6 +431,15 @@ const scimMigrations: Migrations.Migrations = [
   },
 ];
 
+/** The erasure cascade drops a user's link from every directory connection, in every organization. */
+const erasureGrant = TenantScoped.crossTenant(
+  "scim erasure (ADR-EA-031): deleting a user drops their link from every connection",
+);
+/** The data-subject export lists every connection that provisioned the person. */
+const exportGrant = TenantScoped.crossTenant(
+  "scim export (ADR-EA-031): the connections that provisioned the person, across organizations",
+);
+
 /**
  * ADR-EA-031/CSG-001: this plugin's part of `AccountErasure.eraseAccount`. A `scim_resource` user
  * row holds the directory's `userName` (usually the email) and `externalId`; it goes with the user,
@@ -439,7 +449,8 @@ export const scimErasure = Erasure.contribute({
   id: "scim",
   make: Effect.gen(function* () {
     const records = yield* ScimRecords.ScimRecords;
-    return (subject: Erasure.ErasureSubject) => records.unlinkResource("User", subject.userId);
+    return (subject: Erasure.ErasureSubject) =>
+      records.unlinkResource(erasureGrant, "User", subject.userId);
   }),
 });
 
@@ -449,7 +460,7 @@ export const scimExport = DataExport.contribute({
   make: Effect.gen(function* () {
     const records = yield* ScimRecords.ScimRecords;
     return (subject: DataExport.DataExportSubject) =>
-      records.linksOfResource("User", subject.userId).pipe(
+      records.linksOfResource(exportGrant, "User", subject.userId).pipe(
         Effect.map((links) => ({
           provisionedBy: links.map((link) => ({
             connectionId: link.connectionId,
@@ -813,7 +824,14 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
                 );
               yield* membershipAdded(connection, user.id).pipe(
                 // The link was written above; abandoning the user must not leave the mapping behind.
-                Effect.onError(() => records.unlink(connection.id, "User", user.id)),
+                Effect.onError(() =>
+                  records.unlink(connection.id, "User", user.id).pipe(
+                    // Cleanup on an already failing path: an outage here is logged, never allowed to mask that failure.
+                    Effect.catch((error) =>
+                      Effect.logWarning("awthaq/scim: could not unlink an abandoned user", error),
+                    ),
+                  ),
+                ),
                 Effect.catchTags({
                   MembershipLimitReached: () =>
                     Effect.fail(

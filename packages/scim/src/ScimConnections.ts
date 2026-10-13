@@ -16,6 +16,7 @@
 // unknown token gets — nothing reveals which.
 
 import type { Api } from "@awthaq/api";
+import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import { OrganizationRecords } from "@awthaq/organization";
 import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
@@ -31,6 +32,9 @@ import * as ScimApi from "./ScimApi.ts";
 import * as ScimRecords from "./ScimRecords.ts";
 
 const TOKEN_PREFIX = "scim_";
+
+/** The bearer token's hash is the capability: the connection is found before any tenant is known. */
+const tokenGrant = TenantScoped.crossTenant("scim: the bearer token hash is the capability");
 
 const hexOf = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -57,16 +61,21 @@ export interface ScimConnectionStoreShape {
   readonly create: (input: {
     readonly organizationId: string;
     readonly name: string;
-  }) => Effect.Effect<{
-    readonly connection: ScimConnectionView;
-    readonly token: Redacted.Redacted<string>;
-  }>;
-  readonly list: (organizationId: string) => Effect.Effect<ReadonlyArray<ScimConnectionView>>;
+  }) => Effect.Effect<
+    {
+      readonly connection: ScimConnectionView;
+      readonly token: Redacted.Redacted<string>;
+    },
+    Api.StoreUnavailable
+  >;
+  readonly list: (
+    organizationId: string,
+  ) => Effect.Effect<ReadonlyArray<ScimConnectionView>, Api.StoreUnavailable>;
   /** Retires the token; what the connection provisioned stays (its users are ordinary users). Idempotent. */
   readonly revoke: (
     organizationId: string,
     connectionId: string,
-  ) => Effect.Effect<ScimConnectionView, ScimRecords.ScimRecordNotFound>;
+  ) => Effect.Effect<ScimConnectionView, ScimRecords.ScimRecordNotFound | Api.StoreUnavailable>;
 }
 
 export class ScimConnectionStore extends Context.Service<
@@ -76,7 +85,12 @@ export class ScimConnectionStore extends Context.Service<
 
 /** Hex SHA-256 of a token — the only form of it ever stored or compared. */
 const hashToken = (crypto: Crypto.Crypto, token: string) =>
-  crypto.digest("SHA-256", new TextEncoder().encode(token)).pipe(Effect.map(hexOf), Effect.orDie);
+  crypto
+    .digest("SHA-256", new TextEncoder().encode(token))
+    .pipe(
+      Effect.map(hexOf),
+      Effect.catch(StoreFailure.storeUnavailable("ScimConnections.hashToken")),
+    );
 
 /** Requires `ScimRecords` and `Crypto`. */
 export const layerStore = Layer.effect(
@@ -86,8 +100,14 @@ export const layerStore = Layer.effect(
     const crypto = yield* Crypto.Crypto;
 
     const create: ScimConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
-      const token = `${TOKEN_PREFIX}${hexOf(yield* crypto.randomBytes(32).pipe(Effect.orDie))}`;
+      const id = yield* crypto.randomUUIDv7.pipe(
+        Effect.catch(StoreFailure.storeUnavailable("ScimConnectionStore.create")),
+      );
+      const token = `${TOKEN_PREFIX}${hexOf(
+        yield* crypto
+          .randomBytes(32)
+          .pipe(Effect.catch(StoreFailure.storeUnavailable("ScimConnectionStore.create"))),
+      )}`;
       const record = yield* records.createConnection({
         id,
         organizationId: input.organizationId,
@@ -128,7 +148,7 @@ export const ScimAuthenticationLive = Layer.effect(
         const presented = Redacted.value(credential);
         if (!presented.startsWith(TOKEN_PREFIX)) return yield* ScimApi.unauthorized();
         const hash = yield* hashToken(crypto, presented);
-        const found = yield* records.findConnectionByTokenHash(hash);
+        const found = yield* records.findConnectionByTokenHash(tokenGrant, hash);
         if (Option.isNone(found)) return yield* ScimApi.unauthorized();
         const connection = found.value;
         // Constant-time even though the lookup was an equality: no early exit on a partial match.

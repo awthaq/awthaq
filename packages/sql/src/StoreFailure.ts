@@ -74,15 +74,18 @@ export const orStoreUnavailable =
 
 /**
  * `orStoreUnavailable` for an insert or update that can hit a unique constraint: a `UniqueViolation`
- * is the domain outcome `onUnique()` makes (in the Shape's `E`), anything else is an outage or a
+ * is the domain outcome `onUnique(error)` makes (in the Shape's `E`; the error says which constraint), anything else is an outage or a
  * defect exactly as `orStoreUnavailable` classifies it.
  */
 export const orConflict =
-  <Conflict extends { readonly _tag: string }>(operation: string, onUnique: () => Conflict) =>
+  <Conflict extends { readonly _tag: string }>(
+    operation: string,
+    onUnique: (error: SqlError) => Conflict,
+  ) =>
   <A, E, R>(self: Effect.Effect<A, E, R>) =>
     self.pipe(
       Effect.mapError((error) =>
-        isSqlError(error) && error.reason._tag === "UniqueViolation" ? onUnique() : error,
+        isSqlError(error) && error.reason._tag === "UniqueViolation" ? onUnique(error) : error,
       ),
       orStoreUnavailable(operation),
     );
