@@ -32,6 +32,7 @@ import {
   ConnectionRecords,
   Organization,
   OrganizationConnections,
+  OrganizationDirectory,
   OrganizationHooks,
   OrganizationMembers,
   OrganizationQadi,
@@ -64,6 +65,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as LayerMap from "effect/LayerMap";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
@@ -232,10 +234,44 @@ export type ConnectionServices =
   | OrganizationConnections.OrganizationConnectionStore
   | ConnectionRecords.ConnectionRecords;
 
+/**
+ * The connection store asks the Directory only whether an organization is active. These scenarios name
+ * organizations by string and never create them, so a stub answers "active" for any id.
+ */
+const connectionOrganization = (id: string): OrganizationRecords.OrganizationRecord => ({
+  id,
+  name: id,
+  slug: id,
+  logo: Option.none(),
+  metadata: Option.none(),
+  homeRegion: Option.none(),
+  suspendedAt: Option.none(),
+  createdAt: DateTime.makeUnsafe(0),
+});
+const notUsedByTheStore = () => Effect.die(new Error("not used by the connection store"));
+const ActiveOrganizations = Layer.succeed(
+  OrganizationDirectory.OrganizationDirectory,
+  OrganizationDirectory.OrganizationDirectory.of({
+    find: (id) => Effect.succeed(Option.some(connectionOrganization(id))),
+    findActive: (id) => Effect.succeed(Option.some(connectionOrganization(id))),
+    requireActive: notUsedByTheStore,
+    isSlugAvailable: notUsedByTheStore,
+    listForUser: notUsedByTheStore,
+    listPage: notUsedByTheStore,
+    create: notUsedByTheStore,
+    update: notUsedByTheStore,
+    delete: notUsedByTheStore,
+    suspend: notUsedByTheStore,
+    reinstate: notUsedByTheStore,
+  }),
+);
+
 const buildConnectionStack = () =>
   Layer.mergeAll(OrganizationConnections.layerStore, OrganizationConnections.oauthConnections).pipe(
     Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
     Layer.provideMerge(ConnectionRecords.layerMemory),
+    Layer.provideMerge(ActiveOrganizations),
+    Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(NodeCrypto.layer),
   );

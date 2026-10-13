@@ -24,6 +24,7 @@ import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
+import * as OrganizationDeletion from "./OrganizationDeletion.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import * as OrganizationRecords from "./OrganizationRecords.ts";
@@ -160,6 +161,7 @@ export class OrganizationDirectory extends Context.Service<
       const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
       const teams = yield* TeamRecords.TeamRecords;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
+      const deletion = yield* OrganizationDeletion.OrganizationDeletion;
       const builtConfig = yield* OrganizationConfig;
       const configNow = Tenant.configInForce(OrganizationConfig, builtConfig);
       const beforeCreate = yield* OrganizationHooks.BeforeCreateOrganization;
@@ -324,6 +326,8 @@ export class OrganizationDirectory extends Context.Service<
           yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteOrganization)(
             beforeDelete.run({ actor, organizationId }),
           );
+          // F7: rows other plugins hang off the organization (connections) go in the same transaction.
+          const contributions = yield* deletion.contributions;
           // OHS-002: the five-table cascade is one transaction: a failure at any step leaves every
           // organization_* row untouched. Events and hooks only run once the delete has committed.
           yield* sqlTransaction
@@ -335,6 +339,9 @@ export class OrganizationDirectory extends Context.Service<
                 yield* orgRoles.removeAllForOrganization(organizationId);
                 // CWM-003: no session may keep pointing at the deleted organization.
                 yield* activeContext.clearOrganization(organizationId);
+                for (const contribution of contributions) {
+                  yield* contribution.handler.inTransaction(organizationId);
+                }
                 yield* orgs
                   .delete(organizationId)
                   .pipe(
@@ -349,6 +356,11 @@ export class OrganizationDirectory extends Context.Service<
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({ _tag: "auth.organization.deleted", organizationId });
+          for (const contribution of contributions) {
+            if (contribution.handler.afterCommit !== undefined) {
+              yield* contribution.handler.afterCommit(organizationId);
+            }
+          }
           yield* afterDelete.run({ actor, organizationId });
         },
       );

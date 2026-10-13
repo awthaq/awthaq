@@ -36,6 +36,7 @@
 
 import { OAuthConnections, OAuthProvider } from "@awthaq/oauth";
 import { Claims } from "@awthaq/oauth/presets";
+import { AuthEvents } from "@awthaq/core";
 import { OutboundUrl } from "@awthaq/ports";
 import { SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Config from "effect/Config";
@@ -49,7 +50,9 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Data from "effect/Data";
 import * as ConnectionRecords from "./ConnectionRecords.ts";
-import * as OrganizationHooks from "./OrganizationHooks.ts";
+import * as OrganizationActor from "./OrganizationActor.ts";
+import * as OrganizationDeletion from "./OrganizationDeletion.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 
 // ---- provider ids -------------------------------------------------------------
 
@@ -271,13 +274,19 @@ export interface ConnectionUpdateInput {
 }
 
 export interface OrganizationConnectionStoreShape {
+  /**
+   * Refuses an organization that is unknown or suspended (`InvalidConnection`), then writes and publishes
+   * `auth.organization.connectionCreated` (identifiers only, naming the actor's user when it names one).
+   */
   readonly create: (
+    actor: OrganizationActor.Actor,
     input: ConnectionCreateInput,
   ) => Effect.Effect<
     ConnectionView,
     InvalidConnection | ConnectionRecords.ConnectionDomainTaken | StoreFailure.StoreUnavailable
   >;
   readonly update: (
+    actor: OrganizationActor.Actor,
     organizationId: string,
     connectionId: string,
     patch: ConnectionUpdateInput,
@@ -289,6 +298,7 @@ export interface OrganizationConnectionStoreShape {
     | StoreFailure.StoreUnavailable
   >;
   readonly remove: (
+    actor: OrganizationActor.Actor,
     organizationId: string,
     connectionId: string,
   ) => Effect.Effect<
@@ -400,54 +410,81 @@ const toView = (record: ConnectionRecords.ConnectionRecord): ConnectionView => (
   updatedAt: record.updatedAt,
 });
 
-/** Requires `ConnectionRecords`, `OrganizationConnections` (invalidated on every write) and `Crypto`. */
+/**
+ * Requires `ConnectionRecords`, `OrganizationConnections` (invalidated on every write), the exposed
+ * `OrganizationDirectory` (a connection belongs to an active organization), `AuthEvents` and `Crypto`.
+ */
 export const layerStore = Layer.effect(
   OrganizationConnectionStore,
   Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
     const map = yield* OrganizationConnections;
+    const directory = yield* OrganizationDirectory.OrganizationDirectory;
+    const events = yield* AuthEvents.AuthEvents;
     const crypto = yield* Crypto.Crypto;
 
-    const create: OrganizationConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(
-        Effect.catch(StoreFailure.storeUnavailable("OrganizationConnectionStore.create")),
+    /** A connection belongs to an organization that exists and is not suspended (BEH-EA-237), worded as the SAML store words it. */
+    const requireActiveOrganization = (organizationId: string) =>
+      directory.findActive(organizationId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(new InvalidConnection({ reason: "the organization does not exist" })),
+            onSome: () => Effect.void,
+          }),
+        ),
       );
-      const scopes = input.scopes ?? [];
-      yield* validate({
-        kind: input.kind,
-        name: input.name,
-        issuer: Option.fromNullishOr(input.issuer),
-        discoveryUrl: Option.fromNullishOr(input.discoveryUrl),
-        authorizationEndpoint: Option.fromNullishOr(input.authorizationEndpoint),
-        tokenEndpoint: Option.fromNullishOr(input.tokenEndpoint),
-        jwksUri: Option.fromNullishOr(input.jwksUri),
-        userinfoEndpoint: Option.fromNullishOr(input.userinfoEndpoint),
-        clientId: input.clientId,
-        scopes,
-      });
-      const emailDomains = yield* normalizeDomains(input.emailDomains ?? []);
-      const record = yield* records.create({
-        id,
-        organizationId: input.organizationId,
-        kind: input.kind,
-        name: input.name.trim(),
-        issuer: input.issuer,
-        discoveryUrl: input.discoveryUrl,
-        authorizationEndpoint: input.authorizationEndpoint,
-        tokenEndpoint: input.tokenEndpoint,
-        jwksUri: input.jwksUri,
-        userinfoEndpoint: input.userinfoEndpoint,
-        clientId: input.clientId,
-        clientSecret: input.clientSecret,
-        scopes,
-        emailDomains,
-      });
-      yield* map.invalidate(input.organizationId);
-      return toView(record);
-    });
+
+    const create: OrganizationConnectionStoreShape["create"] = Effect.fnUntraced(
+      function* (actor, input) {
+        yield* requireActiveOrganization(input.organizationId);
+        const id = yield* crypto.randomUUIDv7.pipe(
+          Effect.catch(StoreFailure.storeUnavailable("OrganizationConnectionStore.create")),
+        );
+        const scopes = input.scopes ?? [];
+        yield* validate({
+          kind: input.kind,
+          name: input.name,
+          issuer: Option.fromNullishOr(input.issuer),
+          discoveryUrl: Option.fromNullishOr(input.discoveryUrl),
+          authorizationEndpoint: Option.fromNullishOr(input.authorizationEndpoint),
+          tokenEndpoint: Option.fromNullishOr(input.tokenEndpoint),
+          jwksUri: Option.fromNullishOr(input.jwksUri),
+          userinfoEndpoint: Option.fromNullishOr(input.userinfoEndpoint),
+          clientId: input.clientId,
+          scopes,
+        });
+        const emailDomains = yield* normalizeDomains(input.emailDomains ?? []);
+        const record = yield* records.create({
+          id,
+          organizationId: input.organizationId,
+          kind: input.kind,
+          name: input.name.trim(),
+          issuer: input.issuer,
+          discoveryUrl: input.discoveryUrl,
+          authorizationEndpoint: input.authorizationEndpoint,
+          tokenEndpoint: input.tokenEndpoint,
+          jwksUri: input.jwksUri,
+          userinfoEndpoint: input.userinfoEndpoint,
+          clientId: input.clientId,
+          clientSecret: input.clientSecret,
+          scopes,
+          emailDomains,
+        });
+        yield* map.invalidate(input.organizationId);
+        yield* events.publish({
+          _tag: "auth.organization.connectionCreated",
+          organizationId: input.organizationId,
+          connectionId: record.id,
+          actorUserId: OrganizationActor.userIdOf(actor),
+        });
+        return toView(record);
+      },
+    );
 
     const update: OrganizationConnectionStoreShape["update"] = Effect.fnUntraced(
-      function* (organizationId, connectionId, patch) {
+      function* (actor, organizationId, connectionId, patch) {
+        yield* requireActiveOrganization(organizationId);
         const existing = yield* records.findById(organizationId, connectionId);
         if (Option.isNone(existing)) {
           return yield* new ConnectionRecords.ConnectionRecordNotFound({ id: connectionId });
@@ -490,14 +527,29 @@ export const layerStore = Layer.effect(
           emailDomains,
         });
         yield* map.invalidate(organizationId);
+        yield* events.publish({
+          _tag: "auth.organization.connectionUpdated",
+          organizationId,
+          connectionId,
+          fields: Object.entries(patch).flatMap(([field, value]) =>
+            value === undefined ? [] : [field],
+          ),
+          actorUserId: OrganizationActor.userIdOf(actor),
+        });
         return toView(record);
       },
     );
 
     const remove: OrganizationConnectionStoreShape["remove"] = Effect.fnUntraced(
-      function* (organizationId, connectionId) {
+      function* (actor, organizationId, connectionId) {
         yield* records.remove(organizationId, connectionId);
         yield* map.invalidate(organizationId);
+        yield* events.publish({
+          _tag: "auth.organization.connectionDeleted",
+          organizationId,
+          connectionId,
+          actorUserId: OrganizationActor.userIdOf(actor),
+        });
       },
     );
 
@@ -528,19 +580,19 @@ export const layerStore = Layer.effect(
 );
 
 /**
- * Deleting an organization removes its connections and releases their email
- * domains. A separate opt-in layer, like `Organization.beforeUserDeleteErasure`
- * (hook-point taps are a module-level registry that freezes at first run, so a
- * tap cannot be merged into a layer rebuilt repeatedly): provide it once.
+ * Deleting an organization removes its connections and releases their email domains: this plugin's
+ * contribution to the organization's deletion (F7). The rows go in the deletion's own transaction, so a
+ * failure rolls the deletion back instead of being swallowed, and the cached provider set is dropped once
+ * it has committed. A separate opt-in layer, like the store itself: provide it where the store is.
  */
-export const cleanupOnOrganizationDelete = Layer.unwrap(
-  Effect.gen(function* () {
+export const connectionsOnOrganizationDelete = OrganizationDeletion.contribute({
+  id: "organization.oauthConnections",
+  make: Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
     const map = yield* OrganizationConnections;
-    return OrganizationHooks.AfterDeleteOrganization.tap(({ organizationId }) =>
-      records
-        .removeAllForOrganization(organizationId)
-        .pipe(Effect.andThen(map.invalidate(organizationId))),
-    );
+    return {
+      inTransaction: records.removeAllForOrganization,
+      afterCommit: map.invalidate,
+    };
   }),
-);
+});

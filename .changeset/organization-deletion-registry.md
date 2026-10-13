@@ -1,0 +1,10 @@
+---
+"@awthaq/organization": minor
+"@awthaq/core": minor
+"@awthaq/saml": minor
+"@awthaq/scim": minor
+---
+
+Deleting an organization removes the connections that hang off it, in its own transaction (ADR-EA-040, BEH-EA-235). `OrganizationDeletion` is an aggregating registry (like `Erasure.contribute`), exposed by `Organization.layer`; `OrganizationDirectory.delete` runs every contribution's `inTransaction` after its own cascade and every `afterCommit` once the transaction has committed, so a failing contribution rolls the deletion back instead of leaving rows behind. OIDC/OAuth2 connections (`connectionsOnOrganizationDelete`), SAML connections (their domains, SP keys and Single Logout sessions) and SCIM connections (and their mappings, through the new `ScimRecords.removeAllForOrganization`) previously outlived the organization. The OIDC `OrganizationConnectionStore` now refuses an unknown or suspended organization (`InvalidConnection`) and takes an `Actor` on `create`, `update` and `remove`, publishing the new core events `auth.organization.connectionCreated` / `connectionUpdated` / `connectionDeleted` (identifiers only, with the acting user's id when the actor names one; `@awthaq/core`).
+
+Migration: `OrganizationConnections.cleanupOnOrganizationDelete` (an opt-in observe tap whose failures were swallowed) is replaced by `connectionsOnOrganizationDelete`; provide it where the store is. `OrganizationConnectionStore.create(input)` becomes `create(actor, input)`, `update(organizationId, connectionId, patch)` becomes `update(actor, organizationId, connectionId, patch)` and `remove(organizationId, connectionId)` becomes `remove(actor, organizationId, connectionId)` (use `OrganizationActor.application("...")` for application code). `OrganizationConnections.layerStore` now requires the exposed `OrganizationDirectory` and `AuthEvents`. `Saml.layer` and `Scim.layer` now require the `OrganizationDeletion` registry that `Organization.layer` exposes. A custom `ScimRecords` implements `removeAllForOrganization(organizationId)`. A new tenancy table is not needed: no migration.

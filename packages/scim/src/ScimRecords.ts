@@ -92,6 +92,13 @@ export interface ScimRecordsShape {
     organizationId: string,
     id: string,
   ) => Effect.Effect<ConnectionRecord, ScimRecordNotFound | StoreFailure.StoreUnavailable>;
+  /**
+   * Plan 04 (F7): removes every connection of an organization with the mappings of those connections, for
+   * `OrganizationDirectory.delete`'s transaction. Keyed by the organization, so no witness. Idempotent.
+   */
+  readonly removeAllForOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   // ---- resource links
   readonly link: (input: {
     readonly connectionId: string;
@@ -247,6 +254,24 @@ export const layerMemory = Layer.effect(
           },
         );
         return yield* Effect.fromResult(outcome);
+      });
+
+    const removeAllForOrganization: ScimRecordsShape["removeAllForOrganization"] = (
+      organizationId,
+    ) =>
+      Ref.update(state, (s) => {
+        const doomed = new Set(
+          Array.from(HashMap.values(s.connections))
+            .filter((row) => row.organizationId === organizationId)
+            .map((row) => row.id),
+        );
+        return {
+          connections: HashMap.filter(
+            s.connections,
+            (row) => row.organizationId !== organizationId,
+          ),
+          links: s.links.filter((row) => !doomed.has(row.connectionId)),
+        };
       });
 
     const sameResource = (
@@ -427,6 +452,7 @@ export const layerMemory = Layer.effect(
       findConnectionByTokenHash,
       listConnections,
       revokeConnection,
+      removeAllForOrganization,
       link,
       find,
       findByName,
@@ -727,6 +753,15 @@ export const layerSql = Layer.effect(
       },
     );
 
+    const removeAllForOrganization: ScimRecordsShape["removeAllForOrganization"] = (
+      organizationId,
+    ) =>
+      sql`DELETE FROM scim_resource WHERE "scimConnectionId" IN (SELECT id FROM scim_connection WHERE "organizationId" = ${organizationId})`.pipe(
+        Effect.andThen(sql`DELETE FROM scim_connection WHERE "organizationId" = ${organizationId}`),
+        unavailable("removeAllForOrganization"),
+        Effect.asVoid,
+      );
+
     const unlink: ScimRecordsShape["unlink"] = (connectionId, kind, resourceId) =>
       sql`DELETE FROM scim_resource WHERE "scimConnectionId" = ${connectionId} AND kind = ${kind} AND "resourceId" = ${resourceId}`.pipe(
         unavailable("unlink"),
@@ -752,6 +787,7 @@ export const layerSql = Layer.effect(
       findConnectionByTokenHash,
       listConnections,
       revokeConnection,
+      removeAllForOrganization,
       link,
       find,
       findByName,

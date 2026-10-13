@@ -44,6 +44,7 @@ import {
 import {
   Organization,
   OrganizationActor,
+  OrganizationDeletion,
   OrganizationMembers,
   OrganizationTeams,
 } from "@awthaq/organization";
@@ -458,6 +459,18 @@ export const scimErasure = Erasure.contribute({
   }),
 });
 
+/**
+ * Plan 04 (F7): an organization's deletion removes its directory connections and their mappings, in the
+ * deletion's own transaction. Without it, `scim_connection` and `scim_resource` rows outlived the organization.
+ */
+export const scimOrganizationDeletion = OrganizationDeletion.contribute({
+  id: "scim",
+  make: Effect.gen(function* () {
+    const records = yield* ScimRecords.ScimRecords;
+    return { inTransaction: records.removeAllForOrganization };
+  }),
+});
+
 /** CSG-005: which directory connections provisioned the person, under which userName/externalId. */
 export const scimExport = DataExport.contribute({
   id: "scim",
@@ -489,7 +502,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
   static readonly layer = AuthPlugin.layer(Scim, {
     ports: [SqlTransaction.SqlTransaction],
     dependsOn: [Organization.Organization],
-    contributes: Layer.mergeAll(scimErasure, scimExport),
+    contributes: Layer.mergeAll(scimErasure, scimExport, scimOrganizationDeletion),
     handlers: HttpApiBuilder.group(
       ScimApi.ScimApi,
       "scim",

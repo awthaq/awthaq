@@ -156,6 +156,24 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     organizationId: "org-1",
     role: "editor",
   },
+  "auth.organization.connectionCreated": {
+    _tag: "auth.organization.connectionCreated",
+    organizationId: "org-1",
+    connectionId: "conn-1",
+    actorUserId: userId,
+  },
+  "auth.organization.connectionUpdated": {
+    _tag: "auth.organization.connectionUpdated",
+    organizationId: "org-1",
+    connectionId: "conn-1",
+    fields: ["name"],
+  },
+  "auth.organization.connectionDeleted": {
+    _tag: "auth.organization.connectionDeleted",
+    organizationId: "org-1",
+    connectionId: "conn-1",
+    actorUserId: userId,
+  },
   "auth.organization.teamCreated": {
     _tag: "auth.organization.teamCreated",
     organizationId: "org-1",

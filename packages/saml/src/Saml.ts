@@ -49,6 +49,7 @@ import {
   Organization,
   OrganizationActor,
   OrganizationAuthority,
+  OrganizationDeletion,
   OrganizationDirectory,
   OrganizationMembers,
 } from "@awthaq/organization";
@@ -711,6 +712,32 @@ const SamlContinuationPayload = Schema.Struct({
 
 // ---- the plugin --------------------------------------------------------------------------------------
 
+/**
+ * Plan 04 (F7): an organization's deletion removes its SAML connections with their domains, SP keys and
+ * Single Logout session rows, in the deletion's own transaction. Without it those rows outlived the
+ * organization (and its email domains stayed routed to a dead connection).
+ */
+export const samlOrganizationDeletion = OrganizationDeletion.contribute({
+  id: "saml",
+  make: Effect.gen(function* () {
+    const records = yield* SamlRecords.SamlRecords;
+    return {
+      inTransaction: (organizationId: string) =>
+        Effect.flatMap(records.listByOrganization(organizationId), (connections) =>
+          Effect.forEach(
+            connections,
+            (connection) =>
+              records
+                .remove(organizationId, connection.id)
+                // Removed meanwhile: the goal state holds.
+                .pipe(Effect.catchTag("SamlRecordNotFound", () => Effect.void)),
+            { discard: true },
+          ),
+        ),
+    };
+  }),
+});
+
 export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   apiVersion: 1,
   contract: SamlApi.SamlApi,
@@ -732,6 +759,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       XmlSignature.XmlSignature,
     ],
     dependsOn: [Organization.Organization],
+    contributes: samlOrganizationDeletion,
     handlers: Layer.mergeAll(SamlHandlers, SamlAccountHandlers, SamlAdminHandlers),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;

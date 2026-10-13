@@ -320,6 +320,19 @@ const connectionMethods: Methods = {
         ),
     },
   },
+  removeAllForOrganization: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.gen(function* () {
+            yield* records.removeAllForOrganization(orgOf(row, as));
+            // Keyed by the organization: only that organization's own connection is gone.
+            const remaining = yield* records.listConnections(row.organizationId);
+            return !remaining.some((found) => found.id === row.connectionId);
+          }),
+        ),
+    },
+  },
   link: derivedElsewhere("scim_resource"),
   find: derivedElsewhere("scim_resource"),
   findByName: derivedElsewhere("scim_resource"),
@@ -336,6 +349,7 @@ const resourceMethods: Methods = {
   findConnectionByTokenHash: derivedElsewhere("scim_connection"),
   listConnections: derivedElsewhere("scim_connection"),
   revokeConnection: derivedElsewhere("scim_connection"),
+  removeAllForOrganization: derivedElsewhere("scim_connection"),
   link: { insert: true },
   find: viaConnection,
   findByName: viaConnection,

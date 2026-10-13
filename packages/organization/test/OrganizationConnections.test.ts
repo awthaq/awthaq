@@ -3,7 +3,7 @@
 // an organization's rows into provider configs; `oauthConnections` installs the
 // resolver `@awthaq/oauth` consults after its static registry — proven here end
 // to end by completing a real callback through a stored connection.
-import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, AuditLog, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { OAuth, OAuthConnections } from "@awthaq/oauth";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
@@ -16,10 +16,16 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { fakeHttpClient } from "../../oauth/test/FakeProvider.ts";
+import * as DateTime from "effect/DateTime";
 import * as ConnectionRecords from "../src/ConnectionRecords.ts";
 import * as OrganizationConnections from "../src/OrganizationConnections.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
+import * as OrganizationDirectory from "../src/OrganizationDirectory.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
+import * as OrganizationMemory from "../src/OrganizationMemory.ts";
+import * as OrganizationRecords from "../src/OrganizationRecords.ts";
+import * as OrganizationSystem from "../src/OrganizationSystem.ts";
+import * as Organization from "../src/Organization.ts";
 import { TestAuth } from "@awthaq/test";
 import { grant } from "./support.ts";
 
@@ -38,6 +44,45 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
+const actor = OrganizationActor.application("OrganizationConnections.test");
+
+/**
+ * The store only asks the Directory whether an organization is active. These suites name organizations by
+ * string ("org-1") without creating them, so a stub answers: every organization is active except "ghost" and
+ * "suspended". The real Directory (unknown and suspended organizations, the deletion contribution) is
+ * exercised in the suites below.
+ */
+const aRecord = (id: string): OrganizationRecords.OrganizationRecord => ({
+  id,
+  name: id,
+  slug: id,
+  logo: Option.none(),
+  metadata: Option.none(),
+  homeRegion: Option.none(),
+  suspendedAt: Option.none(),
+  createdAt: DateTime.makeUnsafe(0),
+});
+const unused = () => Effect.die(new Error("not used by the connection store"));
+const StubDirectoryLive = Layer.succeed(
+  OrganizationDirectory.OrganizationDirectory,
+  OrganizationDirectory.OrganizationDirectory.of({
+    find: (id) => Effect.succeed(Option.some(aRecord(id))),
+    findActive: (id) =>
+      Effect.succeed(
+        id === "ghost" || id === "suspended" ? Option.none() : Option.some(aRecord(id)),
+      ),
+    requireActive: unused,
+    isSlugAvailable: unused,
+    listForUser: unused,
+    listPage: unused,
+    create: unused,
+    update: unused,
+    delete: unused,
+    suspend: unused,
+    reinstate: unused,
+  }),
+);
+
 /** Connection storage, sealing and the LayerMap — everything but OAuth. */
 const ConnectionsLive = Layer.mergeAll(
   OrganizationConnections.layerStore,
@@ -45,7 +90,9 @@ const ConnectionsLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
   Layer.provideMerge(ConnectionRecords.layerMemory),
+  Layer.provideMerge(StubDirectoryLive),
   Layer.provideMerge(EncryptionLive),
+  Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -83,7 +130,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
       const records = yield* ConnectionRecords.ConnectionRecords;
-      const view = yield* store.create(oidcInput("org-1"));
+      const view = yield* store.create(actor, oidcInput("org-1"));
       assert.isTrue(view.hasClientSecret);
       assert.strictEqual(view.providerId, `org:org-1:${view.id}`);
       const stored = yield* records.findById("org-1", view.id);
@@ -101,7 +148,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
         const store = yield* OrganizationConnections.OrganizationConnectionStore;
         const outcome = (url: string) =>
           store
-            .create(oidcInput("org-1", { discoveryUrl: url, emailDomains: [] }))
+            .create(actor, oidcInput("org-1", { discoveryUrl: url, emailDomains: [] }))
             .pipe(
               Effect.match({ onFailure: (failure) => failure._tag, onSuccess: () => "created" }),
             );
@@ -126,7 +173,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
       const reject = (overrides: Partial<OrganizationConnections.ConnectionCreateInput>) =>
-        store.create(oidcInput("org-1", overrides)).pipe(
+        store.create(actor, oidcInput("org-1", overrides)).pipe(
           Effect.flip,
           Effect.map((failure) => failure._tag),
         );
@@ -162,11 +209,12 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
       const first = yield* store.create(
+        actor,
         oidcInput("org-1", { emailDomains: [" Acme.Example ", "acme.example"] }),
       );
       assert.deepStrictEqual(first.emailDomains, ["acme.example"]);
       const clash = yield* store
-        .create(oidcInput("org-2", { emailDomains: ["acme.example"] }))
+        .create(actor, oidcInput("org-2", { emailDomains: ["acme.example"] }))
         .pipe(Effect.flip);
       assert.strictEqual(clash._tag, "ConnectionDomainTaken");
     }).pipe(Effect.provide(ConnectionsLive)),
@@ -175,7 +223,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
   it.effect("discover routes by organization id, then by email domain", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
-      const view = yield* store.create(oidcInput("org-1"));
+      const view = yield* store.create(actor, oidcInput("org-1"));
       assert.deepStrictEqual(
         yield* store.discover({ organizationId: "org-1" }),
         Option.some(view.providerId),
@@ -198,7 +246,7 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
       Effect.gen(function* () {
         const store = yield* OrganizationConnections.OrganizationConnectionStore;
         const resolver = Option.getOrThrow(yield* OAuthConnections.OAuthConnectionResolver);
-        const view = yield* store.create(oidcInput("org-1"));
+        const view = yield* store.create(actor, oidcInput("org-1"));
         const found = yield* resolver.find(view.providerId);
         assert.isTrue(Option.isSome(found));
         if (Option.isSome(found)) {
@@ -210,12 +258,12 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
         const again = yield* resolver.find(view.providerId);
         assert.strictEqual(Option.getOrThrow(again).revision, Option.getOrThrow(found).revision);
         // An edit invalidates the entry: the new revision and the new client id show up at once.
-        yield* store.update("org-1", view.id, { clientId: "client-2" });
+        yield* store.update(actor, "org-1", view.id, { clientId: "client-2" });
         const edited = Option.getOrThrow(yield* resolver.find(view.providerId));
         assert.strictEqual(edited.config.clientId, "client-2");
         assert.notStrictEqual(edited.revision, Option.getOrThrow(found).revision);
         // Removing it makes the id unknown again.
-        yield* store.remove("org-1", view.id);
+        yield* store.remove(actor, "org-1", view.id);
         assert.isTrue(Option.isNone(yield* resolver.find(view.providerId)));
       }).pipe(Effect.provide(ConnectionsLive)),
   );
@@ -224,7 +272,7 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
       const resolver = Option.getOrThrow(yield* OAuthConnections.OAuthConnectionResolver);
-      const view = yield* store.create(oidcInput("org-1"));
+      const view = yield* store.create(actor, oidcInput("org-1"));
       assert.isTrue(Option.isNone(yield* resolver.find("google")));
       assert.isTrue(Option.isNone(yield* resolver.find("org:org-1")));
       assert.isTrue(Option.isNone(yield* resolver.find(`org:org-2:${view.id}`)));
@@ -237,8 +285,8 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
       const envelopes = yield* ConnectionRecords.MemoryEnvelopes;
       const resolver = Option.getOrThrow(yield* OAuthConnections.OAuthConnectionResolver);
-      const good = yield* store.create(oidcInput("org-1", { emailDomains: [] }));
-      const bad = yield* store.create(oidcInput("org-1", { emailDomains: ["bad.example"] }));
+      const good = yield* store.create(actor, oidcInput("org-1", { emailDomains: [] }));
+      const bad = yield* store.create(actor, oidcInput("org-1", { emailDomains: ["bad.example"] }));
       yield* envelopes.plant(bad.id, "not-an-envelope");
       yield* OrganizationConnections.OrganizationConnections.invalidate("org-1");
       assert.isTrue(Option.isSome(yield* resolver.find(good.providerId)));
@@ -247,30 +295,95 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
   );
 });
 
-describe("cleanupOnOrganizationDelete (BEH-EA-235)", () => {
+// ---- the store against the real Directory (BEH-EA-235, plan 04 phase 5) -------------------------------
+
+const RealLive = Layer.mergeAll(
+  OrganizationConnections.layerStore,
+  OrganizationConnections.connectionsOnOrganizationDelete,
+).pipe(
+  Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
+  Layer.provideMerge(ConnectionRecords.layerMemory),
+  Layer.provideMerge(OrganizationSystem.layer.pipe(Layer.provide(Organization.config({})))),
+  Layer.provideMerge(OrganizationMemory.layer),
+  Layer.provideMerge(EncryptionLive),
+  Layer.provideMerge(TestAuth.memoryFoundation),
+  Layer.provideMerge(SqlTransaction.layerNoop),
+  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
+  Layer.provideMerge(NodeCrypto.layer),
+);
+
+describe("connections belong to an active organization, and go with it (BEH-EA-235)", () => {
+  it.effect("create and update refuse an unknown or suspended organization", () =>
+    Effect.gen(function* () {
+      const store = yield* OrganizationConnections.OrganizationConnectionStore;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
+      const unknown = yield* store.create(actor, oidcInput("no-such-org")).pipe(Effect.flip);
+      assert.strictEqual(unknown._tag, "InvalidConnection");
+      const org = yield* directory.create(actor, {
+        owner: Users.UserId("o"),
+        name: "A",
+        slug: "a",
+      });
+      const view = yield* store.create(actor, oidcInput(org.id));
+      yield* directory.suspend(OrganizationActor.platformAdmin(Users.UserId("admin")), {
+        organizationId: org.id,
+      });
+      const suspended = yield* store
+        .update(actor, org.id, view.id, { clientId: "client-2" })
+        .pipe(Effect.flip);
+      assert.strictEqual(suspended._tag, "InvalidConnection");
+      const second = yield* store.create(actor, oidcInput(org.id)).pipe(Effect.flip);
+      assert.strictEqual(second._tag, "InvalidConnection");
+    }).pipe(Effect.provide(RealLive)),
+  );
+
+  it.effect("each write is published with the acting user, identifiers only", () =>
+    Effect.gen(function* () {
+      const store = yield* OrganizationConnections.OrganizationConnectionStore;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
+      const auditLog = yield* AuditLog.AuditLog;
+      const org = yield* directory.create(actor, {
+        owner: Users.UserId("o"),
+        name: "A",
+        slug: "a",
+      });
+      const admin = OrganizationActor.platformAdmin(Users.UserId("admin-1"));
+      const view = yield* store.create(admin, oidcInput(org.id));
+      yield* store.update(admin, org.id, view.id, { clientId: "client-2" });
+      yield* store.remove(actor, org.id, view.id);
+      const created = yield* auditLog.list({ eventTag: "auth.organization.connectionCreated" });
+      assert.strictEqual(created.length, 1);
+      assert.deepStrictEqual(created[0]?.actorUserId, Option.some("admin-1"));
+      const updated = yield* auditLog.list({ eventTag: "auth.organization.connectionUpdated" });
+      assert.strictEqual(updated.length, 1);
+      assert.deepStrictEqual(updated[0]?.actorUserId, Option.some("admin-1"));
+      const deleted = yield* auditLog.list({ eventTag: "auth.organization.connectionDeleted" });
+      assert.deepStrictEqual(deleted[0]?.actorUserId, Option.none());
+    }).pipe(Effect.provide(RealLive)),
+  );
+
   it.effect("deleting an organization removes its connections and frees their domains", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
       const records = yield* ConnectionRecords.ConnectionRecords;
-      yield* store.create(oidcInput("org-1"));
-      yield* store.create(oidcInput("org-2", { emailDomains: ["other.example"] }));
-      const afterDelete = yield* OrganizationHooks.AfterDeleteOrganization;
-      yield* afterDelete.run({
-        actor: OrganizationActor.application("test"),
-        organizationId: "org-1",
+      const first = yield* directory.create(actor, {
+        owner: Users.UserId("o1"),
+        name: "A",
+        slug: "a",
       });
-      assert.strictEqual((yield* records.listByOrganization("org-1")).length, 0);
+      const second = yield* directory.create(actor, {
+        owner: Users.UserId("o2"),
+        name: "B",
+        slug: "b",
+      });
+      yield* store.create(actor, oidcInput(first.id));
+      yield* store.create(actor, oidcInput(second.id, { emailDomains: ["other.example"] }));
+      yield* directory.delete(actor, { organizationId: first.id });
+      assert.strictEqual((yield* records.listByOrganization(first.id)).length, 0);
       assert.isTrue(Option.isNone(yield* records.findByEmailDomain(grant, "acme.example")));
-      assert.strictEqual((yield* records.listByOrganization("org-2")).length, 1);
-    }).pipe(
-      Effect.provide(
-        // A tap's layer requires its point (ELC-001), so the point is provided to it.
-        OrganizationConnections.cleanupOnOrganizationDelete.pipe(
-          Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-          Layer.provideMerge(ConnectionsLive),
-        ),
-      ),
-    ),
+      assert.strictEqual((yield* records.listByOrganization(second.id)).length, 1);
+    }).pipe(Effect.provide(RealLive)),
   );
 });
 
@@ -318,7 +431,10 @@ describe("a stored connection completes a full OAuth flow (EP-004)", () => {
       assert.strictEqual(unknown._tag, "ProviderNotFound");
 
       // Home-realm discovery: the email domain names the connection to redirect to.
-      const view = yield* store.create({ ...oauth2Input("org-1"), emailDomains: ["acme.example"] });
+      const view = yield* store.create(actor, {
+        ...oauth2Input("org-1"),
+        emailDomains: ["acme.example"],
+      });
       const routed = yield* store.discover({ email: "ada@acme.example" });
       assert.deepStrictEqual(routed, Option.some(view.providerId));
 

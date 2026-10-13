@@ -1114,6 +1114,55 @@ export const OrganizationRoleDeletedEvent = defineEvent(
 );
 export type OrganizationRoleDeletedEvent = typeof OrganizationRoleDeletedEvent.Type;
 
+/**
+ * `@awthaq/organization`'s per-organization OIDC/OAuth2 connection store, after each SUCCESSFUL mutation
+ * (identifiers only; for an update the NAMES of the fields changed, never their values). `actorUserId` is the
+ * user who acted when the actor names one (a member, a platform administrator); a directory or application
+ * actor leaves it absent, so the audit row names no user.
+ */
+export const OrganizationConnectionCreatedEvent = defineEvent(
+  "auth.organization.connectionCreated",
+  {
+    organizationId: Schema.String,
+    connectionId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
+export type OrganizationConnectionCreatedEvent = typeof OrganizationConnectionCreatedEvent.Type;
+
+export const OrganizationConnectionUpdatedEvent = defineEvent(
+  "auth.organization.connectionUpdated",
+  {
+    organizationId: Schema.String,
+    connectionId: Schema.String,
+    fields: Schema.Array(Schema.String),
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
+export type OrganizationConnectionUpdatedEvent = typeof OrganizationConnectionUpdatedEvent.Type;
+
+export const OrganizationConnectionDeletedEvent = defineEvent(
+  "auth.organization.connectionDeleted",
+  {
+    organizationId: Schema.String,
+    connectionId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
+export type OrganizationConnectionDeletedEvent = typeof OrganizationConnectionDeletedEvent.Type;
+
 /** Published by `@awthaq/organization`'s `createTeam`. */
 export const OrganizationTeamCreatedEvent = defineEvent(
   "auth.organization.teamCreated",
@@ -1633,6 +1682,9 @@ const Registry = registry([
   WebhookEndpointDeletedEvent,
   WebhookTestQueuedEvent,
   SamlConnectionCreatedEvent,
+  OrganizationConnectionCreatedEvent,
+  OrganizationConnectionUpdatedEvent,
+  OrganizationConnectionDeletedEvent,
   SamlConnectionUpdatedEvent,
   SamlConnectionDeletedEvent,
   SamlSigningKeyRotatedEvent,

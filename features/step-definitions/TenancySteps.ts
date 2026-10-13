@@ -230,7 +230,7 @@ const storeConnection = Effect.fn("features.tenancy.storeConnection")(function* 
   const view = yield* Effect.provide(
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
-      return yield* store.create({
+      return yield* store.create(OrganizationActor.application("bdd"), {
         organizationId: organizationName,
         kind: "oauth2",
         name: "Acme OAuth",
