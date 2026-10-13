@@ -15,26 +15,14 @@
 // below shares it (each test uses its own organization/user ids, so shared
 // state cannot leak between them).
 import { Api } from "@awthaq/api";
-import { Persistence, Sessions, Users } from "@awthaq/core";
+import { Auth, Users } from "@awthaq/core";
 import {
   Organization,
   OrganizationActor,
   OrganizationDirectory,
-  OrganizationHooks,
   OrganizationMembers,
   OrganizationQadi,
 } from "@awthaq/organization";
-import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
-  OrganizationRecords,
-  OrgRoleRecords,
-  TeamRecords,
-} from "@awthaq/organization/records";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, layer } from "@effect/vitest";
 import {
   currentSubjectLayer,
@@ -52,58 +40,21 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as DecisionCacheInvalidation from "../src/DecisionCacheInvalidation.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("decision-cache-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const records = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
-  layer.pipe(Layer.provide(NodeCrypto.layer));
-
-const OrganizationLive = Organization.Organization.layer.pipe(
-  Layer.provide(
-    Organization.config({
-      dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 10 },
-      teams: {
-        enabled: true,
-        maximumTeams: Number.POSITIVE_INFINITY,
-        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
-        allowRemovingAllTeams: false,
-      },
-    }),
-  ),
-  Layer.provide(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(records(OrganizationRecords.layerMemory)),
-  Layer.provideMerge(records(MembershipRecords.layerMemory)),
-  Layer.provideMerge(ActiveContextRecords.layerMemory),
-  Layer.provideMerge(records(InvitationRecords.layerMemory)),
-  Layer.provideMerge(records(OrgRoleRecords.layerMemory)),
-  Layer.provideMerge(records(TeamRecords.layerMemory)),
-  Layer.provideMerge(Mailer.layerMemory),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-);
+const OrganizationLive = TestAuth.layer(Auth.make([Organization.Organization]), {
+  services: Organization.config({
+    dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 10 },
+    teams: {
+      enabled: true,
+      maximumTeams: Number.POSITIVE_INFINITY,
+      maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+      allowRemovingAllTeams: false,
+    },
+  }),
+});
 
 // The app-scoped cache, plus the opt-in bridge that keeps it honest.
 const RelationshipsLive = OrganizationQadi.relationships.pipe(

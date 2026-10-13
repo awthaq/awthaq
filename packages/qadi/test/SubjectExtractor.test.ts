@@ -1,4 +1,7 @@
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
+// Hand-wired on purpose: `SubjectExtractorLive` shares `Authentication`'s own `PrincipalResolver` (the same
+// principal logic), a short-lived `SessionConfig` is injected beneath the stores and the resolver is read back
+// directly; the wiring is the subject of the test, not a host to compose (plan 08 exemption).
 import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import { Authentication } from "@awthaq/server";

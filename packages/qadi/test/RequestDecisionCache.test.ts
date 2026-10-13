@@ -5,8 +5,7 @@
 // relationship revoked between two requests is visible on the next one with
 // no invalidation layer at all.
 import { Api } from "@awthaq/api";
-import { Persistence, Sessions, Users } from "@awthaq/core";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Auth, AuthPlugin } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import {
   evaluate,
@@ -17,12 +16,8 @@ import {
 } from "@qadi/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -74,25 +69,25 @@ const CheckHandlers = HttpApiBuilder.group(TestApi, "check", (handlers) =>
 // per call through `toWebHandler`'s context argument.
 const EvaluationLive = Layer.mergeAll(EvaluationServicesNone, CountingResolver);
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
+/** A one-group plugin: the cache is exercised through the composition a host builds (`TestAuth.layer`). */
+class CheckPlugin extends AuthPlugin.Service<CheckPlugin, Record<string, never>>()("check", {
+  apiVersion: 1,
+  contract: TestApi,
+  tables: {},
+}) {
+  static readonly layer = AuthPlugin.layer(CheckPlugin, {
+    make: Effect.succeed({}),
+    handlers: CheckHandlers,
+  });
+}
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AppLayer = AuthHttp.routes(TestApi, {}).pipe(
-  Layer.provide(CheckHandlers),
-  Layer.provide(AuthorizedSubject.AuthorizedSubjectLive),
-  Layer.provide(RequestDecisionCache.RequestDecisionCacheLive()),
-  Layer.provide(Authentication.OptionalAuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
-);
+// Not `TestAuth.app`: the handler is called with the evaluation services as its per-request context.
+const AppLayer = TestAuth.layer(Auth.make([CheckPlugin]), {
+  services: Layer.mergeAll(
+    AuthorizedSubject.AuthorizedSubjectLive,
+    RequestDecisionCache.RequestDecisionCacheLive(),
+  ),
+});
 
 const get = (
   handler: (

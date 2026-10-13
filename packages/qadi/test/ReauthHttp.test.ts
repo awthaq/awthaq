@@ -8,17 +8,12 @@
 // decodes it — the very schema asserted against below — telling a reauth demand
 // (with its window) apart from a plain permission denial.
 import { Api } from "@awthaq/api";
-import { Persistence, SessionCookie, Sessions, Users } from "@awthaq/core";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Auth, AuthPlugin, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import { allOf, enforce, EvaluationServicesNone, obliged } from "@qadi/core";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -63,17 +58,21 @@ const guarded = (maxAgeSeconds: number) =>
     ),
   );
 
-const LoginHandlers = HttpApiBuilder.group(TestApi, "login", (handlers) =>
-  handlers.handleAll({
-    login: Effect.fnUntraced(function* () {
-      const sessions = yield* Sessions.Sessions;
-      const users = yield* Users.Users;
-      const user = yield* users
-        .create({ identity: { _tag: "Email", email: "reauth@example.com" }, name: "Reauth" })
-        .pipe(Effect.orDie);
-      const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-      yield* SessionCookie.set(session, token);
-    }),
+const LoginHandlers = HttpApiBuilder.group(
+  TestApi,
+  "login",
+  Effect.fnUntraced(function* (handlers) {
+    const sessions = yield* Sessions.Sessions;
+    const users = yield* Users.Users;
+    return handlers.handleAll({
+      login: Effect.fnUntraced(function* () {
+        const user = yield* users
+          .create({ identity: { _tag: "Email", email: "reauth@example.com" }, name: "Reauth" })
+          .pipe(Effect.orDie);
+        const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        yield* SessionCookie.set(session, token);
+      }),
+    });
   }),
 );
 
@@ -84,24 +83,26 @@ const Handlers = HttpApiBuilder.group(TestApi, "reauth", (handlers) =>
   }),
 );
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
+/**
+ * An empty host plugin carrying no routes of its own: the two test groups ride beside it as `extraGroups`, with their
+ * handlers and the bridge middleware provided as the test's own `services`, through the composition a host builds.
+ */
+class HostPlugin extends AuthPlugin.Service<HostPlugin, Record<string, never>>()("host", {
+  apiVersion: 1,
+  contract: HttpApi.make("auth"),
+  tables: {},
+}) {
+  static readonly layer = AuthPlugin.layer(HostPlugin, { make: Effect.succeed({}) });
+}
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AppLayer = AuthHttp.routes(TestApi, {}).pipe(
-  Layer.provide(Handlers),
-  Layer.provide(LoginHandlers),
-  Layer.provide(AuthorizedSubject.AuthorizedSubjectLive),
-  Layer.provide(Authentication.AuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
+// Not `TestAuth.app`: the handler is called with the evaluation services as its per-request context.
+const AppLayer = TestAuth.layer(
+  Auth.make([HostPlugin], { extraGroups: [LoginGroup, StaleGroup] }),
+  {
+    services: Layer.mergeAll(LoginHandlers, Handlers).pipe(
+      Layer.provideMerge(AuthorizedSubject.AuthorizedSubjectLive),
+    ),
+  },
 );
 
 describe("Path A reauth over real HTTP (EEM-005)", () => {

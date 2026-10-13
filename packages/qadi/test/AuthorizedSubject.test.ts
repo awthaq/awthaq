@@ -15,17 +15,10 @@
 // reused for both requests, since each independent build would otherwise
 // own its own, unrelated `Sessions`/`Users` state.
 import { Api } from "@awthaq/api";
-import { Persistence, SessionCookie, Sessions, Users } from "@awthaq/core";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Auth, AuthPlugin, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { assert, describe, expectTypeOf, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -44,47 +37,48 @@ const WhoamiGroup = HttpApiGroup.make("whoami")
 
 const TestApi = HttpApi.make("auth").add(WhoamiGroup);
 
-const WhoamiHandlers = HttpApiBuilder.group(TestApi, "whoami", (handlers) =>
-  handlers.handleAll({
-    login: Effect.fnUntraced(function* () {
-      const sessions = yield* Sessions.Sessions;
-      const users = yield* Users.Users;
-      const user = yield* users
-        .create({ identity: { _tag: "Email", email: "whoami@example.com" }, name: "Whoami" })
-        .pipe(Effect.orDie);
-      const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-      yield* SessionCookie.set(session, token);
-    }),
-    get: Effect.fnUntraced(function* () {
-      const subject = yield* CurrentSubject;
-      return new Whoami({ subjectId: subject.id });
-    }),
+const WhoamiHandlers = HttpApiBuilder.group(
+  TestApi,
+  "whoami",
+  Effect.fnUntraced(function* (handlers) {
+    const sessions = yield* Sessions.Sessions;
+    const users = yield* Users.Users;
+    return handlers.handleAll({
+      login: Effect.fnUntraced(function* () {
+        const user = yield* users
+          .create({ identity: { _tag: "Email", email: "whoami@example.com" }, name: "Whoami" })
+          .pipe(Effect.orDie);
+        const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        yield* SessionCookie.set(session, token);
+      }),
+      get: Effect.fnUntraced(function* () {
+        const subject = yield* CurrentSubject;
+        return new Whoami({ subjectId: subject.id });
+      }),
+    });
   }),
 );
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
+/** A one-group plugin: the bridge is exercised through the composition a host builds (`TestAuth.layer`), not a hand-wired router. */
+class WhoamiPlugin extends AuthPlugin.Service<WhoamiPlugin, Record<string, never>>()("whoami", {
+  apiVersion: 1,
+  contract: TestApi,
+  tables: {},
+}) {
+  static readonly layer = AuthPlugin.layer(WhoamiPlugin, {
+    make: Effect.succeed({}),
+    handlers: WhoamiHandlers,
+  });
+}
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AppLayer = AuthHttp.routes(TestApi, {}).pipe(
-  Layer.provide(WhoamiHandlers),
-  Layer.provide(AuthorizedSubject.AuthorizedSubjectLive),
-  Layer.provide(Authentication.OptionalAuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
-);
+const AppLayer = TestAuth.layer(Auth.make([WhoamiPlugin]), {
+  services: AuthorizedSubject.AuthorizedSubjectLive,
+});
 
 describe("AuthorizedSubject (real HTTP)", () => {
   it.effect("BEH-EA-145: with no credential, the handler sees qadi's anonymous subject", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() => handler(new Request("http://localhost/whoami")));
       assert.strictEqual(response.status, 200);
       const body = (yield* Effect.promise(() => response.json())) as { subjectId: string };
@@ -96,7 +90,7 @@ describe("AuthorizedSubject (real HTTP)", () => {
     "BEH-EA-145: with a real session cookie, the handler sees the user's own subject id",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const loginResponse = yield* Effect.promise(() =>
           handler(new Request("http://localhost/login", { method: "POST" })),
         );
