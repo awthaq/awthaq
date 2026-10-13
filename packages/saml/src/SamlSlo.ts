@@ -24,6 +24,7 @@ import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Tenant, Verification } from "@awthaq/core";
 import { XmlSignature } from "@awthaq/ports";
 import * as Crypto from "effect/Crypto";
+import { TenantScoped } from "@awthaq/sql";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -39,6 +40,11 @@ import * as SamlLogout from "./SamlLogout.ts";
 import { logoutRequestXml, logoutResponseXml, postFormHtml, redirectUrl } from "./SamlProtocol.ts";
 import type * as SamlRecords from "./SamlRecords.ts";
 import * as SamlSpKeys from "./SamlSpKeys.ts";
+
+/** An ACS response, a logout request or SP metadata names its connection before any tenant is known (public endpoints). */
+export const protocolGrant = TenantScoped.crossTenant(
+  "saml: the protocol message names the connection before any tenant is known",
+);
 
 export const LOGOUT_COOKIE = "__Host-saml-logout";
 const LOGOUT_PREFIX = "saml-logout:";
@@ -163,7 +169,7 @@ export const makeSlo = (deps: SloDeps) => {
     const row = yield* records.findSession(sessionId);
     const owner = Option.isNone(row)
       ? Option.none()
-      : yield* records.findById(row.value.connectionId);
+      : yield* records.findById(protocolGrant, row.value.connectionId);
     // The local session ends first, whatever the IdP does or says next, and as the connection's tenant (like the IdP's own request).
     const revoke = sessions
       .revoke(sessionId, "signOut")

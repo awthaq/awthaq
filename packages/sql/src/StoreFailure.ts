@@ -18,11 +18,11 @@
 
 import { Api } from "@awthaq/api";
 import { Defects } from "@awthaq/ports";
-import type * as Cause from "effect/Cause";
+import { isNoSuchElementError, type NoSuchElementError } from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
-import type * as Schema from "effect/Schema";
+import { isSchemaError, type SchemaError } from "effect/Schema";
 import { isSqlError, type SqlError } from "effect/unstable/sql/SqlError";
 
 export import StoreUnavailable = Api.StoreUnavailable;
@@ -53,39 +53,38 @@ export const storeUnavailable = (operation: string) => (cause: unknown) =>
         Effect.andThen(Effect.fail(new StoreUnavailable({ operation }))),
       );
 
+/** What a repository statement fails with besides the domain's own outcomes. */
+type Fault = SqlError | SchemaError | NoSuchElementError;
+
+const isFault = <E>(error: E): error is Extract<E, Fault> =>
+  isSqlError(error) || isSchemaError(error) || isNoSuchElementError(error);
+
 /**
  * A repository call with nothing else to recover from: an outage is `StoreUnavailable`, a row that
- * no longer decodes (`SchemaError`) is a defect. Use it where the effect's `E` is exactly the
- * repository's `SqlError | SchemaError`; where a domain outcome shares the `catchTags`, map
- * `SqlError: storeUnavailable(operation)` and `SchemaError: Effect.die` beside it instead.
+ * no longer decodes (`SchemaError`) or a `RETURNING` that returned no row (`NoSuchElementError`) is
+ * a defect. It leaves every other failure in `E` alone, so a method whose `E` also carries domain
+ * outcomes (`SlugTaken`, `NotFound`) pipes through it too.
  */
 export const orStoreUnavailable =
   (operation: string) =>
-  <A, R>(self: Effect.Effect<A, SqlError | Schema.SchemaError | Cause.NoSuchElementError, R>) =>
-    self.pipe(
-      Effect.catchTags({
-        SqlError: storeUnavailable(operation),
-        SchemaError: Effect.die,
-        NoSuchElementError: Effect.die,
-      }),
+  <A, E, R>(self: Effect.Effect<A, E, R>) =>
+    Effect.catchIf(self, isFault, (fault) =>
+      isSqlError(fault) ? storeUnavailable(operation)(fault) : Effect.die(fault),
     );
 
 /**
  * `orStoreUnavailable` for an insert or update that can hit a unique constraint: a `UniqueViolation`
  * is the domain outcome `onUnique()` makes (in the Shape's `E`), anything else is an outage or a
- * defect exactly as `orStoreUnavailable` classifies it. (`NoSuchElementError` is a `RETURNING`
- * that returned no row: a defect.)
+ * defect exactly as `orStoreUnavailable` classifies it.
  */
 export const orConflict =
   <Conflict extends { readonly _tag: string }>(operation: string, onUnique: () => Conflict) =>
-  <A, R>(self: Effect.Effect<A, SqlError | Schema.SchemaError | Cause.NoSuchElementError, R>) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>) =>
     self.pipe(
       Effect.mapError((error) =>
         isSqlError(error) && error.reason._tag === "UniqueViolation" ? onUnique() : error,
       ),
-      Effect.catchTag("SqlError", storeUnavailable(operation)),
-      Effect.catchTag("SchemaError", Effect.die),
-      Effect.catchTag("NoSuchElementError", Effect.die),
+      orStoreUnavailable(operation),
     );
 
 /**

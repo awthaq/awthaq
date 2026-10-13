@@ -46,6 +46,7 @@ import {
 } from "@awthaq/core";
 import { ClientAddress, Defects, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
 import { OrganizationRecords, Organization } from "@awthaq/organization";
+import { TenantScoped } from "@awthaq/sql";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -78,6 +79,11 @@ import * as SamlRecords from "./SamlRecords.ts";
 import * as SamlRoleMapping from "./SamlRoleMapping.ts";
 import * as SamlSlo from "./SamlSlo.ts";
 import * as SamlSpKeys from "./SamlSpKeys.ts";
+
+/** The session-row sweep covers every connection's sign-ins. */
+const sweepGrant = TenantScoped.crossTenant(
+  "saml: retention sweep of every connection's session rows",
+);
 
 export { SamlConfig, config } from "./SamlConfig.ts";
 export type { SamlConfigShape, SamlConfigInput } from "./SamlConfig.ts";
@@ -753,7 +759,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
 
       /** A connection that exists AND whose organization exists and is not suspended (BEH-EA-237); anything else is `None`. */
       const usableConnection = (connectionId: string) =>
-        records.findById(connectionId).pipe(
+        records.findById(SamlSlo.protocolGrant, connectionId).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.succeedNone,
@@ -1016,6 +1022,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
                 sessionIndex: payload.sessionIndex,
               });
               yield* records.pruneSessions(
+                sweepGrant,
                 DateTime.subtractDuration(yield* DateTime.now, settings.sessionRecordRetention),
               );
             }),

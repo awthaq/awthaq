@@ -93,6 +93,7 @@ export type AppServices =
   | SamlConnections.SamlConnectionStore
   | SamlSpKeys.SamlSpKeys
   | SamlRecords.SamlRecords
+  | SamlRecords.MemoryEnvelopes
   | Sso.Sso
   | OrganizationConnections.OrganizationConnectionStore
   | MembershipRecords.MembershipRecords
@@ -263,13 +264,13 @@ const buildLive = (
     Layer.provideMerge(SamlConnections.layerStore),
     Layer.provideMerge(SamlSpKeys.layer),
     Layer.provideMerge(metadataFetcher(served)),
-    Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(OrganizationLive),
     Layer.provideMerge(SamlRecords.layerMemory),
     Layer.provideMerge(spyLayer(observations)),
     Layer.provideMerge(RateLimiter.layerPermissive),
     Layer.provideMerge(ClientAddress.layerDirect),
     Layer.provideMerge(OrganizationMemory.layer),
+    Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),

@@ -1,8 +1,8 @@
 // BEH-EA-314 (spec/behaviors/29-saml-sp.md): signed AuthnRequests. A connection that signs sends a redirect-binding request
 // whose query signature verifies under the SP certificate its metadata publishes, and under nothing else; the private key is
-// stored sealed (Encryption, AAD naming the key), the newest unexpired key signs while every unexpired certificate is
+// stored sealed (a `SealedColumn`, AAD naming the key), the newest unexpired key signs while every unexpired certificate is
 // published, and a connection that says it signs NEVER sends an unsigned request, whatever happens to its key.
-import { Encryption } from "@awthaq/ports";
+
 import { X509Certificate } from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -169,29 +169,19 @@ describe("a connection that signs its AuthnRequests", () => {
 });
 
 describe("the SP signing key at rest", () => {
-  it.effect(
-    "is stored only sealed, under an AAD that names the key: it opens there and nowhere else",
-    () =>
-      Effect.gen(function* () {
-        yield* atNow;
-        const records = yield* SamlRecords.SamlRecords;
-        const encryption = yield* Encryption.Encryption;
-        const { connection } = yield* seedConnection({ authnRequestsSigned: true });
-        const [row] = yield* records.listSpKeys(connection.id);
-        if (row === undefined) return assert.fail("no key");
-        assert.notInclude(row.privateKey, "PRIVATE KEY");
-        assert.notInclude(JSON.stringify(row), "PRIVATE KEY");
-        const opened = yield* encryption.decrypt(row.privateKey, SamlSpKeys.aad(row.id));
-        assert.include(Redacted.value(opened.plaintext), "BEGIN PRIVATE KEY");
-        // Copied into another key's row, or under another field, it does not decrypt.
-        const elsewhere = yield* encryption
-          .decrypt(row.privateKey, SamlSpKeys.aad("some-other-key"))
-          .pipe(Effect.flip);
-        assert.isDefined(elsewhere);
-        // The public API of the key service never returns the private half.
-        const keys = yield* SamlSpKeys.SamlSpKeys;
-        assert.notInclude(JSON.stringify(yield* keys.list(connection.id)), "PRIVATE KEY");
-      }).pipe(Effect.provide(SamlLive())),
+  // That the stored value is an envelope bound to its row, opens to what was written, and re-seals after a rotation is
+  // `runSealedColumnTests`' (SamlRecords.test.ts); this is only what the key service itself promises.
+  it.effect("the key service never returns the private half", () =>
+    Effect.gen(function* () {
+      yield* atNow;
+      const records = yield* SamlRecords.SamlRecords;
+      const { connection } = yield* seedConnection({ authnRequestsSigned: true });
+      const [row] = yield* records.listSpKeys(connection.id);
+      if (row === undefined) return assert.fail("no key");
+      assert.notInclude(JSON.stringify(row), "PRIVATE KEY");
+      const keys = yield* SamlSpKeys.SamlSpKeys;
+      assert.notInclude(JSON.stringify(yield* keys.list(connection.id)), "PRIVATE KEY");
+    }).pipe(Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -205,15 +195,17 @@ describe("the SP signing key at rest", () => {
         const [row] = yield* records.listSpKeys(connection.id);
         if (row === undefined) return assert.fail("no key");
         // A newer row whose sealed key belongs to another key: it is the one that would sign, and it cannot be opened.
+        const envelopes = yield* SamlRecords.MemoryEnvelopes;
         yield* records.saveSpKey({
           id: "swapped",
           connectionId: connection.id,
           certificate: row.certificate,
-          privateKey: row.privateKey,
+          privateKey: Redacted.make("replaced below"),
           fingerprint: row.fingerprint,
           notBefore: row.notBefore,
           notAfter: row.notAfter,
         });
+        yield* envelopes.plant("swapped", yield* envelopes.stored(row.id));
         yield* TestClock.adjust(Duration.seconds(1));
         const exit = yield* Effect.exit(saml.authnRequest(connection.id, {}));
         assert.isTrue(Exit.isFailure(exit));
@@ -289,7 +281,10 @@ describe("rotating the SP signing key", () => {
             certificatePem: attacker.cert,
           })
           .pipe(Effect.flip);
-        assert.include(mismatch.reason, "not the one for this private key");
+        assert.include(
+          mismatch._tag === "InvalidSigningKey" ? mismatch.reason : "",
+          "not the one for this private key",
+        );
         assert.isTrue((yield* saml.metadata(connection.id)).includes("X509Certificate"));
         // Nothing about the key material leaks into the refusal.
         assert.notInclude(JSON.stringify(mismatch), "PRIVATE");

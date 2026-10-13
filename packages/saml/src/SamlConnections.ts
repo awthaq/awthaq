@@ -25,6 +25,7 @@
 import type { Api } from "@awthaq/api";
 import { Organization, OrganizationRecords } from "@awthaq/organization";
 import { OutboundUrl } from "@awthaq/ports";
+import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
 import { X509Certificate } from "node:crypto";
 import * as Context from "effect/Context";
@@ -111,6 +112,15 @@ export type IdpSource =
 
 const MAX_RULES = 50;
 const MAX_NAME = 255;
+
+/** The admin surface names a connection by its own id; `SamlAdmin` authorizes the caller against that connection's organization. */
+const adminGrant = TenantScoped.crossTenant(
+  "saml admin: a connection is named by its own id; the caller is authorized against its organization",
+);
+/** Home-realm discovery routes an email domain to exactly one connection, across organizations. */
+const discoveryGrant = TenantScoped.crossTenant(
+  "saml: home-realm discovery routes an email domain to exactly one connection, across organizations",
+);
 
 export interface SamlConnectionStoreShape {
   readonly create: (input: {
@@ -335,7 +345,9 @@ export const layerStore = Layer.effect(
         input.roleMapping === undefined
           ? undefined
           : yield* validatedRoleMapping(input.organizationId, input.roleMapping);
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* crypto.randomUUIDv7.pipe(
+        Effect.catch(StoreFailure.storeUnavailable("SamlConnectionStore.create")),
+      );
       const created = yield* records.create({
         id,
         organizationId: input.organizationId,
@@ -357,7 +369,7 @@ export const layerStore = Layer.effect(
     });
 
     const get: SamlConnectionStoreShape["get"] = (id) =>
-      records.findById(id).pipe(
+      records.findById(adminGrant, id).pipe(
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.fail(new SamlConnectionNotFound({ id })),
@@ -386,7 +398,7 @@ export const layerStore = Layer.effect(
           ? undefined
           : yield* validatedRoleMapping(current.organizationId, patch.roleMapping);
       const updated = yield* records
-        .update(id, {
+        .update(current.organizationId, id, {
           name: patch.name?.trim(),
           idpEntityId: patch.entityId?.trim(),
           ssoUrl,
@@ -424,7 +436,7 @@ export const layerStore = Layer.effect(
           metadata.slo === undefined ? null : yield* validatedUrl("sloUrl", metadata.slo.url);
         const idpCertificates = yield* certificatesOf(metadata.certificates);
         return yield* records
-          .update(id, {
+          .update(current.organizationId, id, {
             ssoUrl,
             idpCertificates,
             sloUrl,
@@ -447,7 +459,7 @@ export const layerStore = Layer.effect(
       }
       const domain = hint.email?.split("@")[1]?.trim().toLowerCase();
       if (domain === undefined || domain === "") return Option.none<string>();
-      return Option.map(yield* records.findByDomain(domain), (record) => record.id);
+      return Option.map(yield* records.findByDomain(discoveryGrant, domain), (record) => record.id);
     });
 
     return SamlConnectionStore.of({
@@ -457,13 +469,12 @@ export const layerStore = Layer.effect(
       update,
       refreshMetadata,
       remove: (id) =>
-        records
-          .remove(id)
-          .pipe(
-            Effect.catchTag("SamlRecordNotFound", () =>
-              Effect.fail(new SamlConnectionNotFound({ id })),
-            ),
+        get(id).pipe(
+          Effect.flatMap((current) => records.remove(current.organizationId, id)),
+          Effect.catchTag("SamlRecordNotFound", () =>
+            Effect.fail(new SamlConnectionNotFound({ id })),
           ),
+        ),
       discover,
     });
   }),
