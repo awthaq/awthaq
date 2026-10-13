@@ -136,7 +136,7 @@ export interface ConnectionRecordsShape {
 }
 
 export class ConnectionRecords extends Context.Service<ConnectionRecords, ConnectionRecordsShape>()(
-  "awthaq/organization/ConnectionRecords",
+  "awthaq/organization/records/ConnectionRecords",
 ) {}
 
 const notFound = (id: string): ConnectionRecordNotFound => new ConnectionRecordNotFound({ id });

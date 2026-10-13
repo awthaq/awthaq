@@ -111,7 +111,7 @@ export interface OrganizationRecordsShape {
 export class OrganizationRecords extends Context.Service<
   OrganizationRecords,
   OrganizationRecordsShape
->()("awthaq/organization/OrganizationRecords") {}
+>()("awthaq/organization/records/OrganizationRecords") {}
 
 const notFound = (id: string): OrganizationRecordNotFound => new OrganizationRecordNotFound({ id });
 const slugTaken = (slug: string): OrganizationRecordSlugTaken =>

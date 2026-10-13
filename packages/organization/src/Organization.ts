@@ -38,6 +38,7 @@ import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationHandlers from "./OrganizationHandlers.ts";
 import { organizationMigrations } from "./OrganizationMigrations.ts";
 import { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
+import * as OrganizationBundle from "./OrganizationBundle.ts";
 import { OrganizationHooksLive } from "./OrganizationHooks.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationInvitations from "./OrganizationInvitations.ts";
@@ -91,6 +92,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     apiVersion: 1,
     contract: OrganizationApi.OrganizationApi,
     migrations: organizationMigrations,
+    // Plan 08 (BEH-EA-T4): the seven record stores, memory and SQL, matched.
+    records: OrganizationBundle,
     // Plan 08: the 46 hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.
     hookPoints: OrganizationHooksLive,
     config: [ConfigDescriptor.make(OrganizationConfig)],

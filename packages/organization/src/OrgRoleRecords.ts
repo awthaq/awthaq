@@ -76,7 +76,7 @@ export interface OrgRoleRecordsShape {
 }
 
 export class OrgRoleRecords extends Context.Service<OrgRoleRecords, OrgRoleRecordsShape>()(
-  "awthaq/organization/OrgRoleRecords",
+  "awthaq/organization/records/OrgRoleRecords",
 ) {}
 
 const notFound = (id: string): OrgRoleRecordNotFound => new OrgRoleRecordNotFound({ id });

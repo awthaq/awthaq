@@ -120,7 +120,7 @@ export interface InvitationRecordsShape {
 }
 
 export class InvitationRecords extends Context.Service<InvitationRecords, InvitationRecordsShape>()(
-  "awthaq/organization/InvitationRecords",
+  "awthaq/organization/records/InvitationRecords",
 ) {}
 
 const notFound = (id: string): InvitationRecordNotFound => new InvitationRecordNotFound({ id });

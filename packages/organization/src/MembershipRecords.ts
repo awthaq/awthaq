@@ -111,7 +111,7 @@ export interface MembershipRecordsShape {
 }
 
 export class MembershipRecords extends Context.Service<MembershipRecords, MembershipRecordsShape>()(
-  "awthaq/organization/MembershipRecords",
+  "awthaq/organization/records/MembershipRecords",
 ) {}
 
 const notFound = (userId: Users.UserId, organizationId: string): MembershipRecordNotFound =>

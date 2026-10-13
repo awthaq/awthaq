@@ -102,7 +102,7 @@ export interface ActiveContextRecordsShape {
 export class ActiveContextRecords extends Context.Service<
   ActiveContextRecords,
   ActiveContextRecordsShape
->()("awthaq/organization/ActiveContextRecords") {}
+>()("awthaq/organization/records/ActiveContextRecords") {}
 
 // ---- layerMemory ------------------------------------------------------------
 

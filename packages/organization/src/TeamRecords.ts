@@ -226,7 +226,7 @@ export interface TeamRecordsShape {
 }
 
 export class TeamRecords extends Context.Service<TeamRecords, TeamRecordsShape>()(
-  "awthaq/organization/TeamRecords",
+  "awthaq/organization/records/TeamRecords",
 ) {}
 
 const teamNotFound = (id: string): TeamRecordNotFound => new TeamRecordNotFound({ id });
