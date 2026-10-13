@@ -36,6 +36,7 @@ import {
   Users,
 } from "@awthaq/core";
 import { Session } from "@awthaq/server";
+import { TenantScoped } from "@awthaq/sql";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
@@ -256,7 +257,7 @@ export interface AdminShape {
       readonly cursor?: ImpersonationRecords.ImpersonationCursor | undefined;
       readonly limit?: number | undefined;
     },
-  ) => Effect.Effect<ImpersonationRecords.ImpersonationPage>;
+  ) => Effect.Effect<ImpersonationRecords.ImpersonationPage, Errors.StoreUnavailable>;
   /**
    * IDS-004: closes every episode whose session hard-expired, as
    * `endedBy: "expired"`, publishing one `impersonationStopped` per closed
@@ -264,7 +265,7 @@ export interface AdminShape {
    * this lazily, so a host only schedules it (`Effect.repeat`/`Schedule`) when
    * it wants the audit trail closed without anyone reading it.
    */
-  readonly sweepExpired: Effect.Effect<number>;
+  readonly sweepExpired: Effect.Effect<number, Errors.StoreUnavailable>;
   /**
    * BAM-005: user and session administration, every call behind `canManageUsers` and
    * then (per-user calls) an existence check — see `AdminConfigShape.canManageUsers`.
@@ -935,7 +936,12 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       // IDS-002: classification, not authorization — a session that any tenant's episode owns must
       // never be revoked as an ordinary user session, so the lookup is deliberately tenant-blind.
       const isImpersonationSession = (sessionId: string) =>
-        records.findBySessionId(sessionId, { anyTenant: true }).pipe(Effect.map(Option.isSome));
+        records
+          .findBySessionId(
+            sessionId,
+            TenantScoped.crossTenant("admin: classify any session as impersonation"),
+          )
+          .pipe(Effect.map(Option.isSome));
 
       const ownSessions = Effect.fnUntraced(function* (userId: Users.UserId) {
         const listed = yield* sessions.list(userId);
@@ -1131,7 +1137,10 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
        * readers never double-publish.
        */
       const sweepExpired: AdminShape["sweepExpired"] = Effect.gen(function* () {
-        const closed = yield* records.closeExpired(yield* DateTime.now);
+        const closed = yield* records.closeExpired(
+          TenantScoped.crossTenant("admin: expired episodes close in every tenant"),
+          yield* DateTime.now,
+        );
         yield* Effect.forEach(
           closed,
           (episode) =>
@@ -1180,24 +1189,29 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
 
       /**
        * IDS-002: episodes are confined to the ambient tenant unless the caller passes the
-       * superadmin predicate, in which case the records are read tenant-blind. A denied
-       * predicate is not an error here — it just leaves the confinement in place.
+       * superadmin predicate, in which case a `CrossTenant` witness is minted (only then) and the
+       * records are read tenant-blind. A denied predicate is not an error here — it just leaves
+       * the confinement in place (`None`).
        */
       const tenantScopeFor = (caller: Api.UserPrincipal) =>
         Effect.flatMap(configNow, (adminConfig) =>
           adminConfig
             .canAdministerTenants({ admin: subjectOf(caller), organizationId: Option.none() })
             .pipe(
-              Effect.map((crossTenant): ImpersonationRecords.TenantScope => ({
-                anyTenant: crossTenant,
-              })),
+              Effect.map((allowed) =>
+                allowed
+                  ? Option.some(
+                      TenantScoped.crossTenant("admin: superadmin (canAdministerTenants)"),
+                    )
+                  : Option.none(),
+              ),
             ),
         );
 
       const forceStop: AdminShape["forceStop"] = Effect.fnUntraced(function* (caller, sessionId) {
         const adminConfig = yield* configNow;
         yield* sweepExpired;
-        const scope = yield* tenantScopeFor(caller);
+        const scope = Option.getOrUndefined(yield* tenantScopeFor(caller));
         // IDS-001: the row is the only proof `sessionId` is an impersonation
         // session, and the per-episode gate needs its target. IDS-002: another
         // tenant's episode is simply not found, unless the caller is a superadmin.
@@ -1241,7 +1255,10 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         // IDS-004: lazy reconciliation — an expired episode is never reported active.
         yield* sweepExpired;
         const admin = subjectOf(caller);
-        const page = yield* records.list(input, yield* tenantScopeFor(caller));
+        const page = yield* records.list(
+          input,
+          Option.getOrUndefined(yield* tenantScopeFor(caller)),
+        );
         // IDS-001: per-row gate — a deny-all/unconfigured host exposes nothing. The gate
         // runs after paging, so a page can hold fewer than `limit` visible rows while
         // `nextCursor` still points onward.

@@ -1537,3 +1537,10 @@ Phase 4:
 - BDD (`34-webhooks.feature`): REQ-EA-1136 and REQ-EA-1137 (a sealed secret copied into, or swapped within, a row does not decrypt) are deleted, since the records no longer expose an envelope to copy; the moved-ciphertext case is `runSealedColumnTests`' and the delivery-level `secret` failure is `WebhookDelivery.test.ts` ("a secret that no longer decrypts"). REQ-EA-1135 and REQ-EA-1264 now assert that the sealed value opens to what was created/registered.
 - `enqueue`, `drainDue` and `pruneOnce` in `WebhookDelivery.ts` carry explicit types (the TS2883 exception the plugins document: declaration emit cannot name `StoreUnavailable` through the records' inferred error). `WebhookRecords.layerMemory`/`layerSql` carry explicit `Layer` types for the same reason (`Encryption`).
 - `Webhooks` no longer lists `Encryption` among its `ports`.
+
+Phase 5:
+
+- `closeExpired(grant, now)` and `verifyChain(grant)` take the witness as a leading/only parameter (the plan only said "take a CrossTenant"); the memory adapter ignores it, the SQL adapter wraps the statement in `TenantScoped.lift`. `findBySessionId`/`endEpisode`/`list` lift only when a witness is passed.
+- SQL queries carry the `Visibility` through the `SqlSchema` request (a `Schema.declare` guard) and build the predicate inside the query; `TenantScoped.predicate` now returns a plain `Statement.Fragment` (each branch annotated) so it composes into `sql.and([...])`.
+- `Admin.tenantScopeFor` returns `Option<CrossTenant>`, minted only when `canAdministerTenants` allows; `AdminShape.list` and `sweepExpired` gain `StoreUnavailable`. Crypto `PlatformError` from id minting is `StoreUnavailable` (`ImpersonationRecords.create`).
+- The conformance suite classifies `closeExpired`/`verifyChain` as `crossTenant` and runs with `rls: { layer: SqlLayer }`; the Postgres-only `verifyChain` under RLS case is in `ImpersonationRecords.test.ts`. Neither ran (no Postgres). Deleted store-level case: "IDS-002: list, findBySessionId and endEpisode only see the ambient tenant's episodes" (replaced by the suite plus a small witness case). `27-admin-impersonation.md` is revision 1.4, traceability 1.15.

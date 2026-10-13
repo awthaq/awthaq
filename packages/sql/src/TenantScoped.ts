@@ -16,6 +16,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Statement from "effect/unstable/sql/Statement";
 
 /** The transaction-local setting the RLS policies read (`TenantScope` re-exports it). */
 export const TENANT_SETTING = "awthaq.tenant_id";
@@ -92,14 +93,15 @@ export const predicate = (
   qualifier?: string,
 ) => {
   const target = qualifier === undefined ? sql(column) : sql`${sql(qualifier)}.${sql(column)}`;
-  return Visibility.$match(seen, {
-    Everywhere: () => sql.literal("1 = 1"),
-    Tenant: ({ tenant }) =>
+  const chosen = Visibility.$match(seen, {
+    Everywhere: (): Statement.Fragment => sql.literal("1 = 1"),
+    Tenant: ({ tenant }): Statement.Fragment =>
       Option.match(tenant, {
-        onNone: () => sql`${target} IS NULL`,
-        onSome: (id) => sql`${target} = ${id}`,
+        onNone: (): Statement.Fragment => sql`${target} IS NULL`,
+        onSome: (id): Statement.Fragment => sql`${target} = ${id}`,
       }),
   });
+  return chosen;
 };
 
 /** Provided by `TenantScope.withTenant` (Postgres): `awthaq.tenant_id` is set on this connection. */
