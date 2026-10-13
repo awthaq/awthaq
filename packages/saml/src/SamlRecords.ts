@@ -245,7 +245,7 @@ export interface SamlRecordsShape {
 }
 
 export class SamlRecords extends Context.Service<SamlRecords, SamlRecordsShape>()(
-  "awthaq/saml/SamlRecords",
+  "awthaq/saml/records/SamlRecords",
 ) {}
 
 const notFound = (id: string): SamlRecordNotFound => new SamlRecordNotFound({ id });
@@ -924,3 +924,14 @@ export const layerSql: Layer.Layer<
     } satisfies SamlRecordsShape;
   }),
 );
+
+/**
+ * Plan 08 (BEH-EA-T4): the plugin's record store as two matched layers, `Saml.records`. `layerMemory` also
+ * provides `MemoryEnvelopes`, a test seam that is not a store; a bundle provides record stores only, so it is
+ * projected away (a suite that plants envelopes uses `layerMemory` directly).
+ */
+const memoryStore = Layer.effect(SamlRecords, Effect.service(SamlRecords)).pipe(
+  Layer.provide(layerMemory),
+);
+
+export const records = { memory: memoryStore, sql: layerSql };

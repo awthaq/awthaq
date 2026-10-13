@@ -244,8 +244,6 @@ const buildLive = (
         Layer.provide(CsrfProtectionLive),
       ),
     ),
-    Layer.provideMerge(SamlConnections.layerStore),
-    Layer.provideMerge(SamlSpKeys.layer),
     Layer.provideMerge(metadataFetcher(served)),
     Layer.provideMerge(OrganizationLive),
     Layer.provideMerge(SamlRecords.layerMemory),

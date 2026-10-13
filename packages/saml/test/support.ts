@@ -36,7 +36,6 @@ import * as Saml from "../src/Saml.ts";
 import * as SamlConnections from "../src/SamlConnections.ts";
 import * as SamlMetadataFetcher from "../src/SamlMetadataFetcher.ts";
 import * as SamlRecords from "../src/SamlRecords.ts";
-import * as SamlSpKeys from "../src/SamlSpKeys.ts";
 import * as XmlSignatureNode from "../src/XmlSignatureNode.ts";
 import {
   ACS_URL,
@@ -149,8 +148,6 @@ export const SamlLive = <Wrapped extends Sessions.Sessions | Users.Users = never
     Layer.provide(AdminAuthenticationLive),
     Layer.provide(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(SamlConnections.layerStore),
-    Layer.provideMerge(SamlSpKeys.layer),
     Layer.provideMerge(fetcher),
     Layer.provideMerge(OrganizationLive),
     Layer.provideMerge(SamlRecords.layerMemory),

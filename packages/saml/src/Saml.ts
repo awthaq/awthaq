@@ -44,7 +44,14 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Defects, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
+import {
+  ClientAddress,
+  Defects,
+  type Encryption,
+  RateLimiter,
+  SqlTransaction,
+  XmlSignature,
+} from "@awthaq/ports";
 import {
   Organization,
   OrganizationActor,
@@ -80,6 +87,7 @@ import {
   type SignedAssertion,
 } from "./SamlAssertion.ts";
 import * as SamlConfig from "./SamlConfig.ts";
+import * as SamlConnections from "./SamlConnections.ts";
 import { trustSetOf } from "./SamlConnections.ts";
 import { authnRequestXml, redirectUrl, spMetadataXml } from "./SamlProtocol.ts";
 import * as SamlRecords from "./SamlRecords.ts";
@@ -738,6 +746,9 @@ export const samlOrganizationDeletion = OrganizationDeletion.contribute({
   }),
 });
 
+/** Named so the class's inferred `records` type can be emitted (TS2883 needs the `Encryption` namespace in scope). */
+export type RecordsEncryption = Encryption.Encryption;
+
 export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   apiVersion: 1,
   contract: SamlApi.SamlApi,
@@ -750,6 +761,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
     saml_session: AuthPlugin.Table.derived("saml_connection", "connectionId"),
   },
   migrations: samlMigrations,
+  // Plan 08 (BEH-EA-T4): the connection/key/session store, memory and SQL, matched.
+  records: SamlRecords.records,
 }) {
   static readonly layer = AuthPlugin.layer(Saml, {
     ports: [
@@ -1215,5 +1228,10 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
 
       return Saml.of({ metadata, authnRequest, acs, slo: slo.slo, logout: slo.logout, admin });
     }),
-  });
+  }).pipe(
+    // Plan 08 (Q1): the connection store and the SP key store are always required and storage-agnostic (built
+    // over `SamlRecords`), so they ship with the plugin instead of in every host's graph. The metadata fetcher
+    // stays the host's: it is a network adapter (`layerPinned` in production, a fake in tests).
+    Layer.provideMerge(SamlConnections.layerStore.pipe(Layer.provideMerge(SamlSpKeys.layer))),
+  );
 }
