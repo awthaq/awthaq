@@ -14,7 +14,7 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { AuditLog, AuthEvents, Sessions } from "@awthaq/core";
+import { AuditLog, AuthEvents, Persistence, Sessions } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
@@ -35,9 +35,9 @@ const JwtLive = Jwt.Jwt.layer.pipe(
   Layer.provideMerge(SigningKeyRecordsLive),
   Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(AuthenticationLive),
-  Layer.provideMerge(Sessions.layerMemory),
+  Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(RevocationStore.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
   Layer.provideMerge(JwtConfig.config({ issuer: ISSUER })),

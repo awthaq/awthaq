@@ -5,7 +5,7 @@
 // Next-specific is asserted here: the public entry, and that the `React.cache`
 // wrapped `getSession` still resolves a real session.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -16,13 +16,13 @@ import * as Redacted from "effect/Redacted";
 import { applyRotatedSession, getSession } from "../src/GetSession.ts";
 
 const TestLayer = Layer.mergeAll(
-  Users.layerMemory,
-  Sessions.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
   Authentication.PrincipalResolverLive,
 ).pipe(
   Layer.provideMerge(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
 );
 

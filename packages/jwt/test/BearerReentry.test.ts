@@ -4,7 +4,7 @@
 // `POST /jwt/token` is the authenticated endpoint used as the probe: it answers
 // 200 only when `Authentication` resolved a principal.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -47,9 +47,9 @@ const appLayer = (config: Parameters<typeof JwtConfig.config>[0], withRegistry =
     Layer.provideMerge(KeyRing.KeyRing.layer),
     Layer.provideMerge(SigningKeyRecordsLive),
     Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(RevocationStore.layerMemory),
     Layer.provideMerge(NodeCrypto.layer),

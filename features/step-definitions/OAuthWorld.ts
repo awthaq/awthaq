@@ -17,7 +17,8 @@
 // depends on (e.g. `DateTime.now`) see the same simulated `TestClock` every
 // other step does. Several of this feature's own scenarios (REQ-EA-334's
 // flow-TTL expiry) depend on that.
-import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { TestEncryption } from "@awthaq/test";
+import { Accounts, Persistence, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import { OAuth, OAuthProvider } from "@awthaq/oauth";
@@ -35,6 +36,9 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { TestAuth } from "@awthaq/test";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 // ---- fake HttpClient: routes by URL substring ----
 
@@ -114,10 +118,10 @@ export const discoveryFor = (id: string): Record<string, unknown> => ({
 });
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const EncryptionLive = Encryption.layer.pipe(
@@ -139,7 +143,7 @@ const EncryptionLive = Encryption.layer.pipe(
  * REQ-EA-345: `Users`/`Accounts` over a real in-memory SQLite database migrated by core's own
  * migrations — the `(provider, subject, issuer)` UNIQUE constraint is the only thing that can
  * arbitrate two concurrent links, which the memory `Accounts` (one atomic `Ref` update) cannot
- * show. `Accounts.layerSql` inserts with no application-level pre-check, so a rejected duplicate
+ * show. `AccountStoreSql` inserts with no application-level pre-check, so a rejected duplicate
  * is the constraint's doing.
  */
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
@@ -148,10 +152,10 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 export const SqliteIdentityStores = Layer.mergeAll(
-  Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
-  Accounts.layerSql.pipe(
-    Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-  ),
+  Users.layer.pipe(Layer.provide(SqlStores)),
+  Accounts.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
 ).pipe(
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(SqlLive),

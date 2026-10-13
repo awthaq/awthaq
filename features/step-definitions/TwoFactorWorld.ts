@@ -19,6 +19,7 @@ import {
   Errors,
   Hooks,
   Migrations,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -109,14 +110,14 @@ const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
           ),
       });
     }),
-  ).pipe(Layer.provide(Sessions.layerMemory));
+  ).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
 
 const coreLive = (outage: Ref.Ref<boolean>) =>
   Layer.mergeAll(
-    Users.layerMemory,
-    Accounts.layerMemory,
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
     sessionsWithOutage(outage),
-    Verification.layerMemory,
+    Verification.layer.pipe(Layer.provide(Persistence.memory)),
   ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(

@@ -6,21 +6,23 @@
 // over the very same rows. Memory-store behaviour is proven by the package suites; what only
 // a database can show here — the schema-level unique constraints (BEH-EA-041/043), atomic
 // consumption (BEH-EA-062), one transaction around consume + state change (BEH-EA-058) — is
-// why these features do not run over `layerMemory`.
+// why these features do not run over `Persistence.memory`.
 //
 // `Effect.runPromise`-style HTTP handlers run on the real clock; a scenario that needs
 // expiry uses the direct `ctx` services under `TestClock` and never mixes the two.
+import { TestEncryption } from "@awthaq/test";
 import { AuthCore } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
-  AuthEvents,
   Auth,
+  AuthEvents,
   DataExport,
   Erasure,
   Errors,
   Hooks,
   Migrations,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -62,6 +64,9 @@ import {
   makeNamedRegistry,
   TestServices,
 } from "./shared/Harness.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
@@ -253,27 +258,28 @@ const buildStack = (probes: Probes) => {
   const { AccountsProbe, VerificationProbe, SessionsProbe } = probesLayer(probes);
 
   const RealStores = Layer.mergeAll(
-    Accounts.layerSql.pipe(
-      Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-    ),
-    Sessions.layerSql.pipe(Layer.provide(Repositories.SessionsRepositoryLive)),
-    Verification.layerSql.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Repositories.VerificationRepositoryLive,
-          Repositories.VerificationReservationsRepositoryLive,
+    Accounts.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
+    Sessions.layer.pipe(Layer.provide(SqlStores)),
+    Verification.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Repositories.VerificationRepositoryLive,
+            Repositories.VerificationReservationsRepositoryLive,
+          ),
         ),
       ),
-    ),
   );
 
   // The probes wrap the real services under the same tags (provide, never merge, so the
   // probed instance is the only one anything above sees).
   const Stores = Layer.merge(
-    Users.layerSql.pipe(
-      Layer.provide(Repositories.UsersRepositoryLive),
-      Layer.provide(auth.userFieldsLayer),
-    ),
+    Users.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(Layer.provide(Repositories.UsersRepositoryLive), Layer.provide(auth.userFieldsLayer)),
     Layer.mergeAll(
       Layer.mergeAll(AccountsProbe, VerificationProbe, SessionsProbe).pipe(
         Layer.provide(RealStores),
@@ -302,7 +308,7 @@ const buildStack = (probes: Probes) => {
   const CoreLive = Layer.mergeAll(Erasure.layer, DataExport.layer, ProfileExport).pipe(
     Layer.provideMerge(Stores),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(SqlLive),

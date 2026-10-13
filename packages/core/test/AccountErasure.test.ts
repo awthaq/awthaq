@@ -5,6 +5,7 @@
 // late veto, undoes *everything*) need a real transaction, so they run over SQLite, migrated
 // by `@awthaq/sql`'s own `CoreMigrations` — the schema is FK-less on purpose (SEA-001), so
 // this rollback is the only thing standing between a crash and a half-erased account.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -19,6 +20,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Persistence from "../src/Persistence.ts";
 import * as Accounts from "../src/Accounts.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
@@ -29,6 +31,9 @@ import * as Hooks from "../src/Hooks.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -92,15 +97,15 @@ const memoryLayer = (
   Layer.mergeAll(Erasure.layer.pipe(Layer.provide(Erasure.config(config))), contributions).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
-        Users.layerMemory,
-        Accounts.layerMemory,
-        Sessions.layerMemory,
-        Verification.layerMemory,
+        Users.layer.pipe(Layer.provide(Persistence.memory)),
+        Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+        Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+        Verification.layer.pipe(Layer.provide(Persistence.memory)),
         SqlTransaction.layerNoop,
       ),
     ),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(hooksFor(probe)),
     Layer.provideMerge(NodeCrypto.layer),
   );
@@ -117,24 +122,28 @@ const sqlLayer = (
   Layer.mergeAll(Erasure.layer, contributions).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
-        Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
-        Accounts.layerSql.pipe(
-          Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-        ),
-        Sessions.layerSql.pipe(Layer.provide(Repositories.SessionsRepositoryLive)),
-        Verification.layerSql.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              Repositories.VerificationRepositoryLive,
-              Repositories.VerificationReservationsRepositoryLive,
+        Users.layer.pipe(Layer.provide(SqlStores)),
+        Accounts.layer
+          .pipe(Layer.provide(SqlStores))
+          .pipe(
+            Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
+          ),
+        Sessions.layer.pipe(Layer.provide(SqlStores)),
+        Verification.layer
+          .pipe(Layer.provide(SqlStores))
+          .pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Repositories.VerificationRepositoryLive,
+                Repositories.VerificationReservationsRepositoryLive,
+              ),
             ),
           ),
-        ),
         SqlTransaction.layerSql,
       ),
     ),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
     Layer.provideMerge(hooksFor(probe)),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(SqlLive),

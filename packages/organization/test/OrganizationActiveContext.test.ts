@@ -2,7 +2,7 @@
 // interface. Keyed by a session reference, not an actor: the membership is the only witness (MTI-001), the
 // pointers are per session, a suspended organization reads as unavailable (BEH-EA-237) and a lapsed pointer
 // is cleared for real on read (CWM-003).
-import { Users } from "@awthaq/core";
+import { Persistence, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
@@ -30,7 +30,7 @@ const teamsOn = {
 const Live = OrganizationSystem.layer.pipe(
   Layer.provide(Organization.config({ teams: teamsOn })),
   Layer.provideMerge(OrganizationMemory.layer),
-  Layer.provideMerge(Users.layerMemory),
+  Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Mailer.layerMemory),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(SqlTransaction.layerNoop),

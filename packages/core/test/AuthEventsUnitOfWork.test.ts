@@ -1,17 +1,22 @@
 // ADR-EA-037 / BEH-EA-327: a live subscriber never observes a state-change event whose unit of work
 // rolled back; an attempt event is recorded and delivered whether or not its unit commits.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { SqlTransaction } from "@awthaq/ports";
-import { CoreMigrations, Repositories, TenantScope } from "@awthaq/sql";
+import { CoreMigrations, TenantScope } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Users from "../src/Users.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
 
@@ -21,7 +26,7 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 const Live = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

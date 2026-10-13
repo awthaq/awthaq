@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
+import * as Persistence from "../src/Persistence.ts";
 import * as Accounts from "../src/Accounts.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
@@ -59,9 +60,13 @@ const SessionsOutage = Layer.effect(
 );
 
 const envFor = (recorder: Recorder, behaviour: Behaviour = {}) => {
-  const base = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
+  const base = Layer.mergeAll(
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  ).pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(SqlTransaction.layerNoop),
   );

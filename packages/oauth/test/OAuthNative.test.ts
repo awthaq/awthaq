@@ -3,7 +3,7 @@
 // an allowlisted deep link carrying a one-time exchange code, redeemed once at
 // `POST /oauth/token` for the session token. Domain-level, like `OAuth.test.ts`.
 import { createHash } from "node:crypto";
-import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, Persistence, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -38,10 +38,10 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const acme = OAuthProvider.oauth2({

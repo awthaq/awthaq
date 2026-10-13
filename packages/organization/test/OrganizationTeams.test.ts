@@ -2,7 +2,7 @@
 // appears here: the system interface takes an `Actor`, and every policy a team operation has
 // (`teams.enabled`, the quotas, the last-team rule, vetoes, the transaction, `Bound`) is proved
 // without the authorized layer. `Organization.test.ts` keeps only the authorization half.
-import { HookPoint, Migrations, Users } from "@awthaq/core";
+import { HookPoint, Migrations, Persistence, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import { TestAuth } from "@awthaq/test";
@@ -50,7 +50,9 @@ const buildLayer = (
   OrganizationSystem.layer.pipe(
     Layer.provide(Organization.config(config)),
     Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
+    Layer.provideMerge(
+      Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
+    ),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(taps),
@@ -817,7 +819,9 @@ const sqlRecords = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
 
 const SqlSystemLive = OrganizationSystem.layer.pipe(
   Layer.provide(Organization.config({ teams: teamsOn({ allowRemovingAllTeams: true }) })),
-  Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
+  Layer.provideMerge(
+    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
+  ),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(sqlRecords(OrganizationRecords.layerSql)),
   Layer.provideMerge(sqlRecords(MembershipRecords.layerSql)),

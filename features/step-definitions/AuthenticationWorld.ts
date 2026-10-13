@@ -14,7 +14,15 @@
 // which scheme authenticated. Nothing about resolution is stubbed.
 import { Api } from "@awthaq/api";
 import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
-import { AuditLog, AuthEvents, Hooks, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Hooks,
+  Persistence,
+  RateLimits,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
@@ -251,10 +259,10 @@ const buildApp = (options: AppOptions) => {
       Layer.provideMerge(SessionSettings),
     )
     .pipe(
-      Layer.provideMerge(Sessions.layerMemory),
-      Layer.provideMerge(Users.layerMemory),
+      Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
+      Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provideMerge(AuthEvents.layer),
-      Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provideMerge(Hooks.HooksLive),
       Layer.provideMerge(RateLimits.layer),
       Layer.provideMerge(RateLimiter.layerPermissive),

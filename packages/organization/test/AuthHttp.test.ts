@@ -3,7 +3,7 @@
 // codes, a real session cookie — mirroring `@awthaq/admin`'s own
 // `AuthHttp.test.ts`.
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { Persistence, Sessions, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -29,7 +29,10 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(TestAuth.memoryFoundation),
 );

@@ -3,6 +3,7 @@
 // One suite, run over memory and over SQLite (migrated by `@awthaq/sql`'s own
 // `CoreMigrations`). Time is `TestClock`'s: rows are created at the epoch and the clock is
 // moved forward, so "older than the grace" is exact and no test waits.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -16,6 +17,7 @@ import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Hooks from "../src/Hooks.ts";
@@ -24,11 +26,17 @@ import * as Sessions from "../src/Sessions.ts";
 import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";
 
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
+
 const alice = Users.UserId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
 
-const MemoryLayer = Layer.mergeAll(Sessions.layerMemory, Verification.layerMemory).pipe(
+const MemoryLayer = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
@@ -39,19 +47,21 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 const SqlLayer = Layer.mergeAll(
-  Sessions.layerSql.pipe(Layer.provide(Repositories.SessionsRepositoryLive)),
-  Verification.layerSql.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Repositories.VerificationRepositoryLive,
-        Repositories.VerificationReservationsRepositoryLive,
+  Sessions.layer.pipe(Layer.provide(SqlStores)),
+  Verification.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Repositories.VerificationRepositoryLive,
+          Repositories.VerificationReservationsRepositoryLive,
+        ),
       ),
     ),
-  ),
   SqlTransaction.layerSql,
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
   Layer.provideMerge(SqlLive),

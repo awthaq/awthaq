@@ -6,7 +6,7 @@
 // real encode/decode/SQL round-trip. A scenario's Given records what to arrange, its When runs the
 // whole flow against one database inside a single `withDatabase`, and the Then reads the result
 // back from the scratch (`FoundationsWorld`).
-import { Users } from "@awthaq/core";
+import { Persistence, Users } from "@awthaq/core";
 import { Models, Repositories, CoreMigrations } from "@awthaq/sql";
 import { Encryption, KeyProvider } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -108,6 +108,6 @@ export const optionValue = <A>(option: Option.Option<A>): A | undefined =>
   Option.isSome(option) ? option.value : undefined;
 
 /** The domain `Users` service over memory — the "ordinary creation path" a caller goes through (`create` takes no id). */
-export const MemoryUsersLive = Users.layerMemory.pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+export const MemoryUsersLive = Users.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(Layer.provideMerge(TestAuth.memoryFoundation));

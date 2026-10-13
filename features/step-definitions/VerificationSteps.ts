@@ -3,8 +3,8 @@
 // (`/verify-email`, `/password/*`) where a scenario is about what a caller sees, the
 // `Verification` service directly (under `TestClock`) where it is about expiry or races, and
 // raw row reads where the claim is about what is persisted.
-import { AuditLog, AuthEvents, Hooks, Verification } from "@awthaq/core";
-import { Repositories } from "@awthaq/sql";
+import { AuditLog, AuthEvents, Hooks, Persistence, Verification } from "@awthaq/core";
+import { Repositories, VerificationStoreSql } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import assert from "node:assert/strict";
@@ -769,7 +769,7 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "no live VerificationToken row for it remains once the race resolves, regardless of which caller won",
     function* () {
-      // As shipped (CSG-003/BEH-EA-061): `layerSql` keeps the consumed row as replay evidence
+      // As shipped (CSG-003/BEH-EA-061): `Persistence.sql()` keeps the consumed row as replay evidence
       // until the retention window passes, so "gone" means no *live* row remains and no caller
       // can consume it again — not that the record was physically deleted.
       const { tokens } = yield* World;
@@ -897,11 +897,14 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
         };
       }),
     ).pipe(Layer.provide(Repositories.VerificationReservationsRepositoryLive));
-    const DownVerification = Verification.layerSql.pipe(
+    const DownStore = VerificationStoreSql.layer.pipe(
       Layer.provide(Layer.mergeAll(Repositories.VerificationRepositoryLive, DownReservations)),
+    );
+    const DownVerification = Verification.layer.pipe(
+      Layer.provide(DownStore),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(AuthEvents.layer),
-      Layer.provide(AuditLog.layerMemory),
+      Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provide(Hooks.HooksLive),
     );
     yield* exits.set(

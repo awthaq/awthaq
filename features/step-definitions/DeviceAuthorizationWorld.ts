@@ -16,6 +16,7 @@ import {
   AuditLog,
   DataExport,
   Erasure,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -130,9 +131,9 @@ const buildApp = (options: AppOptions) => {
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(
       Layer.mergeAll(
-        Users.layerMemory,
-        Sessions.layerMemory,
-        Verification.layerMemory,
+        Users.layer.pipe(Layer.provide(Persistence.memory)),
+        Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+        Verification.layer.pipe(Layer.provide(Persistence.memory)),
         cheapArgon2id,
       ),
     ),

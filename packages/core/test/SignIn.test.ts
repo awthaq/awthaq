@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as AuthRequestContext from "../src/AuthRequestContext.ts";
@@ -86,9 +87,12 @@ const testContinuation = (recorder: Recorder) =>
   });
 
 const envFor = (recorder: Recorder, behaviour: Behaviour = {}) => {
-  const base = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
+  const base = Layer.mergeAll(
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  ).pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(NodeCrypto.layer),
   );
   const taps = Layer.mergeAll(

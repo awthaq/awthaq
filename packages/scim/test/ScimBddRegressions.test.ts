@@ -4,7 +4,7 @@
 //     asking, so a refused DELETE still logged the user out and hid it from the directory.
 //   - BEH-EA-252: `/ServiceProviderConfig` must report the `filter.maxResults` the plugin
 //     actually enforces (`ScimConfig.maxResults`), not a hard-coded 200.
-import { AuditLog, Hooks, HookPoint, Sessions, Users } from "@awthaq/core";
+import { AuditLog, HookPoint, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { MembershipRecords } from "@awthaq/organization/records";
 import { AuthHttp } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
@@ -54,7 +54,14 @@ describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
         assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.deleted" }), []);
         assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.scim.userDeleted" }), []);
       }).pipe(
-        Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, Users.layerMemory, LegalHold)),
+        Effect.provide(
+          ScimLive(
+            { deleteBehavior: "erase" },
+            {},
+            Users.layer.pipe(Layer.provide(Persistence.memory)),
+            LegalHold,
+          ),
+        ),
       ),
   );
 });

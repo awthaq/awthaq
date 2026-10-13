@@ -3,7 +3,7 @@
 // audience, `verifyJWT` does not demand a `sub`, and an algorithm switch keeps
 // grace-period keys of the old algorithm verifying.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -33,9 +33,9 @@ const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
     Layer.provide(SigningKeyRecordsLive),
     Layer.provide(SqlTransaction.layerNoop),
     Layer.provide(AuthenticationLive),
-    Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(RevocationStore.layerMemory),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(JwtConfig.config({ issuer: "https://issuer.test", ...overrides })),
@@ -192,9 +192,9 @@ describe("algorithm switch (JJS-003)", () => {
             Layer.provide(Layer.fresh(KeyRing.KeyRing.layer)),
             Layer.provide(records),
             Layer.provide(AuthenticationLive),
-            Layer.provideMerge(Sessions.layerMemory),
+            Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
             Layer.provideMerge(AuthEvents.layer),
-            Layer.provideMerge(AuditLog.layerMemory),
+            Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
             Layer.provideMerge(RevocationStore.layerMemory),
             Layer.provide(NodeCrypto.layer),
             Layer.provide(JwtConfig.config({ issuer: "https://issuer.test", algorithm })),

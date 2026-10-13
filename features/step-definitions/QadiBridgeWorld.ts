@@ -21,6 +21,7 @@ import {
   DataExport,
   Erasure,
   Hooks,
+  Persistence,
   Sessions,
   Slots,
   Users,
@@ -374,12 +375,12 @@ export const configure = Effect.fn("features.qadiBridge.configure")(function* (
 // ---- the app ----
 
 export const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(Slots.layer),
   Layer.provideMerge(Erasure.registryLayer),

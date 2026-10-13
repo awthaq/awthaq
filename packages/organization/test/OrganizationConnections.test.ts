@@ -3,7 +3,15 @@
 // an organization's rows into provider configs; `oauthConnections` installs the
 // resolver `@awthaq/oauth` consults after its static registry — proven here end
 // to end by completing a real callback through a stored connection.
-import { Accounts, AuditLog, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  Persistence,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { OAuth, OAuthConnections } from "@awthaq/oauth";
 import {
   ClientAddress,
@@ -99,7 +107,9 @@ const ConnectionsLive = Layer.mergeAll(
   Layer.provideMerge(ConnectionRecords.layerMemory),
   Layer.provideMerge(StubDirectoryLive),
   Layer.provideMerge(EncryptionLive),
-  Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
+  Layer.provideMerge(
+    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
+  ),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(NodeCrypto.layer),
 );
@@ -314,7 +324,9 @@ const RealLive = Layer.mergeAll(
   Layer.provideMerge(OrganizationSystem.layer.pipe(Layer.provide(Organization.config({})))),
   Layer.provideMerge(OrganizationMemory.layer),
   Layer.provideMerge(EncryptionLive),
-  Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
+  Layer.provideMerge(
+    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
+  ),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
@@ -399,10 +411,10 @@ describe("connections belong to an active organization, and go with it (BEH-EA-2
 // ---- end to end: a stored connection completes a real OAuth callback ------------------
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const OAuthLive = OAuth.OAuth.layer.pipe(

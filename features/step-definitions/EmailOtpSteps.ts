@@ -1,7 +1,7 @@
 // P20a (BCR-010): steps for features/features/14-mfa-passwordless/33-email-otp.feature. The
 // shared people/clock/gate steps are in PasswordlessCommonSteps.ts; what is specific here is a
 // code — minted by Verification, mailed, presented with an attempt budget behind it.
-import { AuditLog, AuthEvents, Verification } from "@awthaq/core";
+import { AuditLog, AuthEvents, Persistence, Verification } from "@awthaq/core";
 import { EmailOtp, EmailOtpApi } from "@awthaq/magic-link";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
@@ -118,10 +118,16 @@ export const emailOtpSteps = defineSteps<World>(({ Given, When, Then }) => {
       return Redacted.value(issued.value);
     }).pipe(
       Effect.provide(
-        Verification.layerMemory.pipe(
-          Layer.provide(Layer.succeed(Crypto.Crypto, scripted)),
-          Layer.provide(AuthEvents.layer.pipe(Layer.provide(AuditLog.layerMemory))),
-        ),
+        Verification.layer
+          .pipe(Layer.provide(Persistence.memory))
+          .pipe(
+            Layer.provide(Layer.succeed(Crypto.Crypto, scripted)),
+            Layer.provide(
+              AuthEvents.layer.pipe(
+                Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+              ),
+            ),
+          ),
       ),
     );
     yield* remember("scriptedValue", value);

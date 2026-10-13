@@ -3,7 +3,7 @@
 // does, for 21-qadi-resolvers-obligations.feature (BEH-EA-162). The one seam an application owns is
 // `ResourceOrganizationLookup` (which organization a resource belongs to); `probe` lets a scenario
 // steer and observe it.
-import { Sessions, Users } from "@awthaq/core";
+import { Persistence, Sessions, Users } from "@awthaq/core";
 import {
   Organization,
   OrganizationActiveContext,
@@ -56,9 +56,10 @@ export const makeWalkProbe = (): WalkProbe => ({
   failing: Ref.makeUnsafe(false),
 });
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

@@ -8,6 +8,7 @@ import {
   AuditLog,
   AuthEvents,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -52,13 +53,13 @@ export const BASE_URL = "https://sp.example.com";
 export const IDP_ENTITY_ID = "https://idp.example.com/metadata";
 
 const CoreLive = Layer.mergeAll(
-  Sessions.layerMemory,
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Verification.layerMemory,
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(RateLimits.layer),
   Layer.provideMerge(NodeCrypto.layer),

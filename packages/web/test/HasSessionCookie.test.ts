@@ -5,7 +5,7 @@
 // one — the whole point being that it performs no verification at all, not
 // merely that it happens to tolerate expired sessions.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -36,13 +36,13 @@ describe("hasSessionCookie (BEH-EA-188)", () => {
 
   it("returns true even when the cookie names a session that has since expired — proving no verification happens", async () => {
     const TestLayer = Layer.mergeAll(
-      Users.layerMemory,
-      Sessions.layerMemory,
+      Users.layer.pipe(Layer.provide(Persistence.memory)),
+      Sessions.layer.pipe(Layer.provide(Persistence.memory)),
       TestClock.layer(),
     ).pipe(
       Layer.provideMerge(NodeCrypto.layer),
       Layer.provideMerge(AuthEvents.layer),
-      Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provideMerge(Hooks.HooksLive),
     );
     // ETVS-006: disposed deterministically, even when an assertion throws.

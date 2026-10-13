@@ -14,6 +14,7 @@ import {
   DataExport,
   Erasure,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   UserFields,
@@ -50,6 +51,8 @@ import * as Csrf from "../src/Csrf.ts";
 import { currentUser } from "../src/internal/CurrentUser.ts";
 import { HandlerInvariantViolation } from "../src/internal/Defects.ts";
 import * as Session from "../src/Session.ts";
+
+const SessionsInMemory = Sessions.layer.pipe(Layer.provide(Persistence.memory));
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -93,7 +96,7 @@ const csrfHeaders = (cookie?: string): Record<string, string> => ({
 });
 
 const makeAppLayer = (
-  sessionsLayer: typeof Sessions.layerMemory,
+  sessionsLayer: typeof SessionsInMemory,
   limiterLayer: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
 ) =>
   Layer.mergeAll(
@@ -115,22 +118,22 @@ const makeAppLayer = (
     // `SqlTransaction` — a no-op wrapper for this in-memory composition.
     Layer.provide(SqlTransaction.layerNoop),
     Layer.provideMerge(sessionsLayer),
-    Layer.provideMerge(Users.layerMemory),
-    Layer.provideMerge(Accounts.layerMemory),
-    Layer.provideMerge(Verification.layerMemory),
+    Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Verification.layer.pipe(Layer.provide(Persistence.memory))),
     // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );
 
-const AppLayer = makeAppLayer(Sessions.layerMemory);
+const AppLayer = makeAppLayer(Sessions.layer.pipe(Layer.provide(Persistence.memory)));
 
 // SAM-004: the same app over a composition that declares two `billing` fields, one of them server-only.
-const FieldsAppLayer = makeAppLayer(Sessions.layerMemory).pipe(
+const FieldsAppLayer = makeAppLayer(Sessions.layer.pipe(Layer.provide(Persistence.memory))).pipe(
   Layer.provideMerge(
     UserFields.layer({
       billing_plan: UserFields.serverOnly(Schema.Literals(["free", "pro"])),
@@ -143,13 +146,13 @@ const FieldsAppLayer = makeAppLayer(Sessions.layerMemory).pipe(
 // TIR-003/ESS-005/GC-005: a `Sessions` whose `list` never contains the
 // caller's own session — what the SQL layer's 200-row page cap used to do to
 // a user with many historical sessions. Point queries must not depend on it.
-const ListlessSessions: typeof Sessions.layerMemory = Layer.effect(
+const ListlessSessions: typeof SessionsInMemory = Layer.effect(
   Sessions.Sessions,
   Effect.gen(function* () {
     const real = yield* Sessions.Sessions;
     return { ...real, list: () => Effect.succeed([]) };
   }),
-).pipe(Layer.provide(Sessions.layerMemory));
+).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
 
 const ListlessAppLayer = makeAppLayer(ListlessSessions);
 
@@ -607,19 +610,26 @@ describe("GET /user/export (CSG-005)", () => {
         const limited = yield* sendHandled("/user/export", { method: "GET", token });
         assert.strictEqual(limited.status, 429);
       }),
-    ).pipe(Effect.provide(makeAppLayer(Sessions.layerMemory, RateLimiter.layerMemory))),
+    ).pipe(
+      Effect.provide(
+        makeAppLayer(
+          Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+          RateLimiter.layerMemory,
+        ),
+      ),
+    ),
   );
 });
 
 // EHA-009: the session was revoked between the middleware's verify and the
 // handler's keyed read — a typed 401 with an expired cookie, not a 500.
-const VanishingSessions: typeof Sessions.layerMemory = Layer.effect(
+const VanishingSessions: typeof SessionsInMemory = Layer.effect(
   Sessions.Sessions,
   Effect.gen(function* () {
     const real = yield* Sessions.Sessions;
     return { ...real, findOwned: () => Effect.succeed(Option.none()) };
   }),
-).pipe(Layer.provide(Sessions.layerMemory));
+).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
 
 describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)", () => {
   it.effect("GET /session answers 401 Unauthenticated and expires the cookie", () =>
@@ -1118,11 +1128,13 @@ describe("AuthHttp (BEH-EA-087's ManagedRuntime escape hatch)", () => {
   it.effect("serves an imperative, non-Effect-native call against the same Layer", () =>
     Effect.gen(function* () {
       const runtime = ManagedRuntime.make(
-        Sessions.layerMemory.pipe(
-          Layer.provide(NodeCrypto.layer),
-          Layer.provide(AuthEvents.layer),
-          Layer.provide(AuditLog.layerMemory),
-        ),
+        Sessions.layer
+          .pipe(Layer.provide(Persistence.memory))
+          .pipe(
+            Layer.provide(NodeCrypto.layer),
+            Layer.provide(AuthEvents.layer),
+            Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+          ),
       );
       const { session } = yield* Effect.promise(() =>
         runtime.runPromise(

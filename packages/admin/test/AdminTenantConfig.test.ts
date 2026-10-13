@@ -1,7 +1,7 @@
 // EP-007 (ADR-EA-018 Decision 8, BEH-EA-236): the admin gates are read per operation, so one
 // composition serves tenants with different `Admin.config(...)`. Deny-all stays the default.
 import { Api } from "@awthaq/api";
-import { AuditChain, Sessions, Tenant, Users } from "@awthaq/core";
+import { AuditChain, Persistence, Sessions, Tenant, Users } from "@awthaq/core";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -13,9 +13,10 @@ import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

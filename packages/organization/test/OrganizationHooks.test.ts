@@ -12,7 +12,7 @@
 // freezes, another. A tap's `Layer` requires its point, which
 // `OrganizationHooksLive` provides last in `buildLayer`'s pipe.
 import { Api } from "@awthaq/api";
-import { HookPoint, Sessions, Users } from "@awthaq/core";
+import { HookPoint, Persistence, Sessions, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -28,7 +28,10 @@ import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(TestAuth.memoryFoundation),
 );

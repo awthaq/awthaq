@@ -10,6 +10,7 @@ import {
   AuditChain,
   AuthEvents,
   Erasure,
+  Persistence,
   Sessions,
   Users,
   Verification,
@@ -49,10 +50,10 @@ import { TestAuth } from "@awthaq/test";
 // `Accounts`/`Verification` are here only because `Erasure.layer` (BEH-EA-290's erasure
 // clause) sweeps them too; the organization group itself never touches them.
 const CoreLive = Layer.mergeAll(
-  Sessions.layerMemory,
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Verification.layerMemory,
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(

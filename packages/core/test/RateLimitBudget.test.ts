@@ -18,6 +18,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as AuthPlugin from "../src/AuthPlugin.ts";
@@ -110,7 +111,7 @@ const ipRuleIn = (group: string, bucket: string) =>
 const Live = RateLimiter.layer.pipe(
   Layer.provide(RateLimiter.layerStoreMemory),
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(RateLimits.layer),
 );
 
@@ -427,7 +428,7 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
       Effect.provide(
         RateLimiter.layerPermissive.pipe(
           Layer.provideMerge(AuthEvents.layer),
-          Layer.provideMerge(AuditLog.layerMemory),
+          Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provideMerge(RateLimits.layer),
         ),
       ),

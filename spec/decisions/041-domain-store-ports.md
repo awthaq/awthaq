@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-041 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-10-13 |
-> | Status | Accepted |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 02) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 02) <br> 1.1 (2026-10-13): Status flipped to Accepted, implemented: every phase of plan 02 shipped; `layerMemory` and `layerSql` removed from the five modules in favour of `Persistence.memory`/`Persistence.sql()` |
 
 ---
 

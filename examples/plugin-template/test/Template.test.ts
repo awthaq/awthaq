@@ -3,7 +3,15 @@
 // endpoints over a real `HttpRouter` handler with a real session cookie, and aborts an
 // operation with a veto tap.
 import { Api } from "@awthaq/api";
-import { Auth, HookPoint, Migrations, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  Auth,
+  HookPoint,
+  Migrations,
+  Persistence,
+  RateLimits,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { RateLimiter, Tenant } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
@@ -32,9 +40,11 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 );
 
 // `RateLimits.layer` is the per-composition rule registry every budget registers into.
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory, RateLimits.layer).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  RateLimits.layer,
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

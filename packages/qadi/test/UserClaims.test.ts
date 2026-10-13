@@ -3,12 +3,13 @@
 // claim through the resolver.
 import {
   AuditLog,
+  Auth,
+  AuthEvents,
   DataExport,
   Erasure,
-  AuthEvents,
-  Auth,
   Hooks,
   Migrations,
+  Persistence,
   Users,
 } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
@@ -34,7 +35,7 @@ import * as UserClaims from "../src/UserClaims.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const CoreLive = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   // CSG-001: the plugin contributes its erasure to the composition's registry.
   Layer.provideMerge(Erasure.registryLayer),
   Layer.provideMerge(DataExport.registryLayer),

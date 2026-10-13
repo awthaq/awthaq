@@ -12,7 +12,7 @@
 // simulated time and have `Sessions.layerMemory`'s own `DateTime.now` reads
 // see it.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -32,14 +32,14 @@ import {
 import type { HeadersLike } from "../src/CookieHeader.ts";
 
 const TestLayer = Layer.mergeAll(
-  Users.layerMemory,
-  Sessions.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
   Authentication.PrincipalResolverLive,
   TestClock.layer(),
 ).pipe(
   Layer.provideMerge(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
 );
 
@@ -62,15 +62,17 @@ const withRuntime = async <R, A>(
 
 /** BO-001/IC-001: a short `touchEvery` so a rotation is reachable without an implausibly long `TestClock.adjust`. */
 const ShortTouchLayer = Layer.mergeAll(
-  Users.layerMemory,
-  Sessions.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
   Authentication.PrincipalResolverLive,
   TestClock.layer(),
 ).pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       NodeCrypto.layer,
-      AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory)),
+      AuthEvents.layer.pipe(
+        Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+      ),
       Hooks.HooksLive,
       Layer.succeed(Sessions.SessionConfig, {
         absolute: Duration.days(30),
@@ -329,7 +331,7 @@ describe("getSession (BEH-EA-185)", () => {
             Deferred.await(gate).pipe(Effect.andThen(base.findById(id))),
         };
       }),
-    ).pipe(Layer.provide(Users.layerMemory));
+    ).pipe(Layer.provide(Users.layer.pipe(Layer.provide(Persistence.memory))));
     const GatedResolver = Layer.succeed(Authentication.PrincipalResolver, {
       resolve: (session) =>
         Deferred.succeed(gate, undefined).pipe(
@@ -342,10 +344,14 @@ describe("getSession (BEH-EA-185)", () => {
         ),
     });
     return withRuntime(
-      Layer.mergeAll(GatedUsers, Sessions.layerMemory, GatedResolver).pipe(
+      Layer.mergeAll(
+        GatedUsers,
+        Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+        GatedResolver,
+      ).pipe(
         Layer.provideMerge(NodeCrypto.layer),
         Layer.provideMerge(AuthEvents.layer),
-        Layer.provideMerge(AuditLog.layerMemory),
+        Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
         Layer.provideMerge(Hooks.HooksLive),
       ),
       async (runtime) => {

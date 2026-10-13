@@ -11,7 +11,16 @@
 // group at all). A minimal companion plugin with one real endpoint is
 // composed alongside `Roles` to prove its own manifest entry composes
 // correctly without a real HTTP dependency between the two packages.
-import { AuditLog, DataExport, Erasure, Auth, AuthEvents, AuthPlugin, Slots } from "@awthaq/core";
+import {
+  AuditLog,
+  Auth,
+  AuthEvents,
+  AuthPlugin,
+  DataExport,
+  Erasure,
+  Persistence,
+  Slots,
+} from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -103,7 +112,7 @@ describe("SubjectResolver slot exclusivity (BEH-EA-138)", () => {
   };
 
   const CoreLive = AuthEvents.layer.pipe(
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     // CSG-001: the plugin contributes its erasure to the composition's registry.
     Layer.provideMerge(Erasure.registryLayer),
     Layer.provideMerge(DataExport.registryLayer),

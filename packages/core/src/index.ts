@@ -24,10 +24,10 @@
 // check is real but runtime, not the compile-time one BEH-EA-012 illustrates,
 // a confirmed structural limit of `Context.Reference` in this effect
 // version, not a scoping choice).
-// `Users`/`Accounts`/`Sessions`/`Verification` each have both a `layerMemory`
-// and a SQL-backed `layerSql` (over `@awthaq/sql`'s repositories,
-// BEH-EA-033/034; `Verification.layerSql` per
-// spec/decisions/016-verification-sql-claiming.md, ADR-EA-016).
+// `Users`/`Accounts`/`Sessions`/`Verification`/`AuditLog` are each written once, as `layer`, over a store
+// port (ADR-EA-041); `Persistence.memory` and `Persistence.sql(options)` provide the five stores and the
+// matching `SqlTransaction` (the SQL adapters are over `@awthaq/sql`'s repositories, BEH-EA-033/034;
+// `Verification` per spec/decisions/016-verification-sql-claiming.md, ADR-EA-016).
 // See spec/overview.md for the full package map.
 
 export * as Accounts from "./Accounts.ts";
@@ -56,6 +56,7 @@ export * from "./HttpApiTypes.ts";
 export * as MailDispatch from "./MailDispatch.ts";
 export * as Migrations from "./Migrations.ts";
 export * as Observability from "./Observability.ts";
+export * as Persistence from "./Persistence.ts";
 export * as Phone from "./Phone.ts";
 export * as RateLimits from "./RateLimits.ts";
 export * as Retention from "./Retention.ts";

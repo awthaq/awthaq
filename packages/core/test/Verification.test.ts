@@ -7,6 +7,7 @@
 // `packages/sql/test/VerificationStoreSql.test.ts`; the blocks below that name a real transaction
 // are SQL compositions: the protocol of `redeem` (ADR-EA-039) over `VerificationStoreSql`, per
 // spec/decisions/016-verification-sql-claiming.md (ADR-EA-016).
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { SqlTransaction, VerificationStore } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -27,6 +28,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
@@ -34,11 +36,16 @@ import { StoreUnavailable } from "../src/Errors.ts";
 import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";
 
-const MemoryLayer = Verification.layerMemory.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-);
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
+
+const MemoryLayer = Verification.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  );
 
 // PV-010: `:memory:` SQLite by default, a real Postgres schema under `pnpm run test:pg`.
 const SqlLive = TestSql.layer("core_Verification");
@@ -820,7 +827,7 @@ describe("Verification infrastructure failures (MA-004)", () => {
     Layer.provide(DownStore),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   );
 
   it.effect("a store outage surfaces as StoreUnavailable named for the service operation", () =>
@@ -868,7 +875,7 @@ describe("Verification infrastructure failures (MA-004)", () => {
     }).pipe(Effect.provide(DownLayer)),
   );
 
-  const BrokenCryptoLayer = Verification.layerMemory.pipe(
+  const BrokenCryptoLayer = Verification.layer.pipe(Layer.provide(Persistence.memory)).pipe(
     Layer.provide(
       Layer.succeed(
         Crypto.Crypto,
@@ -887,10 +894,10 @@ describe("Verification infrastructure failures (MA-004)", () => {
       ),
     ),
     Layer.provide(AuthEvents.layer),
-    Layer.provide(AuditLog.layerMemory),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   );
 
-  it.effect("layerMemory: a crypto PlatformError surfaces as StoreUnavailable", () =>
+  it.effect("Persistence.memory: a crypto PlatformError surfaces as StoreUnavailable", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
       const issueFailure = yield* verification
@@ -909,21 +916,23 @@ describe("Verification infrastructure failures (MA-004)", () => {
 // miss records. The replay event is an attempt event and the spent attempt runs in the unit of work's
 // `afterUnit` lane, so both survive the rollback without the caller doing anything.
 describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () => {
-  const SqlAuditLayer = Verification.layerSql.pipe(
-    Layer.provide(Repositories.VerificationRepositoryLive),
-    Layer.provide(Repositories.VerificationReservationsRepositoryLive),
-    Layer.provide(NodeCrypto.layer),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
-  );
+  const SqlAuditLayer = Verification.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(
+      Layer.provide(Repositories.VerificationRepositoryLive),
+      Layer.provide(Repositories.VerificationReservationsRepositoryLive),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provideMerge(AuthEvents.layer),
+      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
+      Layer.provideMerge(SqlLive),
+      Layer.provideMerge(Migrated),
+    );
 
   const replayRows = Effect.flatMap(AuditLog.AuditLog, (log) =>
     log.list({ eventTag: "auth.token.replay" }),
   );
 
-  it.effect("layerSql: a miss inside a failing transaction is still audited", () =>
+  it.effect("Persistence.sql(): a miss inside a failing transaction is still audited", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
       const sql = yield* SqlClient.SqlClient;
@@ -939,7 +948,7 @@ describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () =
   );
 
   it.effect(
-    "layerSql: attempts spent by misses inside a rolled-back transaction still burn a budgeted token",
+    "Persistence.sql(): attempts spent by misses inside a rolled-back transaction still burn a budgeted token",
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
@@ -962,7 +971,7 @@ describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () =
       }).pipe(Effect.provide(SqlAuditLayer)),
   );
 
-  it.effect("layerMemory: a miss publishes exactly one replay row", () =>
+  it.effect("Persistence.memory: a miss publishes exactly one replay row", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
       const identifier = "verify-email:pv220-memory";
@@ -974,15 +983,17 @@ describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () =
 
 // ADR-EA-039: what only a real transaction can prove, on SQLite and (under `pnpm test:pg`) Postgres.
 describe("Verification.redeem over a real transaction", () => {
-  const SqlAuditLayer = Verification.layerSql.pipe(
-    Layer.provide(Repositories.VerificationRepositoryLive),
-    Layer.provide(Repositories.VerificationReservationsRepositoryLive),
-    Layer.provide(NodeCrypto.layer),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
-  );
+  const SqlAuditLayer = Verification.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(
+      Layer.provide(Repositories.VerificationRepositoryLive),
+      Layer.provide(Repositories.VerificationReservationsRepositoryLive),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provideMerge(AuthEvents.layer),
+      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
+      Layer.provideMerge(SqlLive),
+      Layer.provideMerge(Migrated),
+    );
 
   const replayRows = Effect.flatMap(AuditLog.AuditLog, (log) =>
     log.list({ eventTag: "auth.token.replay" }),
@@ -1002,7 +1013,7 @@ describe("Verification.redeem over a real transaction", () => {
       ),
     );
 
-  it.effect("layerSql: use's own writes and the claim commit or roll back together", () =>
+  it.effect("Persistence.sql(): use's own writes and the claim commit or roll back together", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
       const ttl = Duration.minutes(10);
@@ -1035,7 +1046,7 @@ describe("Verification.redeem over a real transaction", () => {
   );
 
   it.effect(
-    "layerSql + AuditLog.layerSql: a miss through redeem leaves exactly one durable auth.token.replay row",
+    "Persistence.sql() + AuditLog: a miss through redeem leaves exactly one durable auth.token.replay row",
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
@@ -1051,7 +1062,7 @@ describe("Verification.redeem over a real transaction", () => {
   );
 
   it.effect(
-    "layerSql: misses through redeem burn a budgeted token (the spent attempt commits)",
+    "Persistence.sql(): misses through redeem burn a budgeted token (the spent attempt commits)",
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
@@ -1071,7 +1082,7 @@ describe("Verification.redeem over a real transaction", () => {
   );
 
   it.effect(
-    "layerSql: a use that fails on a real SQL statement rolls back and the token redeems afterwards",
+    "Persistence.sql(): a use that fails on a real SQL statement rolls back and the token redeems afterwards",
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
@@ -1107,7 +1118,7 @@ describe("Verification.redeem over a real transaction", () => {
   );
 
   it.effect(
-    "layerSql: a redeem nested in an outer transaction is a savepoint: a rollback inside keeps the outer transaction usable, and a miss inside commits with it",
+    "Persistence.sql(): a redeem nested in an outer transaction is a savepoint: a rollback inside keeps the outer transaction usable, and a miss inside commits with it",
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
@@ -1150,7 +1161,7 @@ describe("Verification.redeem over a real transaction", () => {
 });
 
 // ADR-EA-039: the compensation that gives a memory token back, and the drift it documents (TRBS-005).
-describe("Verification (layerMemory) redeem compensation", () => {
+describe("Verification (Persistence.memory) redeem compensation", () => {
   const issueOne = (identifier: string, extra?: { readonly userId: Users.UserId }) =>
     Effect.flatMap(Verification.Verification, (verification) =>
       verification.issue({

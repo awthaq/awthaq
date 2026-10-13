@@ -2,7 +2,7 @@
 // composed the way an application does — `Organization` beside `AdminTenants` —
 // and driven domain-level, like `Admin.test.ts`.
 import { Api } from "@awthaq/api";
-import { AuditLog, HookPoint, Sessions, Users } from "@awthaq/core";
+import { AuditLog, HookPoint, Persistence, Sessions, Users } from "@awthaq/core";
 import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -16,9 +16,10 @@ import * as Admin from "../src/Admin.ts";
 import * as AdminTenants from "../src/AdminTenants.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

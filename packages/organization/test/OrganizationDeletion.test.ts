@@ -1,7 +1,7 @@
 // Plan 04 (F7, ADR-EA-040): the organization-deletion registry. Another plugin's rows that hang off an
 // organization (connections) are removed in the deletion's own transaction, in `order` then id order, and
 // their `afterCommit` runs only once the deletion has committed.
-import { Migrations, Users } from "@awthaq/core";
+import { Migrations, Persistence, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -30,7 +30,9 @@ const application = OrganizationActor.application("OrganizationDeletion.test");
 const base = OrganizationSystem.layer.pipe(
   Layer.provide(Organization.config({})),
   Layer.provideMerge(OrganizationMemory.layer),
-  Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
+  Layer.provideMerge(
+    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
+  ),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
@@ -144,7 +146,12 @@ describe("OrganizationDeletion over SQL", () => {
           Layer.provideMerge(
             OrganizationSystem.layer.pipe(
               Layer.provide(Organization.config({})),
-              Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  Users.layer.pipe(Layer.provide(Persistence.memory)),
+                  Mailer.layerMemory,
+                ),
+              ),
               Layer.provideMerge(TestAuth.memoryFoundation),
               Layer.provideMerge(sqlRecords(OrganizationRecords.layerSql)),
               Layer.provideMerge(sqlRecords(MembershipRecords.layerSql)),

@@ -4,10 +4,11 @@
 // run against a real in-memory SQLite database migrated by the framework `Migrator`
 // (`PersistenceStratumWorld.ts`). Scenarios whose behavior does not exist yet (INV-EA-016's
 // ownership validation) or needs another World (REQ-EA-092) stay `@skip` in the feature.
+import { TestEncryption } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { Accounts, AuthEvents, Users } from "@awthaq/core";
+import { Accounts, AuthEvents, Persistence, Users } from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
 import { Repositories } from "@awthaq/sql";
 import { RedactionGuard } from "@awthaq/test";
@@ -36,6 +37,9 @@ import {
   withDatabase,
 } from "./PersistenceStratumWorld.ts";
 import { TestServices } from "./shared/Harness.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const CANARY = "canary-access-token-9f8e7d6c5b4a";
@@ -255,9 +259,13 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   );
 
   When("the entity passes through logging, tracing spans, and emitted events", function* () {
-    const layer = Accounts.layerSql.pipe(
-      Layer.provideMerge(Layer.mergeAll(RepositoriesLive, RedactionGuard.layer, NodeCrypto.layer)),
-    );
+    const layer = Accounts.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(RepositoriesLive, RedactionGuard.layer, NodeCrypto.layer),
+        ),
+      );
     const outcome = yield* Effect.gen(function* () {
       const guard = yield* RedactionGuard.RedactionGuard;
       yield* guard.watch("accessToken", CANARY);

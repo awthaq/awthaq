@@ -9,7 +9,16 @@
 // state (credential hash, session liveness) the wire never exposes, and the
 // reset scenario can run over a real SQLite transaction with an injectable
 // fault.
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { TestEncryption } from "@awthaq/test";
+import {
+  Accounts,
+  AuthEvents,
+  Persistence,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -49,6 +58,9 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { TestAuth } from "@awthaq/test";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 /** Which fault, if any, the fault-injecting `Sessions` wrapper raises when the flow reaches it (TIR-005). */
 export type Fault = "none" | "sessionIssue" | "revokeAll";
@@ -90,10 +102,12 @@ const faultInjectingSessions = (fault: Ref.Ref<Fault>) =>
 
 const memoryCore = (fault: Ref.Ref<Fault>) =>
   Layer.mergeAll(
-    Users.layerMemory,
-    Accounts.layerMemory,
-    faultInjectingSessions(fault).pipe(Layer.provide(Sessions.layerMemory)),
-    Verification.layerMemory,
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+    faultInjectingSessions(fault).pipe(
+      Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
+    ),
+    Verification.layer.pipe(Layer.provide(Persistence.memory)),
     // `Password` still declares the `SqlTransaction` port (sign-up goes through `SignUp`); here it
     // is a no-op wrapper. `confirmReset` itself redeems through `Verification.redeem`, which gives a
     // failed reset's token back in memory too (ADR-EA-039).
@@ -123,21 +137,23 @@ const sqliteCore = (fault: Ref.Ref<Fault>) => {
     Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
   ).pipe(Layer.provide(SqlLive));
   return Layer.mergeAll(
-    Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
-    Accounts.layerSql.pipe(
-      Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-    ),
+    Users.layer.pipe(Layer.provide(SqlStores)),
+    Accounts.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
     faultInjectingSessions(fault).pipe(
-      Layer.provide(Sessions.layerSql.pipe(Layer.provide(Repositories.SessionsRepositoryLive))),
+      Layer.provide(Sessions.layer.pipe(Layer.provide(SqlStores))),
     ),
-    Verification.layerSql.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Repositories.VerificationRepositoryLive,
-          Repositories.VerificationReservationsRepositoryLive,
+    Verification.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Repositories.VerificationRepositoryLive,
+            Repositories.VerificationReservationsRepositoryLive,
+          ),
         ),
       ),
-    ),
     SqlTransaction.layerSql,
   ).pipe(
     Layer.provideMerge(TestAuth.memoryFoundation),

@@ -5,7 +5,16 @@
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Api } from "@awthaq/api";
-import { AuditLog, Auth, AuthEvents, HookPoint, Hooks, RateLimits, Slots } from "@awthaq/core";
+import {
+  AuditLog,
+  Auth,
+  AuthEvents,
+  HookPoint,
+  Hooks,
+  Persistence,
+  RateLimits,
+  Slots,
+} from "@awthaq/core";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { SubjectResolver } from "@awthaq/qadi";
@@ -853,7 +862,7 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   const budgetLayer = (owner: RateLimits.Owner) => Layer.effectDiscard(RateLimits.budget(owner));
   const rateTestLayer = RateLimiter.layerPermissive.pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(RateLimits.layer),
   );
 

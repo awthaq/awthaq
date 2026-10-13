@@ -20,6 +20,7 @@ import {
   DataExport,
   Erasure,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -33,10 +34,9 @@ import {
   Mailer,
   PasswordHasher,
   RateLimiter,
-  SqlTransaction,
 } from "@awthaq/ports";
 import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
-import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
+import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as PgClient from "@effect/sql-pg/PgClient";
@@ -62,7 +62,9 @@ const auth = Auth.make([Password.Password]);
 
 // 2. The database, chosen by configuration. Both branches provide the same `SqlClient`, which is
 //    all the repositories and the migrator ask for; the dialect is read from the client.
-const PostgresLive = PgClient.layerConfig({ url: Config.Redacted("DATABASE_URL") });
+const PostgresLive = PgClient.layerConfig({
+  url: Config.Redacted("DATABASE_URL"),
+});
 const SqliteLive = SqliteClient.layerConfig({
   filename: Config.String("SQLITE_FILE").pipe(Config.withDefault("./awthaq.sqlite")),
 });
@@ -96,25 +98,18 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const RepositoriesLive = Layer.mergeAll(
-  Repositories.UsersRepositoryLive,
-  Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
-  Repositories.SessionsRepositoryLive,
-  Repositories.VerificationRepositoryLive,
-  Repositories.VerificationReservationsRepositoryLive,
-  Repositories.AuditLogRepositoryLive,
-).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
-
-// 4. The domain services over those repositories; `AuthEvents` writes every event into the
-//    durable `AuditLog` table.
+// 4. The domain services over the SQL stores (`Persistence.sql()`); `AuthEvents` writes every
+//    event into the durable `AuditLog` table.
 const CoreLive = Layer.mergeAll(
-  Users.layerSql,
-  Accounts.layerSql,
-  Sessions.layerSql,
-  Verification.layerSql,
+  Users.layer,
+  Accounts.layer,
+  Sessions.layer,
+  Verification.layer,
 ).pipe(
-  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerSql))),
-  Layer.provideMerge(RepositoriesLive),
+  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layer))),
+  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(EncryptionLive))),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -141,9 +136,7 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect, SqlTransaction.layerSql),
-  ),
+  Layer.provideMerge(Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect)),
 );
 
 // 7. Mount the composed api. The OpenAPI document and Scalar UI are unauthenticated, so they are

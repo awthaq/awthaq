@@ -1,6 +1,6 @@
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-138 through BEH-EA-141.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, DataExport, Erasure, Slots, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, DataExport, Erasure, Persistence, Slots, Users } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -20,7 +20,7 @@ const owner = role({ name: "owner", permissions: [projectDelete], inherits: [edi
 // `provideMerge` also exposes `AuditLog` so tests can read the durable record back.
 // MA-005: a plugin layer built outside `Auth.make` (which provides one itself) needs a `SlotsRegistry`.
 const CoreLive = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Slots.layer),
   // CSG-001/CSG-005: the plugin contributes its erasure and export to the composition's registries.
   Layer.provideMerge(Erasure.registryLayer),

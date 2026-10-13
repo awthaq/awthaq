@@ -7,8 +7,9 @@ import {
   Accounts,
   AuditLog,
   AuthEvents,
-  Hooks,
   HookPoint,
+  Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -41,13 +42,13 @@ const seen = Ref.makeUnsafe<ReadonlyArray<{ readonly userId: string; readonly co
 const guardedUserId = Ref.makeUnsafe<string | undefined>(undefined);
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(
     Hooks.BeforeCredentialReset.tap((input) =>
       Effect.gen(function* () {

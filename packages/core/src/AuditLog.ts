@@ -38,7 +38,6 @@
 // deliberately rewritable under GDPR Art. 17, which a hash chain would forbid.
 
 import { AuditLogStore, Defects } from "@awthaq/ports";
-import { AuditLogStoreSql, type Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -50,7 +49,6 @@ import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   type AuthEvent,
   type AuthEventTag,
@@ -393,19 +391,3 @@ export const layer = Layer.effect(
     return AuditLog.of({ record, list, replay, pseudonymizeActor, purge });
   }),
 );
-
-// ---- transitional aliases (removed in phase 7) -----------------------------------
-
-/**
- * Dev/test convenience — explicitly *not* durable (evaporates at process exit, exactly the gap
- * BEH-EA-100 exists to close). Deliberately has no dependencies of its own.
- */
-export const layerMemory = layer.pipe(Layer.provide(AuditLogStore.layerMemory));
-
-// The annotation is the TS2883 exception (declaration emit cannot name the repository through the
-// adapter's inferred layer type); this alias is removed with `layerMemory` in phase 7.
-export const layerSql: Layer.Layer<
-  AuditLog,
-  never,
-  SqlRepositories.AuditLogRepository | SqlClient.SqlClient
-> = layer.pipe(Layer.provide(AuditLogStoreSql.layer));

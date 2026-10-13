@@ -10,15 +10,16 @@
 // business-logic mock).
 import { createHash } from "node:crypto";
 import {
+  Accounts,
   AuditLog,
-  Hooks,
   AuthEvents,
+  Hooks,
   MailDispatch,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
   Verification,
-  Accounts,
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -82,13 +83,13 @@ const httpClientReturningStatus = (status: number): Layer.Layer<HttpClient.HttpC
   );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );

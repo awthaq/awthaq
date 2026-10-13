@@ -7,7 +7,6 @@
 // the clock, the announcements); the store owns persistence and the atomicity of each primitive.
 
 import { Defects, type Ids, UserStore } from "@awthaq/ports";
-import { UserStoreSql, type Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -19,7 +18,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { relabel, storeUnavailable, StoreUnavailable } from "./Errors.ts";
 import * as Hooks from "./Hooks.ts";
 import type { ErasureClearance } from "./internal/erasureClearance.ts";
@@ -904,19 +902,6 @@ export const layer = Layer.effectContext(
     return Context.make(Users, users).pipe(Context.add(UserRemoval, removal));
   }),
 );
-
-// ---- transitional aliases (removed in phase 7) -----------------------------------
-
-/** TRBS-005: single-process, test-grade storage — see `Sessions.layerMemory`. Use `layerSql` for any multi-instance deployment. */
-export const layerMemory = layer.pipe(Layer.provide(UserStore.layerMemory));
-
-// The annotation is the TS2883 exception (declaration emit cannot name the repository through the
-// adapter's inferred layer type); this alias is removed with `layerMemory` in phase 7.
-export const layerSql: Layer.Layer<
-  Users | UserRemoval,
-  never,
-  SqlRepositories.UsersRepository | SqlClient.SqlClient | Crypto.Crypto
-> = layer.pipe(Layer.provide(UserStoreSql.layer));
 
 /**
  * SAM-004: typed access to declared user fields. Pass the record of declarations — a composition's

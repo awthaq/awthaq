@@ -11,12 +11,15 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as MailDispatch from "../src/MailDispatch.ts";
 import * as Users from "../src/Users.ts";
 
-const EventsLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+const EventsLive = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+);
 
 const failed = (retryable: boolean) =>
   new Mailer.MailDeliveryFailed({ template: "reset-password", reason: "provider down", retryable });

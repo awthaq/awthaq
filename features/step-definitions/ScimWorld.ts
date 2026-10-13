@@ -14,8 +14,9 @@ import {
   AuthEvents,
   Erasure,
   Errors,
-  Hooks,
   HookPoint,
+  Hooks,
+  Persistence,
   Sessions,
   Users,
   Verification,
@@ -44,12 +45,14 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
 
+const UsersInMemory = Users.layer.pipe(Layer.provide(Persistence.memory));
+
 const ORIGIN = "http://localhost:3000";
 
 // ---- the composition ---------------------------------------------------------------------
 
 /** The real in-memory `Users`, except that reading by email reports an outage (ADR-EA-028). */
-const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
+const UsersDownOnLookup: typeof UsersInMemory = Layer.effect(
   Users.Users,
   Effect.gen(function* () {
     const real = yield* Users.Users;
@@ -62,7 +65,7 @@ const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
 ).pipe(
   // provideMerge: the real `UserRemoval` rides along; this double's `Users` wins (`Context.merge`
   // keeps the later entry).
-  Layer.provideMerge(Users.layerMemory),
+  Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
 );
 
 /** A `BeforeCreateTeam` tap that refuses every team (plan 04: a veto now reaches SCIM Groups). */
@@ -103,19 +106,22 @@ export interface AppOptions {
 }
 
 const buildLive = (options: AppOptions) => {
-  const users = options.usersOutage === true ? UsersDownOnLookup : Users.layerMemory;
+  const users =
+    options.usersOutage === true
+      ? UsersDownOnLookup
+      : Users.layer.pipe(Layer.provide(Persistence.memory));
   const hooks =
     options.vetoDelete === true
       ? VetoDelete.pipe(Layer.provideMerge(Hooks.HooksLive))
       : Hooks.HooksLive;
   const CoreLive = Layer.mergeAll(
-    Sessions.layerMemory,
-    Accounts.layerMemory,
-    Verification.layerMemory,
+    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+    Verification.layer.pipe(Layer.provide(Persistence.memory)),
     users,
   ).pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(hooks),
     Layer.provideMerge(NodeCrypto.layer),
   );

@@ -8,10 +8,11 @@
 // logic, not `@simplewebauthn/server`'s cryptography (that's
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
 import {
+  Accounts,
   AuditLog,
   AuthEvents,
-  Accounts,
   Erasure,
+  Persistence,
   Sessions,
   Users,
   Verification,
@@ -44,8 +45,8 @@ const OrphaningErasure = Erasure.layer.pipe(
   // `Layer.fresh`: the composition's own registry (holding this plugin's contribution) is memoized by
   // reference and `Effect.provide` forks the current memo map, so without `fresh` it would be reused.
   Layer.provide(Layer.fresh(Erasure.registryLayer)),
-  Layer.provide(Accounts.layerMemory),
-  Layer.provide(Verification.layerMemory),
+  Layer.provide(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
+  Layer.provide(Verification.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provide(SqlTransaction.layerNoop),
 );
 

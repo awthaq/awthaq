@@ -3,7 +3,7 @@
 // `MembershipRecords`, a hand-built `Api.UserPrincipal` the same way
 // `@awthaq/admin`'s own `Admin.test.ts` does.
 import { Api } from "@awthaq/api";
-import { AuditLog, Sessions, Tenant, Users } from "@awthaq/core";
+import { AuditLog, Persistence, Sessions, Tenant, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -25,7 +25,10 @@ import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import { TestAuth } from "@awthaq/test";
 import { grant, addMember } from "./support.ts";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents` (session
   // reuse publishes `auth.session.reuse`) — `provideMerge`, not a sibling
   // inside `mergeAll` above, so it also satisfies that need rather than

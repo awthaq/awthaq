@@ -1,7 +1,15 @@
 // The shared domain-level composition for this package's tests: real in-memory `Users`, `Sessions`,
 // `Verification`, `AuthEvents` and `AuditLog`, the real `MagicLink` and `EmailOtp` plugins, and —
 // so the MFA divert can be proven end to end — the real `@awthaq/two-factor` plugin with both gates.
-import { Accounts, Errors, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  Errors,
+  Persistence,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -67,14 +75,16 @@ const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
           ),
       });
     }),
-  ).pipe(Layer.provide(Sessions.layerMemory));
+  ).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
 
 const coreLive = (failSessionIssue: Ref.Ref<boolean> | undefined) =>
   Layer.mergeAll(
-    Accounts.layerMemory,
-    Users.layerMemory,
-    failSessionIssue === undefined ? Sessions.layerMemory : sessionsWithOutage(failSessionIssue),
-    Verification.layerMemory,
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    failSessionIssue === undefined
+      ? Sessions.layer.pipe(Layer.provide(Persistence.memory))
+      : sessionsWithOutage(failSessionIssue),
+    Verification.layer.pipe(Layer.provide(Persistence.memory)),
   ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(

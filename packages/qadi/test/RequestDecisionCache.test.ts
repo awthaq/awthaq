@@ -5,7 +5,7 @@
 // relationship revoked between two requests is visible on the next one with
 // no invalidation layer at all.
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { Persistence, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -78,9 +78,10 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AppLayer = AuthHttp.routes(TestApi, {}).pipe(
   Layer.provide(CheckHandlers),

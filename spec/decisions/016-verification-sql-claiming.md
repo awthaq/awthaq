@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-016 |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-13): Initial release <br> 1.1 (2026-09-13): `layerSql` implemented; `issue` revised from a separate delete-then-insert to one atomic `INSERT ... ON CONFLICT ... DO UPDATE` against a partial unique index, after a code-review finding that the original two-statement design let two concurrent `issue`s for the same `identifier` both leave a live row behind <br> 1.2 (2026-09-14): Noted this decision's SQLite-only scope is superseded — `@awthaq/sql` gained a real `@effect/sql-pg` driver and this decision's own claim primitive now runs against Postgres too, via the same repository contract-test suite (shipping-gaps map, tickets 03/15) <br> 1.3 (2026-09-29): `Sessions.layerSql`'s `supersedes` is no longer an unwrapped precedent — RRS-004/ESR-002 wrapped its tombstone and insert in one `sql.withTransaction`; the references below are updated <br> 1.4 (2026-09-29): Dated the Context's four facts to when the decision was taken; core migrations, Postgres and libSQL have shipped since (DTWS-001, CCR-EA-006) <br> 1.5 (2026-10-13): The "no change to `VerificationShape` at all" paragraph and the matching Consequences sentence are superseded by ADR-EA-039 (plan 07): `Verification.redeem` owns the transaction |
+> | Change History | 1.0 (2026-09-13): Initial release <br> 1.1 (2026-09-13): `layerSql` implemented; `issue` revised from a separate delete-then-insert to one atomic `INSERT ... ON CONFLICT ... DO UPDATE` against a partial unique index, after a code-review finding that the original two-statement design let two concurrent `issue`s for the same `identifier` both leave a live row behind <br> 1.2 (2026-09-14): Noted this decision's SQLite-only scope is superseded — `@awthaq/sql` gained a real `@effect/sql-pg` driver and this decision's own claim primitive now runs against Postgres too, via the same repository contract-test suite (shipping-gaps map, tickets 03/15) <br> 1.3 (2026-09-29): `Sessions.layerSql`'s `supersedes` is no longer an unwrapped precedent — RRS-004/ESR-002 wrapped its tombstone and insert in one `sql.withTransaction`; the references below are updated <br> 1.4 (2026-09-29): Dated the Context's four facts to when the decision was taken; core migrations, Postgres and libSQL have shipped since (DTWS-001, CCR-EA-006) <br> 1.5 (2026-10-13): The "no change to `VerificationShape` at all" paragraph and the matching Consequences sentence are superseded by ADR-EA-039 (plan 07): `Verification.redeem` owns the transaction <br> 1.6 (2026-10-13): The service is written once over `VerificationStore`; `layerMemory` and `layerSql` are the `Ref` and SQL adapters of that port, and the boundary is `now >= expiresAt` on both (plan 02, ADR-EA-041) |
 
 ---
 
@@ -28,6 +28,8 @@ Four concrete facts, confirmed against the codebase as it stood when this decisi
 Only `@effect/sql-sqlite-node` is an actual dependency in this repository today; no Postgres or MySQL driver is installed or tested, despite ADR-EA-004/ADR-EA-014 committing the project generally to dialect-neutral SQL persistence.
 
 ## Decision
+
+> **Revision 1.6 (plan 02).** `Verification.layerMemory` and `Verification.layerSql` no longer exist. `Verification.layer` is written once over the `VerificationStore` port; the `Ref` adapter and `VerificationStoreSql` implement it and both pass `StoreContract.verification`. The names below describe the two adapters' behaviour as originally decided. A reservation is expired iff `now >= expiresAt`.
 
 **`reserve` is backed by a dedicated `verification_reservations` table**, not the `verification_tokens` table — `(identifier)` a plain (non-partial) `UNIQUE` column, `expiresAt` its only other real column. Reusing `verification_tokens` was rejected: a reservation is not a token a caller ever presents back (fact 2 above), and folding it into the same table would make a future `UNIQUE(identifier)` constraint on that table ambiguous between "one live token" and "one live token or reservation."
 

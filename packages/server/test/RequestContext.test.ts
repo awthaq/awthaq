@@ -1,7 +1,7 @@
 // ALF-006: every event one HTTP request raises carries the request's correlation
 // id (and client address / user agent) — on the bus and in the durable audit row.
 // Exercised against a real Node HTTP server through the global middleware.
-import { AuditLog, AuthEvents } from "@awthaq/core";
+import { AuditLog, AuthEvents, Persistence } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { assert, describe, it } from "@effect/vitest";
@@ -28,7 +28,7 @@ const pingRoute = HttpRouter.add(
 );
 
 const Services = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

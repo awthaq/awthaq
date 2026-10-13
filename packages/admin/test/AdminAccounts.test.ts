@@ -12,6 +12,7 @@ import {
   Erasure,
   HookPoint,
   Hooks,
+  Persistence,
   Sessions,
   Users,
   Verification,
@@ -33,10 +34,10 @@ import * as AdminAccounts from "../src/AdminAccounts.ts";
 import { TestAuth } from "@awthaq/test";
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(

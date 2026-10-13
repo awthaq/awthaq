@@ -3,7 +3,7 @@
 // discovery documents — through `HttpRouter.toWebHandler`, the way a directory
 // service's HTTP client would reach the plugin.
 import { AuthHttp } from "@awthaq/server";
-import { Errors, Sessions, Users } from "@awthaq/core";
+import { Errors, Persistence, Sessions, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { OrganizationRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
@@ -23,6 +23,8 @@ import * as ScimRecords from "../src/ScimRecords.ts";
 import { ScimLive, seedConnection } from "./support.ts";
 import { TenantScoped } from "@awthaq/sql";
 
+const UsersInMemory = Users.layer.pipe(Layer.provide(Persistence.memory));
+
 /** The witness these tests present where a cross-organization caller would. */
 const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
@@ -34,7 +36,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 
 const buildApp = (
   scimConfig: Partial<Scim.ScimConfigShape> = {},
-  users: typeof Users.layerMemory = Users.layerMemory,
+  users: typeof UsersInMemory = Users.layer.pipe(Layer.provide(Persistence.memory)),
 ) => {
   const Live = ScimLive(scimConfig, {}, users);
   const AppLayer = AuthHttp.routes(ScimApi.ScimApi).pipe(
@@ -375,7 +377,7 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
 });
 
 /** The real in-memory `Users`, except that reading by email reports an outage. */
-const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
+const UsersDownOnLookup: typeof UsersInMemory = Layer.effect(
   Users.Users,
   Effect.gen(function* () {
     const real = yield* Users.Users;
@@ -388,7 +390,7 @@ const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
 ).pipe(
   // provideMerge: the real `UserRemoval` rides along; this double's `Users` wins (`Context.merge`
   // keeps the later entry).
-  Layer.provideMerge(Users.layerMemory),
+  Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
 );
 
 describe("SCIM over HTTP: a store outage (ADR-EA-028)", () => {

@@ -7,6 +7,7 @@ import {
   Auth,
   DataExport,
   Erasure,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -50,9 +51,10 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
@@ -126,8 +128,8 @@ describe("AR-003: the admin tier", () => {
           Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
           Layer.provideMerge(RateLimiter.layerPermissive),
           Layer.provideMerge(SqlTransaction.layerNoop),
-          Layer.provideMerge(Accounts.layerMemory),
-          Layer.provideMerge(Verification.layerMemory),
+          Layer.provideMerge(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
+          Layer.provideMerge(Verification.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provideMerge(CoreLive),
           Layer.provideMerge(TestServices),
           Layer.provideMerge(HttpRouter.layer),

@@ -2,7 +2,7 @@
 // codes, a real session cookie, the CSRF double-submit: deny-by-default 403, the erasure cascade
 // behind DELETE, the 202 of a mailed email change, the 422 of a weak password.
 import { Api } from "@awthaq/api";
-import { Accounts, Erasure, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, Erasure, Persistence, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -45,10 +45,10 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(

@@ -5,7 +5,7 @@
 // contract served behind the real CSRF and authentication middleware — so a test can go through the wire
 // (`makeApp`) or call the service directly (`buildLayer`), over the very same rows.
 import { Api } from "@awthaq/api";
-import { Migrations, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Migrations, Persistence, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import type { Hooks } from "@awthaq/core";
 import {
   ClientAddress,
@@ -146,9 +146,9 @@ export const buildLayer = (options: HarnessOptions, taps: Taps = Layer.empty) =>
     .pipe(
       Layer.provideMerge(
         Layer.mergeAll(
-          Users.layerMemory,
-          Sessions.layerMemory,
-          Verification.layerMemory,
+          Users.layer.pipe(Layer.provide(Persistence.memory)),
+          Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+          Verification.layer.pipe(Layer.provide(Persistence.memory)),
           TestHasher,
         ),
       ),

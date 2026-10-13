@@ -11,7 +11,7 @@
 // spec/behaviors/14-rate-limiting.md: "where this document says `consume` fails with
 // `RateLimited`, the port-level failure is `RateLimitExceeded` and the caller-visible one is
 // `RateLimited`"). `failureNamed` maps the Gherkin's word onto the level each step is at.
-import { AuditLog, Auth, AuthEvents, AuthPlugin, RateLimits } from "@awthaq/core";
+import { AuditLog, Auth, AuthEvents, AuthPlugin, Persistence, RateLimits } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
@@ -206,7 +206,7 @@ export { AcmeAudit, AcmeGate, AcmeNormalize, PRE };
 /** What a budget needs beside the registry: a limiter, the event bus and its audit sink. */
 const BudgetServicesLive = RateLimiter.layerPermissive.pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(RateLimits.layer),
 );
 

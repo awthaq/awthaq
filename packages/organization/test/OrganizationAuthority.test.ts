@@ -1,7 +1,7 @@
 // Plan 04 (ADR-EA-040): `OrganizationAuthority`, the read-only evaluation path. The plugin's own
 // gating, the `Bound` a role-conferring operation derives, and `OrganizationQadi` all read it, so
 // they cannot disagree (ADR-EA-009). No principal, no write, no hook point appears here.
-import { Users } from "@awthaq/core";
+import { Persistence, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
@@ -27,7 +27,9 @@ const buildLayer = (config: Partial<Organization.OrganizationConfigShape> = {}) 
   OrganizationSystem.layer.pipe(
     Layer.provide(Organization.config(config)),
     Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(Layer.mergeAll(Users.layerMemory, Mailer.layerMemory)),
+    Layer.provideMerge(
+      Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
+    ),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),

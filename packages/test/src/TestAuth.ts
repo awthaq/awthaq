@@ -62,8 +62,8 @@
 import type { TestFramework } from "./TestFramework.ts";
 import {
   Accounts,
-  Auth,
   AuditLog,
+  Auth,
   AuthEvents,
   AuthPlugin,
   DataExport,
@@ -71,6 +71,7 @@ import {
   HookPoint,
   Hooks,
   Migrations,
+  Persistence,
   RateLimits,
   Sessions,
   Slots,
@@ -129,12 +130,12 @@ const TestHasher = PasswordHasher.layerArgon2id.pipe(
 );
 
 const MemoryStores = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
+  Users.layer,
+  Accounts.layer,
+  Sessions.layer,
   // ETVS-004/MW-002: what every password-style composition needs beyond the core stores
   // (also `AuthHttp.coreHandlers`' always-served `account` group).
-  Verification.layerMemory,
+  Verification.layer,
   TestHasher,
   Mailer.layerMemory,
   RateLimiter.layerPermissive,
@@ -142,6 +143,7 @@ const MemoryStores = Layer.mergeAll(
   // MA-005: `Auth.make` provides its own `SlotsRegistry`; this one is for a plugin layer a
   // test composes standalone (outside `Auth.make`), whose `Slots.override` requires one.
   Slots.layer,
+  // Consumers read it from the output (the bundle's copy is consumed by the stores).
   SqlTransaction.layerNoop,
   // AGA-001/NHS-003: `ClientAddress.layerDirect` — the raw-`remoteAddress`
   // passthrough every zero-config app (and every composition here) gets
@@ -160,25 +162,27 @@ const MemoryStores = Layer.mergeAll(
  * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's
  * record stores) needs beneath it, as one layer: the platform `Crypto` (ids and secrets),
  * `AuthEvents` over an in-memory `AuditLog`, and every hook point's default (no-tap) layer.
- * `layerMemory.pipe(Layer.provideMerge(TestAuth.memoryFoundation))` replaces the four
- * `Layer.provideMerge(NodeCrypto.layer | AuthEvents.layer | AuditLog.layerMemory |
+ * `Users.layer.pipe(Layer.provideMerge(TestAuth.memoryFoundation))` replaces the four
+ * `Layer.provideMerge(NodeCrypto.layer | AuthEvents.layer | AuditLog.layer |
  * Hooks.HooksLive)` lines each suite used to repeat. The services stay in the output, so a test
  * can `yield*` the very instances the stores were built over. Raw layers stay available for a
  * suite that injects its own `Crypto` or hook taps.
  */
 export const memoryFoundation = AuthEvents.layer.pipe(
   // BEH-EA-100: `AuthEvents.layer` needs `AuditLog` — see its own header comment.
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   // AOMS-006/BCR-004/CSG-002/THS-002 (wayfinder ticket 03): every hook point's own default
-  // (no-tap) layer — `Users.layerMemory` and every plugin's own `make` consult one directly. See
+  // (no-tap) layer — `Users.layer` and every plugin's own `make` consult one directly. See
   // `Hooks.HooksLive`'s own doc comment.
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
 const MemoryPorts = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(MemoryStores),
-  // RRS-003: `Sessions.layerMemory` also needs `AuthEvents`.
+  // `Persistence.memory` carries the four stores' state and `SqlTransaction.layerNoop`; every
+  // service built over it shares the one set of Refs.
+  Layer.provideMerge(MemoryStores.pipe(Layer.provide(Persistence.memory))),
+  // RRS-003: `Sessions.layer` also needs `AuthEvents`.
   Layer.provideMerge(memoryFoundation),
 );
 

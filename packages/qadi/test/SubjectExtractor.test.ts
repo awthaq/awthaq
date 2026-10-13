@@ -1,5 +1,5 @@
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -18,9 +18,10 @@ import { SubjectExtractor as QadiSubjectExtractor } from "@qadi/http";
 import * as SubjectExtractor from "../src/SubjectExtractor.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const TestLayer = SubjectExtractor.SubjectExtractorLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -36,9 +37,12 @@ const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
   touchEvery: Duration.millis(100),
 });
 
-const ShortLivedCoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
+const ShortLivedCoreLive = Layer.mergeAll(
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig)),
 );

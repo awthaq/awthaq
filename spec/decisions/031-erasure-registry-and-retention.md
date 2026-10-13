@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-031 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (CSG-001, DRS-002, SEA-001, SSMS-002, CSG-005, CSG-003, ALF-010) <br> 1.1 (2026-10-13): `eraseAccount(userId, initiator)` takes a required `ErasureInitiator` (`Self`/`Admin`/`Directory`); SCIM `erase` runs the cascade and `scim` contributes an erasure and an export section (architecture plan 03) <br> 1.2 (2026-10-13): the veto is consulted once and mints the `ErasureClearance` that `UserRemoval.remove` requires, so no other path can delete a user row (architecture plan 03) |
+> | Change History | 1.0 (2026-09-29): Initial release (CSG-001, DRS-002, SEA-001, SSMS-002, CSG-005, CSG-003, ALF-010) <br> 1.1 (2026-10-13): `eraseAccount(userId, initiator)` takes a required `ErasureInitiator` (`Self`/`Admin`/`Directory`); SCIM `erase` runs the cascade and `scim` contributes an erasure and an export section (architecture plan 03) <br> 1.2 (2026-10-13): the veto is consulted once and mints the `ErasureClearance` that `UserRemoval.remove` requires, so no other path can delete a user row (architecture plan 03) <br> 1.3 (2026-10-13): The core cascade goes through the stores, matched by `Persistence.memory` or `Persistence.sql()` (plan 02, ADR-EA-041) |
 
 ---
 
@@ -42,3 +42,7 @@ SCIM `DELETE` in `erase` mode used to delete the user row and its sessions direc
 **Positive**: erasure is complete by construction and atomic; adding a plugin cannot silently forget it.
 
 **Negative**: a plugin store outside the transaction (a remote service) cannot be rolled back by `SqlTransaction`; such a contribution must be idempotent and retry-safe.
+
+### Revision note (plan 02)
+
+Erasure's core cascade deletes through `UserStore`, `AccountStore`, `SessionStore` and `VerificationStore`, which a matched bundle supplies; mixing stores across bundles leaves the swapped store outside `SqlTransaction`.

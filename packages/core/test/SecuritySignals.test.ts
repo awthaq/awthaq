@@ -8,6 +8,7 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as SecuritySignals from "../src/SecuritySignals.ts";
@@ -53,7 +54,13 @@ const run = <A, E>(
           ),
         );
         return yield* body(events, incidents);
-      }).pipe(Effect.provide(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory)))),
+      }).pipe(
+        Effect.provide(
+          AuthEvents.layer.pipe(
+            Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+          ),
+        ),
+      ),
     );
   });
 

@@ -10,6 +10,7 @@ import {
   Erasure,
   Hooks,
   Migrations,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -137,10 +138,10 @@ export const buildLayer = (options: HarnessOptions) =>
       Layer.provide(CsrfProtectionLive),
     )
     .pipe(
-      Layer.provideMerge(Sessions.layerMemory),
-      Layer.provideMerge(Users.layerMemory),
+      Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
+      Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provideMerge(AuthEvents.layer),
-      Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provideMerge(Hooks.HooksLive),
       Layer.provideMerge(RateLimits.layer),
       Layer.provideMerge(
@@ -242,8 +243,8 @@ export const orphanOwner = (userId: Users.UserId) =>
         // `Layer.fresh`: the composition's own registry (holding api-key's contribution) is memoized
         // by reference, so without `fresh` it would be reused.
         Layer.provide(Layer.fresh(Erasure.registryLayer)),
-        Layer.provide(Accounts.layerMemory),
-        Layer.provide(Verification.layerMemory),
+        Layer.provide(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
+        Layer.provide(Verification.layer.pipe(Layer.provide(Persistence.memory))),
       ),
     ),
     Effect.orDie,

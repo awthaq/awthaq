@@ -2,14 +2,15 @@
 // real in-memory stack `Password.test.ts` builds inline, parameterised over
 // the pieces a test wants to swap (HIBP transport, config, mailer, hasher).
 import {
+  Accounts,
   AuditLog,
-  Hooks,
   AuthEvents,
+  Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
   Verification,
-  Accounts,
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -54,13 +55,13 @@ export const UnavailableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.s
 );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );

@@ -14,6 +14,7 @@ import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as AuthRequestContext from "../src/AuthRequestContext.ts";
@@ -23,7 +24,9 @@ import * as Users from "../src/Users.ts";
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
 
-const AuthEventsLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+const AuthEventsLive = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+);
 
 describe("AuthEvents", () => {
   it.effect("BEH-EA-098/102: publish returns immediately; stream sees every published event", () =>

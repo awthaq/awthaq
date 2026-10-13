@@ -2,7 +2,8 @@
 // causal handoffs it must never break (ADR-EA-014: revocation and rotation are
 // authoritative on the very next read). The replica is a real second database
 // that only changes when the test calls `catchUp` (`LaggingReplica`).
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import * as TestEncryption from "../src/TestEncryption.ts";
+import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
 import { CoreMigrations, Models, ReadRouting, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -17,6 +18,9 @@ import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as LaggingReplica from "../src/LaggingReplica.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 const M = Models.makeModels("sqlite");
 
@@ -248,12 +252,14 @@ describe("ReadRouting (RRC-001)", () => {
 const sessionsUnderLag = Effect.gen(function* () {
   const lag = yield* newReplica;
   const context = yield* Layer.build(
-    Sessions.layerSql.pipe(
-      Layer.provide(Repositories.SessionsRepositoryLive),
-      Layer.provide(lag.layer),
-      Layer.provide(Layer.mergeAll(NodeCrypto.layer, AuthEvents.layer)),
-      Layer.provide(AuditLog.layerMemory),
-    ),
+    Sessions.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(
+        Layer.provide(Repositories.SessionsRepositoryLive),
+        Layer.provide(lag.layer),
+        Layer.provide(Layer.mergeAll(NodeCrypto.layer, AuthEvents.layer)),
+        Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+      ),
   );
   return { lag, sessions: Context.get(context, Sessions.Sessions) };
 });

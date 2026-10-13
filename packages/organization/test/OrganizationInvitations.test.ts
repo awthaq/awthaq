@@ -2,7 +2,7 @@
 // capability token (MTI-010), the lifecycle, the quota, the team, the `Bound`, the veto, the observe points
 // and the transaction of an acceptance are proved here. `Organization.test.ts` keeps who may invite, cancel
 // and read.
-import { AuditLog, Migrations, HookPoint, Users } from "@awthaq/core";
+import { AuditLog, HookPoint, Migrations, Persistence, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -49,7 +49,7 @@ const buildLayer = (
   OrganizationSystem.layer.pipe(
     Layer.provide(Organization.config(config)),
     Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(Users.layerMemory),
+    Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(mailer),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(SqlTransaction.layerNoop),
@@ -583,7 +583,7 @@ const sqlRecords = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
   layer.pipe(Layer.provide(NodeCrypto.layer));
 const SqlSystemLive = OrganizationSystem.layer.pipe(
   Layer.provide(Organization.config({ teams: teamsOn })),
-  Layer.provideMerge(Users.layerMemory),
+  Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Mailer.layerMemory),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(sqlRecords(OrganizationRecords.layerSql)),

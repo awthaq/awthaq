@@ -2,6 +2,7 @@
 // guarantees `SignUp.test.ts` proves over memory (a conflict, a failing `within`, a vetoed or
 // failed first session all leave nothing behind) run here over SQLite, and over Postgres under
 // `pnpm test:pg` (`packages/sql/test/support/TestSql.ts`).
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -12,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Persistence from "../src/Persistence.ts";
 import * as Accounts from "../src/Accounts.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
@@ -22,6 +24,9 @@ import * as Sessions from "../src/Sessions.ts";
 import * as SignUp from "../src/SignUp.ts";
 import * as Users from "../src/Users.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -60,15 +65,15 @@ const SessionsOutage = Layer.effect(
 
 const envFor = (behaviour: Behaviour = {}) => {
   const base = Layer.mergeAll(
-    Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
-    Accounts.layerSql.pipe(
-      Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-    ),
-    Sessions.layerSql.pipe(Layer.provide(Repositories.SessionsRepositoryLive)),
+    Users.layer.pipe(Layer.provide(SqlStores)),
+    Accounts.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
+    Sessions.layer.pipe(Layer.provide(SqlStores)),
     SqlTransaction.layerSql,
   ).pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(SqlLive),
     Layer.provideMerge(Migrated),

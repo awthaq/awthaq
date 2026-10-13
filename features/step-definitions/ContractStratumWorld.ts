@@ -11,7 +11,7 @@
 //    `session` group is the thing under test (BEH-EA-031).
 // Sessions are minted directly against the same running services (shared `MemoMap`).
 import { Api } from "@awthaq/api";
-import { Auth, Sessions, Users } from "@awthaq/core";
+import { Auth, Persistence, Sessions, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
@@ -125,8 +125,8 @@ const buildAuthProbe = () => {
     Layer.provideMerge(TracedAuthentication),
     Layer.provideMerge(Authentication.OptionalAuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(Sessions.layerMemory),
-    Layer.provideMerge(Users.layerMemory),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),

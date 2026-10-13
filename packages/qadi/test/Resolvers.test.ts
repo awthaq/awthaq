@@ -1,6 +1,6 @@
 // spec/behaviors/21-qadi-resolvers-obligations.md, BEH-EA-161, BEH-EA-165.
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { Persistence, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -12,9 +12,10 @@ import { AttributeResolver, exists, hasAttribute, makeSubjectId, obligation } fr
 import * as Resolvers from "../src/Resolvers.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AttributesLayer = Resolvers.UserAttributes.pipe(Layer.provideMerge(CoreLive));
 

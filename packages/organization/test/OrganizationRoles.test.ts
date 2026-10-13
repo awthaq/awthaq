@@ -1,7 +1,7 @@
 // Plan 04 (ADR-EA-040): `OrganizationRoles`, dynamic access control at its own interface, with no principal.
 // The feature gate, the reserved names (RZS-005), the `Bound` (RRM-001), the quota, the veto and the
 // observe point are proved here; `Organization.test.ts` keeps who may manage roles.
-import { HookPoint, Users } from "@awthaq/core";
+import { HookPoint, Persistence, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
@@ -29,7 +29,7 @@ const buildLayer = (
   OrganizationSystem.layer.pipe(
     Layer.provide(Organization.config(config)),
     Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(Users.layerMemory),
+    Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(SqlTransaction.layerNoop),

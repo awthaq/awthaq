@@ -5,7 +5,7 @@
 // `RelationshipResolver`/`AttributeResolver` straight, the same way an
 // application's own qadi policy evaluation would reach them.
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { Persistence, Sessions, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -30,7 +30,10 @@ import * as TeamRecords from "../src/TeamRecords.ts";
 import { TestAuth } from "@awthaq/test";
 import { grant, addMember } from "./support.ts";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(TestAuth.memoryFoundation),
 );

@@ -1,6 +1,6 @@
 // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 14
 // (AAPS-002).
-import { Users } from "@awthaq/core";
+import { Persistence, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -18,7 +18,9 @@ const fakeResolver = (
     resolve: (_subjectId, attribute) => Effect.succeed(table[attribute]),
   });
 
-const CoreLive = Users.layerMemory.pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+const CoreLive = Users.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 describe("attributeResolverRegistry (AAPS-002)", () => {
   it.effect("dispatches each attribute to exactly the contribution that declared it", () =>

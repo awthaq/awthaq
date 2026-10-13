@@ -1,6 +1,6 @@
 // CSG-001/DRS-002 (.issues/high): `MembershipRecords.deleteAllByUser` and
 // `Organization.organizationErasure` (the plugin's `Erasure` contribution, CSG-001).
-import { Erasure, Hooks, Users } from "@awthaq/core";
+import { Erasure, Hooks, Persistence, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -37,7 +37,7 @@ describe("MembershipRecords.deleteAllByUser", () => {
 
 describe("Organization erasure contribution", () => {
   const TestLayer = Layer.mergeAll(
-    Users.layerMemory,
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
     TeamRecords.layerMemory,
     InvitationRecords.layerMemory,
   ).pipe(

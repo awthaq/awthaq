@@ -14,6 +14,7 @@ import {
   AuditLog,
   AuthEvents,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -151,13 +152,13 @@ const spyLayer = (observations: Observations) =>
   ).pipe(Layer.provide(XmlSignatureNode.layer));
 
 const CoreLive = Layer.mergeAll(
-  Sessions.layerMemory,
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Verification.layerMemory,
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(RateLimits.layer),
   Layer.provideMerge(NodeCrypto.layer),

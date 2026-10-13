@@ -3,16 +3,19 @@ import { WebCrypto } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as Users from "../src/Users.ts";
 
-const EdgeLayer = Sessions.layerMemory.pipe(
-  Layer.provide(WebCrypto.layer),
-  Layer.provide(AuthEvents.layer),
-  Layer.provide(AuditLog.layerMemory),
-);
+const EdgeLayer = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(WebCrypto.layer),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  );
 
 describe("Sessions over WebCrypto.layer (ERAS-002)", () => {
   it.effect("issue then verify round-trips with no Node crypto layer in the composition", () =>

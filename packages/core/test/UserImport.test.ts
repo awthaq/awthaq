@@ -2,6 +2,7 @@
 // transactional (no user without its credential survives a failed row). Runs on
 // both backends: the in-memory `Ref` layers, and real SQL (`:memory:` SQLite, or
 // a Postgres schema under `pnpm run test:pg`).
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -13,15 +14,19 @@ import * as Redacted from "effect/Redacted";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import { EncryptionLive } from "../../sql/test/contract.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
+import * as Persistence from "../src/Persistence.ts";
 import * as Accounts from "../src/Accounts.ts";
 import * as Hooks from "../src/Hooks.ts";
 import * as Phone from "../src/Phone.ts";
 import * as UserImport from "../src/UserImport.ts";
 import * as Users from "../src/Users.ts";
 
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
+
 const MemoryLayer = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
   SqlTransaction.layerNoop,
 ).pipe(Layer.provide(NodeCrypto.layer), Layer.provide(Hooks.HooksLive));
 
@@ -32,14 +37,12 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 const SqlDomain = Layer.mergeAll(
-  Users.layerSql.pipe(
-    Layer.provide(Repositories.UsersRepositoryLive),
-    Layer.provide(NodeCrypto.layer),
-  ),
-  Accounts.layerSql.pipe(
-    Layer.provide(Repositories.AccountsRepositoryLive),
-    Layer.provide(NodeCrypto.layer),
-  ),
+  Users.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(Layer.provide(Repositories.UsersRepositoryLive), Layer.provide(NodeCrypto.layer)),
+  Accounts.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(Layer.provide(Repositories.AccountsRepositoryLive), Layer.provide(NodeCrypto.layer)),
   SqlTransaction.layerSql,
 ).pipe(
   Layer.provide(Hooks.HooksLive),

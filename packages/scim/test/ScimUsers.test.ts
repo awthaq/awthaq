@@ -1,7 +1,16 @@
 // BEH-EA-247 through 250 (spec/behaviors/30-scim.md): SCIM Users — provisioning,
 // ownership, immutability, deactivation and deletion — driven at the domain level over
 // the same layer graph an application builds (`support.ts`).
-import { Accounts, AuditLog, AuthEvents, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  HookPoint,
+  Hooks,
+  Persistence,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { OrganizationHooks } from "@awthaq/organization";
 import { InvitationRecords, MembershipRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
@@ -18,6 +27,8 @@ import * as Scim from "../src/Scim.ts";
 import * as ScimApi from "../src/ScimApi.ts";
 import { ScimLive, seedConnection } from "./support.ts";
 import { TenantScoped } from "@awthaq/sql";
+
+const UsersInMemory = Users.layer.pipe(Layer.provide(Persistence.memory));
 
 /** The witness these tests present where a cross-organization caller would. */
 const grant = TenantScoped.crossTenant("test: a cross-organization caller");
@@ -270,7 +281,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
           ScimLive(
             {},
             {},
-            Users.layerMemory,
+            Users.layer.pipe(Layer.provide(Persistence.memory)),
             Hooks.BeforeSignUp.tap((input) =>
               Effect.fail(new HookPoint.HookAbort({ code: `NO_SIGNUP_${input.strategy}` })),
             ).pipe(Layer.provideMerge(Hooks.HooksLive)),
@@ -504,7 +515,7 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
  * user, every later read of the same id reports `UserNotFound`, as if another erasure had landed
  * in between. `provideMerge`: the double's `Users` wins while the real `UserRemoval` rides along.
  */
-const ErasedBetweenReads: typeof Users.layerMemory = Layer.effect(
+const ErasedBetweenReads: typeof UsersInMemory = Layer.effect(
   Users.Users,
   Effect.gen(function* () {
     const real = yield* Users.Users;
@@ -521,7 +532,7 @@ const ErasedBetweenReads: typeof Users.layerMemory = Layer.effect(
         ),
     });
   }),
-).pipe(Layer.provideMerge(Users.layerMemory));
+).pipe(Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))));
 
 describe("SCIM Users: membership goes through OrganizationMembers (plan 04)", () => {
   it.effect(

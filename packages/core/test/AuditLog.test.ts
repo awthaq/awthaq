@@ -17,6 +17,7 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Observability from "../src/Observability.ts";
@@ -472,7 +473,13 @@ it.effect("AuthEvents.publish writes through AuditLog with zero subscribers", ()
     const recorded = yield* auditLog.list();
     assert.strictEqual(recorded.length, 1);
     assert.strictEqual(recorded[0]?.eventTag, "auth.token.replay");
-  }).pipe(Effect.provide(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory)))),
+  }).pipe(
+    Effect.provide(
+      AuthEvents.layer.pipe(
+        Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+      ),
+    ),
+  ),
 );
 
 // MA-004/ADR-EA-028: a store outage is the typed `StoreUnavailable` on every method, not a defect,

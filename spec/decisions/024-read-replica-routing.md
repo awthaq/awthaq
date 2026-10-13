@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-024 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (RRC-001, RRC-008; wayfinder ticket 28) |
+> | Change History | 1.0 (2026-09-29): Initial release (RRC-001, RRC-008; wayfinder ticket 28) <br> 1.1 (2026-10-13): The primary-pinned read list moves into the store contracts; `captureToken` is wired by `SessionStoreSql`'s write primitives and deliberately not by `AuditLogStoreSql.append` (plan 02, ADR-EA-041) |
 
 ---
 
@@ -35,3 +35,7 @@ Repositories are built over one ambient `SqlClient` (BEH-EA-035), and `SqlModel.
 **Positive**: additive and default-off (no existing deployment changes); an operator cannot under-classify a sensitive read by turning replicas on, because the sensitive reads have no eventual mode; the token check is one cheap query, and only on eventual reads by a fiber that has written.
 
 **Negative**: per-request write-then-list flows need their service to call `captureToken`; until then such a flow is stale-tolerant by classification, which is why `Sessions.listByUser` defaults to the primary. The token does not cross requests (decision 4). The default position source speaks Postgres only; SQLite has no replicas, so `captureToken` and the position checks are no-ops there.
+
+### Revision note (plan 02)
+
+Decision 2's primary-pinned list is now asserted by the store contracts (`StoreContract.sessions`, `StoreContract.verification`). Decision 3: `SessionStoreSql`'s write primitives capture the causal token through `ReadRouting.captureTokenOn`; `AuditLogStoreSql.append` deliberately does not, because the audit trail is read eventually.

@@ -3,13 +3,21 @@
 // executes, the assertions are the directives, checked by `tsc -p tsconfig.test.json`. The file
 // imports the modules the barrel re-exports as `Erasure` and `Users` (the lint forbids the barrel itself),
 // so it checks the public surface.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import type * as Layer from "effect/Layer";
+import * as Layer from "effect/Layer";
 import { expectTypeOf } from "vitest";
 import * as Erasure from "../src/Erasure.ts";
 import type * as Hooks from "../src/Hooks.ts";
+import * as Persistence from "../src/Persistence.ts";
 import * as Users from "../src/Users.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
+
+const UsersInMemory = Users.layer.pipe(Layer.provide(Persistence.memory));
+const UsersOverSql = Users.layer.pipe(Layer.provide(SqlStores));
 
 declare const users: Users.UsersShape;
 declare const removal: Users.UserRemovalShape;
@@ -39,13 +47,13 @@ describe("user deletion is sealed behind AccountErasure (BEH-EA-046)", () => {
   });
 
   it("both Users layers provide Users and UserRemoval and no longer require the delete veto", () => {
-    expectTypeOf<Layer.Success<typeof Users.layerMemory>>().toEqualTypeOf<
+    expectTypeOf<Layer.Success<typeof UsersInMemory>>().toEqualTypeOf<
       Users.Users | Users.UserRemoval
     >();
-    expectTypeOf<Layer.Success<typeof Users.layerSql>>().toEqualTypeOf<
+    expectTypeOf<Layer.Success<typeof UsersOverSql>>().toEqualTypeOf<
       Users.Users | Users.UserRemoval
     >();
-    expectTypeOf<Hooks.BeforeUserDelete>().not.toExtend<Layer.Services<typeof Users.layerMemory>>();
-    expectTypeOf<Hooks.BeforeUserDelete>().not.toExtend<Layer.Services<typeof Users.layerSql>>();
+    expectTypeOf<Hooks.BeforeUserDelete>().not.toExtend<Layer.Services<typeof UsersInMemory>>();
+    expectTypeOf<Hooks.BeforeUserDelete>().not.toExtend<Layer.Services<typeof UsersOverSql>>();
   });
 });

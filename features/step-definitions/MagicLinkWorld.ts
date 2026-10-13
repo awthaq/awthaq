@@ -14,11 +14,12 @@
 // options; nothing may have been requested yet, since state does not carry over a rebuild).
 import { Api } from "@awthaq/api";
 import {
-  Errors,
   Accounts,
   AuditLog,
+  Errors,
   HookPoint,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -144,14 +145,14 @@ const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
           ),
       });
     }),
-  ).pipe(Layer.provide(Sessions.layerMemory));
+  ).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
 
 const coreLive = (outage: Ref.Ref<boolean>) =>
   Layer.mergeAll(
-    Users.layerMemory,
-    Accounts.layerMemory,
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
     sessionsWithOutage(outage),
-    Verification.layerMemory,
+    Verification.layer.pipe(Layer.provide(Persistence.memory)),
   ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));

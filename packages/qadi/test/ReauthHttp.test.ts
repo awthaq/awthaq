@@ -8,7 +8,7 @@
 // decodes it — the very schema asserted against below — telling a reauth demand
 // (with its window) apart from a plain permission denial.
 import { Api } from "@awthaq/api";
-import { SessionCookie, Sessions, Users } from "@awthaq/core";
+import { Persistence, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import { allOf, enforce, EvaluationServicesNone, obliged } from "@qadi/core";
@@ -88,9 +88,10 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AppLayer = AuthHttp.routes(TestApi, {}).pipe(
   Layer.provide(Handlers),

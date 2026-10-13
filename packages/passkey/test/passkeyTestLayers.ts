@@ -1,7 +1,16 @@
 // Shared domain-level composition for the plugin's own test files: real,
 // in-memory `Users`/`Accounts`/`Sessions`/`AuthEvents`/`ChallengeStore`/
 // `PasskeyCredentials`, with only the `WebAuthn` port swapped per test.
-import { AuditLog, Hooks, AuthEvents, Accounts, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  Hooks,
+  Persistence,
+  RateLimits,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -21,9 +30,13 @@ export const realRateLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.
 const makeCoreLive = (
   rateLimiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
 ) =>
-  Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
+  Layer.mergeAll(
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  ).pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(RateLimits.layer),
     Layer.provideMerge(rateLimiter),

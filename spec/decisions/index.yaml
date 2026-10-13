@@ -165,4 +165,4 @@ entries:
   - id: "ADR-EA-041"
     file: "041-domain-store-ports.md"
     title: "Core Domain Services Are Written Once Over Atomic Store Ports"
-    status: "Accepted"
+    status: "Accepted — implemented"

@@ -7,7 +7,6 @@
 // hash brand, the id and the clock); the store owns persistence and the atomicity of each primitive.
 
 import { AccountStore, type Ids, PasswordHasher } from "@awthaq/ports";
-import { AccountStoreSql, type Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -17,7 +16,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import * as Tenant from "./Tenant.ts";
 import { UserId } from "./Users.ts";
@@ -375,20 +373,3 @@ export const layer = Layer.effect(
     };
   }),
 );
-
-// ---- transitional aliases (removed in phase 7) -----------------------------------
-
-/**
- * TRBS-005: single-process, test-grade storage. It is not shared across instances, it is lost on
- * restart, and it grows without bound. Use `layerSql` (or a future KV store, ADR-EA-014) for any
- * multi-instance deployment.
- */
-export const layerMemory = layer.pipe(Layer.provide(AccountStore.layerMemory));
-
-// The annotation is the TS2883 exception (declaration emit cannot name the repository through the
-// adapter's inferred layer type); this alias is removed with `layerMemory` in phase 7.
-export const layerSql: Layer.Layer<
-  Accounts,
-  never,
-  SqlRepositories.AccountsRepository | SqlClient.SqlClient | Crypto.Crypto
-> = layer.pipe(Layer.provide(AccountStoreSql.layer));

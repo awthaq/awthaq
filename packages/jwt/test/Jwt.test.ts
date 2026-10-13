@@ -2,7 +2,7 @@
 // result succeeds with every claim correct; a tampered signature fails;
 // an expired token fails (`TestClock`-driven).
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -54,10 +54,10 @@ const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
     // `Sessions` at its own call site, not captured in `make` — the test
     // body needs the same `Sessions` instance exposed too, both to issue/
     // revoke a real session and to satisfy `jwt.verifyLive`'s own `R`.
-    Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     // TIR-001: `RevocationStore` is captured once in `make` now (not a
     // per-call `R` the way `Sessions` is), so this discharges it for the
     // whole plugin rather than merely exposing it to the test body.

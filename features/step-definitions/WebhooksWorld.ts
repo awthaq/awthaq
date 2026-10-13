@@ -14,6 +14,7 @@ import {
   DataExport,
   Erasure,
   EventRelay,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -197,9 +198,10 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
+const CoreLive = Layer.mergeAll(
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const CSRF_SECRET = "webhooks-bdd-csrf-secret-padded-to-thirty-two-bytes";
 

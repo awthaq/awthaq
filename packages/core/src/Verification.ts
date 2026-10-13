@@ -22,7 +22,6 @@
 // event too.
 
 import { Defects, Hmac, type Ids, VerificationStore } from "@awthaq/ports";
-import { VerificationStoreSql, type Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -35,7 +34,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
 import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import { UserId } from "./Users.ts";
@@ -473,25 +471,3 @@ export const layer = Layer.effect(
     return { issue, consume, redeem, reserve, deleteAllByUser, purgeExpired };
   }),
 );
-
-// ---- transitional aliases (removed in phase 7) -----------------------------------
-
-/**
- * TRBS-005: single-process, test-grade storage. It is not shared across instances (a revocation on
- * one instance does not propagate to another), it is lost on restart, and it grows until a
- * retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV store, ADR-EA-014) for any
- * multi-instance deployment.
- */
-export const layerMemory = layer.pipe(Layer.provide(VerificationStore.layerMemory));
-
-// The annotation is the TS2883 exception (declaration emit cannot name the repositories through the
-// adapter's inferred layer type); this alias is removed with `layerMemory` in phase 7.
-export const layerSql: Layer.Layer<
-  Verification,
-  never,
-  | SqlRepositories.VerificationRepository
-  | SqlRepositories.VerificationReservationsRepository
-  | SqlClient.SqlClient
-  | Crypto.Crypto
-  | AuthEvents.AuthEvents
-> = layer.pipe(Layer.provide(VerificationStoreSql.layer));

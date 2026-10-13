@@ -27,6 +27,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import { StoreUnavailable } from "../src/Errors.ts";
@@ -34,11 +35,13 @@ import * as Sessions from "../src/Sessions.ts";
 import * as Tenant from "../src/Tenant.ts";
 import * as Users from "../src/Users.ts";
 
-const MemoryLayer = Sessions.layerMemory.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(AuthEvents.layer),
-  Layer.provide(AuditLog.layerMemory),
-);
+const MemoryLayer = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  );
 
 const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
   absolute: Duration.millis(1000),
@@ -46,10 +49,12 @@ const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
   touchEvery: Duration.millis(100),
 });
 
-const ShortLivedMemoryLayer = Sessions.layerMemory.pipe(
-  Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, AuthEvents.layer)),
-  Layer.provide(AuditLog.layerMemory),
-);
+const ShortLivedMemoryLayer = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, AuthEvents.layer)),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  );
 
 /** EP-007: the application's own map, tenant id -> that tenant's `SessionConfig` layer. */
 class TenantSessionConfig extends LayerMap.Service<TenantSessionConfig>()(
@@ -863,11 +868,13 @@ suite("Sessions", MemoryLayer, ShortLivedMemoryLayer);
 // silently accepted (the previous hard-delete behavior). These need
 // `AuthEvents` exposed to the test body itself (to assert the published
 // event), unlike `suite`'s own `layer`/`shortLivedLayer` params.
-const MemoryLayerWithEvents = Sessions.layerMemory.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-);
+const MemoryLayerWithEvents = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  );
 
 const reuseSuite = (
   name: string,
@@ -1382,11 +1389,13 @@ const cappedConfig = Layer.succeed(Sessions.SessionConfig, {
   maxConcurrent: { limit: 2, onExceed: "evictOldest" },
 });
 
-const CappedMemoryLayer = Sessions.layerMemory.pipe(
-  Layer.provide(Layer.mergeAll(NodeCrypto.layer, cappedConfig)),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-);
+const CappedMemoryLayer = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(Layer.mergeAll(NodeCrypto.layer, cappedConfig)),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  );
 
 const capSuite = (
   name: string,
@@ -1486,11 +1495,13 @@ const graceConfig = (rotationGrace?: Duration.Duration) =>
   });
 
 const graceMemoryLayer = (rotationGrace?: Duration.Duration) =>
-  Sessions.layerMemory.pipe(
-    Layer.provide(Layer.mergeAll(NodeCrypto.layer, graceConfig(rotationGrace))),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-  );
+  Sessions.layer
+    .pipe(Layer.provide(Persistence.memory))
+    .pipe(
+      Layer.provide(Layer.mergeAll(NodeCrypto.layer, graceConfig(rotationGrace))),
+      Layer.provideMerge(AuthEvents.layer),
+      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    );
 
 const graceSuite = (
   name: string,
@@ -1722,7 +1733,7 @@ describe("Sessions infrastructure failures (MA-004)", () => {
     Layer.provide(DownStore),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(AuthEvents.layer),
-    Layer.provide(AuditLog.layerMemory),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   );
 
   it.effect("a store outage surfaces as StoreUnavailable named for the service operation", () =>
@@ -1784,11 +1795,13 @@ describe("Sessions infrastructure failures (MA-004)", () => {
         ),
     }),
   );
-  const BrokenCryptoLayer = Sessions.layerMemory.pipe(
-    Layer.provide(BrokenCrypto),
-    Layer.provide(AuthEvents.layer),
-    Layer.provide(AuditLog.layerMemory),
-  );
+  const BrokenCryptoLayer = Sessions.layer
+    .pipe(Layer.provide(Persistence.memory))
+    .pipe(
+      Layer.provide(BrokenCrypto),
+      Layer.provide(AuthEvents.layer),
+      Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    );
 
   it.effect("a crypto PlatformError surfaces as StoreUnavailable", () =>
     Effect.gen(function* () {
@@ -1829,7 +1842,7 @@ describe("Sessions rotation loser (S-6)", () => {
       Layer.provide(store),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(AuthEvents.layer),
-      Layer.provide(AuditLog.layerMemory),
+      Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     );
 
   const dueForTouch = Effect.gen(function* () {
@@ -1894,7 +1907,7 @@ describe("Sessions.list bound (S-8)", () => {
         Layer.provide(TruncatingStore),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(AuthEvents.layer),
-        Layer.provide(AuditLog.layerMemory),
+        Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
       );
       const logger = Logger.make<unknown, void>(({ message }) => {
         warnings.push(Array.isArray(message) ? message.join(" ") : String(message));

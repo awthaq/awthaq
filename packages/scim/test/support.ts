@@ -8,6 +8,7 @@ import {
   AuthEvents,
   Erasure,
   Hooks,
+  Persistence,
   Sessions,
   Users,
   Verification,
@@ -24,10 +25,17 @@ import * as ScimApi from "../src/ScimApi.ts";
 import * as ScimConnections from "../src/ScimConnections.ts";
 import * as ScimRecords from "../src/ScimRecords.ts";
 
-const CoreLive = (users: typeof Users.layerMemory, hooks: typeof Hooks.HooksLive) =>
-  Layer.mergeAll(Sessions.layerMemory, Accounts.layerMemory, Verification.layerMemory, users).pipe(
+const UsersInMemory = Users.layer.pipe(Layer.provide(Persistence.memory));
+
+const CoreLive = (users: typeof UsersInMemory, hooks: typeof Hooks.HooksLive) =>
+  Layer.mergeAll(
+    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+    Verification.layer.pipe(Layer.provide(Persistence.memory)),
+    users,
+  ).pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(hooks),
     Layer.provideMerge(NodeCrypto.layer),
   );
@@ -74,7 +82,7 @@ const OrganizationLive = (options: Partial<Organization.OrganizationConfigShape>
 export const ScimLive = (
   scimConfig: Partial<Scim.ScimConfigShape> = {},
   organizationConfig: Partial<Organization.OrganizationConfigShape> = {},
-  users: typeof Users.layerMemory = Users.layerMemory,
+  users: typeof UsersInMemory = Users.layer.pipe(Layer.provide(Persistence.memory)),
   // P20a: a composition with a tap installed on a hook point (e.g. a `beforeDelete` veto) passes
   // `Tap.pipe(Layer.provideMerge(Hooks.HooksLive))` here.
   hooks: typeof Hooks.HooksLive = Hooks.HooksLive,

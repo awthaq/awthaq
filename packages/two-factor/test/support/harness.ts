@@ -3,12 +3,14 @@
 // (the first factor), the real `TwoFactor` plugin with both of its gates, the real `Encryption`
 // port over a fixed test key, and argon2id at its smallest legal cost. Only the rate limiter and the
 // plugin's configuration vary per suite.
+import { TestEncryption } from "@awthaq/test";
 import {
   Accounts,
   AuditLog,
   AuthEvents,
   Errors,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -25,7 +27,7 @@ import {
 } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { Authentication, Csrf } from "@awthaq/server";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Crypto from "effect/Crypto";
@@ -44,6 +46,9 @@ import * as TwoFactorConfig from "../../src/TwoFactorConfig.ts";
 import * as TwoFactorStore from "../../src/TwoFactorStore.ts";
 import { TestAuth } from "@awthaq/test";
 import * as TestSql from "../../../sql/test/support/TestSql.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 export const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,
@@ -98,14 +103,16 @@ const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
           ),
       });
     }),
-  ).pipe(Layer.provide(Sessions.layerMemory));
+  ).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
 
 const coreLive = (outage: Ref.Ref<boolean> | undefined) =>
   Layer.mergeAll(
-    Users.layerMemory,
-    Accounts.layerMemory,
-    outage === undefined ? Sessions.layerMemory : sessionsWithOutage(outage),
-    Verification.layerMemory,
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+    outage === undefined
+      ? Sessions.layer.pipe(Layer.provide(Persistence.memory))
+      : sessionsWithOutage(outage),
+    Verification.layer.pipe(Layer.provide(Persistence.memory)),
   );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
@@ -187,7 +194,7 @@ const SqlLive = TestSql.layer("two_factor_harness");
  */
 export const buildDurableAuditLayer = (options?: BuildOptions) => {
   const durableFoundation = AuthEvents.layer.pipe(
-    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(SqlLive),

@@ -971,7 +971,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       >;
       const failure = results.find(Exit.isFailure);
       assert.ok(failure !== undefined, "expected one attempt to be rejected");
-      // `Accounts.layerSql` maps the UNIQUE violation itself to this tag; it does no lookup first.
+      // `AccountStoreSql` maps the UNIQUE violation itself to this tag; it does no lookup first.
       assert.match(String(failure.cause), /AccountAlreadyLinked/);
     },
   );

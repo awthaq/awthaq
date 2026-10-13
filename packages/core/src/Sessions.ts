@@ -10,7 +10,6 @@
 
 import { Api } from "@awthaq/api";
 import { Hmac, type Ids, LegacySessionBridge, SessionStore, type Store } from "@awthaq/ports";
-import { SessionStoreSql, type Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -21,7 +20,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
 import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import * as Observability from "./Observability.ts";
@@ -1042,21 +1040,3 @@ export const layer = Layer.effect(
     };
   }),
 );
-
-// ---- transitional aliases (removed in phase 7) -----------------------------------
-
-/**
- * TRBS-005: single-process, test-grade storage. It is not shared across instances (a revocation on one
- * instance does not propagate to another), it is lost on restart, and it grows without bound until a
- * retention sweep (CSG-003) prunes it. Use `layerSql` (or a `SessionStore` over a KV store, ADR-EA-014)
- * for any multi-instance deployment.
- */
-export const layerMemory = layer.pipe(Layer.provide(SessionStore.layerMemory));
-
-// The annotation is the TS2883 exception (declaration emit cannot name the repository through the
-// adapter's inferred layer type); this alias is removed with `layerMemory` in phase 7.
-export const layerSql: Layer.Layer<
-  Sessions,
-  never,
-  SqlRepositories.SessionsRepository | SqlClient.SqlClient | Crypto.Crypto | AuthEvents.AuthEvents
-> = layer.pipe(Layer.provide(SessionStoreSql.layer));

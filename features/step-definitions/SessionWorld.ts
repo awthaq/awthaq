@@ -11,7 +11,7 @@
 //
 // AH-005: what this World adds over the first version, so the scenarios whose
 // only blocker was a World-capability gap can run:
-// - **Real rows.** `Sessions` is `layerSql` over an in-memory SQLite client (core's own
+// - **Real rows.** `Sessions` is `Persistence.sql()` over an in-memory SQLite client (core's own
 //   migrations), so a step can read the persisted row (`readSessionRow`) — the memory layer
 //   keeps its rows in a private `Ref` no step can reach.
 // - **Simulated time.** A `TestClock` is part of the composition (started at the real "now",
@@ -21,11 +21,13 @@
 //   published event, so "the secret never reaches a log or span" is checkable.
 // - **Fiber interleaving.** A `gate` endpoint behind the real `Authentication` middleware whose
 //   handler blocks until released, so "validated, then revoked, then completes" can be driven.
+import { TestEncryption } from "@awthaq/test";
 import { Api, AuthCore } from "@awthaq/api";
 import {
   Accounts,
   DataExport,
   Erasure,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -71,16 +73,21 @@ import {
   TestServices,
 } from "./shared/Harness.ts";
 
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
+
 const CoreMigrated = Layer.effectDiscard(
   Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provideMerge(SqliteClient.layer({ filename: ":memory:" })));
 
 const sessionsSql = (config: Sessions.SessionConfig) =>
-  Sessions.layerSql.pipe(
-    Layer.provide(Repositories.SessionsRepositoryLive),
-    Layer.provide(Layer.succeed(Sessions.SessionConfig, config)),
-    Layer.provideMerge(CoreMigrated),
-  );
+  Sessions.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(
+      Layer.provide(Repositories.SessionsRepositoryLive),
+      Layer.provide(Layer.succeed(Sessions.SessionConfig, config)),
+      Layer.provideMerge(CoreMigrated),
+    );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -146,10 +153,10 @@ const buildAppLayer = (settings: Sessions.SessionConfig, gate: Gate) => {
     // over the registry `Hooks.HooksLive` provides).
     Layer.provideMerge(
       Layer.mergeAll(
-        Users.layerMemory,
-        Accounts.layerMemory,
+        Users.layer.pipe(Layer.provide(Persistence.memory)),
+        Accounts.layer.pipe(Layer.provide(Persistence.memory)),
         sessionsSql(settings),
-        Verification.layerMemory,
+        Verification.layer.pipe(Layer.provide(Persistence.memory)),
       ),
     ),
     Layer.provideMerge(TestAuth.memoryFoundation),

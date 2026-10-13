@@ -11,6 +11,7 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 - [Repository map](#repository-map)
 - [Quickstart](#quickstart)
 - [Running it](#running-it)
+- [Persistence](#persistence)
 - [Swapping in Postgres for real](#swapping-in-postgres-for-real)
 - [Configuration](#configuration)
 - [Plugins](#plugins)
@@ -56,12 +57,13 @@ import {
   DataExport,
   Erasure,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
+import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
 import {
   ClientAddress,
   Encryption,
@@ -69,7 +71,6 @@ import {
   Mailer,
   PasswordHasher,
   RateLimiter,
-  SqlTransaction,
 } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
@@ -114,25 +115,19 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const RepositoriesLive = Layer.mergeAll(
-  Repositories.UsersRepositoryLive,
-  Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
-  Repositories.SessionsRepositoryLive,
-  Repositories.VerificationRepositoryLive,
-  Repositories.VerificationReservationsRepositoryLive,
-  Repositories.AuditLogRepositoryLive,
-).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
-
-// 4. The domain services, backed by those repositories instead of memory.
+// 4. The domain services, backed by the SQL stores (`Persistence.sql()`: users, accounts,
+//    sessions, verification and audit log over one `SqlClient`) instead of memory.
 //    `AuthEvents` publishes every event into the durable `AuditLog` table.
 const CoreLive = Layer.mergeAll(
-  Users.layerSql,
-  Accounts.layerSql,
-  Sessions.layerSql,
-  Verification.layerSql,
+  Users.layer,
+  Accounts.layer,
+  Sessions.layer,
+  Verification.layer,
 ).pipe(
-  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerSql))),
-  Layer.provideMerge(RepositoriesLive),
+  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layer))),
+  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(EncryptionLive))),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -176,9 +171,7 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect, SqlTransaction.layerSql),
-  ),
+  Layer.provideMerge(Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect)),
 );
 
 // 7. Mount the composed api onto the router — `AuthHttp.routes` registers
@@ -289,6 +282,15 @@ The session cookie is `SameSite=Strict` (BEH-EA-055), so a browser does not send
 
 This exact composition was run end to end against an in-memory SQLite `SqlClient` while writing this section (sign-up, verify, sign-in, profile update, export and delete all answered as shown; with `AWTHAQ_EXPOSE_DOCS` unset, `/openapi.json` and `/docs` answered `404`). `packages/sql`'s domain layers are dialect-agnostic, so swapping `PgClient.layerConfig({ url })` for `SqliteClient.layer({ filename })` is the only change between the two; CI's `postgres:16` service (`.github/workflows/check.yml`) is the signal against Postgres itself, the same caveat `packages/sql/test/Repositories.postgres.test.ts` documents. Nothing here has been run against a real Postgres by hand.
 
+## Persistence
+
+`Users`, `Accounts`, `Sessions`, `Verification` and `AuditLog` are each written once, over a store port (`UserStore`, `AccountStore`, `SessionStore`, `VerificationStore`, `AuditLogStore` in `@awthaq/ports`), so you choose where state lives by providing one bundle from `@awthaq/core`, not by picking a layer per service:
+
+- `Persistence.memory`: the in-process `Ref` adapters plus `SqlTransaction.layerNoop`. For tests and a single process.
+- `Persistence.sql({ encryptPii? })`: the SQL adapters over the ambient `SqlClient`, the repositories they need, and `SqlTransaction.layerSql`. It requires `SqlClient` and `Encryption`; pass `encryptPii: true` to seal the PII columns.
+
+Swapping one store (for example a Redis-backed `SessionStore`, ADR-EA-014) means providing your adapter in place of that one service; every adapter has to pass `StoreContract` from `@awthaq/test`. Mixing stores across bundles is allowed, but the swapped store is then outside the `SqlTransaction` the SQL bundle opens, so a multi-store operation (an account erasure, for example) is no longer atomic across it.
+
 ## Swapping in Postgres for real
 
 `packages/sql` ships one migration set (`CoreMigrations.coreMigrations`, in `@awthaq/sql`) that branches per dialect internally (`sql.onDialectOrElse`), so the same `Migrator.make({})({ loader: CoreMigrations.coreMigrations })` call in the quickstart above brings a fresh Postgres database to schema-equality with what `packages/sql/src/Models.ts` declares — no separate Postgres-specific schema file to maintain. See [`.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md`](.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md) for how this was proven (a dedicated contract-test suite runs against SQLite, then Postgres, with the same test bodies).
@@ -347,7 +349,7 @@ Every `layerMemory` in this repository (`Users`, `Accounts`, `Sessions`, `Verifi
 
 | What | How to share it |
 |---|---|
-| Domain state: users, accounts, sessions, verification tokens, the audit log | The `layerSql` variants over one database (`Users.layerSql`, `Accounts.layerSql`, `Sessions.layerSql`, `Verification.layerSql`, `AuditLog.layerSql`); a session revoked on one replica is then revoked on all |
+| Domain state: users, accounts, sessions, verification tokens, the audit log | `Persistence.sql()` over one database (the same `Users.layer`, `Accounts.layer`, `Sessions.layer`, `Verification.layer` and `AuditLog.layer`, written once over store ports; `Persistence.memory` is the matching in-memory bundle); a session revoked on one replica is then revoked on all |
 | Encryption keyset (provider tokens, `users.metadata`) | The same `AWTHAQ_ENCRYPTION_KEYS` and `AWTHAQ_ENCRYPTION_KEY_ID` on every replica, or one KMS-backed `KeyProvider`; rotate by adding the new entry everywhere before pointing `AWTHAQ_ENCRYPTION_KEY_ID` at it (`spec/decisions/019-encryption-key-rotation.md`) |
 | CSRF secret | The same `Csrf.CsrfConfig` secret (at least 32 bytes) and `allowedOrigins`; a token minted by one replica must verify on another |
 | JWT signing keys, token denylist | `SigningKeyRecords.layerSql` and `RevocationStore.layerSql` (keys live in the database; private key material at rest is encrypted through `Encryption`), the same `JwtConfig`; rotation follows `spec/decisions/017-jwt-signing-key-rotation.md` |

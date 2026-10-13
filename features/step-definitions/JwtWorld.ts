@@ -4,7 +4,7 @@
 // downstream service would: by decoding the compact JWS and by verifying against the served
 // JWKS. Defective tokens are signed with the issuer's *real* current key (or a real key it
 // never published) so a rejection is about the defect, not about a bad signature by accident.
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import { SealedColumn } from "@awthaq/sql";
@@ -53,9 +53,9 @@ const buildAppLayer = (config: JwtConfigInput) =>
     Layer.provideMerge(SigningKeyRecords.layerMemory),
     Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(RevocationStore.layerMemory),
     Layer.provideMerge(NodeCrypto.layer),

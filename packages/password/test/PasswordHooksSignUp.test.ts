@@ -5,15 +5,16 @@
 // composition's tap stays out of `Password.test.ts`'s own untapped `signUp`
 // coverage (a hook registry is per composition, ELC-001).
 import {
+  Accounts,
   AuditLog,
-  Hooks,
-  HookPoint,
   AuthEvents,
+  HookPoint,
+  Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
   Verification,
-  Accounts,
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -34,13 +35,13 @@ const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
 );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  Verification.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(
     Hooks.BeforeSignUp.tap((input) =>
       (input.email ?? "").endsWith("@forbidden.example.com")
