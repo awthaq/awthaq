@@ -41,7 +41,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
-import { ClientAddress, Mailer, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -227,7 +227,12 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(EmailOtp, {
-    ports: [ClientAddress.ClientAddress, Mailer.Mailer, RateLimiter.RateLimiter],
+    ports: [
+      ClientAddress.ClientAddress,
+      Mailer.Mailer,
+      RateLimiter.RateLimiter,
+      SqlTransaction.SqlTransaction,
+    ],
     handlers: EmailOtpHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;

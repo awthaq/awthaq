@@ -10,7 +10,7 @@
 //    otherwise (or if that user has vanished) the address is looked up again, and a brand-new address
 //    creates a user — *only* when the plugin's `allowSignUp` is on, through the same `BeforeSignUp`
 //    veto every user-creating path consults (NAM-002), and announced with `auth.user.created` and
-//    `AfterSignUp`. The user is created here, after the proof, never at request time: an unanswered
+//    `AfterSignUp` (all through core's `SignUp`). The user is created here, after the proof, never at request time: an unanswered
 //    request creates nothing.
 // 2. **The mailbox is now proven**, so `emailVerified` flips (idempotent).
 // 3. **The shared sign-in** is core's `SignIn.complete` (ADR-EA-038): the suspension gate, the
@@ -24,7 +24,20 @@
 // Nothing here touches an existing password credential: a magic link or code signs the person in; it
 // does not link, unlink or replace any credential.
 
-import { AuthEvents, Hooks, HookPoint, Sessions, SignIn, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuthEvents,
+  Hooks,
+  HookPoint,
+  Sessions,
+  SignIn,
+  SignUp,
+  Users,
+} from "@awthaq/core";
+import { Defects, SqlTransaction } from "@awthaq/ports";
+
+// The services `SignUp.make` requires ride this module so the plugins' inferred layer types can name them (TS2883).
+export { Accounts, AuthEvents, SqlTransaction };
 import type { Errors } from "@awthaq/core";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -71,9 +84,7 @@ export interface Channel {
 /** Resolves the core services once, at plugin build; the returned closure carries no further requirements. */
 export const make = Effect.gen(function* () {
   const users = yield* Users.Users;
-  const events = yield* AuthEvents.AuthEvents;
-  const beforeSignUp = yield* Hooks.BeforeSignUp;
-  const afterSignUp = yield* Hooks.AfterSignUp;
+  const creation = yield* SignUp.make;
   const signIn = yield* SignIn.make;
 
   /** A user for `email`: the existing one, or — when allowed and the veto passes — a new one. */
@@ -94,39 +105,33 @@ export const make = Effect.gen(function* () {
     if (!completion.allowSignUp) {
       return yield* Effect.fail(new ChannelInvalid({ reason: "signUpDisabled" }));
     }
-    // NAM-002/SCP-008: creation through any path is a sign-up, so the same veto guards it.
+    // ADR-EA-038: `SignUp` vets (NAM-002/SCP-008: creation through any path is a sign-up, so the same
+    // veto guards it), then creates in one unit, announcing only once it commits. The mailbox has just
+    // been proven, so the new user is created verified.
     const local = email.slice(0, Math.max(email.indexOf("@"), 1));
-    const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
-      beforeSignUp.run({ email, name: local, strategy: completion.strategy }),
+    const vetted = yield* creation.vet({
+      identity: { _tag: "Email", email },
+      name: local,
+      strategy: completion.strategy,
+    });
+    return yield* creation.create(vetted, { verified: true }).pipe(
+      // A concurrent request claimed the address between our lookup and this insert: use theirs.
+      Effect.catchTag("SignUp/IdentityTaken", (taken) =>
+        taken.kind === "Email"
+          ? users
+              .findByEmail(vetted.identity._tag === "Email" ? vetted.identity.email : email)
+              .pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.fail(new ChannelInvalid({ reason: "userMissing" })),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              )
+          : // FAMS-002: an Email identity cannot collide on a phone, and a fresh user links no account.
+            Defects.invariantViolation("ChannelSignUpConflict", taken.message),
+      ),
     );
-    const vetoed = { ...vetoedSignUp, email: vetoedSignUp.email ?? email };
-    const created = yield* users
-      .create({ identity: { _tag: "Email", email: vetoed.email }, name: vetoed.name })
-      .pipe(
-        Effect.map((user) => ({ user, fresh: true })),
-        // A concurrent request claimed the address between our lookup and this insert: use theirs.
-        Effect.catchTag("Users/EmailAlreadyExists", () =>
-          users.findByEmail(vetoed.email).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(new ChannelInvalid({ reason: "userMissing" })),
-                onSome: (winner) => Effect.succeed({ user: winner, fresh: false }),
-              }),
-            ),
-          ),
-        ),
-        // FAMS-002: `create` here is an Email identity, so a phone conflict is unreachable.
-        Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
-      );
-    if (created.fresh) {
-      yield* events.publish({ _tag: "auth.user.created", userId: created.user.id });
-      yield* afterSignUp.run({
-        userId: created.user.id,
-        email: vetoed.email,
-        strategy: completion.strategy,
-      });
-    }
-    return created.user;
   });
 
   const complete: Channel["complete"] = Effect.fnUntraced(function* (completion) {

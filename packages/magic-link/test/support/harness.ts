@@ -1,7 +1,7 @@
 // The shared domain-level composition for this package's tests: real in-memory `Users`, `Sessions`,
 // `Verification`, `AuthEvents` and `AuditLog`, the real `MagicLink` and `EmailOtp` plugins, and —
 // so the MFA divert can be proven end to end — the real `@awthaq/two-factor` plugin with both gates.
-import { RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -49,6 +49,7 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 const CoreLive = Layer.mergeAll(
+  Accounts.layerMemory,
   Users.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,

@@ -33,7 +33,7 @@ import {
   VerificationLink,
 } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
-import { ClientAddress, Mailer, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -223,7 +223,12 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(MagicLink, {
-    ports: [ClientAddress.ClientAddress, Mailer.Mailer, RateLimiter.RateLimiter],
+    ports: [
+      ClientAddress.ClientAddress,
+      Mailer.Mailer,
+      RateLimiter.RateLimiter,
+      SqlTransaction.SqlTransaction,
+    ],
     handlers: MagicLinkHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
