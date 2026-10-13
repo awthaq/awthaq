@@ -8,11 +8,13 @@
 
 import type { AuthEvents, Users } from "@awthaq/core";
 import type { Mailer, SqlTransaction } from "@awthaq/ports";
+import * as OrganizationActiveContext from "./OrganizationActiveContext.ts";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import * as OrganizationDeletion from "./OrganizationDeletion.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationInvitations from "./OrganizationInvitations.ts";
 import * as OrganizationMembers from "./OrganizationMembers.ts";
+import * as OrganizationRoles from "./OrganizationRoles.ts";
 import * as OrganizationTeams from "./OrganizationTeams.ts";
 import * as Layer from "effect/Layer";
 
@@ -22,6 +24,8 @@ export const services = [
   OrganizationTeams.OrganizationTeams,
   OrganizationMembers.OrganizationMembers,
   OrganizationInvitations.OrganizationInvitations,
+  OrganizationRoles.OrganizationRoles,
+  OrganizationActiveContext.OrganizationActiveContext,
   OrganizationAuthority.OrganizationAuthority,
   OrganizationDeletion.OrganizationDeletion,
 ] as const;
@@ -31,6 +35,8 @@ export const layer = Layer.mergeAll(
   OrganizationTeams.OrganizationTeams.layer,
   OrganizationMembers.OrganizationMembers.layer,
   OrganizationInvitations.OrganizationInvitations.layer,
+  OrganizationRoles.OrganizationRoles.layer,
+  OrganizationActiveContext.OrganizationActiveContext.layer,
 ).pipe(
   Layer.provideMerge(OrganizationAuthority.OrganizationAuthority.layer),
   Layer.provideMerge(OrganizationDirectory.OrganizationDirectory.layer),

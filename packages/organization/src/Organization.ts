@@ -23,34 +23,30 @@ import {
   HookPoint,
   Users,
 } from "@awthaq/core";
-import { Defects, Mailer, SqlTransaction } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as ActiveContextRecords from "./ActiveContextRecords.ts";
 import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
+import * as OrganizationActiveContext from "./OrganizationActiveContext.ts";
 import * as OrganizationApi from "./OrganizationApi.ts";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationHandlers from "./OrganizationHandlers.ts";
-import * as OrganizationHooks from "./OrganizationHooks.ts";
 import { organizationMigrations } from "./OrganizationMigrations.ts";
 import { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationInvitations from "./OrganizationInvitations.ts";
 import * as OrganizationMembers from "./OrganizationMembers.ts";
+import * as OrganizationRoles from "./OrganizationRoles.ts";
 import * as OrganizationSystem from "./OrganizationSystem.ts";
 import * as OrganizationTeams from "./OrganizationTeams.ts";
 import type { OrganizationShape } from "./OrganizationShape.ts";
-import { limitsOf as resolveLimits } from "./internal/limits.ts";
 import { ownsEmail } from "./internal/invitee.ts";
-import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
-import * as TeamRecords from "./TeamRecords.ts";
 
 // ---- cross-organization witnesses (plan 05, ADR-EA-018 decision 10) ----------------------
 //
@@ -79,6 +75,12 @@ export {
  * emitted, which needs both namespaces in scope.
  */
 export type PersonalDataRegistries = Erasure.ErasureRegistry | DataExport.DataExportRegistry;
+
+/**
+ * The wire middleware and the typed veto error the plugin's class and layer mention, named here so their
+ * inferred types can be emitted (declaration emit needs the namespaces in scope).
+ */
+export type WireTypes = Api.Authentication | Api.CsrfProtection | HookPoint.HookAborted;
 
 // ---- plugin ---------------------------------------------------------------------
 
@@ -110,16 +112,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     contributes: Layer.mergeAll(organizationErasure, organizationExport),
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
-      const members = yield* MembershipRecords.MembershipRecords;
-      const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
-      const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
-      const teams = yield* TeamRecords.TeamRecords;
       // ADR-EA-040: the plugin's system interfaces, built beneath this `make` by `exposes`.
       const authority = yield* OrganizationAuthority.OrganizationAuthority;
       const directory = yield* OrganizationDirectory.OrganizationDirectory;
       const teamSystem = yield* OrganizationTeams.OrganizationTeams;
       const memberSystem = yield* OrganizationMembers.OrganizationMembers;
       const invitationSystem = yield* OrganizationInvitations.OrganizationInvitations;
+      const roleSystem = yield* OrganizationRoles.OrganizationRoles;
+      const activeSystem = yield* OrganizationActiveContext.OrganizationActiveContext;
       const users = yield* Users.Users;
       // OHS-002: the cascades below commit or roll back as one unit. `layerNoop`
       // for an in-memory composition, `layerSql` over the real client otherwise.
@@ -132,12 +132,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const configNow = Effect.contextWith((context: Context.Context<never>) =>
         Effect.succeed(Context.getOrUndefined(context, OrganizationConfig) ?? builtConfig),
       );
-      const beforeCreateRole = yield* OrganizationHooks.BeforeCreateRole;
-      const afterCreateRole = yield* OrganizationHooks.AfterCreateRole;
-      const beforeUpdateRoleHook = yield* OrganizationHooks.BeforeUpdateRole;
-      const afterUpdateRoleHook = yield* OrganizationHooks.AfterUpdateRole;
-      const beforeDeleteRole = yield* OrganizationHooks.BeforeDeleteRole;
-      const afterDeleteRole = yield* OrganizationHooks.AfterDeleteRole;
 
       const effectivePermissionsOf = authority.effectivePermissions;
 
@@ -164,7 +158,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
               action,
               reason,
             });
-          const membership = yield* members.findByUserAndOrg(callerId, organizationId);
+          const membership = yield* memberSystem.find(organizationId, callerId);
           if (Option.isNone(membership)) {
             yield* denied("notMember");
             return yield* Effect.fail(new OrganizationApi.OrganizationNotFound());
@@ -186,7 +180,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       /** Fails `OrganizationNotFound` (MTI-009) if the caller isn't a member — no statement check, for read endpoints any member may use. */
       const requireMembership = (callerId: Users.UserId, organizationId: string) =>
-        members.findByUserAndOrg(callerId, organizationId).pipe(
+        memberSystem.find(organizationId, callerId).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.fail(new OrganizationApi.OrganizationNotFound()),
@@ -202,10 +196,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        * `list` still returns it, flagged `suspended`, so a member sees why.
        */
       const requireOrganization = directory.requireActive;
-
-      /** EP-006: the static limits with this organization's `limitsFor` overrides merged over them. */
-      const limitsOf = (organizationId: string) =>
-        Effect.flatMap(configNow, (orgConfig) => resolveLimits(orgConfig, organizationId));
 
       // ---- organizations: authorization on top of `OrganizationDirectory` ---------------------
 
@@ -352,106 +342,25 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const activeOrganizationOf = (caller: Api.UserPrincipal) =>
-        activeContext.findBySessionId(caller.sessionId).pipe(
-          Effect.map(Option.flatMap((row) => row.activeOrganizationId)),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new OrganizationApi.NoActiveOrganization()),
-              onSome: Effect.succeed,
-            }),
-          ),
-        );
+      // ---- active context: a session's pointers, through `OrganizationActiveContext` ---------
+      //
+      // Nothing here is an authorization decision beyond the membership witness the module requires; the
+      // caller's session is the identity.
 
-      /** EP-003: the active-context paths read memberships directly, so they check suspension themselves. */
-      const isSuspended = (organizationId: string) =>
-        directory
-          .find(organizationId)
-          .pipe(
-            Effect.map((found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt)),
-          );
-
-      const getActiveMember: OrganizationShape["getActiveMember"] = Effect.fnUntraced(
-        function* (caller) {
-          const organizationId = yield* activeOrganizationOf(caller);
-          if (yield* isSuspended(organizationId)) {
-            return yield* Effect.fail(new OrganizationApi.NoActiveOrganization());
-          }
-          const membership = yield* members.findByUserAndOrg(
-            Users.UserId(caller.ref.id),
-            organizationId,
-          );
-          if (Option.isNone(membership))
-            return yield* Effect.fail(new OrganizationApi.NoActiveOrganization());
-          return membership.value;
-        },
-      );
+      const getActiveMember: OrganizationShape["getActiveMember"] = (caller) =>
+        activeSystem.activeMembership(OrganizationActiveContext.sessionOf(caller));
 
       const getActiveMemberRole: OrganizationShape["getActiveMemberRole"] = (caller) =>
         getActiveMember(caller).pipe(Effect.map((membership) => membership.role));
 
-      const setActive: OrganizationShape["setActive"] = Effect.fnUntraced(
-        function* (caller, organizationId) {
-          const callerId = Users.UserId(caller.ref.id);
-          if (organizationId === null) {
-            return yield* activeContext.unsetOrganization(caller.sessionId, callerId);
-          }
-          const membership = yield* members.findByUserAndOrg(callerId, organizationId);
-          if (Option.isNone(membership) || (yield* isSuspended(organizationId)))
-            return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
-          // MTI-001: the membership record is the witness the setter requires.
-          return yield* activeContext.setOrganization(caller.sessionId, membership.value);
-        },
-      );
+      const setActive: OrganizationShape["setActive"] = (caller, organizationId) =>
+        activeSystem.setOrganization(
+          OrganizationActiveContext.sessionOf(caller),
+          Option.fromNullOr(organizationId),
+        );
 
-      /**
-       * CWM-003: the stored pointers are re-validated on read — a row whose
-       * organization/team the user no longer belongs to (a membership removed
-       * around this plugin, or a row that predates the `userId` column, which
-       * the cascade could not find) reads as cleared, and is cleared for real.
-       */
-      const revalidateActive = Effect.fnUntraced(function* (
-        caller: Api.UserPrincipal,
-        row: ActiveContextRecords.ActiveContextRecord,
-      ) {
-        const callerId = Users.UserId(caller.ref.id);
-        let stale = false;
-        if (Option.isSome(row.activeOrganizationId)) {
-          const membership = yield* members.findByUserAndOrg(
-            callerId,
-            row.activeOrganizationId.value,
-          );
-          if (Option.isNone(membership)) {
-            yield* activeContext.unsetOrganization(caller.sessionId, callerId);
-            yield* activeContext.unsetTeam(caller.sessionId, callerId);
-            stale = true;
-          }
-        }
-        if (!stale && Option.isSome(row.activeTeamId)) {
-          const onTeam = yield* teams.findTeamMembership(row.activeTeamId.value, callerId);
-          if (Option.isNone(onTeam)) {
-            yield* activeContext.unsetTeam(caller.sessionId, callerId);
-            stale = true;
-          }
-        }
-        if (!stale) return row;
-        const refreshed = yield* activeContext.findBySessionId(caller.sessionId);
-        return Option.getOrElse(refreshed, () => row);
-      });
-
-      const getActive: OrganizationShape["getActive"] = Effect.fnUntraced(function* (caller) {
-        const existing = yield* activeContext.findBySessionId(caller.sessionId);
-        if (Option.isSome(existing)) return yield* revalidateActive(caller, existing.value);
-        const now = yield* DateTime.now;
-        const empty: ActiveContextRecords.ActiveContextRecord = {
-          sessionId: caller.sessionId,
-          userId: Option.some(caller.ref.id),
-          activeOrganizationId: Option.none(),
-          activeTeamId: Option.none(),
-          updatedAt: now,
-        };
-        return empty;
-      });
+      const getActive: OrganizationShape["getActive"] = (caller) =>
+        activeSystem.get(OrganizationActiveContext.sessionOf(caller));
 
       // ---- invitations: authorization on top of `OrganizationInvitations` -------------------
       //
@@ -510,7 +419,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
               }),
             ),
           );
-          const callerMembership = yield* members.findByUserAndOrg(callerId, found.organizationId);
+          const callerMembership = yield* memberSystem.find(found.organizationId, callerId);
           if (Option.isNone(callerMembership)) {
             return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           }
@@ -534,7 +443,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         record: InvitationRecords.InvitationRecord,
       ) =>
         Effect.gen(function* () {
-          const membership = yield* members.findByUserAndOrg(callerId, record.organizationId);
+          const membership = yield* memberSystem.find(record.organizationId, callerId);
           if (Option.isSome(membership)) {
             const effective = yield* effectivePermissionsOf(
               record.organizationId,
@@ -586,176 +495,82 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const listInvitationsForUser: OrganizationShape["listInvitationsForUser"] = (caller) =>
         invitationSystem.listForUser(Users.UserId(caller.ref.id));
 
-      // ---- dynamic access control -----------------------------------------------
+      // ---- dynamic access control: authorization on top of `OrganizationRoles` ----------------
+      //
+      // `role:*` statements and the caller's grant ceiling are decided here; the feature gate, the
+      // reserved names, the quota, the veto and the write are the module's.
 
-      const requireDynamicAccessControlEnabled = Effect.flatMap(configNow, (orgConfig) =>
-        orgConfig.dynamicAccessControl.enabled
-          ? Effect.void
-          : Effect.fail(new OrganizationApi.DynamicAccessControlDisabled()),
-      );
+      const ceilingOfMember = Effect.fnUntraced(function* (
+        organizationId: string,
+        membership: MembershipRecords.MembershipRecord,
+      ) {
+        return OrganizationActor.Bound.Ceiling({
+          statements: yield* effectivePermissionsOf(organizationId, membership),
+        });
+      });
 
       const createRole: OrganizationShape["createRole"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
           yield* requireOrganization(organizationId);
-          yield* requireDynamicAccessControlEnabled;
-          const callerId = Users.UserId(caller.ref.id);
-          const membership = yield* requirePermission(callerId, organizationId, "role", "create");
-
-          // RZS-005/N8: a dynamic role never takes a built-in tier's name or an
-          // application-defined static role's name.
-          if (
-            PermissionEngine.isBuiltInRole(input.role) ||
-            Object.hasOwn((yield* configNow).permissionStatements, input.role)
-          ) {
-            return yield* Effect.fail(new OrganizationApi.ReservedOrgRoleName());
-          }
-
-          const granterPermissions = yield* effectivePermissionsOf(organizationId, membership);
-          if (!PermissionEngine.canGrant(input.permission, granterPermissions)) {
-            return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
-          }
-
-          const count = yield* orgRoles.countByOrganization(organizationId);
-          if (count >= (yield* limitsOf(organizationId)).maximumRolesPerOrganization) {
-            return yield* Effect.fail(new OrganizationApi.RoleLimitReached());
-          }
-
-          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateRole)(
-            beforeCreateRole.run({
-              actor: OrganizationActor.user(caller),
-              organizationId,
-              role: input.role,
-            }),
+          yield* roleSystem.requireEnabled;
+          const membership = yield* requirePermission(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "role",
+            "create",
           );
-
-          const record = yield* orgRoles
-            .create({ organizationId, role: vetoed.role, permission: input.permission })
-            .pipe(
-              Effect.catchTag("OrgRoleRecordNameTaken", () =>
-                Effect.fail(new OrganizationApi.OrgRoleNameTaken()),
-              ),
-            );
-          yield* events.publish({
-            _tag: "auth.organization.roleCreated",
+          return yield* roleSystem.create(OrganizationActor.user(caller), {
             organizationId,
-            role: record.role,
+            role: input.role,
+            permission: input.permission,
+            bound: yield* ceilingOfMember(organizationId, membership),
           });
-          yield* afterCreateRole.run({
-            actor: OrganizationActor.user(caller),
-            organizationId,
-            role: record.role,
-            roleId: record.id,
-          });
-          return record;
         },
       );
 
       const listRoles: OrganizationShape["listRoles"] = Effect.fnUntraced(
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
-          yield* requireDynamicAccessControlEnabled;
+          yield* roleSystem.requireEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "read");
-          return yield* orgRoles.listByOrganization(organizationId);
+          return yield* roleSystem.list(organizationId);
         },
       );
-
-      const requireOrgRole = (organizationId: string, roleId: string) =>
-        orgRoles.findById(organizationId, roleId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new OrganizationApi.OrgRoleNotFound()),
-              onSome: Effect.succeed,
-            }),
-          ),
-        );
 
       const getRole: OrganizationShape["getRole"] = Effect.fnUntraced(
         function* (caller, organizationId, roleId) {
           yield* requireOrganization(organizationId);
-          yield* requireDynamicAccessControlEnabled;
+          yield* roleSystem.requireEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "read");
-          return yield* requireOrgRole(organizationId, roleId);
+          return yield* roleSystem.find(organizationId, roleId);
         },
       );
 
       const updateRole: OrganizationShape["updateRole"] = Effect.fnUntraced(
         function* (caller, organizationId, roleId, permission) {
           yield* requireOrganization(organizationId);
-          yield* requireDynamicAccessControlEnabled;
+          yield* roleSystem.requireEnabled;
           const membership = yield* requirePermission(
             Users.UserId(caller.ref.id),
             organizationId,
             "role",
             "update",
           );
-          yield* requireOrgRole(organizationId, roleId);
-
-          const granterPermissions = yield* effectivePermissionsOf(organizationId, membership);
-          if (!PermissionEngine.canGrant(permission, granterPermissions)) {
-            return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
-          }
-
-          yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateRole)(
-            beforeUpdateRoleHook.run({
-              actor: OrganizationActor.user(caller),
-              organizationId,
-              roleId,
-            }),
-          );
-
-          const updated = yield* orgRoles
-            .update(organizationId, roleId, permission)
-            .pipe(
-              Effect.catchTag("OrgRoleRecordNotFound", () =>
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: org role vanished between check and write",
-                ),
-              ),
-            );
-          yield* events.publish({
-            _tag: "auth.organization.roleUpdated",
-            organizationId,
-            role: updated.role,
-          });
-          yield* afterUpdateRoleHook.run({
-            actor: OrganizationActor.user(caller),
+          return yield* roleSystem.update(OrganizationActor.user(caller), {
             organizationId,
             roleId,
+            permission,
+            bound: yield* ceilingOfMember(organizationId, membership),
           });
-          return updated;
         },
       );
 
       const deleteRole: OrganizationShape["deleteRole"] = Effect.fnUntraced(
         function* (caller, organizationId, roleId) {
           yield* requireOrganization(organizationId);
-          yield* requireDynamicAccessControlEnabled;
+          yield* roleSystem.requireEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "delete");
-          const existing = yield* requireOrgRole(organizationId, roleId);
-          yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteRole)(
-            beforeDeleteRole.run({ actor: OrganizationActor.user(caller), organizationId, roleId }),
-          );
-          yield* orgRoles
-            .remove(organizationId, roleId)
-            .pipe(
-              Effect.catchTag("OrgRoleRecordNotFound", () =>
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: org role vanished between check and write",
-                ),
-              ),
-            );
-          yield* events.publish({
-            _tag: "auth.organization.roleDeleted",
-            organizationId,
-            role: existing.role,
-          });
-          yield* afterDeleteRole.run({
-            actor: OrganizationActor.user(caller),
-            organizationId,
-            roleId,
-          });
+          yield* roleSystem.remove(OrganizationActor.user(caller), { organizationId, roleId });
         },
       );
 
@@ -968,20 +783,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const setActiveTeam: OrganizationShape["setActiveTeam"] = Effect.fnUntraced(
-        function* (caller, teamId) {
-          const callerId = Users.UserId(caller.ref.id);
-          if (teamId === null) {
-            return yield* activeContext.unsetTeam(caller.sessionId, callerId);
-          }
-          const membership = yield* teams.findTeamMembership(teamId, callerId);
-          if (Option.isNone(membership)) {
-            return yield* Effect.fail(new OrganizationApi.TeamMembershipNotFound());
-          }
-          // MTI-001: the team-membership record is the witness the setter requires.
-          return yield* activeContext.setTeam(caller.sessionId, membership.value);
-        },
-      );
+      const setActiveTeam: OrganizationShape["setActiveTeam"] = (caller, teamId) =>
+        activeSystem.setTeam(
+          OrganizationActiveContext.sessionOf(caller),
+          Option.fromNullOr(teamId),
+        );
 
       return Organization.of({
         create,

@@ -329,62 +329,6 @@ describe("Organization", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect(
-    "getActiveMember/getActiveMemberRole answer NoActiveOrganization with no active org set",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const caller = asCaller("owner-1");
-        const memberFailure = yield* organization.getActiveMember(caller).pipe(Effect.flip);
-        assert.strictEqual(memberFailure._tag, "NoActiveOrganization");
-        const roleFailure = yield* organization.getActiveMemberRole(caller).pipe(Effect.flip);
-        assert.strictEqual(roleFailure._tag, "NoActiveOrganization");
-      }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("setActive then getActiveMember/getActiveMemberRole resolve against it", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const caller = asCaller("owner-1");
-      const record = yield* organization.create({ caller, name: "Acme", slug: "acme" });
-
-      yield* organization.setActive(caller, record.id);
-      const active = yield* organization.getActive(caller);
-      assert.deepStrictEqual(active.activeOrganizationId, Option.some(record.id));
-
-      const membership = yield* organization.getActiveMember(caller);
-      assert.strictEqual(membership.organizationId, record.id);
-      const role = yield* organization.getActiveMemberRole(caller);
-      assert.deepStrictEqual(role, ["owner"]);
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("setActive rejects an organization the caller isn't a member of", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const outsider = asCaller("outsider-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-
-      const failure = yield* organization.setActive(outsider, record.id).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "MembershipNotFound");
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("setActive with null unsets the active organization", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const caller = asCaller("owner-1");
-      const record = yield* organization.create({ caller, name: "Acme", slug: "acme" });
-      yield* organization.setActive(caller, record.id);
-      yield* organization.setActive(caller, null);
-      const active = yield* organization.getActive(caller);
-      assert.deepStrictEqual(active.activeOrganizationId, Option.none());
-      const failure = yield* organization.getActiveMember(caller).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "NoActiveOrganization");
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
   it.effect("cancel requires invitation:cancel permission and marks it canceled", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
@@ -450,58 +394,6 @@ describe("Organization", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("createRole is rejected when dynamic access control is disabled", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const failure = yield* organization
-        .createRole(owner, org.id, { role: "billing-admin", permission: {} })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "DynamicAccessControlDisabled");
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("createRole/listRoles/getRole/updateRole/deleteRole round-trip", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-
-      const role = yield* organization.createRole(owner, org.id, {
-        role: "billing-admin",
-        permission: { organization: ["update"] },
-      });
-      const listed = yield* organization.listRoles(owner, org.id);
-      assert.strictEqual(listed.length, 1);
-
-      const fetched = yield* organization.getRole(owner, org.id, role.id);
-      assert.strictEqual(fetched.role, "billing-admin");
-
-      const updated = yield* organization.updateRole(owner, org.id, role.id, {
-        organization: ["update", "delete"],
-      });
-      assert.deepStrictEqual(updated.permission, { organization: ["update", "delete"] });
-
-      yield* organization.deleteRole(owner, org.id, role.id);
-      const afterDelete = yield* organization.listRoles(owner, org.id);
-      assert.strictEqual(afterDelete.length, 0);
-    }).pipe(
-      Effect.provide(
-        buildLayer({
-          dynamicAccessControl: {
-            enabled: true,
-            maximumRolesPerOrganization: Number.POSITIVE_INFINITY,
-          },
-        }),
-      ),
-    ),
-  );
-
-  // RRM-001/RRM-002: every role-assignment path (updateMemberRole, invite,
-  // addMember) applies the same grant guard as createRole/updateRole — a
-  // caller can only confer statements it holds, only known role names are
-  // stored, and a lower tier cannot alter a higher one.
   describe("RRM-001/RRM-002: role assignment respects canGrant", () => {
     const hrConfig = {
       permissionStatements: { hr: { member: ["update"], invitation: ["create"] } },
@@ -677,36 +569,6 @@ describe("Organization", () => {
       },
     };
 
-    it.effect("createRole named owner/admin/member fails ReservedOrgRoleName", () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        for (const role of ["owner", "admin", "member"]) {
-          const failure = yield* organization
-            .createRole(owner, org.id, { role, permission: {} })
-            .pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "ReservedOrgRoleName");
-        }
-      }).pipe(Effect.provide(buildLayer(dac))),
-    );
-
-    it.effect("createRole named after a static custom role fails ReservedOrgRoleName", () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const failure = yield* organization
-          .createRole(owner, org.id, { role: "hr", permission: {} })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "ReservedOrgRoleName");
-      }).pipe(
-        Effect.provide(
-          buildLayer({ ...dac, permissionStatements: { hr: { member: ["update"] } } }),
-        ),
-      ),
-    );
-
     it.effect("a stored dynamic role named owner cannot change the owner's statements", () =>
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
@@ -798,25 +660,6 @@ describe("Organization", () => {
     ),
   );
 
-  it.effect("maximumRolesPerOrganization caps the number of custom roles", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.createRole(owner, org.id, { role: "r1", permission: {} });
-      const failure = yield* organization
-        .createRole(owner, org.id, { role: "r2", permission: {} })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "RoleLimitReached");
-    }).pipe(
-      Effect.provide(
-        buildLayer({ dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 1 } }),
-      ),
-    ),
-  );
-
-  // PV-300 (MTI-009): the visibility gate runs before the feature gate, so a non-member learns nothing.
-  // What each team operation does once past the gates is proved at `OrganizationTeams.test.ts`.
   it.effect(
     "createTeam answers OrganizationNotFound to a non-member and TeamsDisabled to a member",
     () =>
