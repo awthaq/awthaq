@@ -118,6 +118,7 @@ describe("SubjectResolver slot exclusivity (BEH-EA-138)", () => {
     Layer.provideMerge(DataExport.registryLayer),
   );
   const RolesInstalled = Roles.Roles.layer.pipe(
+    Layer.provide(Roles.Roles.records.memory),
     Layer.provide(Roles.config([])),
     Layer.provideMerge(CoreLive),
   );

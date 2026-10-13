@@ -91,7 +91,8 @@ const CoreLive = Layer.mergeAll(
 
 /** Core services plus the Roles plugin (catalog: `admin`, `editor`) over the given SQL client. */
 export const sqlApp = (sql: SqlClient.SqlClient) =>
-  Roles.Roles.layerSql.pipe(
+  Roles.Roles.layer.pipe(
+    Layer.provide(Roles.Roles.records.sql),
     Layer.provide(Roles.config([adminRole, editorRole])),
     Layer.provideMerge(CoreLive),
     // Exposed as well as provided: `import` keeps its checkpoint ledger on the application's own client.

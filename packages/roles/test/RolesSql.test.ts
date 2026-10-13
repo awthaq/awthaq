@@ -1,4 +1,4 @@
-// BAM-006 (.issues/high): proves `Roles.Roles.layerSql` genuinely persists
+// BAM-006 (.issues/high): proves `Roles.Roles.layer` over `Roles.records.sql` genuinely persists
 // role assignments — assign/revoke/listRoleNames round-trip through a real
 // SQLite database migrated via this plugin's own `Migrations.run`, not a
 // hand-rolled fixture, the same `packages/jwt/test/RevocationStore.test.ts`
@@ -54,7 +54,8 @@ const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(DataExport.registryLayer),
 );
 
-const TestLayer = Roles.Roles.layerSql.pipe(
+const TestLayer = Roles.Roles.layer.pipe(
+  Layer.provide(Roles.Roles.records.sql),
   Layer.provide(Roles.config([editor, owner])),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(SqlLive),
@@ -68,7 +69,7 @@ const CaptureLogs = Logger.layer([
   }),
 ]);
 
-describe("Roles.Roles.layerSql", () => {
+describe("Roles.Roles.layer over Roles.records.sql", () => {
   it.effect("assign persists a role assignment, listRoleNames reads it back", () =>
     Effect.gen(function* () {
       const roles = yield* Roles.Roles;
@@ -234,7 +235,7 @@ describe("Roles.Roles.layerSql", () => {
 });
 
 // Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
-describe("Roles.layerSql: a store outage", () => {
+describe("Roles over Roles.records.sql: a store outage", () => {
   it.effect("assign fails with StoreUnavailable naming the operation", () =>
     Effect.gen(function* () {
       yield* TestSql.injectFailure({

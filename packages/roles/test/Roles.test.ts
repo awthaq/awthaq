@@ -28,7 +28,11 @@ const CoreLive = AuthEvents.layer.pipe(
 );
 
 const layerFor = (catalog: ReadonlyArray<ReturnType<typeof role>>) =>
-  Roles.Roles.layer.pipe(Layer.provide(Roles.config(catalog)), Layer.provideMerge(CoreLive));
+  Roles.Roles.layer.pipe(
+    Layer.provide(Roles.Roles.records.memory),
+    Layer.provide(Roles.config(catalog)),
+    Layer.provideMerge(CoreLive),
+  );
 
 const TestLayer = layerFor([editor, owner]);
 

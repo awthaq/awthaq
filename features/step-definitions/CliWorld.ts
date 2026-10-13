@@ -179,7 +179,8 @@ const CoreLive = Layer.mergeAll(
 
 /** Core services plus the Roles plugin (catalog: `admin`, `editor`) over the given SQL client. */
 export const sqlApp = (sql: SqlClient.SqlClient) =>
-  Roles.Roles.layerSql.pipe(
+  Roles.Roles.layer.pipe(
+    Layer.provide(Roles.Roles.records.sql),
     Layer.provide(Roles.config([adminRole, editorRole])),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)),

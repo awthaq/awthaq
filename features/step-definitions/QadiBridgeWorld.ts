@@ -684,7 +684,10 @@ const buildBridge = (world: WorldShape, options: BridgeOptions) => {
   const rolesLayer =
     options.roles === undefined
       ? Layer.empty
-      : Roles.Roles.layer.pipe(Layer.provide(Roles.config(options.roles)));
+      : Roles.Roles.layer.pipe(
+          Layer.provide(Roles.Roles.records.memory),
+          Layer.provide(Roles.config(options.roles)),
+        );
   // `Roles` claims the exclusive slot; the counting decorator wraps whichever resolver is in effect.
   const subjects = countingResolver(world).pipe(Layer.provideMerge(rolesLayer));
   return { subjects, evaluation: evaluationPorts(world, options) };

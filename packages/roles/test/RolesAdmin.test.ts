@@ -79,6 +79,7 @@ const AppLayer = AuthHttp.routes(RolesAdminApi.RolesAdminApi).pipe(
   Layer.provide(GuardLive),
   Layer.provide(CsrfProtectionLive),
   Layer.provideMerge(Roles.Roles.layer),
+  Layer.provide(Roles.Roles.records.memory),
   Layer.provide(Roles.config([editor, support, admin])),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(TestServices),
