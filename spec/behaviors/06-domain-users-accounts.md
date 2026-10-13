@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-06 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-046 names `@awthaq/api-key` among the paths the sign-in gate covers (architecture plan 10 item 0) <br> 1.4 (2026-10-13): deleting a user is `AccountErasure`'s job and only its: `Users` has no `delete`, the row store primitive takes an `ErasureClearance`, and `createWith` abandons a half-made user (architecture plan 03) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-046 names `@awthaq/api-key` among the paths the sign-in gate covers (architecture plan 10 item 0) <br> 1.4 (2026-10-13): deleting a user is `AccountErasure`'s job and only its: `Users` has no `delete`, the row store primitive takes an `ErasureClearance`, and `createWith` abandons a half-made user (architecture plan 03) <br> 1.5 (2026-10-13): BEH-EA-322, every sign-in completes through `SignIn` (architecture plan 01) |
 
 ---
 
@@ -142,7 +142,7 @@ REQUIREMENT: Deleting a `User` row MUST make every `Account` and `Session`
 
 **Deleting a user is `Erasure.AccountErasure`'s job, and only its (Revision 1.4; architecture plan 03).** `Users` has no `delete`. A committed user is deleted by `Erasure.AccountErasure.eraseAccount(userId, initiator)` (ADR-EA-031), the only path: the `BeforeUserDelete` veto is consulted exactly once, before anything is touched, and its passing mints an `ErasureClearance` that the row store primitive `UserRemoval.remove` requires. The clearance can be minted only inside core (a private constructor on a class that the package barrel exports as a type only), so outside core `users.delete(...)`, `UserRemoval.remove(id)` and a forged clearance all fail to compile (`UserDeletion.types.test.ts`, `ErasureClearance.boundary.test.ts`). `Users.createWith(input, complete)` is the one other way a row disappears: it abandons the user it just created, with no veto and no event, when `complete` (SCIM `POST /Users`: link, add to the organization) fails, dies or is interrupted, because nobody outside the call was told the user exists; abandonment is not erasure, so it does not sweep invitations addressed to the email.
 
-**Suspension is never deletion (Revision 1.1; SCP-001, BAM-005).** A `User` also has `status: "active" | "suspended"` (with an operator-only reason and an optional expiry). `Users.setStatus(id, status, { reason?, until? })` is the *only* writer of `status`: `updateProfile` has no such field and the SQL `update` variant excludes the columns, so no generic write can reach it. `setStatus` leaves Accounts and Sessions alone (the caller — an admin, a SCIM handler — composes `Sessions.revokeAll(id, "suspended")`), and reactivating restores sign-in with every row intact; erasure (`AccountErasure`) keeps the destructive cascade above unchanged, and SCIM `active:false` maps to suspension, not deletion. One shared gate, `Users.assertCanSignIn(user)`, fails `UserSuspended` (403, no body) for a user whose suspension is in force at the current instant (a `suspendedUntil` in the past has lapsed with no write); password sign-in, passkey `authenticateVerify` and the OAuth callback each call it with the `UserRecord` they already hold, *after* the credential proof and *before* `Sessions.issue`, so a wrong credential never learns whether an account is suspended. It is deliberately a plain call, not a hook point (a tap left out of a composition would silently un-gate a flow), and deliberately not inside `Users.findById` (an administrator must still resolve and reactivate a suspended user); admin impersonation does not consult it. **Machine credentials are gated too (architecture plan 10 item 0).** `@awthaq/api-key` consults the same gate: a key (and a `client_credentials` client minting a service token) whose owner is suspended, or no longer exists, is refused exactly like an unknown credential (`None` / `InvalidClient`, never `UserSuspended`, so a presented key reveals nothing about the account), and `Users.setStatus(…, "active")` restores it with nothing lost.
+**Suspension is never deletion (Revision 1.1; SCP-001, BAM-005).** A `User` also has `status: "active" | "suspended"` (with an operator-only reason and an optional expiry). `Users.setStatus(id, status, { reason?, until? })` is the *only* writer of `status`: `updateProfile` has no such field and the SQL `update` variant excludes the columns, so no generic write can reach it. `setStatus` leaves Accounts and Sessions alone (the caller — an admin, a SCIM handler — composes `Sessions.revokeAll(id, "suspended")`), and reactivating restores sign-in with every row intact; erasure (`AccountErasure`) keeps the destructive cascade above unchanged, and SCIM `active:false` maps to suspension, not deletion. One shared gate, `Users.assertCanSignIn(user)`, fails `UserSuspended` (403, no body) for a user whose suspension is in force at the current instant (a `suspendedUntil` in the past has lapsed with no write); `SignIn.clear` and `SignIn.resume` call it for every strategy (password, passkey, OAuth, SAML, device authorization, magic link, email OTP and the second factor's completion), *after* the credential proof and *before* the session exists, so a wrong credential never learns whether an account is suspended; a refusal publishes `auth.user.signInFailed { reason: "suspended" }` for every strategy (BEH-EA-322). It is deliberately a plain call, not a hook point (a tap left out of a composition would silently un-gate a flow), and deliberately not inside `Users.findById` (an administrator must still resolve and reactivate a suspended user); admin impersonation does not consult it. **Machine credentials are gated too (architecture plan 10 item 0).** `@awthaq/api-key` consults the same gate: a key (and a `client_credentials` client minting a service token) whose owner is suspended, or no longer exists, is refused exactly like an unknown credential (`None` / `InvalidClient`, never `UserSuspended`, so a presented key reveals nothing about the account), and `Users.setStatus(…, "active")` restores it with nothing lost.
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §3.4 states the reasoning this design carries forward unchanged: "a Session's validity is tied to the User, not to any one linked identity." Unlinking the `google` account from a user who also has a password credential must leave every live session, and every other linked account, intact — a session's authority derives from the user record, never from the specific identity that happened to establish it.
 
@@ -200,3 +200,33 @@ This is GDPR Art. 15 (access) and Art. 20 (portability) as the mirror image of e
 
 _Previous: [BEH-EA-040](05-persistence-stratum.md#beh-ea-040-a-plugin-migration-may-only-alter-tables-under-its-own-prefix-shared-tables-are-altered-only-through-a-declared-extension-point)_
 _Next: [BEH-EA-049](07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair)_
+
+## BEH-EA-322: Every sign-in completes through `SignIn`, and a session for a proven credential is minted only from a clearance
+
+```ts
+// @awthaq/core: one implementation of "a proven credential becomes a session" (ADR-EA-038)
+const signIn = yield* SignIn.make
+const cleared = yield* signIn.clear({ userId, strategy: "password", amr: ["pwd"] }) // Clearance
+const issued = yield* signIn.issue(cleared, { ip, userAgent })                     // the only way to mint
+// or: signIn.complete(attempt, request) = clear then issue; signIn.resume(...) for a divert owner
+```
+
+```text
+REQUIREMENT: Every flow that turns a proven credential into a session MUST
+             mint it from a `SignIn.Clearance`, obtained by the user lookup,
+             the suspension gate, the BeforeSignIn veto and the
+             BeforeSessionIssue divert, in that order. The `amr` the divert
+             sees MUST be the `amr` the session records. After the mint, the
+             first factor's continuation (if any) MUST run, then
+             `auth.user.signedIn` MUST be published and `AfterSignIn` run.
+             A user who vanished between the proof and the session MUST be
+             refused through the flow's own uniform refusal, never a
+             defect. A suspended refusal MUST publish
+             `auth.user.signInFailed { reason: "suspended" }` for every
+             strategy. A divert owner that completes the sign-in later MUST
+             return the divert's handoff to `SignIn.resume`, so the session
+             records both factors, is minted in the first factor's tenant and
+             runs the first factor's continuation.
+```
+
+**As shipped (ADR-EA-038).** `clear` fails `SignIn/UserGone`, `UserSuspended`, `HookAborted` (the veto), `TwoFactorRequired` (the divert) or `StoreUnavailable`; the `Clearance` is a brand whose constructor is package-private, so `issue` accepts nothing else and no plugin can forge one (`SignIn.types.test.ts`). A suspended or gone user never reaches the veto. The divert context is `{ userId, strategy, amr, handoff }` with `amr` required; the handoff is `{ tenantId?, continuation? }`. `resume` re-runs the gate only (the veto and the divert already ran for this sign-in), and `issue` mints under the clearance's tenant even when the minting request runs in another. A *continuation* is work a first factor owes once its session exists (SAML: the Single Logout record and role mapping, BEH-EA-315/316), registered through `SignIn.continuation` in an aggregating registry that rides `Hooks.HooksLive`; an unregistered `kind` is a defect, not a silent skip. Request facts (`ip`, `userAgent`) come from the explicit `request` argument per field, else from `AuthRequestContext`. `Sessions.issue` is called only from `SignIn.issue` and three non-sign-in mints (`changePassword` rotation, admin impersonation, `TestAuth`), which `SignInSeams.test.ts` pins by count. Tests: `packages/core/test/SignIn.test.ts`, `SignIn.types.test.ts`, `SignInSeams.test.ts`; each plugin keeps one wiring probe (its strategy, its `amr`, its refusal for a vanished user).

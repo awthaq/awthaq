@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) |
 
 ---
 
@@ -107,6 +107,18 @@ Who asked for an account erasure: `Self` (the account holder), `Admin { adminUse
 ### Erasure clearance
 
 The proof that `AccountErasure` consulted the `BeforeUserDelete` veto for one user and no tap vetoed. `UserRemoval.remove` accepts nothing else, and only core can mint one, so no code outside `AccountErasure` can delete a user row. Exported as a type only.
+
+### Clearance
+
+A sign-in that passed the user lookup, the suspension gate, the `BeforeSignIn` veto and the `BeforeSessionIssue` divert (`SignIn.clear`, or `SignIn.resume` after a resolved divert). `SignIn.issue` accepts nothing else, and only core can mint one, so a session for a proven credential cannot exist without having passed the gate. See: [BEH-EA-322](behaviors/06-domain-users-accounts.md), [ADR-EA-038](decisions/038-sign-in-and-sign-up-are-core-modules.md).
+
+### Handoff
+
+What a `BeforeSessionIssue` divert carries back to `SignIn.resume`: the ambient tenant when the first factor cleared and the first factor's optional continuation. The second-factor plugin stores it with its challenge, so the session it finally mints is the session the first factor would have minted.
+
+### Sign-in continuation
+
+Work a first-factor flow owes once its session exists, whichever request finally mints that session (SAML: the Single Logout record and role mapping). Registered by kind through `SignIn.continuation` in an aggregating registry; an unregistered kind is a defect.
 
 ### Registry
 

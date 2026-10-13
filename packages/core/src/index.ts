@@ -15,6 +15,8 @@
 // declares a typed rule table and spends it by name through `RateLimits.budget`; the
 // vocabulary is in RateLimitModel.ts and the key strategies in RateLimitKey.ts. The
 // port half, `RateLimiter`, lives in `@awthaq/ports`),
+// SignIn.ts (spec/behaviors/06-domain-users-accounts.md, BEH-EA-322, ADR-EA-038 — the one
+// implementation of sign-in completion: a branded `Clearance`, then the session),
 // Slots.ts (spec/behaviors/03-ports-slots-hooks-registries.md, BEH-EA-017/019/021,
 // scoped as documented in that module's own header — its `SlotConflict<P>`
 // check is real but runtime, not the compile-time one BEH-EA-012 illustrates,
@@ -59,6 +61,7 @@ export * as SecretHash from "./SecretHash.ts";
 export * as SecuritySignals from "./SecuritySignals.ts";
 export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
+export * as SignIn from "./SignIn.ts";
 export * as Slots from "./Slots.ts";
 export * as Tenant from "./Tenant.ts";
 export * as UserFields from "./UserFields.ts";
