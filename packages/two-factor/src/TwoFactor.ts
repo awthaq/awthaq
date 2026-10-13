@@ -49,10 +49,9 @@ import * as Headers from "effect/unstable/http/Headers";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { type TwoFactorMethodUsed, type VerifiedChallenge, verified } from "./Challenge.ts";
-import { SecondFactor, type Purpose } from "./SecondFactor.ts";
+import { SecondFactor, failureRule, type Purpose } from "./SecondFactor.ts";
 import { TwoFactorConfig } from "./TwoFactorConfig.ts";
 import * as TwoFactorApi from "./TwoFactorApi.ts";
-import * as TwoFactorRateLimits from "./TwoFactorRateLimits.ts";
 import { TwoFactorRecoveryCodes, TwoFactorSecrets, migrations } from "./TwoFactorStore.ts";
 
 // ---- the markers: what makes forgetting a gate a compile error --------------------------------
@@ -412,16 +411,45 @@ export const TwoFactorHandlers = Layer.mergeAll(
   ),
 );
 
+// ---- rate limits ------------------------------------------------------------------------------------
+
+// BEH-EA-105/107/111, RBS-006: declared once. The static `rateLimits` listing is derived from this table
+// and the layer registers it with `RateLimits.budget`. A rule's key reads only the small, secret-free
+// input its endpoint names (`{ ip }`, `{ userId }`), never a payload: a challenge id or a code never
+// becomes a bucket key.
+//
+// - `verifyByIp` bounds one source spraying `/two-factor/verify*` across many challenges.
+// - `manageByUser` bounds enrol/confirm/disable/regenerate per account (a group-wide rule: the event
+//   reports the real endpoint).
+// - `failureBudget` is BCR-006's shared per-account budget. It is *enforced* inside `SecondFactor` (which
+//   needs the read half, `RateLimiter.check`, and charges failures only); it is listed here so the
+//   registry, `awthaq routes` and the docs show it beside the other two.
+const rules = {
+  verifyByIp: RateLimits.rule({
+    group: "two_factor",
+    endpoint: "verify",
+    key: RateLimits.Key.ip,
+    limit: 30,
+    window: Duration.minutes(15),
+  }),
+  manageByUser: RateLimits.rule({
+    group: "two_factor.account",
+    endpoint: "*",
+    key: RateLimits.Key.user,
+    limit: 20,
+    window: Duration.minutes(15),
+  }),
+  failureBudget: failureRule,
+};
+
 // ---- the plugin ----------------------------------------------------------------------------------------------
 
 export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("two_factor", {
   apiVersion: 1,
   contract: TwoFactorApi.TwoFactorApi,
-  // PV-241: the rules at the default configuration (`failureBudget` follows `failureLimit`/`failureWindow`).
-  rateLimits: AuthPlugin.declareRateLimits(
-    ["two_factor", "two_factor.account"],
-    Object.values(TwoFactorRateLimits.makeRules(TwoFactorConfig.defaultValue())),
-  ),
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it at the default
+  // configuration (`failureBudget` follows `failureLimit`/`failureWindow` through `tune` at build).
+  rateLimitRules: rules,
   tables: ["two_factor_secret", "two_factor_recovery_code"],
   migrations,
   // ECS-008/BEH-EA-229: the default issuer is the classic thing left in production — the label users see in their authenticator app.
@@ -455,41 +483,16 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       const sessions = yield* Sessions.Sessions;
       const events = yield* AuthEvents.AuthEvents;
       const config = yield* TwoFactorConfig;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
       const afterSignIn = yield* Hooks.AfterSignIn;
 
-      // RBS-006: one typed definition per rule feeds both the registry and the enforcement calls. A
-      // `RateLimitScopeViolation` is only reachable if a rule named a group outside this plugin's own
-      // contract — a coding defect here, hence `Effect.orDie`.
-      const rules = TwoFactorRateLimits.makeRules(config);
-      yield* Effect.all(
-        // The callback's return type is annotated to break the inference cycle through `TwoFactor.layer`
-        // (its own initializer names `TwoFactor`) — the narrow exception `Password`/`Passkey` document too.
-        TwoFactorRateLimits.registryEntries(rules).map(
-          (entry): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-            rateLimitsRegistry.register(TwoFactor, entry),
-        ),
-      ).pipe(Effect.orDie);
-
-      const rateLimit = <I>(
-        rule: TwoFactorRateLimits.TwoFactorRule<I>,
-        input: I,
-      ): Effect.Effect<void, Api.RateLimited> =>
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        RateLimits.enforce({
-          key: rule.keyOf(input),
-          limit: rule.limit,
-          window: rule.window,
-          meta: TwoFactorRateLimits.metaOf(rule),
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // RBS-006: the table above feeds both the registry and the enforcement calls. EOTS-007: a breach is
+      // published, logged and counted, and answers `Api.RateLimited`. The failure budget follows the
+      // configured numbers, exactly as `SecondFactor` reads them.
+      const limits = yield* RateLimits.budget(TwoFactor, {
+        tune: Effect.succeed({
+          failureBudget: { limit: config.failureLimit, window: config.failureWindow },
+        }),
+      });
 
       /**
        * BEH-EA-263: enrolling, disabling and regenerating need a session that proved a credential
@@ -563,7 +566,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         },
         context: { readonly userAgent?: string | undefined } | undefined,
       ) {
-        yield* rateLimit(rules.verifyByIp, { ip: input.ip });
+        yield* limits.spend("verifyByIp", { ip: input.ip });
         const consumed = yield* factor.consumeChallenge(input.challengeId);
         const check = method === "totp" ? factor.verifyTotp : factor.verifyRecoveryCode;
         const proof = yield* check(consumed.userId, input.code, "signIn").pipe(
@@ -592,7 +595,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       });
 
       const enable: TwoFactorShape["enable"] = Effect.fnUntraced(function* (userId, sessionId) {
-        yield* rateLimit(rules.manageByUser, { userId });
+        yield* limits.spend("manageByUser", { userId }, { endpoint: "enable" });
         yield* requireFreshSession(userId, sessionId);
         const user = yield* users
           .findById(userId)
@@ -612,7 +615,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       });
 
       const confirm: TwoFactorShape["confirm"] = Effect.fnUntraced(function* (userId, code) {
-        yield* rateLimit(rules.manageByUser, { userId });
+        yield* limits.spend("manageByUser", { userId }, { endpoint: "confirm" });
         return yield* factor.confirmEnrolment(userId, code);
       });
 
@@ -637,7 +640,11 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         code: Redacted.Redacted<string>,
         purpose: Purpose,
       ) {
-        yield* rateLimit(rules.manageByUser, { userId });
+        yield* limits.spend(
+          "manageByUser",
+          { userId },
+          { endpoint: purpose === "disable" ? "disable" : "regenerateRecoveryCodes" },
+        );
         yield* requireFreshSession(userId, sessionId);
         if (!(yield* factor.isEnrolled(userId))) {
           return yield* Effect.fail(new TwoFactorApi.TwoFactorNotEnabled());

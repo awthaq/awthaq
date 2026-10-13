@@ -1,14 +1,16 @@
 // THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-259 to BEH-EA-266): the plugin
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
-import { AuditLog, Hooks, Users, VerificationLink } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Users, VerificationLink } from "@awthaq/core";
 import { Encryption, Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
@@ -545,6 +547,39 @@ describe("TwoFactor: the shared failure budget (BCR-006, ADR-EA-020)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(refused._tag, "SecondFactorLocked");
       }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+  );
+});
+
+describe("TwoFactor: management is rate limited per account (plan 06)", () => {
+  it.effect("a breach of manageByUser reports the real endpoint, not a catch-all, and no key", () =>
+    Effect.gen(function* () {
+      const twoFactor = yield* TwoFactor.TwoFactor;
+      const events = yield* AuthEvents.AuthEvents;
+      const user = yield* enrolledUser("manage@example.com");
+      const collected = yield* Effect.forkChild(
+        events.stream.pipe(
+          Stream.filter((event) => event._tag === "auth.rateLimit.exceeded"),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+        { startImmediately: true },
+      );
+      // `manageByUser` is 20 per 15 minutes; the spend happens before anything else is checked.
+      for (let i = 0; i < 20; i += 1) {
+        yield* Effect.exit(twoFactor.confirm(user.userId, secret("000000")));
+      }
+      const refused = yield* twoFactor.confirm(user.userId, secret("000000")).pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "RateLimited");
+      const [event] = yield* Fiber.join(collected);
+      assert.deepInclude(event, {
+        _tag: "auth.rateLimit.exceeded",
+        group: "two_factor.account",
+        endpoint: "confirm",
+        rule: "manageByUser",
+        dimension: "principal",
+      });
+      assert.notInclude(JSON.stringify(event), user.userId);
+    }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 });
 

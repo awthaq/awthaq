@@ -23,7 +23,15 @@
 // - **The challenge** (`Challenge.ts`) is a `Verification` row; `consumeChallenge` spends it, and the
 //   `FactorProof` this service mints is the only witness `Challenge.verified` accepts.
 
-import { AuthEvents, Errors, Sessions, Users, Verification, VerificationLink } from "@awthaq/core";
+import {
+  AuthEvents,
+  Errors,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+  VerificationLink,
+} from "@awthaq/core";
 import { Defects, Encryption, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -130,8 +138,23 @@ export class SecondFactor extends Context.Service<SecondFactor, SecondFactorShap
 /** AAD binding a secret's envelope to its owner (ADR-EA-020). */
 const secretAad = (userId: Users.UserId): string => `two_factor_secret:${userId}`;
 
-/** BCR-006: the shared per-account failure bucket. */
-export const failureKey = (userId: string): string => `two_factor:fail:${userId}`;
+/**
+ * BCR-006 (ADR-EA-020): the shared per-account failure budget, declared beside the code that charges
+ * it. One bucket across every method and challenge. `TwoFactor`'s rule table lists it (so the registry,
+ * `awthaq routes` and the docs show it) and `layer` below derives its bucket key from it; the
+ * enforcement itself stays here because it needs the read half (`RateLimiter.check`) and charges
+ * failures only, with its own `SecondFactorLocked` and `auth.twoFactor.*` events (not
+ * `auth.rateLimit.exceeded`). The numbers are the configured `failureLimit`/`failureWindow`.
+ */
+const failureDefaults = TwoFactorConfig.defaultValue();
+export const failureRule = RateLimits.failureRule({
+  group: "two_factor",
+  endpoint: "verify",
+  key: RateLimits.Key.user,
+  limit: failureDefaults.failureLimit,
+  window: failureDefaults.failureWindow,
+  bucket: "two_factor.failures",
+});
 
 // The brand's one constructor — module-private, so a `FactorProof` only ever comes out of `check*` below.
 const proofOf = Brand.nominal<FactorProof>();
@@ -152,7 +175,7 @@ export const layer = Layer.effect(
     // ---- the failure budget (BCR-006) ------------------------------------------------------
 
     const budget = {
-      key: (userId: Users.UserId) => failureKey(userId),
+      key: (userId: Users.UserId) => RateLimits.bucketKey(failureRule, { userId }),
       limit: config.failureLimit,
       window: config.failureWindow,
     };
