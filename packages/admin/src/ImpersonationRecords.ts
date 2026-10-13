@@ -177,7 +177,7 @@ export interface ImpersonationRecordsShape {
 export class ImpersonationRecords extends Context.Service<
   ImpersonationRecords,
   ImpersonationRecordsShape
->()("awthaq/admin/ImpersonationRecords") {}
+>()("awthaq/admin/records/ImpersonationRecords") {}
 
 const notFound = (sessionId: string): ImpersonationRecordNotFound =>
   new ImpersonationRecordNotFound({

@@ -834,6 +834,11 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
     ),
   },
   migrations: [...adminMigrations, addTenantIdMigration],
+  // Plan 08 (BEH-EA-T4): the impersonation store, memory and SQL, matched.
+  records: {
+    memory: ImpersonationRecords.layerMemory,
+    sql: ImpersonationRecords.layerSql,
+  },
   // The impersonation audit rows are hash-chained (`AuditChain`); the chain's key is this plugin's concern.
   config: [
     ConfigDescriptor.make(AdminConfig),
