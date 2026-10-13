@@ -44,17 +44,17 @@ const CoreLive = AuthEvents.layer.pipe(
 const withResolver = <E, R>(store: Layer.Layer<UserClaims.UserClaims, E, R>) =>
   UserClaims.UserClaimsAttributes.pipe(Layer.provideMerge(store));
 
-const MemoryLayer = withResolver(UserClaims.UserClaims.layer).pipe(Layer.provideMerge(CoreLive));
+const MemoryLayer = withResolver(
+  UserClaims.UserClaims.layer.pipe(Layer.provide(UserClaims.UserClaims.records.memory)),
+).pipe(Layer.provideMerge(CoreLive));
 
 const SqlLive = TestSql.layer("qadi_UserClaims");
 const Migrated = Layer.effectDiscard(Migrations.run(UserClaims.UserClaims.migrations)).pipe(
   Layer.provide(SqlLive),
 );
-const SqlLayer = withResolver(UserClaims.UserClaims.layerSql).pipe(
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
+const SqlLayer = withResolver(
+  UserClaims.UserClaims.layer.pipe(Layer.provide(UserClaims.UserClaims.records.sql)),
+).pipe(Layer.provideMerge(CoreLive), Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 
 const alice = Users.UserId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
 const admin = Users.UserId("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
@@ -242,6 +242,7 @@ describe("UserClaims composition", () => {
         }).pipe(
           Effect.provide(
             UserClaims.UserClaims.layer.pipe(
+              Layer.provide(UserClaims.UserClaims.records.memory),
               Layer.provideMerge(
                 Hooks.AfterUserAttributesChanged.tap((input) =>
                   Effect.sync(() => {
@@ -260,7 +261,7 @@ describe("UserClaims composition", () => {
 });
 
 // Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
-describe("UserClaims.layerSql: a store outage", () => {
+describe("UserClaims over records.sql: a store outage", () => {
   it.effect("set fails with StoreUnavailable naming the operation", () =>
     Effect.gen(function* () {
       yield* TestSql.injectFailure({

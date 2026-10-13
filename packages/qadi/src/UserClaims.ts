@@ -7,9 +7,9 @@
 // eq(literal("pro"))))`), no redeploy needed.
 //
 // It is a plugin (id `claims`, table `claims_user`) exactly like `Roles`: no HTTP contract of its
-// own, but `Auth.make` aggregates its migration, and `UserClaims.layer` (memory) /
-// `UserClaims.layerSql` mirror `Roles.layer` / `Roles.layerSql`. Like `Roles` it is a trusted
-// primitive: the gate on *who may change claims* is the caller's.
+// own, but `Auth.make` aggregates its migration, and `UserClaims.layer` is written once over the
+// `UserClaimsRecords` store (`UserClaims.records.memory` / `UserClaims.records.sql`), the same shape
+// as `Roles`. Like `Roles` it is a trusted primitive: the gate on *who may change claims* is the caller's.
 //
 // - `merge` is shallow; a `null` value deletes that key (Firebase's own `null` = "remove").
 // - A real change publishes `auth.user.claimsUpdated` (keys only, never values: claims may be
@@ -36,6 +36,7 @@ import {
   Users,
 } from "@awthaq/core";
 import { AttributeResolveError, AttributeResolver } from "@qadi/core";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
@@ -97,7 +98,7 @@ const changedKeys = (before: Claims, after: Claims): ReadonlyArray<string> =>
     .sort();
 
 /** What a backing store must do: atomically rewrite one user's claims, returning both sides. */
-interface ClaimsStore {
+export interface UserClaimsRecordsShape {
   readonly read: (userId: Users.UserId) => Effect.Effect<Claims, Errors.StoreUnavailable>;
   readonly modify: (
     userId: Users.UserId,
@@ -105,66 +106,78 @@ interface ClaimsStore {
   ) => Effect.Effect<{ readonly before: Claims; readonly after: Claims }, Errors.StoreUnavailable>;
 }
 
+/**
+ * Plan 08 (BEH-EA-T4): the record store behind `UserClaims`, keyed with the `/records/` segment so
+ * `UserClaims.records` can be checked against what the plugin layer requires.
+ */
+export class UserClaimsRecords extends Context.Service<UserClaimsRecords, UserClaimsRecordsShape>()(
+  "awthaq/qadi/records/UserClaims",
+) {}
+
 /** The shared behavior over either store: events, the hook announcement, and the three writes. */
-const serviceOver = (store: ClaimsStore) =>
-  Effect.gen(function* () {
-    const events = yield* AuthEvents.AuthEvents;
-    // Optional by construction, like `Users`: a composition that does not provide the point announces nothing.
-    const hook = yield* Effect.serviceOption(Hooks.AfterUserAttributesChanged);
+const make = Effect.gen(function* () {
+  const store = yield* UserClaimsRecords;
+  const events = yield* AuthEvents.AuthEvents;
+  // Optional by construction, like `Users`: a composition that does not provide the point announces nothing.
+  const hook = yield* Effect.serviceOption(Hooks.AfterUserAttributesChanged);
 
-    const apply = (
-      userId: Users.UserId,
-      change: (current: Claims) => Claims,
-      options: ClaimsChangeOptions | undefined,
-    ) =>
-      Effect.gen(function* () {
-        const { before, after } = yield* store.modify(userId, change);
-        const keys = changedKeys(before, after);
-        if (keys.length > 0) {
-          yield* events.publish({
-            _tag: "auth.user.claimsUpdated",
-            userId,
-            keys,
-            actorUserId: options?.actorId,
-          });
-          if (Option.isSome(hook)) {
-            yield* hook.value.run({ userId, attributes: ["claims"] });
-          }
+  const apply = (
+    userId: Users.UserId,
+    change: (current: Claims) => Claims,
+    options: ClaimsChangeOptions | undefined,
+  ) =>
+    Effect.gen(function* () {
+      const { before, after } = yield* store.modify(userId, change);
+      const keys = changedKeys(before, after);
+      if (keys.length > 0) {
+        yield* events.publish({
+          _tag: "auth.user.claimsUpdated",
+          userId,
+          keys,
+          actorUserId: options?.actorId,
+        });
+        if (Option.isSome(hook)) {
+          yield* hook.value.run({ userId, attributes: ["claims"] });
         }
-        return after;
-      });
+      }
+      return after;
+    });
 
-    const shape: UserClaimsShape = {
-      get: store.read,
-      set: (userId, claims, options) => apply(userId, () => claims, options).pipe(Effect.asVoid),
-      merge: (userId, patch, options) =>
-        apply(userId, (current) => applyPatch(current, patch), options),
-      delete: (userId, options) => apply(userId, () => emptyClaims, options).pipe(Effect.asVoid),
-    };
-    return shape;
-  });
-
-const memoryMake = Effect.gen(function* () {
-  const state = yield* Ref.make(HashMap.empty<Users.UserId, Claims>());
-  return yield* serviceOver({
-    read: (userId) =>
-      Ref.get(state).pipe(
-        Effect.map((map) => Option.getOrElse(HashMap.get(map, userId), () => emptyClaims)),
-      ),
-    modify: (userId, change) =>
-      Ref.modify(state, (map) => {
-        const before = Option.getOrElse(HashMap.get(map, userId), () => emptyClaims);
-        const after = change(before);
-        const next =
-          Object.keys(after).length === 0
-            ? HashMap.remove(map, userId)
-            : HashMap.set(map, userId, after);
-        return [{ before, after }, next] as const;
-      }),
-  });
+  const shape: UserClaimsShape = {
+    get: store.read,
+    set: (userId, claims, options) => apply(userId, () => claims, options).pipe(Effect.asVoid),
+    merge: (userId, patch, options) =>
+      apply(userId, (current) => applyPatch(current, patch), options),
+    delete: (userId, options) => apply(userId, () => emptyClaims, options).pipe(Effect.asVoid),
+  };
+  return shape;
 });
 
-// ---- layerSql -----------------------------------------------------------------
+/** Single-process, lost on restart: one `Ref` over every user's document. */
+export const layerMemory = Layer.effect(
+  UserClaimsRecords,
+  Effect.gen(function* () {
+    const state = yield* Ref.make(HashMap.empty<Users.UserId, Claims>());
+    return UserClaimsRecords.of({
+      read: (userId) =>
+        Ref.get(state).pipe(
+          Effect.map((map) => Option.getOrElse(HashMap.get(map, userId), () => emptyClaims)),
+        ),
+      modify: (userId, change) =>
+        Ref.modify(state, (map) => {
+          const before = Option.getOrElse(HashMap.get(map, userId), () => emptyClaims);
+          const after = change(before);
+          const next =
+            Object.keys(after).length === 0
+              ? HashMap.remove(map, userId)
+              : HashMap.set(map, userId, after);
+          return [{ before, after }, next];
+        }),
+    });
+  }),
+);
+
+// ---- the SQL store -------------------------------------------------------------
 
 const decodeClaims = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.JsonObject));
 
@@ -198,45 +211,52 @@ const userClaimsMigrations: Migrations.Migrations = [
   },
 ];
 
-const sqlMake = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
+/** Over the `claims_user` table (run `UserClaims.migrations`, or `Auth.make`'s aggregate). */
+export const layerSql = Layer.effect(
+  UserClaimsRecords,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
 
-  const findQuery = SqlSchema.findOneOption({
-    Request: Schema.String,
-    Result: ClaimsRow,
-    execute: (subject) => sql`SELECT subject, claims FROM claims_user WHERE subject = ${subject}`,
-  });
+    const findQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: ClaimsRow,
+      execute: (subject) => sql`SELECT subject, claims FROM claims_user WHERE subject = ${subject}`,
+    });
 
-  const read = (userId: Users.UserId) =>
-    findQuery(userId).pipe(
-      Effect.map((row) => (Option.isSome(row) ? decodeClaims(row.value.claims) : emptyClaims)),
-      Errors.orStoreUnavailable("UserClaims.read"),
-    );
+    const read = (userId: Users.UserId) =>
+      findQuery(userId).pipe(
+        Effect.map((row) => (Option.isSome(row) ? decodeClaims(row.value.claims) : emptyClaims)),
+        Errors.orStoreUnavailable("UserClaims.read"),
+      );
 
-  const modify: ClaimsStore["modify"] = (userId, change) =>
-    SqlTransaction.transactional(sql)(
-      Effect.gen(function* () {
-        const before = yield* read(userId);
-        const after = change(before);
-        if (Object.keys(after).length === 0) {
-          yield* sql`DELETE FROM claims_user WHERE subject = ${userId}`;
-        } else {
-          const updated = DateTime.formatIso(yield* DateTime.now);
-          yield* sql`
+    const modify: UserClaimsRecordsShape["modify"] = (userId, change) =>
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const before = yield* read(userId);
+          const after = change(before);
+          if (Object.keys(after).length === 0) {
+            yield* sql`DELETE FROM claims_user WHERE subject = ${userId}`;
+          } else {
+            const updated = DateTime.formatIso(yield* DateTime.now);
+            yield* sql`
               INSERT INTO claims_user (subject, claims, updated)
               VALUES (${userId}, ${JSON.stringify(after)}, ${updated})
               ON CONFLICT (subject) DO UPDATE SET claims = excluded.claims, updated = excluded.updated`;
-        }
-        return { before, after };
-      }),
-    ).pipe(Errors.orStoreUnavailable("UserClaims.modify"));
+          }
+          return { before, after };
+        }),
+      ).pipe(Errors.orStoreUnavailable("UserClaims.modify"));
 
-  return yield* serviceOver({ read, modify });
-});
+    return UserClaimsRecords.of({ read, modify });
+  }),
+);
+
+/** Plan 08 (BEH-EA-T4): the plugin's record store as two matched layers, `UserClaims.records`. */
+export const records = { memory: layerMemory, sql: layerSql };
 
 /**
  * CSG-001, wayfinder ticket 30: this plugin's part of `AccountErasure.eraseAccount` —
- * removes the erased user's claims document. Part of `UserClaims.layer`/`layerSql`,
+ * removes the erased user's claims document. Part of `UserClaims.layer`,
  * which therefore require `Erasure.ErasureRegistry`.
  */
 export const claimsExport = DataExport.contribute({
@@ -264,15 +284,11 @@ export class UserClaims extends AuthPlugin.Service<UserClaims, UserClaimsShape>(
     claims_user: AuthPlugin.Table.global("per-user claims document; the directory is global"),
   },
   migrations: userClaimsMigrations,
+  // Plan 08 (BEH-EA-T4): the claims document store, memory and SQL, matched.
+  records,
 }) {
   static readonly layer = AuthPlugin.layer(UserClaims, {
-    make: memoryMake,
-    contributes: Layer.mergeAll(claimsErasure, claimsExport),
-  });
-
-  /** The same service over the `claims_user` table (run `UserClaims.migrations`, or `Auth.make`'s aggregate). */
-  static readonly layerSql = AuthPlugin.layer(UserClaims, {
-    make: sqlMake,
+    make,
     contributes: Layer.mergeAll(claimsErasure, claimsExport),
   });
 }
