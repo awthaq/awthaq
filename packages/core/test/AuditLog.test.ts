@@ -68,19 +68,55 @@ const stamped = (event: AuthEvents.AuthEvent, n: number, ms = 1_700_000_000_000 
 
 const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, never>): void => {
   describe(name, () => {
-    it.effect("records every published AuthEvent, actorless events included", () =>
+    // BEH-EA-101: the actor column is whatever the event declares (`Actor.field`/`prefixed`/`none`).
+    // One event per rule; the declared rule is the event's own, so this is the interface-level proof.
+    it.effect("records the actor each event declares, and none for actorless events", () =>
       Effect.gen(function* () {
         const auditLog = yield* AuditLog.AuditLog;
-        yield* auditLog.record(stamped(samples["auth.user.created"], 1));
-        yield* auditLog.record(stamped(samples["auth.token.replay"], 2));
+        const cases: ReadonlyArray<readonly [AuthEvents.AuthEvent, Option.Option<string>]> = [
+          // Actor.field("userId")
+          [samples["auth.user.created"], Option.some(userId)],
+          [samples["auth.organization.permissionDenied"], Option.some(userId)],
+          // Actor.field("adminUserId"): the administrator, not the target
+          [
+            samples["auth.admin.userUpdated"],
+            Option.some(samples["auth.admin.userUpdated"].adminUserId),
+          ],
+          // Actor.field("creatorUserId")
+          [
+            samples["auth.organization.created"],
+            Option.some(samples["auth.organization.created"].creatorUserId),
+          ],
+          // optional actor fields: present, then absent
+          [
+            { _tag: "auth.mail.failed", template: "verify", userId: otherUserId },
+            Option.some(otherUserId),
+          ],
+          [{ _tag: "auth.mail.failed", template: "verify" }, Option.none()],
+          [
+            { _tag: "auth.roles.assigned", userId, roleName: "admin", actorUserId: otherUserId },
+            Option.some(otherUserId),
+          ],
+          [{ _tag: "auth.roles.assigned", userId, roleName: "admin" }, Option.none()],
+          // Actor.prefixed("subjectId", "user:"): only a user subject names an awthaq user
+          [{ ...samples["auth.authz.denied"], subjectId: `user:${userId}` }, Option.some(userId)],
+          [{ ...samples["auth.authz.denied"], subjectId: "apikey:k-1" }, Option.none()],
+          // Actor.none: a directory, the CLI, an anonymous attempt
+          [samples["auth.token.replay"], Option.none()],
+          [samples["auth.scim.userProvisioned"], Option.none()],
+          [samples["auth.admin.seeded"], Option.none()],
+          [samples["auth.admin.seedRefused"], Option.none()],
+          [samples["auth.import.completed"], Option.none()],
+        ];
+        for (const [index, [event]] of cases.entries()) {
+          yield* auditLog.record(stamped(event, index + 1));
+        }
         const recorded = yield* auditLog.list();
-        assert.strictEqual(recorded.length, 2);
-        const created = recorded.find((r) => r.eventTag === "auth.user.created");
-        const replay = recorded.find((r) => r.eventTag === "auth.token.replay");
-        assert.isDefined(created);
-        assert.isDefined(replay);
-        assert.deepStrictEqual(created?.actorUserId, Option.some(userId));
-        assert.deepStrictEqual(replay?.actorUserId, Option.none());
+        for (const [index, [event, actor]] of cases.entries()) {
+          const id = `018f0000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`;
+          const row = recorded.find((r) => r.id === id);
+          assert.deepStrictEqual(row?.actorUserId, actor, `${event._tag} #${index}`);
+        }
       }).pipe(Effect.provide(layer)),
     );
 
@@ -121,35 +157,6 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
           if (created === undefined) return assert.fail("no record");
           assert.deepStrictEqual(AuditLog.toPublished(created).tenantId, Option.some("org-1"));
         }).pipe(Effect.provide(layer)),
-    );
-
-    // PERS-005: an organization PermissionEngine denial is durably recorded with who/what/why.
-    it.effect("records an organization permission denial with its actor", () =>
-      Effect.gen(function* () {
-        const auditLog = yield* AuditLog.AuditLog;
-        yield* auditLog.record(stamped(samples["auth.organization.permissionDenied"], 1));
-        const recorded = yield* auditLog.list({ eventTag: "auth.organization.permissionDenied" });
-        assert.strictEqual(recorded.length, 1);
-        assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some(userId));
-      }).pipe(Effect.provide(layer)),
-    );
-
-    // ECS-006/ECS-002: a CLI run has no session — the seeded target is in the payload, not the actor.
-    it.effect("records the CLI's admin-seed and import events with no actor", () =>
-      Effect.gen(function* () {
-        const auditLog = yield* AuditLog.AuditLog;
-        yield* auditLog.record(stamped(samples["auth.admin.seeded"], 1));
-        yield* auditLog.record(stamped(samples["auth.admin.seedRefused"], 2));
-        yield* auditLog.record(stamped(samples["auth.import.completed"], 3));
-        const seeded = yield* auditLog.list({ eventTag: "auth.admin.seeded" });
-        assert.strictEqual(seeded.length, 1);
-        assert.deepStrictEqual(seeded[0]?.actorUserId, Option.none());
-        assert.strictEqual(
-          (yield* auditLog.list({ eventTag: "auth.admin.seedRefused" })).length,
-          1,
-        );
-        assert.strictEqual((yield* auditLog.list({ eventTag: "auth.import.completed" })).length, 1);
-      }).pipe(Effect.provide(layer)),
     );
 
     it.effect("list narrows by eventTag", () =>

@@ -4,7 +4,7 @@
 // contact details (ADR-EA-029), so the body is the typed event plus a small envelope; this module
 // adds the two rules that keep it that way for an *external* consumer:
 //
-//   - free text about a person (`PII_FIELDS`, the impersonation justification) is never sent, and
+//   - free text about a person (each event's declared `pii`, e.g. the impersonation justification) is never sent, and
 //   - the client address is sent only when the endpoint's plugin configuration asks for it
 //     (`includeClientContext`), because it is personal data under GDPR and most consumers do not
 //     need it. The user agent rides with it.
@@ -67,7 +67,7 @@ export interface WebhookBody {
 }
 
 export const toBody = (event: AuthEvents.Published, options: PayloadOptions): WebhookBody => {
-  const scrubbed = new Set(AuthEvents.PII_FIELDS[event._tag] ?? []);
+  const scrubbed = new Set(AuthEvents.piiFieldsOf(event._tag));
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(event)) {
     if (ENVELOPE_FIELDS.has(key) || scrubbed.has(key) || NEVER_SENT.test(key)) continue;
@@ -148,12 +148,7 @@ export const testBody = (input: {
 // ---- filters ---------------------------------------------------------------------------------
 
 /** Every tag the library can publish. */
-export const knownEventTags: ReadonlyArray<string> = AuthEvents.AuthEventSchema.members.flatMap(
-  (member) => {
-    const tag = member.fields._tag.ast.literal;
-    return typeof tag === "string" ? [tag] : [];
-  },
-);
+export const knownEventTags: ReadonlyArray<string> = AuthEvents.eventTags;
 
 /** `*`, a family `prefix.*`, or an exact tag. */
 export const patternMatches = (pattern: string, tag: string): boolean =>

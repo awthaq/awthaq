@@ -20,7 +20,7 @@
 // delivers full event payloads — the same content as the audit table — so it is
 // an audit-read-level privilege, not a public tap. Payloads are identifiers-only
 // by design (ESA-005): no email, no free text about a person, except the fields
-// named in `PII_FIELDS`.
+// an event declares as `pii` (`AuthEvents.piiFieldsOf`).
 
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";

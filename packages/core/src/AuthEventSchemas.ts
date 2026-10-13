@@ -20,9 +20,14 @@
 //
 // PII posture (ESA-005, ADR-EA-029): payloads carry identifiers, never contact
 // details or free text about a person. A subscriber that needs an email joins
-// through the record store, which the erasure cascade owns. The two exceptions
-// are declared in `PII_FIELDS` so erasure can scrub them: the impersonation
-// justification text.
+// through the record store, which the erasure cascade owns. The exceptions are
+// declared with the event (`defineEvent`'s `pii`), so erasure can scrub them and
+// the webhooks payload never sends them: the impersonation justification text.
+//
+// Every event is declared with `defineEvent(tag, fields, { actor, pii })`
+// (internal/eventDefinition.ts): its shape, who acted (the audit row's actor
+// column) and which fields hold free text about a person, checked against the
+// event's own fields. `registry([...])` refuses a member without that declaration.
 
 import type * as DateTime from "effect/DateTime";
 import type * as Option from "effect/Option";
@@ -394,7 +399,7 @@ export type PasskeyCounterAnomalyEvent = typeof PasskeyCounterAnomalyEvent.Type;
 /**
  * Published by `@awthaq/admin`'s `impersonate`, on success (BEH-EA-218).
  * `reason` is the BEH-EA-218 justification — free text an admin typed, so it
- * is declared PII (`PII_FIELDS`) and scrubbed when the target/admin is erased.
+ * is declared personal data (`pii`) and scrubbed when the target/admin is erased.
  */
 export const AdminImpersonationStartedEvent = defineEvent(
   "auth.admin.impersonationStarted",
@@ -1733,13 +1738,3 @@ export const decodeEvent = Schema.decodeUnknownEffect(AuthEventSchema);
 /** The event alone, without its envelope (decoding keeps only the declared fields) — what tests and relays compare. Throws on a value that is not an `AuthEvent`. */
 export const payloadOf = Schema.decodeUnknownSync(AuthEventSchema);
 export const encodeEvent = Schema.encodeEffect(AuthEventSchema);
-
-/**
- * ESA-005/ADR-EA-029: the payload fields that hold free text about a person,
- * per tag, scrubbed (set to `""`) when the person is erased. Everything else
- * an event carries is an identifier the erasure pass rewrites to a pseudonym.
- * A new event that carries free text must be listed here.
- */
-export const PII_FIELDS: Readonly<Record<string, ReadonlyArray<string>>> = {
-  "auth.admin.impersonationStarted": ["reason"],
-};

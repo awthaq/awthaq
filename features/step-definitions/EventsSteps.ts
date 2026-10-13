@@ -26,19 +26,9 @@ import {
   capturedLogs,
 } from "./EventsWorld.ts";
 
-/** The registry's declared tags, read off the closed union the schema is built from (BEH-EA-101). */
-const registryTags = AuthEvents.AuthEventSchema.members.map((member) => {
-  const literal = member.fields._tag.ast.literal;
-  if (typeof literal !== "string") throw new Error("an event's _tag is not a string literal");
-  return literal;
-});
-
-const isRegistryTag = (tag: string): tag is AuthEvents.AuthEventTag =>
-  registryTags.some((declared) => declared === tag);
-
 /** A Gherkin-named tag must be one the registry declares; anything else is a typo in the scenario, not a reason to pass. */
 const tagNamed = (tag: string): AuthEvents.AuthEventTag => {
-  if (!isRegistryTag(tag)) throw new Error(`"${tag}" is not a declared AuthEvents tag`);
+  if (!AuthEvents.isEventTag(tag)) throw new Error(`"${tag}" is not a declared AuthEvents tag`);
   return tag;
 };
 
@@ -415,7 +405,7 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the event registry declares {string}, {string}, {string}, and {string}",
     function* (a: string, b: string, c: string, d: string) {
       for (const tag of [a, b, c, d]) {
-        assert.ok(isRegistryTag(tag), `"${tag}" is not declared by the event registry`);
+        assert.ok(AuthEvents.isEventTag(tag), `"${tag}" is not declared by the event registry`);
       }
       yield* subscribe("watcher", [tagNamed(a), tagNamed(b), tagNamed(c), tagNamed(d)]);
     },
@@ -431,11 +421,40 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("the event's tag is one of the registry's declared tags", function* () {
     const seen = yield* Ref.get((yield* getProbe("watcher")).handled);
     assert.equal(seen.length, 2);
-    for (const event of seen) assert.ok(isRegistryTag(event._tag), `${event._tag} is not declared`);
+    for (const event of seen)
+      assert.ok(AuthEvents.isEventTag(event._tag), `${event._tag} is not declared`);
     // The audit log holds the same tags, and a value outside the union does not decode.
-    assert.ok((yield* auditRows).every((row) => isRegistryTag(row.eventTag)));
+    assert.ok((yield* auditRows).every((row) => AuthEvents.isEventTag(row.eventTag)));
     assert.equal(Schema.is(AuthEvents.AuthEventSchema)({ _tag: "auth.not.declared" }), false);
   });
+
+  When("the registry's declarations are read for every declared tag", function* () {
+    yield* publish({ _tag: "auth.user.signedIn", userId: someUser, strategy: "password" });
+    yield* publish({ _tag: "auth.user.created", userId: someUser });
+    yield* publish({ _tag: "auth.token.replay", identifier: "token-1" });
+    yield* letSubscribersRun;
+  });
+
+  Then(
+    "every tag has an actor rule the sample event satisfies and personal-data fields the event carries",
+    function* () {
+      // The personal-data fields each tag declares are fields the event carries.
+      for (const member of AuthEvents.AuthEventSchema.members) {
+        const tag = member.fields._tag.ast.literal;
+        assert.ok(typeof tag === "string" && AuthEvents.isEventTag(tag), `${String(tag)}`);
+        const carried = Object.keys(member.fields);
+        for (const field of AuthEvents.piiFieldsOf(tag)) {
+          assert.ok(carried.includes(field), `${tag}: pii field ${field} is not carried`);
+        }
+      }
+      // The actor column of each durable row is the actor its event declares.
+      const rows = yield* auditRows;
+      assert.ok(rows.length >= 3);
+      for (const row of rows) {
+        assert.deepEqual(row.actorUserId, AuthEvents.actorOf(row.payload), row.eventTag);
+      }
+    },
+  );
 
   Given("a subscriber handling events tagged {string}", function* (tag: string) {
     yield* subscribe("handler", tagNamed(tag));

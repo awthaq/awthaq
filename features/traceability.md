@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1267 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1274; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1268 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1275; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1285,3 +1285,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1272 | [BEH-EA-110](../spec/behaviors/14-rate-limiting.md#beh-ea-110-built-in-rules-shipped-by-core-plugins) | [04-cross-cutting/14-rate-limiting.feature](features/04-cross-cutting/14-rate-limiting.feature) | An application tunes a shipped rule's limit without changing the plugin |
 | REQ-EA-1273 | [BEH-EA-111](../spec/behaviors/14-rate-limiting.md#beh-ea-111-registry-ordering) | [04-cross-cutting/14-rate-limiting.feature](features/04-cross-cutting/14-rate-limiting.feature) | A plugin that declares rate-limit rules but never opens its budget is refused at composition |
 | REQ-EA-1274 | [BEH-EA-111](../spec/behaviors/14-rate-limiting.md#beh-ea-111-registry-ordering) | [04-cross-cutting/14-rate-limiting.feature](features/04-cross-cutting/14-rate-limiting.feature) | A plugin cannot enforce a rule it did not declare |
+| REQ-EA-1275 | [BEH-EA-101](../spec/behaviors/13-events.md#beh-ea-101-events-are-typed-tagged-values-forming-a-registry-contract) | [04-cross-cutting/13-events.feature](features/04-cross-cutting/13-events.feature) | Every registered event declares who acted and which of its fields are personal data |

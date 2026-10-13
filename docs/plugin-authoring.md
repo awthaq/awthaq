@@ -93,6 +93,10 @@ A plugin that stores anything about a person must take part in account erasure a
 - A plugin never deletes a user. To remove an account it calls `Erasure.AccountErasure.eraseAccount(userId, initiator)` (`@awthaq/scim`'s `DELETE` with `deleteBehavior: "erase"` is the worked example, with a `Directory` initiator); to abandon a user it is creating (a provisioning that failed halfway) it uses `Users.createWith(input, complete)`, which removes only the user it just made, with no veto and no event. `Users` has no `delete`.
 - Install both with `AuthPlugin.layer(Self, { contributes: Layer.mergeAll(erasure, export) })`. Test each against the registry (`packages/organization/test/OrganizationErasure.test.ts`, `OrganizationExport.test.ts`).
 
+## Events
+
+Events are identifiers-only (ADR-EA-029) and declared in `@awthaq/core`'s `AuthEventSchemas.ts` with `defineEvent(tag, fields, { actor, pii })`. Name the tag `auth.<plugin>.<pastTense>`. Brand user ids with the module's `UserIdSchema`. Choose the actor: `Actor.field("<userId field>")` for the user who *did* it (an administrator, not the target), `Actor.none` when no user acted (a directory, the CLI, an anonymous attempt), or `Actor.prefixed`. List every free-text field about a person in `pii` (never an email; carry an id and let subscribers join). Add the event to the registry list, add a sample to `test/support/eventSamples.ts` (the compiler asks for it), and publish with `AuthEvents.publish`. Until plugins own their events (plan 09 phase 5), a third-party plugin cannot add a tag: reuse an existing one, or contribute the definition to core.
+
 ## Migrations
 
 - Append only. Never edit a migration that has shipped; add a new entry (BEH-EA-033 to 040). Names are re-keyed per plugin by `Auth.make`.
@@ -121,3 +125,4 @@ An operation that is several SQL statements runs in one `sql.withTransaction` so
 5. Hook points with a `.layer` each, provided once.
 6. A test that builds through `Auth.make`, runs the real migrations, exercises an endpoint over a real handler, aborts a veto, and calls `TestAuth.runPluginContractTests` (pass `hooks: [{ point: Hooks.AfterSignUp, input }]` to run the plugin's declared taps against a stub input: an observe tap must not try to abort, a veto tap may only abort with `HookAbort`; BEH-EA-200).
 7. A package README stating what it ships (`pnpm check:readmes` enforces the status banner).
+8. Every event declared with `defineEvent`, its actor chosen and its free-text fields in `pii`.

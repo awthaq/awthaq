@@ -51,7 +51,7 @@ describe("WebhookPayload.toBody: identifiers only", () => {
   );
 
   it.effect(
-    "drops declared free text about a person (PII_FIELDS): the impersonation justification",
+    "drops declared free text about a person (the event's declared `pii`): the impersonation justification",
     () =>
       Effect.gen(function* () {
         const started = yield* published({
@@ -126,6 +126,7 @@ describe("WebhookPayload filters", () => {
     assert.include(WebhookPayload.knownEventTags, "auth.user.signedIn");
     assert.include(WebhookPayload.knownEventTags, "auth.organization.memberAdded");
     assert.isAbove(WebhookPayload.knownEventTags.length, 50);
+    assert.deepStrictEqual(WebhookPayload.knownEventTags, AuthEvents.eventTags);
     assert.isUndefined(WebhookPayload.unknownPattern(["*", "auth.user.*", "auth.session.revoked"]));
     assert.strictEqual(
       WebhookPayload.unknownPattern(["auth.user.signedIn", "auth.user.signedInn"]),
