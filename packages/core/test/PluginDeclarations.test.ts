@@ -3,6 +3,7 @@
 // — can print them without building a layer. The type-level halves (a rule's group confined to the
 // plugin's own groups; a required port left undeclared refused) are `@ts-expect-error` directives,
 // checked by `tsc -p tsconfig.test.json`.
+import { RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -122,6 +123,56 @@ describe("rateLimits declaration (PV-241)", () => {
       ],
     }) {}
     assert.strictEqual(Stray.rateLimits.length, 1);
+  });
+
+  it("rateLimitRules derive the static declaration, with the key strategy and the mode", () => {
+    class Table extends AuthPlugin.Service<Table, {}>()("table", {
+      apiVersion: 1,
+      contract: HttpApi.make("auth").add(
+        HttpApiGroup.make("table").add(
+          HttpApiEndpoint.get("send", "/table", { success: Schema.String }),
+        ),
+      ),
+      rateLimitRules: {
+        sendByIp: RateLimits.rule({
+          group: "table",
+          endpoint: "send",
+          key: RateLimits.Key.ip,
+          limit: 5,
+          window: Duration.minutes(15),
+        }),
+        lockout: RateLimits.failureRule({
+          group: "table",
+          endpoint: "send",
+          key: RateLimits.Key.user,
+          limit: 3,
+          window: Duration.minutes(1),
+          bucket: "table.lockout",
+        }),
+      },
+    }) {
+      static readonly layer = AuthPlugin.layer(Table, {
+        ports: [RateLimiter.RateLimiter],
+        make: Effect.gen(function* () {
+          yield* RateLimits.budget(Table);
+          return {};
+        }),
+      });
+    }
+    assert.deepStrictEqual(
+      Auth.make([Table]).manifest.rateLimits.map((rule) => [
+        rule.plugin,
+        rule.name,
+        rule.dimension,
+        rule.key,
+        rule.mode,
+        rule.limit,
+      ]),
+      [
+        ["table", "sendByIp", "ip", "ip", "attempts", 5],
+        ["table", "lockout", "principal", "user", "failures", 3],
+      ],
+    );
   });
 
   it("registerDeclared registers every declared rule, and declarationDrift agrees with the registry", () =>

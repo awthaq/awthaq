@@ -8,9 +8,9 @@
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
-import type * as Duration from "effect/Duration";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as Record from "effect/Record";
 import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -18,6 +18,8 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
+import * as RateLimitModel from "./RateLimitModel.ts";
+import type { RateLimitDeclaration } from "./RateLimitModel.ts";
 import * as UserFields from "./UserFields.ts";
 
 /**
@@ -79,6 +81,7 @@ export interface Class<
   Shape,
   Groups extends HttpApiGroup.Constraint,
   Fields extends UserFields.Declarations = {},
+  Limits extends RateLimitModel.Table = {},
 > extends Context.ServiceClass<Self, Key<Id>, Shape> {
   readonly id: Id;
   readonly apiVersion: 1;
@@ -90,8 +93,13 @@ export interface Class<
   readonly taps: ReadonlyArray<DeclaredTap>;
   /** JH-007: tables owned by *other* plugins this one reads; `Auth.make` requires the owner in `dependsOn`. */
   readonly readsTables: ReadonlyArray<string>;
-  /** PV-241/BEH-EA-111: the rate-limit rules this plugin declares statically (defaults; config may tune them), readable without building any layer. */
+  /** PV-241/BEH-EA-111: the rate-limit rules this plugin declares statically (defaults; config may tune them), readable without building any layer. DERIVED from `rateLimitRules`. */
   readonly rateLimits: ReadonlyArray<RateLimitDeclaration>;
+  /**
+   * BEH-EA-105/107: the typed rule table this plugin declared (`Service`'s `rateLimitRules`), the one
+   * source of the static `rateLimits` declaration AND of what `RateLimits.budget(Self)` registers.
+   */
+  readonly rateLimitRules: RateLimitModel.Table;
   /** PV-241/BEH-EA-202: the keys of the ports this plugin's layer requires (`AuthPlugin.layer`'s `ports` option), readable without building any layer. */
   readonly ports: ReadonlyArray<string>;
   /** ECS-008/BEH-EA-229: the configuration inputs this plugin reads, declared statically (none when it has no policy knobs). */
@@ -107,35 +115,18 @@ export interface Class<
    * without an assertion), so it reads `undefined`.
    */
   readonly "~userFields"?: Fields;
+  /**
+   * Type-only: the declared rule table's own type, which `RateLimits.budget(Self)` reads to type
+   * `spend`'s names and inputs. Never assigned, for the reason `"~userFields"` is not.
+   */
+  readonly "~rateLimits"?: Limits;
 }
 
-/** PV-241: what a rate-limit rule is keyed on, as a label a listing can print (the same set as `RateLimits.EnforceMeta["dimension"]`). */
-export type RateLimitDimension = "identity" | "ip" | "principal" | "custom";
+export type { RateLimitDeclaration, RateLimitDimension } from "./RateLimitModel.ts";
 
 /**
- * PV-241/BEH-EA-111: one rate-limit rule declared statically on a plugin (`Service`'s `rateLimits`
- * option), so `awthaq plugin list --rules` can print it without building a layer. The numbers are the
- * plugin's defaults; a configurable plugin may register tuned values at build. `group` is confined at the
- * type level to the plugin's own contract groups (BEH-EA-107 as a compile error, not only a build-time
- * `RateLimitScopeViolation`). The registry stays the source of truth for what is enforced; a plugin's test
- * checks it against this declaration (`RateLimits.declarationDrift`).
- */
-export interface RateLimitDeclaration<Group extends string = string> {
-  readonly group: Group;
-  readonly endpoint: string;
-  /** The rule's own name, unique within its group and endpoint (`requestByIp`), as `EnforceMeta.rule` reports it. */
-  readonly name: string;
-  readonly dimension: RateLimitDimension;
-  readonly limit: number;
-  readonly window: Duration.Input;
-}
-
-/**
- * PV-241: builds a `rateLimits` declaration from a rule table a plugin already keeps for its own
- * enforcement (`PasswordRateLimits.makeRules`, `MagicLink`'s `rules`), so the numbers have one source.
- * `groups` names the plugin's own contract groups; a rule outside them is a definition-time defect
- * (the same refusal `RateLimits.rule` gives at build, raised earlier), and narrowing each rule's `group`
- * to that union needs no type assertion.
+ * PV-241: builds a legacy `rateLimits` declaration from a hand-kept rule list. Superseded by the
+ * `rateLimitRules` table (removed in plan 06 phase 11).
  */
 export const declareRateLimits = <const Group extends string>(
   groups: ReadonlyArray<Group>,
@@ -205,6 +196,8 @@ export interface Any {
   readonly readsTables?: ReadonlyArray<string>;
   /** PV-241: optional so a hand-built plugin value need not declare any. */
   readonly rateLimits?: ReadonlyArray<RateLimitDeclaration>;
+  /** BEH-EA-105: optional so a hand-built plugin value need not declare any. */
+  readonly rateLimitRules?: RateLimitModel.Table;
   /** PV-241: optional so a hand-built plugin value need not declare any. */
   readonly ports?: ReadonlyArray<string>;
   /** Optional here (a hand-built `Any` may have none); every plugin made with `Service` carries the list. */
@@ -276,6 +269,7 @@ export const Service =
     const Id extends string,
     Groups extends GroupsFor<Id>,
     const Fields extends UserFields.Declarations = {},
+    const Limits extends RateLimitModel.Table<GroupIdOf<Groups>> = {},
   >(
     id: Id,
     options: {
@@ -290,6 +284,13 @@ export const Service =
        * contract groups (a compile error otherwise); the numbers are the defaults a config may tune.
        */
       readonly rateLimits?: ReadonlyArray<RateLimitDeclaration<NoInfer<GroupIdOf<Groups>>>>;
+      /**
+       * BEH-EA-105/107/111: the typed rate-limit rule table (`{ signIn: RateLimits.rule({ group, endpoint,
+       * key: RateLimits.Key.email, limit, window }) }`). Declared once: the static `rateLimits` listing is
+       * derived from it, `RateLimits.budget(Self)` registers it and `spend`s only its names, and a rule
+       * whose `group` is not one of this plugin's contract groups is a compile error.
+       */
+      readonly rateLimitRules?: Limits;
       /** ECS-008/BEH-EA-229: descriptors of the `Context.Reference`s this plugin reads (`ConfigDescriptor.make`). */
       readonly config?: ReadonlyArray<ConfigDescriptor>;
       /**
@@ -300,7 +301,7 @@ export const Service =
        */
       readonly userFields?: Fields;
     },
-  ): Class<Self, Id, Shape, Groups, Fields> => {
+  ): Class<Self, Id, Shape, Groups, Fields, Limits> => {
     const key: Key<Id> = `awthaq/plugin/${id}`;
     const userFields: UserFields.Declarations = options.userFields ?? {};
     UserFields.describePlugin(id, userFields);
@@ -320,7 +321,11 @@ export const Service =
       tables: options.tables ?? [],
       migrations: options.migrations ?? [],
       readsTables: options.readsTables ?? [],
-      rateLimits: options.rateLimits ?? [],
+      rateLimits:
+        options.rateLimitRules === undefined
+          ? (options.rateLimits ?? [])
+          : RateLimitModel.declare(options.rateLimitRules),
+      rateLimitRules: options.rateLimitRules ?? {},
       config: options.config ?? [],
       userFields,
       dependsOn: noDependencies,
@@ -558,12 +563,33 @@ export function layer<
     options.contributes === undefined
       ? withHandlers
       : Layer.provideMerge(options.contributes, withHandlers);
-  if (taps.length === 0) return withContributions;
+  // BEH-EA-111: declared means opened. A plugin whose table is non-empty must have opened its budget
+  // by the time its layer is built, so the declaration `plugin list --rules` prints is never a rule
+  // nothing registered. Applies only when a registry is in scope (a budget requires one, so a plugin
+  // that opens its budget always has it).
+  const guarded = Layer.tap(withContributions, () =>
+    Effect.flatMap(Effect.serviceOption(RateLimitModel.RateLimitsRegistry), (registry) =>
+      Option.isNone(registry) || Object.keys(plugin.rateLimitRules).length === 0
+        ? Effect.void
+        : Effect.flatMap(registry.value.handleOf(plugin.id), (handle) =>
+            Option.isSome(handle)
+              ? Effect.void
+              : Effect.die(
+                  new RateLimitModel.RateLimitBudgetNotOpened({
+                    plugin: plugin.id,
+                    rules: Object.keys(plugin.rateLimitRules),
+                    message: `awthaq: plugin "${plugin.id}" declares rate-limit rules but its layer never opened RateLimits.budget(${plugin.id})`,
+                  }),
+                ),
+          ),
+    ),
+  );
+  if (taps.length === 0) return guarded;
   // PERS-003: the plugin installs its own taps as its own owner, so the
   // runtime chain orders them by this plugin's place in the composition.
   const installed = taps.reduce<Layer.Layer<never, never, unknown>>(
     (acc, declaration) => Layer.merge(acc, declaration.install(plugin)),
     Layer.empty,
   );
-  return Layer.merge(withContributions, installed);
+  return Layer.merge(guarded, installed);
 }

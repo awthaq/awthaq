@@ -6,7 +6,7 @@
 // the step that receives the name maps it and says so.
 import { Api } from "@awthaq/api";
 import { HookPoint, RateLimits } from "@awthaq/core";
-import { ClientAddress, RateLimiter } from "@awthaq/ports";
+import { RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
@@ -14,11 +14,9 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import {
   AcmeAudit,
   AcmeGate,
@@ -623,26 +621,23 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(call, "consume");
       const [strategy] = yield* getTexts("strategy");
       const ORIGIN = "203.0.113.7";
-      const derive = (user: string) => {
-        const ruleFor = { group: "invite", endpoint: "create" };
-        const request = HttpServerRequest.fromWeb(new Request("http://localhost/invite/create"));
-        const principal = Layer.succeed(
-          Api.CurrentPrincipal,
-          new Api.UserPrincipal({
-            ref: new Api.PrincipalRef({ type: "user", id: user }),
-            sessionId: `session-${user}`,
-          }),
+      // The handler resolves the principal (`CurrentPrincipal`) and the origin (`ClientAddress`) and
+      // passes them in; the built-in strategies key on exactly those fields.
+      const spec = {
+        group: "invite",
+        endpoint: "create",
+        limit: 5,
+        window: Duration.minutes(1),
+        bucket: "invite.create",
+      } as const;
+      const principalRule = RateLimits.rule({ ...spec, key: RateLimits.Key.user });
+      const ipRule = RateLimits.rule({ ...spec, key: RateLimits.Key.ip });
+      const derive = (user: string) =>
+        Effect.succeed(
+          strategy === "principal"
+            ? RateLimits.bucketKey(principalRule, { userId: user })
+            : RateLimits.bucketKey(ipRule, { ip: ORIGIN }),
         );
-        const address = Layer.succeed(ClientAddress.ClientAddress, {
-          resolve: () => Effect.succeed(Option.some(ORIGIN)),
-        });
-        return strategy === "principal"
-          ? RateLimits.bucketKey({ ...ruleFor, key: "principal" }).pipe(Effect.provide(principal))
-          : RateLimits.bucketKey({ ...ruleFor, key: "ip" }).pipe(
-              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-              Effect.provide(address),
-            );
-      };
       yield* setTexts("derived", [yield* derive(name), yield* derive("someone-else")]);
     },
   );

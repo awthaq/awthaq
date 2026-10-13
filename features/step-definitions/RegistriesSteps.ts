@@ -5,8 +5,8 @@
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Api } from "@awthaq/api";
-import { Auth, HookPoint, Hooks, RateLimits, Slots } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { AuditLog, Auth, AuthEvents, HookPoint, Hooks, RateLimits, Slots } from "@awthaq/core";
+import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { SubjectResolver } from "@awthaq/qadi";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -821,17 +821,41 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     ]);
   });
 
-  const ruleFor = (group: string, endpoint: string): RateLimits.RuleInput => ({
-    group,
-    endpoint,
-    key: "ip",
-    limit: 5,
-    window: "1 minute",
-  });
-  const ratePlugins = () => ({
-    password: { owner: PasswordFixture, input: ruleFor("password", "probe") },
-    invite: { owner: InviteOne, input: ruleFor("invite", "list") },
-  });
+  // A hand-built owner over a fixture plugin's own id, dependencies and contract, with one `order`ed rule
+  // on its first group: what `RateLimits.budget` registers (the rule `Layer` it replaces was removed).
+  const ownerOf = (
+    plugin: {
+      readonly id: string;
+      readonly dependsOn: ReadonlyArray<RateLimits.Owner>;
+      readonly contract: RateLimits.Owner["contract"];
+    },
+    group: string,
+    endpoint: string,
+    order: number,
+  ) => {
+    const owner: RateLimits.Owner = {
+      id: plugin.id,
+      dependsOn: plugin.dependsOn,
+      contract: plugin.contract,
+      rateLimitRules: {
+        [endpoint]: RateLimits.rule({
+          group,
+          endpoint,
+          key: RateLimits.Key.ip,
+          limit: 5,
+          window: "1 minute",
+          order,
+        }),
+      },
+    };
+    return owner;
+  };
+  const budgetLayer = (owner: RateLimits.Owner) => Layer.effectDiscard(RateLimits.budget(owner));
+  const rateTestLayer = RateLimiter.layerPermissive.pipe(
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(RateLimits.layer),
+  );
 
   Given(
     "a registry {string} contributed to by plugin {string} \\(order {int}\\) and plugin {string} \\(order {int}, no dependency relationship\\)",
@@ -852,12 +876,11 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("the registry's contributions are aggregated via {string}", function* (via: string) {
     assert.equal(via, "Layer.effectDiscard");
-    const { password, invite } = ratePlugins();
     // Installed in the "wrong" order on purpose — `order` decides, not installation sequence.
     const contributions = Layer.mergeAll(
-      RateLimits.rule(InviteOne, { ...invite.input, order: 10 }),
-      RateLimits.rule(PasswordFixture, { ...password.input, order: 5 }),
-    ).pipe(Layer.provideMerge(RateLimits.layer));
+      budgetLayer(ownerOf(InviteOne, "invite", "list", 10)),
+      budgetLayer(ownerOf(PasswordFixture, "password", "probe", 5)),
+    ).pipe(Layer.provideMerge(rateTestLayer));
     const registered = yield* Effect.scoped(
       Effect.gen(function* () {
         const context = yield* Layer.build(contributions);
@@ -892,19 +915,20 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "another plugin's Layer attempts to contribute a new rule to {string} after that first read",
     function* (_registry: string) {
-      const { password, invite } = ratePlugins();
       const outcomes = yield* Effect.scoped(
         Effect.gen(function* () {
           const context = yield* Layer.build(
-            RateLimits.rule(PasswordFixture, { ...password.input, order: 5 }).pipe(
-              Layer.provideMerge(RateLimits.layer),
+            budgetLayer(ownerOf(PasswordFixture, "password", "probe", 5)).pipe(
+              Layer.provideMerge(rateTestLayer),
             ),
           );
           const registry = Context.get(context, RateLimits.RateLimitsRegistry);
           const first = yield* registry.registered;
           // A late contribution after the first read is refused (a defect: a composition-order bug).
           const late = yield* Effect.exit(
-            registry.register(InviteOne, { ...invite.input, order: 1 }),
+            RateLimits.budget(ownerOf(InviteOne, "invite", "list", 1)).pipe(
+              Effect.provide(context),
+            ),
           );
           const second = yield* registry.registered;
           return { first, late: late._tag, second };

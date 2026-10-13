@@ -11,8 +11,10 @@
 // AuthEvents.ts (spec/behaviors/13-events.md, BEH-EA-097-104),
 // HookPoint.ts (spec/behaviors/12-hooks.md, BEH-EA-089-096, scoped as
 // documented in that module's own header),
-// RateLimits.ts (spec/behaviors/14-rate-limiting.md, BEH-EA-107/108/110/111 —
-// the port half, `RateLimiter`, lives in `@awthaq/ports`),
+// RateLimits.ts (spec/behaviors/14-rate-limiting.md, BEH-EA-105-111 — a plugin
+// declares a typed rule table and spends it by name through `RateLimits.budget`; the
+// vocabulary is in RateLimitModel.ts and the key strategies in RateLimitKey.ts. The
+// port half, `RateLimiter`, lives in `@awthaq/ports`),
 // Slots.ts (spec/behaviors/03-ports-slots-hooks-registries.md, BEH-EA-017/019/021,
 // scoped as documented in that module's own header — its `SlotConflict<P>`
 // check is real but runtime, not the compile-time one BEH-EA-012 illustrates,
