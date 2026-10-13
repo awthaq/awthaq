@@ -167,6 +167,30 @@ describe("WPS-005/TC-001: the anonymous ceremony is rate-limited", () => {
     }).pipe(Effect.provide(limited)),
   );
 
+  it.effect(
+    "TMS-006: case, whitespace and +tag aliases of one address share the email budget",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        // 10 per 15 minutes per address bucket; every alias is a distinct literal address (and a fresh
+        // IP), so only a shared bucket can throttle them. Before the shared normaliser each `+N` alias
+        // was a fresh budget.
+        for (let attempt = 1; attempt <= 10; attempt++) {
+          yield* passkey.authenticateOptions({
+            email:
+              attempt % 2 === 0
+                ? ` Victim+${attempt}@Example.com `
+                : `victim+${attempt}@example.com`,
+            ip: `10.1.0.${attempt}`,
+          });
+        }
+        const failure = yield* passkey
+          .authenticateOptions({ email: "victim+11@example.com", ip: "10.1.1.1" })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RateLimited");
+      }).pipe(Effect.provide(limited)),
+  );
+
   it.effect("authenticate/options is throttled per source address", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;

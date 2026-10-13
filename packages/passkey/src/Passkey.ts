@@ -419,58 +419,39 @@ const DECOY_TRANSPORT_SETS: ReadonlyArray<ReadonlyArray<string>> = [
 ];
 
 /**
- * TSS-004/TC-001/WPS-005: the anonymous authenticate ceremony's rules. Three
- * rules, all per-source or per-target — a per-IP budget on each of
- * `authenticateOptions`/`authenticateVerify` (mints server state / does
- * signature work for anyone) and a per-email budget on the username-first
- * options call (the enumeration-probing surface). `RateLimits.enforce` is the
- * one place a breach becomes observable (EOTS-007).
+ * TSS-004/TC-001/WPS-005: the anonymous authenticate ceremony's rules. Three rules, all per-source or
+ * per-target: a per-IP budget on each of `authenticateOptions`/`authenticateVerify` (mints server
+ * state / does signature work for anyone) and a per-email budget on the username-first options call
+ * (the enumeration-probing surface). Declared once: the static `rateLimits` listing is derived from
+ * this table and the layer registers it with `RateLimits.budget`, where a breach is made observable
+ * (EOTS-007). The per-email key is the shared TMS-006 normaliser, so `victim+1@x.com` and
+ * `victim+2@x.com` share one bucket instead of each getting a fresh options budget.
  */
-const RATE_LIMITS = {
-  authenticateOptionsByIp: {
+const rules = {
+  authenticateOptionsByIp: RateLimits.rule({
+    group: "passkey.authenticate",
     endpoint: "authenticateOptions",
-    dimension: "ip",
+    key: RateLimits.Key.ip,
     limit: 60,
     window: Duration.minutes(15),
-  },
+  }),
   // Username-first is one call per attempt, so this is looser than a
   // password's per-account budget but still bounds probing one address.
-  authenticateOptionsByEmail: {
+  authenticateOptionsByEmail: RateLimits.rule({
+    group: "passkey.authenticate",
     endpoint: "authenticateOptions",
-    dimension: "identity",
+    key: RateLimits.Key.email,
     limit: 10,
     window: Duration.minutes(15),
-  },
-  authenticateVerifyByIp: {
+  }),
+  authenticateVerifyByIp: RateLimits.rule({
+    group: "passkey.authenticate",
     endpoint: "authenticateVerify",
-    dimension: "ip",
+    key: RateLimits.Key.ip,
     limit: 60,
     window: Duration.minutes(15),
-  },
-} as const satisfies Record<
-  string,
-  {
-    readonly endpoint: string;
-    readonly dimension: "ip" | "identity";
-    readonly limit: number;
-    readonly window: Duration.Duration;
-  }
->;
-
-type RateLimitRuleName = keyof typeof RATE_LIMITS;
-
-const ruleMeta = (name: RateLimitRuleName): RateLimits.EnforceMeta => ({
-  group: "passkey.authenticate",
-  endpoint: RATE_LIMITS[name].endpoint,
-  rule: name,
-  dimension: RATE_LIMITS[name].dimension,
-});
-
-/** `RateLimits.RateLimitKey`'s `input` is untyped, so pulling `email` back out needs a real narrowing check, not a cast. */
-const emailFromRateLimitInput = (input: unknown): string =>
-  typeof input === "object" && input !== null && "email" in input && typeof input.email === "string"
-    ? input.email
-    : "";
+  }),
+};
 
 /** TC-001: no user has this id, so listing its (empty) credentials costs what a real user's listing does. */
 const DECOY_USER_ID = Users.UserId("awthaq-decoy-user");
@@ -1019,15 +1000,8 @@ export const passkeyErasure = Erasure.contribute({
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
   apiVersion: 1,
   contract: PasskeyApi.PasskeyApi,
-  // PV-241: declared from `RATE_LIMITS`, the table both the registry and enforcement draw from.
-  rateLimits: AuthPlugin.declareRateLimits(
-    ["passkey.authenticate"],
-    Object.entries(RATE_LIMITS).map(([name, rule]) => ({
-      group: "passkey.authenticate",
-      name,
-      ...rule,
-    })),
-  ),
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
   tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
   migrations: passkeyMigrations,
   // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
@@ -1078,8 +1052,6 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const builtConfig = yield* PasskeyConfig;
       const configNow = Tenant.configInForce(PasskeyConfig, builtConfig);
       const crypto = yield* Crypto.Crypto;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
       // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
       // future `TwoFactor` plugin taps.
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
@@ -1131,72 +1103,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const enumerationKey = new TextEncoder().encode(Redacted.value(enumerationSecret));
       const decoyCredential = { id: "awthaq-decoy-credential", publicKey: decoyPublicKey() };
 
-      /**
-       * Registers this plugin's own limits into the introspectable registry
-       * (BEH-EA-107/110/111) — declarative, matching the `limit`/`window` each
-       * `rateLimit(...)` call below actually enforces (`RATE_LIMITS` is the
-       * single source of truth both sides draw from). A
-       * `RateLimitScopeViolation` is only reachable if `group` below ever
-       * named something other than this plugin's own contract group — a
-       * coding defect here, hence `Effect.orDie`.
-       */
-      // The explicit return-type annotation on the `.map` callback is the
-      // narrow, necessary exception `@awthaq/password`'s and `@awthaq/oauth`'s
-      // own rule registration already document: passing this class into
-      // anything typed `AuthPlugin.Any` from inside its own `static readonly
-      // layer` initializer is a real TS circularity.
-      yield* Effect.all(
-        (
-          [
-            {
-              endpoint: RATE_LIMITS.authenticateOptionsByIp.endpoint,
-              key: "ip",
-              limit: RATE_LIMITS.authenticateOptionsByIp.limit,
-              window: RATE_LIMITS.authenticateOptionsByIp.window,
-            },
-            {
-              endpoint: RATE_LIMITS.authenticateOptionsByEmail.endpoint,
-              key: (input) =>
-                `passkey:authenticate-options:${emailFromRateLimitInput(input).toLowerCase()}`,
-              limit: RATE_LIMITS.authenticateOptionsByEmail.limit,
-              window: RATE_LIMITS.authenticateOptionsByEmail.window,
-            },
-            {
-              endpoint: RATE_LIMITS.authenticateVerifyByIp.endpoint,
-              key: "ip",
-              limit: RATE_LIMITS.authenticateVerifyByIp.limit,
-              window: RATE_LIMITS.authenticateVerifyByIp.window,
-            },
-          ] satisfies ReadonlyArray<{
-            readonly endpoint: string;
-            readonly key: RateLimits.RateLimitKey;
-            readonly limit: number;
-            readonly window: Duration.Duration;
-          }>
-        ).map((rule): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-          rateLimitsRegistry.register(Passkey, { group: "passkey.authenticate", ...rule }),
-        ),
-        { discard: true },
-      ).pipe(Effect.orDie);
-
-      const rateLimit = (
-        name: RateLimitRuleName,
-        key: string,
-      ): Effect.Effect<void, Api.RateLimited> =>
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        RateLimits.enforce({
-          key,
-          limit: RATE_LIMITS[name].limit,
-          window: RATE_LIMITS[name].window,
-          meta: ruleMeta(name),
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // BEH-EA-107/110/111: the table above is registered (introspectable) and spent through one
+      // budget; a breach is published, logged and counted, and answers `Api.RateLimited` (EOTS-007).
+      const limits = yield* RateLimits.budget(Passkey);
 
       /**
        * Ticket 15 (BPAS-001): the shared freshness gate `registerOptions`/
@@ -1447,15 +1356,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const authenticateOptions: PasskeyShape["authenticateOptions"] = Effect.fnUntraced(
         function* ({ email, ip }) {
           const config = yield* configNow;
-          yield* rateLimit(
-            "authenticateOptionsByIp",
-            `passkey:authenticate-options:ip:${ip ?? "unknown"}`,
-          );
+          yield* limits.spend("authenticateOptionsByIp", { ip });
           if (email !== undefined) {
-            yield* rateLimit(
-              "authenticateOptionsByEmail",
-              `passkey:authenticate-options:${email.toLowerCase()}`,
-            );
+            yield* limits.spend("authenticateOptionsByEmail", { email });
           }
           const ceremonyId = toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie));
           const challenge = yield* challengeStore.issue(authenticateScope(ceremonyId));
@@ -1523,10 +1426,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           const config = yield* configNow;
           // Per-source budget first: cheap to enforce, bounds signature work
           // and challenge probing from one address.
-          yield* rateLimit(
-            "authenticateVerifyByIp",
-            `passkey:authenticate-verify:ip:${input.ip ?? "unknown"}`,
-          );
+          yield* limits.spend("authenticateVerifyByIp", { ip: input.ip });
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
           if (Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
