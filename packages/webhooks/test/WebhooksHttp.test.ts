@@ -1,79 +1,23 @@
 // BEH-EA-281 (spec/behaviors/34-webhooks.md), over real HTTP: the admin group behind the admin-tier
 // authentication and CSRF, the fail-closed gate, the secret shown once on the wire, and the typed errors.
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
-import { AuthHttp, Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import { TestAuth } from "@awthaq/test";
 import * as Webhooks from "../src/Webhooks.ts";
-import * as WebhooksApi from "../src/WebhooksApi.ts";
 import { deliveryLayer } from "./support.ts";
 
-const CSRF_TEST_SECRET = "webhooks-authhttp-test-csrf-secret-padded-to-32-bytes";
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_TEST_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-// `<iat>.<random>.<hmac(iat.random)>`, computed independently of `Csrf.ts` with `node:crypto`.
-const CSRF_VALUE: string = (() => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex")}`;
-})();
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  ),
-);
+// `<iat>.<random>.<hmac(iat.random)>`, computed independently of `Csrf.ts` with `node:crypto`, over the secret the
+// composition's own derived `CsrfProtection` checks.
+const CSRF_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
 
 const ORIGIN = "http://localhost:3000";
 
 const build = (config: Partial<Webhooks.WebhooksConfigShape>) => {
-  const AppLayer = AuthHttp.routes(WebhooksApi.WebhooksApi).pipe(
-    Layer.provide(Webhooks.Webhooks.layer),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(deliveryLayer({ config })),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+  const app = TestAuth.app(deliveryLayer({ config }));
   const sessionCookie = (): Promise<string> =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const sessions = yield* Sessions.Sessions;
-            const issued = yield* sessions.issue({ userId: Users.UserId("admin-1") });
-            return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-          }).pipe(Effect.provide(context));
-        }),
-      ),
-    );
-  return { handler, sessionCookie };
+    app.signIn("admin-1@example.com").then((signedIn) => signedIn.cookieHeader);
+  return { handler: app.handler, sessionCookie };
 };
 
 const call = (
