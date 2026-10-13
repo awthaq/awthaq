@@ -7,11 +7,12 @@
 // `Migrations.ts` documents for the persistence stratum generally.
 
 import { Api } from "@awthaq/api";
-import { Hmac, LegacySessionBridge, SqlTransaction } from "@awthaq/ports";
+import { Hmac, type Ids, LegacySessionBridge, PruneExpired, SqlTransaction } from "@awthaq/ports";
 import {
   Models as SqlModels,
   ReadRouting as SqlReadRouting,
   Repositories as SqlRepositories,
+  SqlStore,
 } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -37,16 +38,14 @@ import {
 } from "./Errors.ts";
 import * as Observability from "./Observability.ts";
 import * as SecretHash from "./SecretHash.ts";
-import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
-import { drainBatches } from "./internal/purgeBatches.ts";
 import * as Tenant from "./Tenant.ts";
 import { UserId } from "./Users.ts";
 
 /**
  * BEH-EA-049: the public half of a session's `id.secret` token. INV-EA-018: an id is an identifier, never a capability — it appears in cookies, JWT `sid` claims and error messages, so nothing may act on it without the secret's proof (PIL-007).
  */
-// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
-export type SessionId = SqlModels.SessionId;
+// MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
+export type SessionId = Ids.SessionId;
 export const SessionId = Brand.nominal<SessionId>();
 
 const { toHex } = Hmac;
@@ -806,7 +805,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             ] => {
               // TMS-004: rows are otherwise removed only on revoke; prune
               // expired ones once the map is large, in the same atomic step.
-              const pruned = pruneExpiredAbove(s, now, (r) => r.absoluteExpiresAt);
+              const pruned = PruneExpired.pruneExpiredAbove(s, now, (r) => r.absoluteExpiresAt);
               const ancestor =
                 input.supersedes === undefined
                   ? Option.none()
@@ -1731,7 +1730,7 @@ export const layerSql: Layer.Layer<
       );
 
     const purgeExpired: SessionsShape["purgeExpired"] = (before) =>
-      drainBatches((limit) =>
+      SqlStore.drainBatches((limit) =>
         repo.deleteExpiredBefore(before, limit).pipe(orStoreUnavailable("Sessions.purgeExpired")),
       );
 

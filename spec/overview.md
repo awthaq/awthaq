@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-OVERVIEW |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) <br> 1.4 (2026-10-13): the Ports table names the `SqlTransaction` unit of work (ADR-EA-037, plan 10 item 5) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) <br> 1.4 (2026-10-13): the Ports table names the `SqlTransaction` unit of work (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): Ports surface lists `Ids`, `Store` and `PruneExpired` (plan 02 phase 1) |
 
 ---
 
@@ -98,6 +98,7 @@ Defects
 Encryption
 Hmac
 HostResolver
+Ids
 KeyProvider
 LegacySessionBridge
 Mailer
@@ -105,10 +106,12 @@ OutboundUrl
 PasswordHasher
 PasswordHasherWorkerPool
 PinnedHttp
+PruneExpired
 RateLimiter
 RefreshingCache
 SmsSender
 SqlTransaction
+Store
 Tenant
 WebAuthn
 WebCrypto
@@ -134,6 +137,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `HostResolver` | `Context.Service` | `layerNode` (`node:dns`, loaded lazily), `layerStatic(table)`; `pin(url)` resolves once, requires every answer public and returns the address to connect to (BEH-EA-312), `refusal(url)` is its refusal half |
 | `OutboundUrl` | helpers | `problem(field, url, options?)`, the SSRF floor for a URL an administrator supplies (https, no credentials, no private/loopback/link-local/reserved address or internal name; IPv6 parsed); `isPublicAddress`, `isIpLiteral` |
 | `PinnedHttp` | helpers | `send(request)` connects to an address `HostResolver.pin` judged, with the URL's own name as Host and SNI, judging the address again, no redirect, a body only up to a cap (webhooks, IdP metadata import); `pinnedRequestOptions` |
+| `Ids`, `Store`, `PruneExpired` | helpers | the identifier brands of the core entities (`UserId`, `AccountId`, `SessionId`, `VerificationTokenId`, `E164`; `@awthaq/sql`'s `Models` re-exports them), what every core store port shares (`StoreUnavailable`, `Consistency`, `ReadOptions`; [ADR-EA-041](decisions/041-domain-store-ports.md)) and the in-memory eviction the `Ref` adapters use (TMS-004) |
 | `Hmac`, `RefreshingCache`, `Defects`, `Tenant` | helpers | constant-time comparison and HMAC, a single-flight TTL cache, tagged defect classes, the ambient `TenantContext` |
 
 ### Domain stratum (4)

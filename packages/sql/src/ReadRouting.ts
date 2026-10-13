@@ -32,6 +32,7 @@
 // redirect landing on another process). `withCausalToken` is the seeding
 // primitive that middleware would call.
 
+import { Store } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -43,14 +44,12 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 /**
  * How stale a read may be. `"authoritative"` (the default everywhere) always
  * reads the primary; `"eventual"` may read the replica when one is configured
- * and read-your-writes allows it.
+ * and read-your-writes allows it. Declared with the store ports (plan 02), re-exported here.
  */
-export type Consistency = "authoritative" | "eventual";
+export type Consistency = Store.Consistency;
 
 /** Per-call read classification accepted by replica-eligible repository methods. */
-export interface ReadOptions {
-  readonly consistency?: Consistency;
-}
+export type ReadOptions = Store.ReadOptions;
 
 // ---- the replica client -----------------------------------------------------------
 

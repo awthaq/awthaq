@@ -6,7 +6,7 @@
 // — neither changes this service's public interface, the same deferral
 // `Migrations.ts` documents for the persistence stratum generally.
 
-import { Defects } from "@awthaq/ports";
+import { Defects, type Ids } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -31,8 +31,8 @@ import * as Tenant from "./Tenant.ts";
 import * as UserFields from "./UserFields.ts";
 
 /** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. INV-EA-018: an identifier, never a capability — UUIDv7, time-ordered and partially predictable, so nothing may act on it without a credential's proof. */
-// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
-export type UserId = SqlModels.UserId;
+// MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
+export type UserId = Ids.UserId;
 export const UserId = Brand.nominal<UserId>();
 
 /** FAMS-002: a user with an email address — BEH-EA-041/042 exactly as before (lower-cased, unique, monotone-verified, never client-settable). */

@@ -19,35 +19,27 @@
 // keeps only a nominal constructor over each, so a key rename on either side
 // breaks the bridge at compile time.
 
-import { Defects } from "@awthaq/ports";
+import { Defects, Ids } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export const UserId = Schema.String.pipe(Schema.brand("UserId"));
-export type UserId = typeof UserId.Type;
+// MA-008: one brand per id, declared at the ports stratum (plan 02) and re-exported here.
+export const UserId = Ids.UserId;
+export type UserId = Ids.UserId;
 
-export const AccountId = Schema.String.pipe(Schema.brand("AccountId"));
-export type AccountId = typeof AccountId.Type;
+export const AccountId = Ids.AccountId;
+export type AccountId = Ids.AccountId;
 
-export const SessionId = Schema.String.pipe(Schema.brand("SessionId"));
-export type SessionId = typeof SessionId.Type;
+export const SessionId = Ids.SessionId;
+export type SessionId = Ids.SessionId;
 
-export const VerificationTokenId = Schema.String.pipe(Schema.brand("VerificationTokenId"));
-export type VerificationTokenId = typeof VerificationTokenId.Type;
+export const VerificationTokenId = Ids.VerificationTokenId;
+export type VerificationTokenId = Ids.VerificationTokenId;
 
-/**
- * SOS-008/FAMS-002: the stored shape of `users.phone` — E.164 (`+` and 2-15
- * digits, no leading zero after the `+`). Declared here for the same reason
- * `UserId` is: the model's `phone` column and core's `Phone` identity share one
- * brand, and `@awthaq/core`'s `Phone.ts` owns the normalizer that mints it.
- */
-export const E164 = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^\+[1-9]\d{1,14}$/)),
-  Schema.brand("E164"),
-);
-export type E164 = typeof E164.Type;
+export const E164 = Ids.E164;
+export type E164 = Ids.E164;
 
 /** The SQL dialects this stratum implements (mysql is a named target, not yet wired — see `CoreMigrations.ts`). */
 export type Dialect = "pg" | "sqlite";

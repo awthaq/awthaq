@@ -7,7 +7,7 @@
 // same deferral `Migrations.ts` documents for the persistence stratum
 // generally.
 
-import { PasswordHasher, SqlTransaction } from "@awthaq/ports";
+import { type Ids, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -26,8 +26,8 @@ import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./E
 import * as Tenant from "./Tenant.ts";
 import { UserId } from "./Users.ts";
 
-// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
-export type AccountId = SqlModels.AccountId;
+// MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
+export type AccountId = Ids.AccountId;
 export const AccountId = Brand.nominal<AccountId>();
 
 /** BEH-EA-044: `providerId = "password"` is the reserved password-credential provider. */

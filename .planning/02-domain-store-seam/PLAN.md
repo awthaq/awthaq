@@ -1290,3 +1290,40 @@ Add to `scripts/test-pg.sh`:
 7. **Erasure across tenants under RLS.** `pseudonymizeActor` and `Verification.deleteAllByUser` act only on the current tenant when run inside `TenantScope.withTenant` on Postgres (L-7). Should erasure always run tenant-unscoped (the GUC unset), or is per-tenant erasure intended?
 8. **`updatedAt` on `setFields`.** The plan bumps it (U-1 canonical). Does anything downstream (SCIM `meta.lastModified`, exports) rely on field writes *not* touching it?
 9. **Legacy session bridge single-use (S-17).** The bridge's `consume` returns `void`, so two concurrent presentations of one better-auth token can mint two sessions. Is that acceptable for a migration window, or should the `LegacySessionBridge` port gain an atomic `claim`? That would be a separate change to `@awthaq/migrate-better-auth`.
+
+---
+
+## 11. Decisions taken (execution)
+
+Open questions were answered with the plan's recommended default; where the plan gave none, the richest option with a real caller. The plan was written before plans 01, 03, 05, 06, 07 and 09 landed, so it was stale in several places (listed under each phase).
+
+### Open questions (section 10)
+
+1. **Q1 (external consumers of `layerSql`/`layerMemory`):** no deprecation alias; the break is immediate (ADR-EA-034 section 2 allows it, and no consumer outside this repository is known).
+2. **Q2 (KV `SessionStore`):** `StoreContract` is public from day one (exported from `@awthaq/test`, cases as data).
+3. **Q3 (transactional memory, phase 8):** not done. Memory stays "atomic per primitive". Plans 01 (`SignUp`'s unit) and 07 (`redeem`'s held-row compensation) already give a memory composition a way to leave nothing behind, and `Effect.tx` re-runs its body on conflict, including publishes and crypto, which would need every service re-audited. ADR-EA-041 lists it as a rejected alternative to revisit.
+4. **Q4 (tenant filtering of partitioned reads):** no application-level filter; status quo (RLS is the backstop under `withTenant`).
+5. **Q5 (`deferMiss`):** moot. Plan 10 item 5 and plan 07 removed `deferMiss`, `recordMiss` and `ConsumeOptions`.
+6. **Q6 (AAPS-005 completeness):** unchanged (`updateProfile`/`setStatus` still always announce; `verifyPhone`/`promoteIdentity` still do not).
+7. **Q7 (erasure across tenants under RLS):** unchanged; no tenant-unscoped erasure here.
+8. **Q8 (`updatedAt` on `setFields`):** bumped (the plan's canonical U-1).
+9. **Q9 (legacy bridge single-use):** unchanged and reported (the bridge port has no atomic claim; a separate change to `@awthaq/migrate-better-auth`).
+
+### Phase 0 (hotfixes in place)
+
+- **0.7 was stale.** Plan 10 item 5 and plan 07 removed `deferMiss`/`recordMiss`, and the miss spend already runs in the unit of work's `afterUnit` lane (so it survives a caller's rollback). The remaining bug was that the spend targeted the identifier, so a reissue between the miss and the spend charged the new token. Fix: `layerSql`'s claim reads the live row first (`findByIdentifier`) and `recordFailedAttempt` is pinned to that row's id (a reissue replaces the live row and its id, so it finds nothing). This costs one extra indexed read per claim; the plan's `sql.withTransaction` suggestion would not have helped under Postgres READ COMMITTED (the second statement takes a fresh snapshot), so it was not used. Regression test: "SOS-004: a reissue racing a miss never charges the new token".
+- **`reserve` with `ttl <= 0` is not a defect.** `MagicLink`/`EmailOtp`'s `resendWindow: Duration.zero` is a valid way to disable the throttle, so a defect would be a regression. `expiresAt <= now` makes both layers grant at once, which is the consistent behaviour the plan wanted.
+- **0.2 reauthenticate:** the repository takes an optional expected `amr` (compare-and-swap); the core loop re-checks liveness and ownership after each lost swap, so a dead row is still `SessionNotFound` and only genuine contention is `StoreUnavailable` (five attempts).
+- **0.3:** `markReusedOnce` replaces `markReused`; the family revocation runs through `SqlTransaction.transactional` (the repo's `check:transactions` guard bans a bare `sql.withTransaction`).
+- **0.5:** `AccountsRepository.lockByUser` (a no-op off Postgres); `Accounts.test.ts` now builds its database with `TestSql.layer("core_Accounts")` and is in `scripts/test-pg.sh`.
+- **0.8:** `UsersRepository.verifyEmail` answers `Option<User>`; on `None` the domain re-reads and returns the current record without announcing (a vanished user is `UserNotFound` from that re-read).
+- Plan 10 item 3 had already made `reauthenticate` refuse a dead session (S-18), so the `liveAt` guard in the plan's section 3.2 is already today's behaviour; `SessionStore.reauthenticate` keeps `liveAt` as a required `DateTime` guard rather than an option.
+
+### Phase 1 (substrate)
+
+- **Plan 05 landed first, so its names win** (README reconciliation): `StoreFailure` (with `retryTransient`, `orStoreUnavailable`) already lives in `@awthaq/sql`, and `Tenant.stamp` already exists in `@awthaq/ports` with a row-shaped signature (`{ tenantId: string | null }`). Plan 02's Option-shaped rule is added beside it as `Tenant.resolve(explicit: Option<string>)` rather than changing `stamp`. `SqlStore.write`/`read` is a thin wrapper over `StoreFailure` (the plan's own instruction), plus `drainBatches`.
+- `PruneExpired` is its own public ports module (`packages/ports/src/PruneExpired.ts`), not `internal/`: core's twins use it until phase 7, and a third-party `Ref` adapter may too. `drainBatches` lives in `SqlStore` (public `@awthaq/sql` module) for the same reason.
+- `StoreUnavailable` is declared in `@awthaq/ports` `Store.ts` as `Api.StoreUnavailable` (a second `export import` of the same class), so the port signatures do not import `@awthaq/sql`.
+- `StoreContract` needs no `StoreContract.memory/sql/file.test.ts` runner files until a port has cases; phase 1 ships `StoreContract.test.ts` (the runner's own test) and each phase adds its runner entries. Cases never read the ambient clock (every primitive takes the instant it judges at), so they run on `Effect.runPromise`.
+- The ports surface block in `spec/overview.md` lists `Ids`, `Store` and `PruneExpired`.
+- ADR-EA-041 is written in phase 1 (status "Accepted") and moves to "Accepted — implemented" with phase 7.

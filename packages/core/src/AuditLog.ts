@@ -37,7 +37,7 @@
 // table with no erasure story (`ImpersonationRecords`); this table is
 // deliberately rewritable under GDPR Art. 17, which a hash chain would forbid.
 
-import { Repositories as SqlRepositories } from "@awthaq/sql";
+import { Repositories as SqlRepositories, SqlStore } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -60,7 +60,6 @@ import {
   upcastPayload,
 } from "./AuthEventSchemas.ts";
 import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
-import { drainBatches } from "./internal/purgeBatches.ts";
 import { UserId } from "./Users.ts";
 
 /** ESA-007: a stored row that no longer decodes as an `AuthEvent` — a schema drift or a hand-edited row. */
@@ -448,7 +447,7 @@ export const layerSql = Layer.effect(
       });
 
     const purge: AuditLogShape["purge"] = (input) =>
-      drainBatches((limit) =>
+      SqlStore.drainBatches((limit) =>
         repo
           .deleteOccurredBefore({
             cutoff: input.before,

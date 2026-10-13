@@ -46,6 +46,16 @@ export const stamp = <A extends { readonly tenantId: string | null }>(
     : Effect.map(TenantContext, (tenant) => ({ ...input, tenantId: Option.getOrNull(tenant) }));
 
 /**
+ * The same rule over an optional explicit tenant, for the store adapters whose rows carry
+ * `Option<string>` (the memory adapters of plan 02): an explicit `Some` wins, else the ambient
+ * `TenantContext`, else none.
+ */
+export const resolve = (explicit: Option.Option<string>): Effect.Effect<Option.Option<string>> =>
+  Option.isSome(explicit)
+    ? Effect.succeed(explicit)
+    : Effect.map(TenantContext, (tenant) => tenant);
+
+/**
  * EP-007: names the tenant whose configuration layers a request runs under. A plugin's
  * `config(...)` layer provides only a `Context.Reference`, which carries no requirement
  * type, so it is a `Layer<never>` — and `LayerMap`'s constructors, keyed by tenant id, do not

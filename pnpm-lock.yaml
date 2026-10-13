@@ -988,6 +988,9 @@ importers:
 
   packages/ports:
     dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
       '@simplewebauthn/server':
         specifier: ^14.0.3
         version: 14.0.3

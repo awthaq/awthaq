@@ -14,7 +14,7 @@ import * as Layer from "effect/Layer";
 import type * as Schema from "effect/Schema";
 import * as ContributionRegistry from "./internal/contributionRegistry.ts";
 import type { StoreUnavailable } from "./Errors.ts";
-import type { Models as SqlModels } from "@awthaq/sql";
+import type { Ids } from "@awthaq/ports";
 
 /**
  * What a continuation is told: who signed in, by which strategy, and the session that now exists.
@@ -23,7 +23,7 @@ import type { Models as SqlModels } from "@awthaq/sql";
  * reads it by id).
  */
 export interface ContinuationContext {
-  readonly userId: SqlModels.UserId;
+  readonly userId: Ids.UserId;
   readonly sessionId: string;
   readonly strategy: string;
 }

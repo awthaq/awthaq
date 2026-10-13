@@ -162,3 +162,7 @@ entries:
     file: "040-plugin-exposes-domain-services.md"
     title: "A Plugin May Expose Namespaced Domain Services; Dependents Declare dependsOn"
     status: "Accepted — implemented"
+  - id: "ADR-EA-041"
+    file: "041-domain-store-ports.md"
+    title: "Core Domain Services Are Written Once Over Atomic Store Ports"
+    status: "Accepted"

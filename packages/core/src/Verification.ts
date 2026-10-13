@@ -32,8 +32,8 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
-import { Defects, Hmac, SqlTransaction } from "@awthaq/ports";
-import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
+import { Defects, Hmac, type Ids, PruneExpired, SqlTransaction } from "@awthaq/ports";
+import { Models as SqlModels, Repositories as SqlRepositories, SqlStore } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -52,12 +52,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { isSqlError } from "effect/unstable/sql/SqlError";
 import * as AuthEvents from "./AuthEvents.ts";
 import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
-import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
-import { drainBatches } from "./internal/purgeBatches.ts";
 import { UserId } from "./Users.ts";
 
-// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
-export type VerificationTokenId = SqlModels.VerificationTokenId;
+// MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
+export type VerificationTokenId = Ids.VerificationTokenId;
 export const VerificationTokenId = Brand.nominal<VerificationTokenId>();
 
 const { toHex } = Hmac;
@@ -453,7 +451,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           yield* Ref.update(tokens, (s) => ({
             ...s,
             live: HashMap.set(
-              pruneExpiredAbove(s.live, now, (r) => r.expiresAt),
+              PruneExpired.pruneExpiredAbove(s.live, now, (r) => r.expiresAt),
               input.identifier,
               row,
             ),
@@ -535,7 +533,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           return [
             true,
             HashMap.set(
-              pruneExpiredAbove(s, now, (expiresAt) => expiresAt),
+              PruneExpired.pruneExpiredAbove(s, now, (expiresAt) => expiresAt),
               input.identifier,
               DateTime.addDuration(now, input.ttl),
             ),
@@ -707,12 +705,12 @@ export const layerSql = Layer.effect(
     // sweep's forensic window passes; a bounded loop of short deletes, tokens then reservations.
     const purgeExpired: VerificationShape["purgeExpired"] = (before) =>
       Effect.all([
-        drainBatches((limit) =>
+        SqlStore.drainBatches((limit) =>
           repo
             .deleteExpiredBefore(before, limit)
             .pipe(orStoreUnavailable("Verification.purgeExpired")),
         ),
-        drainBatches((limit) =>
+        SqlStore.drainBatches((limit) =>
           reservationsRepo
             .deleteExpiredBefore(before, limit)
             .pipe(orStoreUnavailable("Verification.purgeExpired")),

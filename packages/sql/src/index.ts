@@ -23,6 +23,7 @@ export * as RateLimiterStoreSql from "./RateLimiterStoreSql.ts";
 export * as ReadRouting from "./ReadRouting.ts";
 export * as Repositories from "./Repositories.ts";
 export * as SealedColumn from "./SealedColumn.ts";
+export * as SqlStore from "./SqlStore.ts";
 export * as StoreFailure from "./StoreFailure.ts";
 export * as TenantScope from "./TenantScope.ts";
 export * as TenantScoped from "./TenantScoped.ts";

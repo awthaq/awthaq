@@ -2,7 +2,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as HashMap from "effect/HashMap";
-import * as PruneExpired from "../src/internal/pruneExpired.ts";
+import * as PruneExpired from "../src/PruneExpired.ts";
 
 const at = (millis: number) => DateTime.makeUnsafe(millis);
 const expiryOf = (value: { readonly expiresAt: DateTime.Utc }) => value.expiresAt;
