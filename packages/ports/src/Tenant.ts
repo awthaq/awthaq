@@ -34,6 +34,18 @@ export const withoutTenant = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.E
   Effect.provideService(effect, TenantContext, Option.none());
 
 /**
+ * The one tenant-stamp rule (plan 05 / plan 02): an explicit `tenantId` on the input wins, then
+ * the ambient `TenantContext`, then `NULL`. It lives here, below `@awthaq/sql`, so memory and SQL
+ * adapters of core and of every plugin stamp rows identically.
+ */
+export const stamp = <A extends { readonly tenantId: string | null }>(
+  input: A,
+): Effect.Effect<A> =>
+  input.tenantId !== null
+    ? Effect.succeed(input)
+    : Effect.map(TenantContext, (tenant) => ({ ...input, tenantId: Option.getOrNull(tenant) }));
+
+/**
  * EP-007: names the tenant whose configuration layers a request runs under. A plugin's
  * `config(...)` layer provides only a `Context.Reference`, which carries no requirement
  * type, so it is a `Layer<never>` — and `LayerMap`'s constructors, keyed by tenant id, do not

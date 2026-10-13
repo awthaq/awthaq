@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) |
 
 ---
 
@@ -175,3 +175,34 @@ REQUIREMENT: A plugin's migrations MUST create or alter only tables named
 
 _Previous: [BEH-EA-032](04-contract-stratum.md#beh-ea-032-authapi-merges-contracts-and-refuses-a-duplicate-group-id)_
 _Next: [BEH-EA-041](06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email)_
+
+## BEH-EA-324: A sealed column is declared once, opens lazily and re-seals on read
+
+```text
+REQUIREMENT: A table column stored as an `Encryption` envelope MUST be declared
+             once (`SealedColumn.column`) with the canonical AAD
+             `<table>:<rowKey>:<column>`. Reading it MUST yield a `Sealed<A>`
+             whose `open` is the only place the plaintext appears; an envelope
+             under a retired key or a listed legacy AAD MUST open and MUST be
+             re-sealed under the current key and canonical AAD by
+             compare-and-swap, without ever failing the read. A value that
+             does not open MUST be the typed `SealedColumn/Unreadable`, never
+             `null` and never a defect, and a call site MUST handle it with
+             `SealedColumn.orDie` or `SealedColumn.option`.
+```
+
+A ciphertext copied to another row or column fails authentication, because the AAD binds the table, the row key and the column ([ADR-EA-019](../decisions/019-encryption-key-rotation.md) decision 6). A lost or failed compare-and-swap is logged with ids only; `SealedColumnConfig.resealOnRead: false` turns the write off. `SealedColumn.sweep` re-seals every stale or legacy value of a column and reports `{ scanned, resealed, unreadable }`; it is an operator's job, never run by a request. The mechanism is proven once (`packages/sql/test/SealedColumn.test.ts`); each plugin's wiring is proven by `TestAuth.runSealedColumnTests`.
+
+## BEH-EA-325: A plugin records module fails with StoreUnavailable, never a defect, when its store is down
+
+```text
+REQUIREMENT: A plugin records module MUST map a `SqlError` to the typed
+             `StoreUnavailable` naming `<Records>.<method>` (via
+             `StoreFailure`), exactly as a core repository does
+             (BEH-EA-035); a `SchemaError`, and a statement the database
+             refused as malformed or unauthorised, MUST remain defects. A
+             credential-resolver contribution MAY fail with
+             `StoreUnavailable`, and the request then answers 503.
+```
+
+`StoreFailure` is defined once in `@awthaq/sql`; `@awthaq/core`'s `Errors` re-exports it ([ADR-EA-028](../decisions/028-infrastructure-error-policy.md) revision 1.3). A `SqlSyntaxError` or `AuthorizationError` (a missing GRANT, or a row-level-security refusal of a forgotten tenant filter) dies as `Defects/InvariantViolation` `store.statementRefused`, because a retry cannot fix it and a 503 would misreport it.

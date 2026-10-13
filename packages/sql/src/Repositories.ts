@@ -25,6 +25,7 @@ import * as SqlModel from "effect/unstable/sql/SqlModel";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import * as ReadRouting from "./ReadRouting.ts";
+import * as SealedColumn from "./SealedColumn.ts";
 import {
   AccountId,
   SessionId,
@@ -74,23 +75,6 @@ const traced = (name: string, attributes?: Record<string, unknown>) =>
     captureStackTrace: false,
   });
 
-// ---- Tenant attribution (DRS-001, ADR-EA-018) --------------------------------------
-
-/**
- * Every insert path funnels through here: an explicit `tenantId` on the input
- * wins, otherwise the ambient `TenantContext`, otherwise `NULL` — so a
- * single-tenant deployment (nothing provides the context) writes exactly what
- * it wrote before the column existed. Core service signatures do not change;
- * the repositories are the one choke point a caller cannot forget.
- */
-const stampTenant = <A extends { readonly tenantId: string | null }>(input: A): Effect.Effect<A> =>
-  input.tenantId !== null
-    ? Effect.succeed(input)
-    : Effect.map(Tenant.TenantContext, (tenant) => ({
-        ...input,
-        tenantId: Option.getOrNull(tenant),
-      }));
-
 // ---- Opt-in PII column encryption (CSG-006, option B) -------------------------------
 
 /**
@@ -113,54 +97,35 @@ interface PiiCodec {
   }>;
 }
 
-const sealedPii = (encryption: Encryption.EncryptionShape): PiiCodec => {
-  const seal = (aad: string, value: string) => encryption.encrypt(Redacted.make(value), aad);
-  const conceal: PiiCodec["conceal"] = (aad, value) =>
-    value === null ? Effect.succeed(null) : seal(aad, value);
-  return {
-    conceal,
-    reveal: (aad, stored) => {
-      if (stored === null) return Effect.succeed({ plaintext: null, refreshed: Option.none() });
-      // A column that adopted encryption after it held plaintext: not an
-      // envelope, so read it as the plaintext it is and seal it on this read.
-      // (An envelope-shaped value that fails authentication is never read as
-      // plaintext — that is tampering, or a retired key.)
-      if (!Encryption.looksLikeEnvelope(stored)) {
-        return seal(aad, stored).pipe(
-          Effect.map((sealed) => ({ plaintext: stored, refreshed: Option.some(sealed) })),
-        );
-      }
-      return encryption.decrypt(stored, aad).pipe(
-        Effect.flatMap((decrypted) =>
-          Option.isNone(decrypted.staleKid)
-            ? Effect.succeed({
-                plaintext: Redacted.value(decrypted.plaintext),
-                refreshed: Option.none<string>(),
-              })
-            : encryption.encrypt(decrypted.plaintext, aad).pipe(
-                Effect.map((sealed) => ({
-                  plaintext: Redacted.value(decrypted.plaintext),
-                  refreshed: Option.some(sealed),
-                })),
-              ),
+const sealedPii = (encryption: Encryption.EncryptionShape): PiiCodec => ({
+  conceal: (aad, value) =>
+    value === null ? Effect.succeed(null) : encryption.encrypt(Redacted.make(value), aad),
+  // A column that adopted encryption after it held plaintext is read as the plaintext it is and
+  // sealed on this read; an envelope-shaped value that fails authentication is never read as
+  // plaintext (that is tampering, or a retired key).
+  reveal: (aad, stored) =>
+    stored === null
+      ? Effect.succeed({ plaintext: null, refreshed: Option.none() })
+      : SealedColumn.reveal(encryption, { aad, adoptPlaintext: true }, stored).pipe(
+          Effect.map(({ plaintext, refreshed }) => ({
+            plaintext: Redacted.value(plaintext),
+            refreshed,
+          })),
+          // Same policy as the account tokens (SMS-002): one unreadable column
+          // reads as null and is logged (never the ciphertext), it does not
+          // take the fiber down.
+          Effect.catchTags({
+            DecryptionFailed: () =>
+              Effect.logWarning(
+                "awthaq: a personal-data column is undecryptable; reading it as null",
+              ).pipe(Effect.as({ plaintext: null, refreshed: Option.none<string>() })),
+            UnknownKeyId: () =>
+              Effect.logWarning(
+                "awthaq: a personal-data column is under an unknown key; reading it as null",
+              ).pipe(Effect.as({ plaintext: null, refreshed: Option.none<string>() })),
+          }),
         ),
-        // Same policy as the account tokens (SMS-002): one unreadable column
-        // reads as null and is logged (never the ciphertext), it does not
-        // take the fiber down.
-        Effect.catchTags({
-          DecryptionFailed: () =>
-            Effect.logWarning(
-              "awthaq: a personal-data column is undecryptable; reading it as null",
-            ).pipe(Effect.as({ plaintext: null, refreshed: Option.none<string>() })),
-          UnknownKeyId: () =>
-            Effect.logWarning(
-              "awthaq: a personal-data column is under an unknown key; reading it as null",
-            ).pipe(Effect.as({ plaintext: null, refreshed: Option.none<string>() })),
-        }),
-      );
-    },
-  };
-};
+});
 
 // ---- Users ------------------------------------------------------------
 
@@ -402,7 +367,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
     const insert: UsersRepositoryShape["insert"] = (input) =>
       concealMetadata(input.id, input.metadata).pipe(
         Effect.flatMap((metadata) =>
-          Effect.flatMap(stampTenant(input), (stamped) => repo.insert({ ...stamped, metadata })),
+          Effect.flatMap(Tenant.stamp(input), (stamped) => repo.insert({ ...stamped, metadata })),
         ),
         Effect.flatMap(revealUser),
       );
@@ -465,7 +430,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
     const insertIfAbsent: UsersRepositoryShape["insertIfAbsent"] = (input) =>
       concealMetadata(input.id, input.metadata).pipe(
         Effect.flatMap((metadata) =>
-          Effect.flatMap(stampTenant(input), (stamped) =>
+          Effect.flatMap(Tenant.stamp(input), (stamped) =>
             insertIfAbsentQuery({ ...stamped, metadata }),
           ),
         ),
@@ -919,17 +884,12 @@ export const AccountsRepositoryLive: Layer.Layer<
         return Effect.succeed<ColumnRead>({ plaintext: null, stored, refreshed: Option.none() });
       }
       const aad = tokenAad(row.providerId, row.userId, field);
-      return encryption.decrypt(stored, aad).pipe(
-        Effect.flatMap((decrypted): Effect.Effect<ColumnRead> => {
-          const plaintext = Redacted.value(decrypted.plaintext);
-          return Option.isNone(decrypted.staleKid)
-            ? Effect.succeed({ plaintext, stored, refreshed: Option.none() })
-            : encryption
-                .encrypt(decrypted.plaintext, aad)
-                .pipe(
-                  Effect.map((fresh) => ({ plaintext, stored, refreshed: Option.some(fresh) })),
-                );
-        }),
+      return SealedColumn.reveal(encryption, { aad }, stored).pipe(
+        Effect.map(({ plaintext, refreshed }): ColumnRead => ({
+          plaintext: Redacted.value(plaintext),
+          stored,
+          refreshed,
+        })),
         Effect.catchTags({
           DecryptionFailed: () =>
             Effect.fail(
@@ -1033,7 +993,7 @@ export const AccountsRepositoryLive: Layer.Layer<
           "idToken",
           input.idToken,
         );
-        const stamped = yield* stampTenant(input);
+        const stamped = yield* Tenant.stamp(input);
         const row = yield* repo.insert({ ...stamped, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
@@ -1429,7 +1389,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
     const insert: SessionsRepositoryShape["insert"] = (input) =>
       concealPii(input.id, input).pipe(
         Effect.flatMap((columns) =>
-          Effect.flatMap(stampTenant(input), (stamped) =>
+          Effect.flatMap(Tenant.stamp(input), (stamped) =>
             repo.insert({
               ...stamped,
               ipAddress: columns.ipAddress,
@@ -1967,7 +1927,7 @@ export const VerificationRepositoryLive: Layer.Layer<
 
     return {
       models,
-      insert: (input) => Effect.flatMap(stampTenant(input), repo.insert),
+      insert: (input) => Effect.flatMap(Tenant.stamp(input), repo.insert),
       update: repo.update,
       findById: repo.findById,
       delete: repo.delete,

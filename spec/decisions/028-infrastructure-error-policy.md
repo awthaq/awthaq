@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-028 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-10-13 |
 > | Status | Accepted — implemented for `Sessions`, `Verification`, `Users`, `Accounts` and `AuditLog` |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006); 1.1 (2026-09-29): `AuditLog` converted, the audit-write failure policy, the transient-retry helper (MA-004, SEA-002) <br> 1.2 (2026-10-13): the sign-in completions of the first-party plugins converted (plan 10 item 2) |
+> | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006); 1.1 (2026-09-29): `AuditLog` converted, the audit-write failure policy, the transient-retry helper (MA-004, SEA-002) <br> 1.2 (2026-10-13): the sign-in completions of the first-party plugins converted (plan 10 item 2) <br> 1.3 (2026-10-13): Plugin records modules are in scope; the helper moved to `@awthaq/sql` `StoreFailure`; decision 3a: refused statements die; credential-resolver contributions may fail with `StoreUnavailable` (plan 05) |
 
 ---
 
@@ -23,9 +23,10 @@ Core services fail in two different ways. A *domain* failure (`SessionNotFound`,
 **Option B: one typed infrastructure error.** Every core Shape's `E` is its domain errors plus `StoreUnavailable`, and nothing else environmental.
 
 1. **The class** is `StoreUnavailable` (`{ operation: string }`, HTTP 503), defined once in `@awthaq/api` and re-exported by `@awthaq/core` (`Errors.StoreUnavailable`). It is a `Schema.TaggedError` so the same class is the error a service fails with and the wire error a client decodes; there is no second `Data` twin to keep in step (ESS-008). Its cause is *not* a field. `Errors.storeUnavailable(operation)` logs the underlying `SqlError`/`PlatformError` once, where it happened, and fails with the label alone, so a database message can never reach a response body.
-2. **What maps to it:** a `SqlError` from a repository and a `PlatformError` from `Crypto` (`layerSql` and `layerMemory` alike), applied at each service method's seam with `Effect.catchTags`.
+2. **What maps to it, and where it lives.** The helper is defined once in `@awthaq/sql` (`StoreFailure`: `storeUnavailable`, `orStoreUnavailable`, `retryTransient`) and `@awthaq/core` re-exports it. The policy covers plugin records modules too: "a repository" includes them, and option A is rejected for plugins on the same grounds. Operation labels are `<Records>.<method>`. A `SqlError` from a repository and a `PlatformError` from `Crypto` (`layerSql` and `layerMemory` alike), applied at each service method's seam with `Effect.catchTags`.
 3. **What still dies:** a `SchemaError` (a stored row no longer decodes, or a model was constructed with invalid input) and any invariant this code itself broke. Those are bugs a retry cannot fix.
-4. **The HTTP edge:** `Authentication`, `AdminAuthentication`, `OptionalAuthentication` and `CsrfProtection` declare `StoreUnavailable` in their error lists, so every endpoint behind either accepts it without naming it, and the framework answers 503. `resolveSession` maps only `SessionNotFound`/`SessionExpired` to `Unauthenticated`. Because Effect's security chain falls through to the next scheme on any typed failure and answers with the last scheme's, the first scheme to see an outage records it against the request and every later scheme of that request fails with it, so the answer is 503 rather than the bearer scheme's "no credential" 401. `@awthaq/qadi`'s subject extractor reports it as `SubjectExtractionFailed`, the outage signal that error exists for.
+4. **The HTTP edge:** `Authentication`, `AdminAuthentication`, `OptionalAuthentication` and `CsrfProtection` declare `StoreUnavailable` in their error lists, so every endpoint behind either accepts it without naming it, and the framework answers 503. `resolveSession` maps only `SessionNotFound`/`SessionExpired` to `Unauthenticated`. Because Effect's security chain falls through to the next scheme on any typed failure and answers with the last scheme's, the first scheme to see an outage records it against the request and every later scheme of that request fails with it, so the answer is 503 rather than the bearer scheme's "no credential" 401. A credential-resolver contribution may fail with `StoreUnavailable` too, recorded as the request's outage exactly like the cookie scheme's. `@awthaq/qadi`'s subject extractor reports it as `SubjectExtractionFailed`, the outage signal that error exists for.
+3a. **A statement the database refused dies (plan 05).** A `SqlError` whose reason is `SqlSyntaxError` or `AuthorizationError` (a bug, a missing GRANT, or a row-level-security refusal of a forgotten tenant filter) is a defect (`Defects/InvariantViolation`, `store.statementRefused`, logged at error level with the operation), because a retry cannot fix it and a 503 would misreport it.
 5. **Callers** no longer carry `catchTag("PlatformError", Effect.die)`; a plugin Shape that composes a core service adds `StoreUnavailable` to its own `E`.
 
 ## Alternatives considered

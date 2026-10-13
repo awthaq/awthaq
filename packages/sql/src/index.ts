@@ -11,7 +11,9 @@
 // opt-in SQL rate-limit store. ReadRouting.ts: opt-in, default-off read-replica
 // routing with per-read consistency classes and causal tokens (RRC-001,
 // ADR-EA-024). TenantScope.ts: opt-in Postgres row-level security under the
-// `"tenantId"` column and `withTenant` (DRS-001, ADR-EA-018). See README.md for operations (drivers, pool configuration,
+// `"tenantId"` column and `withTenant` (DRS-001, ADR-EA-018). TenantScoped.ts, SealedColumn.ts and
+// StoreFailure.ts: the plugin-table substrate (plan 05): tenant scoping and the cross-tenant
+// witness, sealed columns with lazy re-seal, and the `StoreUnavailable` mapping. See README.md for operations (drivers, pool configuration,
 // migrations, encryption boundary, replicas).
 // See spec/overview.md for the full package map.
 
@@ -20,4 +22,7 @@ export * as Models from "./Models.ts";
 export * as RateLimiterStoreSql from "./RateLimiterStoreSql.ts";
 export * as ReadRouting from "./ReadRouting.ts";
 export * as Repositories from "./Repositories.ts";
+export * as SealedColumn from "./SealedColumn.ts";
+export * as StoreFailure from "./StoreFailure.ts";
 export * as TenantScope from "./TenantScope.ts";
+export * as TenantScoped from "./TenantScoped.ts";

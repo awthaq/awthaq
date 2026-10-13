@@ -59,6 +59,7 @@
 // caller that has installed `Roles` passes `onSignedUp: (userId) =>
 // roles.assign(userId, "member")`; `signInAs` runs it, if given, right after
 // issuing the user and before minting the session.
+import type { TestFramework } from "./TestFramework.ts";
 import {
   Accounts,
   Auth,
@@ -381,12 +382,7 @@ export interface ContractTestOptions<O, R = never> {
   }>;
 }
 
-/** `describe`/`it`/`assert` — kept as an injected shape rather than importing `@effect/vitest` directly, so this harness has no hard dependency on which test runner a third-party plugin author uses. `it`'s body may be async (the migration and redaction checks run real effects). */
-export interface TestFramework {
-  readonly describe: (name: string, body: () => void) => void;
-  readonly it: (name: string, body: () => void | Promise<void>) => void;
-  readonly fail: (message: string) => never;
-}
+export type { TestFramework } from "./TestFramework.ts";
 
 /**
  * SSMS-004: one fresh in-memory SQLite database, core migrations first, then `migrations`
@@ -793,3 +789,16 @@ export const runPluginContractTests = <O, R = never>(
     }
   });
 };
+
+// Plan 05: the plugin-table conformance suites, beside `runPluginContractTests` so a third-party
+// plugin runs them the same way (`TestAuth.runTenantIsolationTests`, `TestAuth.runSealedColumnTests`).
+export { runSealedColumnTests } from "./SealedConformance.ts";
+export type { SealedColumnConfig } from "./SealedConformance.ts";
+export { runTenantIsolationTests } from "./TenantConformance.ts";
+export type {
+  KeyedProbe,
+  MethodClass,
+  Probe,
+  TableCase,
+  TenantIsolationConfig,
+} from "./TenantConformance.ts";

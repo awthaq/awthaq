@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-28 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) |
 ---
 
 > A tenant is an `Organization` row ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)); everything below is opt-in and zero-cost for a single-tenant deployment.
@@ -70,7 +70,7 @@ REQUIREMENT: `TenantScope.enableRls()` MUST enable and force a row-level-securit
              row (single-tenant deployments and maintenance keep working).
 ```
 
-`withTenant` opens (or nests into) one transaction and sets the transaction-local `awthaq.tenant_id`, so a pooled connection never leaks a tenant to the next request. RLS covers `users`/`accounts` only through `enableRls({ includeDirectory: true })`. It is defence in depth ([ADR-EA-009](../decisions/009-authorization-delegated-to-qadi.md)), bypassed by superusers, `BYPASSRLS` roles and, absent `FORCE`, the table owner.
+`withTenant` opens (or nests into) one transaction and sets the transaction-local `awthaq.tenant_id`, so a pooled connection never leaks a tenant to the next request. RLS covers `users`/`accounts` only through `enableRls({ includeDirectory: true })`, and a composition's plugin tables only through `enableRls({ plugins: auth.tenancy })` (Partitioned tables by their column, Derived tables through their parent's policy, Keyed organization-id tables also with `includeKeyed: true`); `disableRls` drops the `awthaq_tenant` policy from every table that has one ([BEH-EA-326](28-tenancy.md#beh-ea-326-a-partitioned-plugin-table-is-filtered-by-the-store-identically-in-memory-and-sql), [BEH-EA-327](28-tenancy.md#beh-ea-327-a-cross-tenant-statement-presents-a-witness-and-the-witness-lifts-rls)). It is defence in depth ([ADR-EA-009](../decisions/009-authorization-delegated-to-qadi.md)), bypassed by superusers, `BYPASSRLS` roles and, absent `FORCE`, the table owner.
 
 _Previous: [BEH-EA-232](28-tenancy.md#beh-ea-232-the-identity-directory-is-global-across-tenants) | Next: [BEH-EA-234](28-tenancy.md#beh-ea-234-the-tenant-middleware-resolves-the-organization-once-per-request)_
 
@@ -143,3 +143,31 @@ Suspension is reversible and never a deletion: every row stays, and reinstating 
 Impersonation records are stamped with the ambient tenant and confined to it unless the caller passes `canAdministerTenants` ([BEH-EA-215](27-admin-impersonation.md#beh-ea-215-admin_impersonation-is-a-durable-audit-trail), [BEH-EA-217](27-admin-impersonation.md#beh-ea-217-forcestop-lets-another-admin-end-someone-elses-impersonation), [BEH-EA-219](27-admin-impersonation.md#beh-ea-219-the-audit-trail-is-queryable)).
 
 _Previous: [BEH-EA-236](28-tenancy.md#beh-ea-236-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple) | Next: [BEH-EA-238](29-saml-sp.md#beh-ea-238-the-saml-response-is-size-capped-before-it-is-parsed)_
+
+## BEH-EA-326: A Partitioned plugin table is filtered by the store, identically in memory and SQL
+
+```text
+REQUIREMENT: A records module for a Partitioned table MUST stamp each insert
+             with the ambient tenant (`Tenant.stamp`: an explicit tenant, then
+             the ambient one, then `NULL`) and MUST confine every read and
+             write to the ambient tenant with `TenantScoped.predicate` (SQL) or
+             `TenantScoped.matches` (memory): no tenant sees only untenanted
+             rows, tenant T sees only T's. The predicate MUST be `= $1` or
+             `IS NULL`, never `IS NOT DISTINCT FROM`.
+```
+
+Isolation lives in the store, not in the service (locality): a service method that forgets a filter cannot leak, and one missed `existing()` is no longer a cross-tenant mutation. `TestAuth.runTenantIsolationTests` runs one parameterised suite per table over every adapter, and its `methods` map is keyed by `keyof Shape`, so a records method added without a tenancy classification does not compile.
+
+## BEH-EA-327: A cross-tenant statement presents a witness, and the witness lifts RLS
+
+```text
+REQUIREMENT: A records method that must see more than the ambient tenant MUST
+             take a `TenantScoped.CrossTenant` witness (minted by
+             `crossTenant(reason)`, the reason naming why). Inside a
+             `TenantScope.withTenant` transaction on Postgres the statement
+             MUST run under `TenantScoped.lift`, which clears
+             `awthaq.tenant_id` for that statement only and restores it
+             afterwards, on success and on failure.
+```
+
+`Tenant.withoutTenant` clears the fiber reference but not the transaction-local setting the policies read, so without `lift` a cross-tenant read inside a request's RLS transaction is silently confined to the request's tenant. `lift` is a savepoint: a failing lifted effect reverts the setting by itself. Outside an RLS transaction (SQLite, no `withTenant`, the background relay) it costs nothing. The witness is recorded on the span (`awthaq.tenant.crossTenant`).

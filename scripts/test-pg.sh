@@ -20,6 +20,9 @@ suites=(
   packages/cli/test/Migration.postgres.test.ts
   packages/sql/test/Repositories.postgres.test.ts
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
+  packages/sql/test/TenantScope.postgres.test.ts
+  packages/sql/test/TenantScoped.test.ts
+  packages/sql/test/SealedColumn.test.ts
   packages/sql/test/UnitOfWork.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
