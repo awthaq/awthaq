@@ -713,3 +713,15 @@ Rollback overall: phases 1–2 are additive (the old switch stays the production
 - **Q4 — Should `EventRelay` scrub declared `pii` before handing events to a custom `EventTransport`?** (F5: ADR-EA-030 Decision 6 says identifiers only, but the impersonation justification crosses today; only the webhooks transport drops it.) A `piiFieldsOf`-based scrub would be on by default with an opt-out for a trusted internal SIEM. That is a behaviour change, so it would be its own ticket.
 - **Q5 — Declare an event's *subjects* (every user it is about) as well?** This would replace webhooks' `subjectUserId` heuristic (F4) and could feed `DataExport` "events about me", not just "events I did". It would be a third required field in `defineEvent`. Decide together with plan 05.
 - **Q6 — Should `AuthEvents.actorOf` be public?** It comes for free through `export *` and helps relay/SIEM consumers, who get `Published` events without the audit row's actor column. The alternative is to keep it internal and have `AuditLog` call the registry directly.
+
+---
+
+## 11. Decisions taken (implementation)
+
+- **Q1** Phase 5 (plugin-owned events): not implemented, per the recommendation (later, after plans 04 and 08).
+- **Q2** Yes for both notes: `auth.admin.userBanned.reason` and `auth.admin.organizationSuspended.reason` are `pii` (phase 4, changeset C2). Their two P6 allowlist entries are gone; `auth.authz.denied.reason` remains allowlisted.
+- **Q3** No `Schema` annotations; no caller today.
+- **Q4** Not implemented. A relay-side scrub is a behaviour change to every custom `EventTransport` that no phase of this plan covers and needs an opt-out design plus an ADR-EA-030 amendment, so it is recorded as `.scratch/09-event-definitions/issues/01-relay-scrub-declared-pii.md`.
+- **Q5** No change: events do not declare their subjects; decide with plan 05.
+- **Q6** `AuthEvents.actorOf` is public (it is exported with `eventTags`, `isEventTag` and `piiFieldsOf`).
+- **Deviations from the plan text:** the new BDD scenario got its own REQ-EA id (REQ-EA-1275) because `spec:verify` refuses a duplicate REQ-EA tag, and its Then checks the registry plus the audit rows' actor column rather than shared samples (the features project cannot import `packages/core/test`); BEH-EA-101/277 and ADR-EA-029 revisions are one higher than the plan states because other plans had already taken 1.2.
