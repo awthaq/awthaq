@@ -94,8 +94,14 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(call, "RateLimiter.consume");
     const { spyKeys } = yield* World;
     const keys = yield* readerOf(spyKeys, "spy limiter");
-    assert.ok(keys.includes("password:signup:alice@example.com"), "sign-up never called consume");
-    assert.ok(keys.includes("password:signin:alice@example.com"), "sign-in never called consume");
+    assert.ok(
+      keys.includes("ratelimit:password.signUp:email:alice@example.com"),
+      "sign-up never called consume",
+    );
+    assert.ok(
+      keys.includes("ratelimit:password.signIn:email:alice@example.com"),
+      "sign-in never called consume",
+    );
   });
 
   Then(
@@ -716,10 +722,7 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     // The password plugin's per-source sign-up rule, as the registry reports it.
     const rules = yield* registeredRules;
     const byIp = rules.find(
-      (rule) =>
-        rule.endpoint === "signUp" &&
-        typeof rule.key === "function" &&
-        rule.key({ ip: "203.0.113.7" }) === "password:signup:ip:203.0.113.7",
+      (rule) => rule.plugin === "password" && rule.endpoint === "signUp" && rule.strategy === "ip",
     );
     assert.ok(byIp !== undefined, "no per-source sign-up rule is registered");
   });
@@ -752,9 +755,7 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       const rules = yield* registeredRules;
       const perAccount = rules.find(
         (rule) =>
-          rule.endpoint === "signIn" &&
-          typeof rule.key === "function" &&
-          rule.key({ email: "anyone@example.com" }) === "password:signin:anyone@example.com",
+          rule.plugin === "password" && rule.endpoint === "signIn" && rule.strategy === "email",
       );
       assert.ok(perAccount !== undefined);
     },
