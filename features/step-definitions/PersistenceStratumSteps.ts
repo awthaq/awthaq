@@ -11,6 +11,7 @@ import { Accounts, AuthEvents, Users } from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
 import { Repositories } from "@awthaq/sql";
 import { RedactionGuard } from "@awthaq/test";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -255,7 +256,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
 
   When("the entity passes through logging, tracing spans, and emitted events", function* () {
     const layer = Accounts.layerSql.pipe(
-      Layer.provideMerge(Layer.mergeAll(RepositoriesLive, RedactionGuard.layer)),
+      Layer.provideMerge(Layer.mergeAll(RepositoriesLive, RedactionGuard.layer, NodeCrypto.layer)),
     );
     const outcome = yield* Effect.gen(function* () {
       const guard = yield* RedactionGuard.RedactionGuard;

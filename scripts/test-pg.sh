@@ -28,7 +28,6 @@ suites=(
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
   packages/api-key/test/StoreOutage.test.ts
-  packages/core/test/Accounts.test.ts
   packages/core/test/AuthEventsUnitOfWork.test.ts
   packages/core/test/SignUpSql.test.ts
   packages/core/test/Users.test.ts

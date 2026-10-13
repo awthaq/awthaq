@@ -17,6 +17,7 @@
 // migrations, encryption boundary, replicas).
 // See spec/overview.md for the full package map.
 
+export * as AccountStoreSql from "./AccountStoreSql.ts";
 export * as AuditLogStoreSql from "./AuditLogStoreSql.ts";
 export * as CoreMigrations from "./CoreMigrations.ts";
 export * as Models from "./Models.ts";

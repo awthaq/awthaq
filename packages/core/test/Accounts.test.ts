@@ -1,66 +1,26 @@
 // spec/behaviors/06-domain-users-accounts.md, BEH-EA-043 through BEH-EA-045, BEH-EA-047.
 //
-// The same contract suite runs against both `Layer`s — `layerMemory` (a
-// `Ref`) and `layerSql` (a real, in-memory SQLite database via
-// `@effect/sql-sqlite-node`).
-//
-// BE-002 (.issues/high): `layerSql` is migrated via `@awthaq/sql`'s own
-// real `CoreMigrations.coreMigrations` (`Migrator.make`) rather than a
-// hand-rolled inline `CREATE TABLE` — the same BAM-002/BE-001 conversion
-// applied to every other core/plugin table's own test suite, and the
-// reason this file's own fixture needed touching at all for a finding
-// that otherwise only added columns: a hand-rolled fixture has no way to
-// pick up a new migration.
-import { Encryption, KeyProvider } from "@awthaq/ports";
-import { PasswordHasher } from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+// Plan 02 (ADR-EA-041): `Accounts` is one implementation over `AccountStore`, so its domain suite
+// runs once, over the `Ref` adapter. What a store must do on every backend (the atomic insert, the
+// token-free identity reads, the last-account delete under concurrency) is
+// `StoreContract.accounts`, run on the `Ref`, SQLite, WAL-file and (`pnpm test:pg`) Postgres
+// adapters; the SQL adapter's own token encryption and failure mapping are
+// `packages/sql/test/AccountStoreSql.test.ts`.
+import { AccountStore, PasswordHasher } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as Accounts from "../src/Accounts.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { StoreUnavailable } from "../src/Errors.ts";
 import * as Users from "../src/Users.ts";
 
-const MemoryLayer = Accounts.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
-
-// `test:pg` runs this file on Postgres, where the concurrent-unlink case (BEH-EA-045) is meaningful.
-const SqlLive = TestSql.layer("core_Accounts");
-
-// Shipping-gap map (.scratch/shipping-gaps), ticket 18:
-// `Repositories.AccountsRepositoryLive` now requires `Encryption` to
-// encrypt/decrypt `accessToken`/`refreshToken` transparently — a fixed
-// test key, isolated from the real `process.env` via `ConfigProvider.fromEnv`.
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
+const MemoryLayer = Accounts.layer.pipe(
+  Layer.provide(AccountStore.layerMemory),
   Layer.provide(NodeCrypto.layer),
-);
-
-const Migrated = Layer.effectDiscard(
-  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
-).pipe(Layer.provide(SqlLive));
-
-const SqlTestLayer = Accounts.layerSql.pipe(
-  Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
 );
 
 const userId = Users.UserId("22222222-2222-2222-2222-222222222222");
@@ -552,72 +512,129 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
   });
 };
 
-suite("Accounts (layerMemory)", MemoryLayer);
-suite("Accounts (layerSql)", SqlTestLayer);
+suite("Accounts", MemoryLayer);
 
-// SMS-002: only the SQL layer holds ciphertext, so an undecryptable token is
-// a `layerSql`-only scenario.
-describe("Accounts (layerSql) undecryptable provider tokens (SMS-002)", () => {
-  const tokens = {
-    accessToken: Redacted.make("access"),
-    refreshToken: Option.none<Redacted.Redacted<string>>(),
-    idToken: Option.none<Redacted.Redacted<string>>(),
-    accessTokenExpiresAt: Option.none<DateTime.Utc>(),
-    refreshTokenExpiresAt: Option.none<DateTime.Utc>(),
-    scope: Option.none<string>(),
-    tokenType: Option.none<string>(),
-  };
+const tokens: Accounts.ProviderTokenSet = {
+  accessToken: Redacted.make("access"),
+  refreshToken: Option.none(),
+  idToken: Option.none(),
+  accessTokenExpiresAt: Option.none<DateTime.Utc>(),
+  refreshTokenExpiresAt: Option.none<DateTime.Utc>(),
+  scope: Option.none(),
+  tokenType: Option.none(),
+};
 
-  it.effect("findProviderTokens fails ProviderTokensUnreadable for an undecryptable row", () =>
-    Effect.gen(function* () {
-      const accounts = yield* Accounts.Accounts;
-      const sql = yield* SqlClient.SqlClient;
-      const account = yield* accounts.link({
-        userId,
-        providerId: "google",
-        subject: "sub-unreadable",
-        tokens,
-      });
-      yield* sql`UPDATE accounts SET "accessToken" = 'garbage' WHERE id = ${account.id}`;
-      const failure = yield* accounts.findProviderTokens(account.id).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "ProviderTokensUnreadable");
-      // Identity reads and a fresh token write are unaffected by the bad column.
-      yield* accounts.findById(account.id);
-      yield* accounts.updateProviderTokens(account.id, tokens);
-      const healed = yield* accounts.findProviderTokens(account.id);
-      assert.strictEqual(Redacted.value(Option.getOrThrow(healed).accessToken), "access");
-    }).pipe(Effect.provide(SqlTestLayer)),
+describe("Accounts over a store that cannot read its tokens (SMS-002)", () => {
+  // The memory adapter never holds ciphertext, so the unreadable answer is a store double's. What
+  // makes a real row unreadable (a retired key, a corrupt envelope) is `AccountStoreSql.test.ts`.
+  const UnreadableStore = Layer.mock(AccountStore.AccountStore, {
+    readProviderTokens: () =>
+      Effect.succeed(
+        Option.some<AccountStore.TokensRead>({
+          _tag: "Undecryptable",
+          field: "accessToken",
+          reason: "UnknownKeyId",
+        }),
+      ),
+  });
+
+  it.effect(
+    "findProviderTokens fails ProviderTokensUnreadable naming the field and the reason",
+    () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const failure = yield* accounts
+          .findProviderTokens(Accounts.AccountId("33333333-3333-3333-3333-333333333333"))
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "ProviderTokensUnreadable");
+        if (failure._tag === "ProviderTokensUnreadable") {
+          assert.strictEqual(failure.field, "accessToken");
+          assert.strictEqual(failure.reason, "UnknownKeyId");
+        }
+      }).pipe(
+        Effect.provide(
+          Accounts.layer.pipe(Layer.provide(UnreadableStore), Layer.provide(NodeCrypto.layer)),
+        ),
+      ),
   );
 });
 
-// MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect.
-describe("Accounts infrastructure failures (MA-004)", () => {
-  const DownRepository = Layer.effect(
-    Repositories.AccountsRepository,
-    Effect.gen(function* () {
-      const real = yield* Repositories.AccountsRepository;
-      return {
-        ...real,
-        listByUser: () =>
-          Effect.fail(
-            new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
-          ),
-      };
-    }),
-  ).pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))));
-
-  const DownLayer = Accounts.layerSql.pipe(
-    Layer.provide(DownRepository),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
-  );
-
-  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable", () =>
+// A fresh token write overwrites whatever was there and does not read it (SMS-002).
+describe("Accounts provider tokens", () => {
+  it.effect("updateProviderTokens replaces the whole group and bumps updatedAt", () =>
     Effect.gen(function* () {
       const accounts = yield* Accounts.Accounts;
-      const failure = yield* accounts.listByUser(userId).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "StoreUnavailable");
-      assert.strictEqual(failure.operation, "Accounts.listByUser");
+      const account = yield* accounts.link({
+        userId,
+        providerId: "google",
+        subject: "sub-tok",
+        tokens,
+      });
+      yield* accounts.updateProviderTokens(account.id, {
+        ...tokens,
+        accessToken: Redacted.make("rotated"),
+      });
+      const read = yield* accounts.findProviderTokens(account.id);
+      assert.strictEqual(Redacted.value(Option.getOrThrow(read).accessToken), "rotated");
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+});
+
+// MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect. The store
+// double names its own primitive, as an adapter does; the service relabels it to the operation the
+// caller ran, so the wire label does not change.
+describe("Accounts infrastructure failures (MA-004)", () => {
+  const down = (primitive: string) => Effect.fail(new StoreUnavailable({ operation: primitive }));
+  const DownStore = Layer.mock(AccountStore.AccountStore, {
+    insertIfAbsent: () => down("AccountStore.insertIfAbsent"),
+    getByKey: () => down("AccountStore.getByKey"),
+    get: () => down("AccountStore.get"),
+    listByUser: () => down("AccountStore.listByUser"),
+    readCredentialHash: () => down("AccountStore.readCredentialHash"),
+    readProviderTokens: () => down("AccountStore.readProviderTokens"),
+    writeCredentialHash: () => down("AccountStore.writeCredentialHash"),
+    writeProviderTokens: () => down("AccountStore.writeProviderTokens"),
+    deleteUnlessLast: () => down("AccountStore.deleteUnlessLast"),
+    deleteByUser: () => down("AccountStore.deleteByUser"),
+  });
+  const DownLayer = Accounts.layer.pipe(Layer.provide(DownStore), Layer.provide(NodeCrypto.layer));
+
+  it.effect("a store outage surfaces as StoreUnavailable named for the service operation", () =>
+    Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const id = Accounts.AccountId("44444444-4444-4444-4444-444444444444");
+      const operationOf = <A>(effect: Effect.Effect<A, { readonly _tag: string }>) =>
+        effect.pipe(
+          Effect.flip,
+          Effect.map((failure) =>
+            failure._tag === "StoreUnavailable" && "operation" in failure
+              ? failure.operation
+              : failure._tag,
+          ),
+        );
+      assert.strictEqual(
+        yield* operationOf(accounts.link({ userId, providerId: "google", subject: "s" })),
+        "Accounts.link",
+      );
+      assert.strictEqual(yield* operationOf(accounts.listByUser(userId)), "Accounts.listByUser");
+      assert.strictEqual(
+        yield* operationOf(accounts.findByProviderSubject("google", "s")),
+        "Accounts.findByProviderSubject",
+      );
+      assert.strictEqual(yield* operationOf(accounts.findById(id)), "Accounts.findById");
+      assert.strictEqual(yield* operationOf(accounts.unlink(id)), "Accounts.unlink");
+      assert.strictEqual(
+        yield* operationOf(accounts.findCredentialHash(id)),
+        "Accounts.findCredentialHash",
+      );
+      assert.strictEqual(
+        yield* operationOf(accounts.findProviderTokens(id)),
+        "Accounts.findProviderTokens",
+      );
+      assert.strictEqual(
+        yield* operationOf(accounts.deleteAllByUser(userId)),
+        "Accounts.deleteAllByUser",
+      );
     }).pipe(Effect.provide(DownLayer)),
   );
 });

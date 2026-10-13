@@ -1350,3 +1350,14 @@ Open questions were answered with the plan's recommended default; where the plan
 - The "reissue racing a miss" test moved to the adapter (`VerificationStoreSql.test.ts`), written against the store primitives; the other redeem-over-a-real-transaction cases stay in `Verification.test.ts` as SQL compositions of the service and the adapter (they test the protocol, not a store primitive), over the `layerSql` alias until phase 7.
 - Deleted from `packages/sql/test/contract.ts`: the five repository-level verification cases the store contract now covers (concurrent `tryConsume`, the atomic claim, `upsertLive` replacing in place, concurrent `upsertLive`s, the reservation claim). The memory pruning case moved to `packages/ports/test/VerificationStore.test.ts`.
 - V-9 (reservations survive `deleteAllByUser`) is unchanged and reported to plan 03's owner: `VerificationStore` gains no primitive for it.
+
+### Phase 4 (Accounts)
+
+- `AccountStore.deleteUnlessLast` is `once` (never retried) and `insertIfAbsent` too; the two token/hash writes and `deleteByUser` retry (idempotent). The delete locks the user's rows, re-counts them, and answers `NotFound` if the target vanished while it waited (a concurrent unlink of the same account).
+- `ProviderTokenSet` (core) is now an alias of the port's `ProviderTokens`, so a service and its adapters speak one shape; it keeps `idToken` (BAM-008), which the plan's sketch left implicit.
+- `Accounts.layerSql` now requires `Crypto` (the id is minted by the service: S-16/U-9/A-8). Compositions that used it without `Crypto` gained it (`cli` SqlApp, `UserImport.test`, a BDD step); the changeset's `Migration:` says so. Every other composition already provided it.
+- The memory key is length-prefixed (`keyOf`), so no value of one part can run into the next.
+- A-6 (BEH-EA-231 memory twins stamp the same fields): `AccountIdentity.tenantId` is stored by every adapter but `AccountRecord` gains no public field (non-goal).
+- SQL repository: the old `insert`, `findById`, `findByProviderSubject`, `listByUser`, `updatePasswordHash`, `updateProviderTokens`, `findAad` stay until phase 7 (their repository-level tests with them); `findTokensById` stays (it is the strict path).
+- The concurrent-unlink case moved from `Accounts.test.ts` to `StoreContract.accounts` (8 two-account users, 16 racing deletes), so `Accounts.test.ts` leaves `scripts/test-pg.sh` (it has no SQL leg any more); the contract runs there through `StoreContract.sql.test.ts`.
+- BEH-EA-044 (a password `subject` equals the `userId`) is enforced by neither layer, as before (A-9, noted).

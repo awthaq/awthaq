@@ -789,7 +789,7 @@ export interface AccountsRepositoryShape {
    * `deleteAllForUserExcept` — a raw bulk statement, not `delete` called
    * once per row.
    */
-  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<number, RepositoryError>;
   /**
    * BEH-EA-045: locks every account row of `userId` for the rest of the enclosing transaction
    * (Postgres `SELECT ... FOR UPDATE`; a no-op on SQLite and libSQL, whose drivers already open
@@ -798,6 +798,66 @@ export interface AccountsRepositoryShape {
    * leaving the user with none.
    */
   readonly lockByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
+  /**
+   * Plan 02 (`AccountStoreSql`): the identity of an account, never a token. These reads select the
+   * identity columns only, so they neither decrypt nor lazily re-encrypt anything (a sign-in's
+   * hot path), and `listIdentitiesByUser` answers in `(createdAt, id)` order (BEH-EA-036).
+   */
+  readonly findIdentityById: (
+    id: AccountId,
+  ) => Effect.Effect<Option.Option<AccountIdentityRow>, RepositoryError>;
+  readonly findIdentityByKey: (
+    providerId: string,
+    subject: string,
+    issuer: string,
+  ) => Effect.Effect<Option.Option<AccountIdentityRow>, RepositoryError>;
+  readonly listIdentitiesByUser: (
+    userId: UserId,
+  ) => Effect.Effect<ReadonlyArray<AccountIdentityRow>, RepositoryError>;
+  /**
+   * `INSERT ... ON CONFLICT ("providerId", subject, issuer) DO NOTHING RETURNING <identity>`: `None`
+   * when the key is taken, and a taken key never aborts an enclosing Postgres transaction (BEH-EA-043).
+   * The tokens are encrypted here (AAD `providerId:userId:field`); the ambient tenant is stamped.
+   */
+  readonly insertIdentityIfAbsent: (input: {
+    readonly id: AccountId;
+    readonly userId: UserId;
+    readonly providerId: string;
+    readonly subject: string;
+    readonly issuer: string;
+    readonly passwordHash: string | null;
+    readonly tokens: AccountTokenColumns;
+    readonly createdAt: DateTime.Utc;
+    readonly updatedAt: DateTime.Utc;
+  }) => Effect.Effect<Option.Option<AccountIdentityRow>, RepositoryError>;
+  /** BEH-EA-044: only the stored hash (no token column is read). Outer `None` = no such account. */
+  readonly findPasswordHash: (
+    id: AccountId,
+  ) => Effect.Effect<Option.Option<string | null>, RepositoryError>;
+  /** BEH-EA-116: replaces the hash and sets `updatedAt`; `false` = no such account. Reads no token. */
+  readonly writePasswordHash: (
+    id: AccountId,
+    passwordHash: string,
+    updatedAt: DateTime.Utc,
+  ) => Effect.Effect<boolean, RepositoryError>;
+  /** SMS-002: replaces the whole token group and sets `updatedAt`; `false` = no such account. Reads no old token. */
+  readonly writeTokens: (
+    id: AccountId,
+    tokens: AccountTokenColumns,
+    updatedAt: DateTime.Utc,
+  ) => Effect.Effect<boolean, RepositoryError>;
+}
+
+/** The identity columns of an account row: everything but the credential hash and the tokens. */
+export interface AccountIdentityRow {
+  readonly id: AccountId;
+  readonly userId: UserId;
+  readonly providerId: string;
+  readonly subject: string;
+  readonly issuer: string;
+  readonly tenantId: string | null;
+  readonly createdAt: DateTime.Utc;
+  readonly updatedAt: DateTime.Utc;
 }
 
 /** The provider-token columns written together by `updateProviderTokens` (plaintext; encrypted by the repository). */
@@ -1151,10 +1211,240 @@ export const AccountsRepositoryLive: Layer.Layer<
       execute: (userId) => sql`SELECT * FROM accounts WHERE "userId" = ${userId}`,
     });
 
+    const deleteAllByUserQuery = SqlSchema.findAll({
+      Request: UserId,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (userId) => sql`DELETE FROM accounts WHERE "userId" = ${userId} RETURNING id`,
+    });
+
     const deleteAllByUser: AccountsRepositoryShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM accounts WHERE "userId" = ${userId}`.pipe(
-        Effect.asVoid,
+      deleteAllByUserQuery(userId).pipe(
+        Effect.map((rows) => rows.length),
         traced("Accounts.deleteAllByUser", { userId }),
+      );
+
+    // ---- plan 02: the identity reads and the targeted writes `AccountStoreSql` is built on ----------
+    const IdentityRow = Schema.Struct({
+      id: AccountId,
+      userId: UserId,
+      providerId: Schema.String,
+      subject: Schema.String,
+      issuer: Schema.String,
+      tenantId: Schema.NullOr(Schema.String),
+      createdAt: models.wire.dateTime,
+      updatedAt: models.wire.dateTime,
+    });
+    const identityColumns = sql`id, "userId", "providerId", subject, issuer, "tenantId", "createdAt", "updatedAt"`;
+
+    const identityByIdQuery = SqlSchema.findOneOption({
+      Request: AccountId,
+      Result: IdentityRow,
+      execute: (id) => sql`SELECT ${identityColumns} FROM accounts WHERE id = ${id}`,
+    });
+    const findIdentityById: AccountsRepositoryShape["findIdentityById"] = (id) =>
+      identityByIdQuery(id).pipe(traced("Accounts.findIdentityById", { id }));
+
+    const identityByKeyQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        providerId: Schema.String,
+        subject: Schema.String,
+        issuer: Schema.String,
+      }),
+      Result: IdentityRow,
+      execute: (request) =>
+        sql`SELECT ${identityColumns} FROM accounts WHERE "providerId" = ${request.providerId} AND subject = ${request.subject} AND issuer = ${request.issuer}`,
+    });
+    // `subject`/`issuer` identify a person at an IdP: only `providerId` is safe as a span attribute.
+    const findIdentityByKey: AccountsRepositoryShape["findIdentityByKey"] = (
+      providerId,
+      subject,
+      issuer,
+    ) =>
+      identityByKeyQuery({ providerId, subject, issuer }).pipe(
+        traced("Accounts.findIdentityByKey", { providerId }),
+      );
+
+    const identitiesByUserQuery = SqlSchema.findAll({
+      Request: UserId,
+      Result: IdentityRow,
+      execute: (userId) =>
+        sql`SELECT ${identityColumns} FROM accounts WHERE "userId" = ${userId} ORDER BY "createdAt" ASC, id ASC`,
+    });
+    const listIdentitiesByUser: AccountsRepositoryShape["listIdentitiesByUser"] = (userId) =>
+      identitiesByUserQuery(userId).pipe(traced("Accounts.listIdentitiesByUser", { userId }));
+
+    const insertIdentityQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: AccountId,
+        userId: UserId,
+        providerId: Schema.String,
+        subject: Schema.String,
+        issuer: Schema.String,
+        tenantId: Schema.NullOr(Schema.String),
+        passwordHash: Schema.NullOr(Schema.String),
+        accessToken: Schema.NullOr(Schema.String),
+        refreshToken: Schema.NullOr(Schema.String),
+        idToken: Schema.NullOr(Schema.String),
+        accessTokenExpiresAt: models.wire.nullableDateTime,
+        refreshTokenExpiresAt: models.wire.nullableDateTime,
+        scope: Schema.NullOr(Schema.String),
+        tokenType: Schema.NullOr(Schema.String),
+        createdAt: models.wire.dateTime,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: IdentityRow,
+      execute: (r) => sql`
+        INSERT INTO accounts (id, "userId", "providerId", subject, issuer, "tenantId", "passwordHash",
+          "accessToken", "refreshToken", "idToken", "accessTokenExpiresAt", "refreshTokenExpiresAt",
+          scope, "tokenType", "createdAt", "updatedAt")
+        VALUES (${r.id}, ${r.userId}, ${r.providerId}, ${r.subject}, ${r.issuer}, ${r.tenantId},
+          ${r.passwordHash}, ${r.accessToken}, ${r.refreshToken}, ${r.idToken},
+          ${r.accessTokenExpiresAt}, ${r.refreshTokenExpiresAt}, ${r.scope}, ${r.tokenType},
+          ${r.createdAt}, ${r.updatedAt})
+        ON CONFLICT ("providerId", subject, issuer) DO NOTHING
+        RETURNING ${identityColumns}
+      `,
+    });
+    const insertIdentityIfAbsent: AccountsRepositoryShape["insertIdentityIfAbsent"] = (input) =>
+      Effect.gen(function* () {
+        const { tokens } = input;
+        const accessToken = yield* encryptToken(
+          input.providerId,
+          input.userId,
+          "accessToken",
+          tokens.accessToken,
+        );
+        const refreshToken = yield* encryptToken(
+          input.providerId,
+          input.userId,
+          "refreshToken",
+          tokens.refreshToken,
+        );
+        const idToken = yield* encryptToken(
+          input.providerId,
+          input.userId,
+          "idToken",
+          tokens.idToken,
+        );
+        const tenantId = yield* Effect.map(Tenant.TenantContext, Option.getOrNull);
+        return yield* insertIdentityQuery({
+          id: input.id,
+          userId: input.userId,
+          providerId: input.providerId,
+          subject: input.subject,
+          issuer: input.issuer,
+          tenantId,
+          passwordHash: input.passwordHash,
+          accessToken,
+          refreshToken,
+          idToken,
+          accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+          refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+          scope: tokens.scope,
+          tokenType: tokens.tokenType,
+          createdAt: input.createdAt,
+          updatedAt: input.updatedAt,
+        });
+      }).pipe(traced("Accounts.insertIdentityIfAbsent", { id: input.id }));
+
+    const passwordHashQuery = SqlSchema.findOneOption({
+      Request: AccountId,
+      Result: Schema.Struct({ passwordHash: Schema.NullOr(Schema.String) }),
+      execute: (id) => sql`SELECT "passwordHash" FROM accounts WHERE id = ${id}`,
+    });
+    const findPasswordHash: AccountsRepositoryShape["findPasswordHash"] = (id) =>
+      passwordHashQuery(id).pipe(
+        Effect.map(Option.map((row) => row.passwordHash)),
+        traced("Accounts.findPasswordHash", { id }),
+      );
+
+    const writePasswordHashQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        id: AccountId,
+        passwordHash: Schema.String,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (r) =>
+        sql`UPDATE accounts SET "passwordHash" = ${r.passwordHash}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING id`,
+    });
+    const writePasswordHash: AccountsRepositoryShape["writePasswordHash"] = (
+      id,
+      passwordHash,
+      updatedAt,
+    ) =>
+      writePasswordHashQuery({ id, passwordHash, updatedAt }).pipe(
+        Effect.map((rows) => rows.length > 0),
+        traced("Accounts.writePasswordHash", { id }),
+      );
+
+    const writeTokensQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        id: AccountId,
+        accessToken: Schema.NullOr(Schema.String),
+        refreshToken: Schema.NullOr(Schema.String),
+        idToken: Schema.NullOr(Schema.String),
+        accessTokenExpiresAt: models.wire.nullableDateTime,
+        refreshTokenExpiresAt: models.wire.nullableDateTime,
+        scope: Schema.NullOr(Schema.String),
+        tokenType: Schema.NullOr(Schema.String),
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (r) => sql`
+        UPDATE accounts
+        SET "accessToken" = ${r.accessToken}, "refreshToken" = ${r.refreshToken},
+            "idToken" = ${r.idToken}, "accessTokenExpiresAt" = ${r.accessTokenExpiresAt},
+            "refreshTokenExpiresAt" = ${r.refreshTokenExpiresAt}, scope = ${r.scope},
+            "tokenType" = ${r.tokenType}, "updatedAt" = ${r.updatedAt}
+        WHERE id = ${r.id}
+        RETURNING id
+      `,
+    });
+    // The AAD (`providerId`, `userId`) is immutable and read token-free, so the old ciphertext is
+    // never decrypted: a row whose old tokens are unreadable heals on this write.
+    const writeTokens: AccountsRepositoryShape["writeTokens"] = (id, tokens, updatedAt) =>
+      findAadQuery(id).pipe(
+        Effect.map(Option.some),
+        Effect.catchTag("NoSuchElementError", () =>
+          Effect.succeed(Option.none<{ readonly providerId: string; readonly userId: string }>()),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed(false),
+            onSome: (aad) =>
+              Effect.gen(function* () {
+                const accessToken = yield* encryptToken(
+                  aad.providerId,
+                  aad.userId,
+                  "accessToken",
+                  tokens.accessToken,
+                );
+                const refreshToken = yield* encryptToken(
+                  aad.providerId,
+                  aad.userId,
+                  "refreshToken",
+                  tokens.refreshToken,
+                );
+                const idToken = yield* encryptToken(
+                  aad.providerId,
+                  aad.userId,
+                  "idToken",
+                  tokens.idToken,
+                );
+                const rows = yield* writeTokensQuery({
+                  ...tokens,
+                  id,
+                  accessToken,
+                  refreshToken,
+                  idToken,
+                  updatedAt,
+                });
+                return rows.length > 0;
+              }),
+          }),
+        ),
+        traced("Accounts.writeTokens", { id }),
       );
 
     const lockByUser: AccountsRepositoryShape["lockByUser"] = (userId) =>
@@ -1175,6 +1465,13 @@ export const AccountsRepositoryLive: Layer.Layer<
       findAad,
       updateProviderTokens,
       lockByUser,
+      findIdentityById,
+      findIdentityByKey,
+      listIdentitiesByUser,
+      insertIdentityIfAbsent,
+      findPasswordHash,
+      writePasswordHash,
+      writeTokens,
       delete: repo.delete,
       // `subject`/`issuer` identify a person at an IdP: only `providerId` is
       // safe as a span attribute.
