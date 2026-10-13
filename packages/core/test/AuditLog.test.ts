@@ -686,6 +686,30 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
           assert.strictEqual((yield* auditLog.list({ actorUserId: otherUserId })).length, 2);
         }).pipe(Effect.provide(layer)),
     );
+
+    // ESA-005 (plan 09, F2): erasing one person must not touch a row that does not name them.
+    it.effect("erasing one user leaves another user's impersonation justification intact", () =>
+      Effect.gen(function* () {
+        const auditLog = yield* AuditLog.AuditLog;
+        const unrelated = UserId("44444444-4444-4444-4444-444444444444");
+        yield* auditLog.record(
+          stamped(
+            {
+              _tag: "auth.admin.impersonationStarted",
+              adminUserId: userId,
+              targetUserId: otherUserId,
+              reason: "billing bug",
+              sessionId,
+            },
+            1,
+          ),
+        );
+        const rewritten = yield* auditLog.pseudonymizeActor(unrelated);
+        assert.strictEqual(rewritten, 0);
+        const rows = yield* auditLog.list();
+        assert.include(JSON.stringify(rows.map((row) => row.payload)), "billing bug");
+      }).pipe(Effect.provide(layer)),
+    );
   });
 };
 

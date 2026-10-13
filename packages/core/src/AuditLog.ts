@@ -377,12 +377,22 @@ const blankFields = (value: unknown, fields: ReadonlyArray<string>): unknown =>
       )
     : value;
 
-/** ESA-005: what erasing `userId` does to one row — the alias substituted everywhere, free-text fields blanked. */
-const scrubRow = (row: StoredRow, userId: string, alias: string): StoredRow => ({
-  ...row,
-  actorUserId: row.actorUserId === null ? null : row.actorUserId.replaceAll(userId, alias),
-  payload: blankFields(replaceDeep(row.payload, userId, alias), PII_FIELDS[row.eventTag] ?? []),
-});
+/** True when erasing `userId` must touch this row: the predicate `listReferencing` applies in SQL (actor column equal, or the id anywhere in the stored payload). */
+const references = (row: StoredRow, userId: string): boolean =>
+  row.actorUserId === userId || JSON.stringify(row.payload).includes(userId);
+
+/** ESA-005: what erasing `userId` does to one row. Nothing unless the row names them; otherwise the alias substituted everywhere and the free-text fields blanked. */
+const scrubRow = (row: StoredRow, userId: string, alias: string): StoredRow =>
+  references(row, userId)
+    ? {
+        ...row,
+        actorUserId: row.actorUserId === null ? null : row.actorUserId.replaceAll(userId, alias),
+        payload: blankFields(
+          replaceDeep(row.payload, userId, alias),
+          PII_FIELDS[row.eventTag] ?? [],
+        ),
+      }
+    : row;
 
 const newestFirst = (records: ReadonlyArray<AuditLogRecord>): ReadonlyArray<AuditLogRecord> =>
   [...records].sort(
