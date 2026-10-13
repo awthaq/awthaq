@@ -288,13 +288,13 @@ describe("Repositories (SQLite specifics)", () => {
           expiresAt: DateTime.add(now, { minutes: 1 }),
           now,
         });
-        yield* auditLog.insert({
+        yield* auditLog.insertIfAbsent({
           id: "a1",
           eventTag: "test",
           actorUserId: null,
           occurredAt: now,
           correlationId: null,
-          payload: {},
+          payload: "{}",
         });
 
         const columns: ReadonlyArray<readonly [table: string, column: string]> = [

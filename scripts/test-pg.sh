@@ -24,6 +24,7 @@ suites=(
   packages/sql/test/TenantScoped.test.ts
   packages/sql/test/SealedColumn.test.ts
   packages/sql/test/UnitOfWork.test.ts
+  packages/test/test/StoreContract.sql.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
   packages/api-key/test/StoreOutage.test.ts

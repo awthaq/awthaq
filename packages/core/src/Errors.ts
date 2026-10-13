@@ -17,7 +17,25 @@
 // them; this module re-exports them, so no core caller changes.
 
 import { StoreFailure } from "@awthaq/sql";
+import * as Effect from "effect/Effect";
 
 export import StoreUnavailable = StoreFailure.StoreUnavailable;
 export const { storeUnavailable, orStoreUnavailable, transientRetrySchedule, retryTransient } =
   StoreFailure;
+
+const isStoreUnavailable = <E>(error: E): error is Extract<E, StoreUnavailable> =>
+  error instanceof StoreUnavailable;
+
+/**
+ * Plan 02 (ADR-EA-041, "operation labels"): a store adapter names the primitive that failed
+ * (`SessionStore.flagReuse`); the domain service says which of ITS operations the caller was running
+ * (`Sessions.verify`), because `StoreUnavailable.operation` is visible on the wire and asserted by
+ * tests. Wraps a whole service operation: every `StoreUnavailable` inside it is relabelled, every
+ * other failure and defect passes through untouched.
+ */
+export const relabel =
+  (operation: string) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>) =>
+    Effect.catchIf(self, isStoreUnavailable, () =>
+      Effect.fail(new StoreUnavailable({ operation })),
+    );

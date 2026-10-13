@@ -130,13 +130,13 @@ describe("ReadRouting (RRC-001)", () => {
         );
         const audit = Context.get(context, Repositories.AuditLogRepository);
         const now = yield* DateTime.now;
-        yield* audit.insert({
+        yield* audit.insertIfAbsent({
           id: "a1",
           eventTag: "auth.test",
           actorUserId: null,
           occurredAt: now,
           correlationId: null,
-          payload: {},
+          payload: "{}",
         });
         const all = {
           eventTag: null,

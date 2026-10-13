@@ -447,7 +447,7 @@ const verificationTokenFields = {
   }),
 };
 
-/** One `auth_audit_log` row as the database returns it (`occurredAt` per-dialect, payload opaque JSON text). */
+/** One `auth_audit_log` row as the database returns it (`occurredAt` per-dialect, payload the JSON text, opaque to the store). */
 const auditLogRow = <C extends Schema.Top>(occurredAt: C) =>
   Schema.Struct({
     id: Schema.String,
@@ -456,7 +456,7 @@ const auditLogRow = <C extends Schema.Top>(occurredAt: C) =>
     occurredAt,
     correlationId: Schema.NullOr(Schema.String),
     tenantId: Schema.NullOr(Schema.String),
-    payload: Schema.fromJsonString(Schema.Unknown),
+    payload: Schema.String,
   });
 
 // ---- per-dialect model sets -------------------------------------------------

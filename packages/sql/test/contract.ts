@@ -960,110 +960,8 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect("AuditLog.list filters by an occurredAt range and round-trips the payload", () =>
-      Effect.gen(function* () {
-        const auditLog = yield* Repositories.AuditLogRepository;
-        const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
-        const at = (minutes: number) => DateTime.addDuration(t0, Duration.minutes(minutes));
-        for (const { id, minutes } of [
-          { id: "a", minutes: 0 },
-          { id: "b", minutes: 10 },
-          { id: "c", minutes: 20 },
-        ]) {
-          yield* auditLog.insert({
-            id,
-            eventTag: "auth.test",
-            actorUserId: null,
-            occurredAt: at(minutes),
-            correlationId: null,
-            payload: { id },
-          });
-        }
-        const inRange = yield* auditLog.list({
-          eventTag: null,
-          actorUserId: null,
-          occurredAfter: at(5),
-          occurredBefore: at(15),
-        });
-        assert.deepStrictEqual(
-          inRange.map((row) => row.id),
-          ["b"],
-        );
-        assert.deepStrictEqual(inRange[0]?.payload, { id: "b" });
-        const all = yield* auditLog.list({
-          eventTag: "auth.test",
-          actorUserId: null,
-          occurredAfter: null,
-          occurredBefore: null,
-        });
-        assert.deepStrictEqual(
-          all.map((row) => row.id),
-          ["c", "b", "a"],
-        );
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
-    // ALF-010: retention deletes are one bounded statement each.
-    it.effect(
-      "AuditLog.deleteOccurredBefore removes only rows older than the cutoff for the given tags",
-      () =>
-        Effect.gen(function* () {
-          const auditLog = yield* Repositories.AuditLogRepository;
-          const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
-          const at = (days: number) => DateTime.addDuration(t0, Duration.days(days));
-          const rows = [
-            { id: "a", eventTag: "auth.one", days: 0 },
-            { id: "b", eventTag: "auth.two", days: 0 },
-            { id: "c", eventTag: "auth.one", days: 10 },
-            { id: "d", eventTag: "auth.three", days: 0 },
-          ];
-          for (const { id, eventTag, days } of rows) {
-            yield* auditLog.insert({
-              id,
-              eventTag,
-              actorUserId: null,
-              occurredAt: at(days),
-              correlationId: null,
-              payload: { id },
-            });
-          }
-          const remaining = auditLog
-            .list({ eventTag: null, actorUserId: null, occurredAfter: null, occurredBefore: null })
-            .pipe(Effect.map((all) => all.map((row) => row.id).sort()));
-
-          // only the listed tag, only before the cutoff: `a` goes; `c` is newer, `b`/`d` other tags
-          assert.strictEqual(
-            yield* auditLog.deleteOccurredBefore({
-              cutoff: at(5),
-              eventTags: ["auth.one"],
-              exceptTags: [],
-              limit: 100,
-            }),
-            1,
-          );
-          assert.deepStrictEqual(yield* remaining, ["b", "c", "d"]);
-
-          // every tag but `auth.three`, bounded by `limit`: `b` goes, `d` is excepted
-          assert.strictEqual(
-            yield* auditLog.deleteOccurredBefore({
-              cutoff: at(5),
-              eventTags: null,
-              exceptTags: ["auth.three"],
-              limit: 1,
-            }),
-            1,
-          );
-          assert.deepStrictEqual(yield* remaining, ["c", "d"]);
-          assert.strictEqual(
-            yield* auditLog.deleteOccurredBefore({
-              cutoff: at(5),
-              eventTags: null,
-              exceptTags: ["auth.three"],
-              limit: 100,
-            }),
-            0,
-          );
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
+    // The audit-log repository cases (the `occurredAt` range, the payload round trip, bounded
+    // retention deletes) are `StoreContract.auditLog`, which runs on every adapter (plan 02, ADR-EA-041).
 
     it.effect(
       "CSG-003: deleteExpiredBefore removes expired sessions, tokens and reservations, bounded by limit, and reports the count",
@@ -1379,13 +1277,13 @@ export const contractCases = (
           attempts: 0,
         });
         yield* reservations.claim({ identifier: `signup:${label}`, expiresAt: future, now });
-        yield* auditLog.insert({
+        yield* auditLog.insertIfAbsent({
           id: `${label}-audit`,
           eventTag: "auth.test",
           actorUserId: null,
           occurredAt: now,
           correlationId: null,
-          payload: null,
+          payload: "null",
         });
         return {
           users: [user.tenantId, ...(Option.isSome(orphan) ? [orphan.value.tenantId] : [])],

@@ -24,11 +24,12 @@ const flaky = (failures: number) => {
   return { state, effect };
 };
 
-describe("SqlStore.write", () => {
+describe("SqlStore.make(sql).write", () => {
   it.live("retries a transient failure at the top level, then succeeds", () =>
     Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
       const probe = flaky(2);
-      const result = yield* probe.effect.pipe(SqlStore.write("Probe.write"));
+      const result = yield* probe.effect.pipe(SqlStore.make(sql).write("Probe.write"));
       assert.strictEqual(result, "ok");
       assert.strictEqual(probe.state.calls, 3);
     }).pipe(Effect.provide(SqlLive)),
@@ -36,8 +37,12 @@ describe("SqlStore.write", () => {
 
   it.live("gives up as StoreUnavailable naming the operation once the retries are spent", () =>
     Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
       const probe = flaky(100);
-      const failure = yield* probe.effect.pipe(SqlStore.write("Probe.write"), Effect.flip);
+      const failure = yield* probe.effect.pipe(
+        SqlStore.make(sql).write("Probe.write"),
+        Effect.flip,
+      );
       assert.strictEqual(failure._tag, "StoreUnavailable");
       assert.strictEqual(failure.operation, "Probe.write");
       assert.strictEqual(probe.state.calls, 4);
@@ -49,7 +54,7 @@ describe("SqlStore.write", () => {
       const sql = yield* SqlClient.SqlClient;
       const probe = flaky(100);
       const failure = yield* sql
-        .withTransaction(probe.effect.pipe(SqlStore.write("Probe.write")))
+        .withTransaction(probe.effect.pipe(SqlStore.make(sql).write("Probe.write")))
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "StoreUnavailable");
       assert.strictEqual(probe.state.calls, 1);
@@ -57,14 +62,15 @@ describe("SqlStore.write", () => {
   );
 });
 
-describe("SqlStore.read", () => {
+describe("SqlStore.make(sql).read", () => {
   it.effect("never retries", () =>
     Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
       const probe = flaky(100);
-      const failure = yield* probe.effect.pipe(SqlStore.read("Probe.read"), Effect.flip);
+      const failure = yield* probe.effect.pipe(SqlStore.make(sql).read("Probe.read"), Effect.flip);
       assert.strictEqual(failure._tag, "StoreUnavailable");
       assert.strictEqual(probe.state.calls, 1);
-    }),
+    }).pipe(Effect.provide(SqlLive)),
   );
 });
 

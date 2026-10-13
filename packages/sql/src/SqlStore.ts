@@ -43,26 +43,32 @@ export const drainBatches = <E, R = never>(
     }
   });
 
-/** Whether the calling fiber is inside a `SqlClient` transaction (a savepoint would nest). */
-const insideTransaction = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  return Option.isSome(yield* Effect.serviceOption(sql.transactionService));
-});
+/**
+ * Binds the wrappers to the client an adapter was built over, so a store primitive's own
+ * requirement stays empty (the port declares none).
+ */
+export const make = (sql: SqlClient.SqlClient) => {
+  /** Whether the calling fiber is inside a `SqlClient` transaction (a savepoint would nest). */
+  const insideTransaction = Effect.map(Effect.serviceOption(sql.transactionService), Option.isSome);
 
-/** A store write: classified like `orStoreUnavailable`, retried on a transient failure at the top level only. */
-export const write =
-  (operation: string, options?: { readonly capture?: boolean }) =>
-  <A, E, R>(self: Effect.Effect<A, E, R>) =>
-    Effect.gen(function* () {
-      const nested = yield* insideTransaction;
-      const attempt = nested ? self : retryTransient()(self);
-      return yield* orStoreUnavailable(operation)(
-        options?.capture === true ? ReadRouting.captureToken(attempt) : attempt,
-      );
-    });
+  /** A store write: classified like `orStoreUnavailable`, retried on a transient failure at the top level only. */
+  const write =
+    (operation: string, options?: { readonly capture?: boolean }) =>
+    <A, E, R>(self: Effect.Effect<A, E, R>) =>
+      Effect.flatMap(insideTransaction, (nested) => {
+        const attempt = nested ? self : retryTransient()(self);
+        return orStoreUnavailable(operation)(
+          options?.capture === true
+            ? Effect.provideService(ReadRouting.captureToken(attempt), SqlClient.SqlClient, sql)
+            : attempt,
+        );
+      });
 
-/** A store read: classified like `orStoreUnavailable`, never retried. */
-export const read =
-  (operation: string) =>
-  <A, E, R>(self: Effect.Effect<A, E, R>) =>
-    orStoreUnavailable(operation)(self);
+  /** A store read: classified like `orStoreUnavailable`, never retried. */
+  const read =
+    (operation: string) =>
+    <A, E, R>(self: Effect.Effect<A, E, R>) =>
+      orStoreUnavailable(operation)(self);
+
+  return { write, read };
+};

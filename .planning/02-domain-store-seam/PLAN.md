@@ -1327,3 +1327,15 @@ Open questions were answered with the plan's recommended default; where the plan
 - `StoreContract` needs no `StoreContract.memory/sql/file.test.ts` runner files until a port has cases; phase 1 ships `StoreContract.test.ts` (the runner's own test) and each phase adds its runner entries. Cases never read the ambient clock (every primitive takes the instant it judges at), so they run on `Effect.runPromise`.
 - The ports surface block in `spec/overview.md` lists `Ids`, `Store` and `PruneExpired`.
 - ADR-EA-041 is written in phase 1 (status "Accepted") and moves to "Accepted — implemented" with phase 7.
+
+### Phase 2 (AuditLog)
+
+- `AuditFilter` has a single `eventTag` (not the plan's `eventTags` list): `AuditLog.list` filters by one tag, so a list would be speculative.
+- The repository's `payload` is now the JSON text end to end (`Models.AuditLogRow.payload: Schema.String`), not a decoded `unknown`: the domain is the one codec, and an event does not pay for a decode and re-encode in the adapter on every publish. `AuditLogRepository.insert` became `insertIfAbsent` (`ON CONFLICT (id) DO NOTHING RETURNING id`, answering `boolean`), keeping the ADR-EA-037 savepoint inside a transaction. The plan's `append` is not wrapped in `captureToken`, as decided there.
+- `SqlStore.make(sql)` (not top-level `SqlStore.write`/`read`): binding the client keeps a store primitive's requirement empty, as the port declares, and `capture` provides the captured client to `captureToken`.
+- The transitional `AuditLog.layerSql` carries an explicit `Layer` type (the TS2883 exception: declaration emit cannot name `AuditLogRepository` through the adapter's inferred type); it is removed with the alias in phase 7.
+- `relabel(operation)` lives in core `Errors.ts` (a `catchIf` over `StoreUnavailable`), so every domain operation names itself on the wire while an adapter names its primitive.
+- `Layer.mock` (effect rc.116) builds the store double for the outage cases; the policy cases (`bestEffort`/`required`) moved onto it.
+- `StoreContract` runners: `StoreContract.memory/sql/file.test.ts` share `packages/test/test/support/storeContract.ts`, where each later phase adds its port; `StoreContract.sql.test.ts` is in `scripts/test-pg.sh`. The contract uses `node:assert/strict`, so `@awthaq/test` still needs no test runner at runtime.
+- Deleted from `packages/sql/test/contract.ts`: the two repository-level audit cases ("filters by an occurredAt range and round-trips the payload", "deleteOccurredBefore removes only rows older than the cutoff for the given tags"); both are `StoreContract.auditLog` cases now and run on Postgres under `test:pg`.
+- Erasure under RLS (L-7) and `captureToken` on appends (L-9) are unchanged, per the plan.

@@ -7,9 +7,9 @@
 // writes through this service before ever touching the `PubSub` — see
 // `AuthEvents.ts`'s own `publish` for the choke point this closes.
 //
-// Shaped like `@awthaq/admin`'s `ImpersonationRecords` (`layerMemory`/
-// `layerSql` over one `Shapes` contract), but keyed by the closed `AuthEvent`
-// union instead of one plugin's own row: `payload` is an opaque JSON envelope
+// Plan 02 (ADR-EA-041): one implementation, `layer`, over `@awthaq/ports`' `AuditLogStore` (a `Ref`
+// adapter there, a SQL adapter in `@awthaq/sql`). It is keyed by the closed `AuthEvent` union:
+// `payload` is an opaque JSON envelope
 // (the `verification_tokens.payload` precedent) rather than a 45-variant
 // column explosion, so a new `AuthEvent` tag needs no migration to be
 // durably recorded.
@@ -37,17 +37,20 @@
 // table with no erasure story (`ImpersonationRecords`); this table is
 // deliberately rewritable under GDPR Art. 17, which a hash chain would forbid.
 
-import { Repositories as SqlRepositories, SqlStore } from "@awthaq/sql";
+import { AuditLogStore, Defects } from "@awthaq/ports";
+import { AuditLogStoreSql, type Repositories as SqlRepositories } from "@awthaq/sql";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   type AuthEvent,
   type AuthEventTag,
@@ -59,7 +62,7 @@ import {
   piiFieldsOf,
   upcastPayload,
 } from "./AuthEventSchemas.ts";
-import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import { relabel, type StoreUnavailable } from "./Errors.ts";
 import { UserId } from "./Users.ts";
 
 /** ESA-007: a stored row that no longer decodes as an `AuthEvent` — a schema drift or a hand-edited row. */
@@ -157,18 +160,6 @@ export class AuditLog extends Context.Service<AuditLog, AuditLogShape>()("awthaq
 
 // ---- the stored row -----------------------------------------------------------
 
-/** A row as either layer keeps it: envelope columns plus the JSON payload. */
-interface StoredRow {
-  readonly id: string;
-  readonly eventTag: string;
-  readonly actorUserId: string | null;
-  readonly occurredAt: DateTime.Utc;
-  readonly correlationId: string | null;
-  /** BEH-EA-231: the row's tenant stamp. */
-  readonly tenantId: string | null;
-  readonly payload: unknown;
-}
-
 /** The pieces of the stored envelope that have no column of their own. */
 const StoredMeta = Schema.Struct({
   version: Schema.optional(Schema.Number),
@@ -184,15 +175,15 @@ const StoredMeta = Schema.Struct({
 const decodeStoredMeta = Schema.decodeUnknownEffect(StoredMeta);
 
 /** Event → the row `record` persists. `Schema.encodeEffect` keeps only the event's own fields, so the envelope keys never leak into the payload. */
-const toStoredRow = (published: Published): Effect.Effect<StoredRow> =>
+const toStoredRow = (published: Published): Effect.Effect<AuditLogStore.AuditRow> =>
   Effect.map(Effect.orDie(encodeEvent(published)), (encoded) => ({
     id: published.eventId,
     eventTag: published._tag,
-    actorUserId: Option.getOrNull(Option.map(actorOf(published), UserId)),
+    actorUserId: Option.map(actorOf(published), UserId),
     occurredAt: published.occurredAt,
-    correlationId: Option.getOrNull(published.correlationId),
-    tenantId: Option.getOrNull(published.tenantId),
-    payload: {
+    correlationId: published.correlationId,
+    tenantId: published.tenantId,
+    payloadJson: JSON.stringify({
       ...encoded,
       version: EVENT_VERSION,
       meta: {
@@ -207,10 +198,22 @@ const toStoredRow = (published: Published): Effect.Effect<StoredRow> =>
           onSome: (userAgent) => ({ userAgent }),
         }),
       },
-    },
+    }),
   }));
 
-const decodeRow = (row: StoredRow): Effect.Effect<AuditLogRecord, AuditLogDecodeError> =>
+/** The stored JSON text as a value, or `None` when it is not JSON at all. */
+const parseJson = (text: string): Option.Option<unknown> => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Option.some(parsed);
+  } catch {
+    return Option.none();
+  }
+};
+
+const decodeRow = (
+  row: AuditLogStore.AuditRow,
+): Effect.Effect<AuditLogRecord, AuditLogDecodeError> =>
   Effect.gen(function* () {
     const failed = (error: unknown) =>
       new AuditLogDecodeError({
@@ -218,21 +221,23 @@ const decodeRow = (row: StoredRow): Effect.Effect<AuditLogRecord, AuditLogDecode
         eventTag: row.eventTag,
         message: `awthaq: audit row ${row.id} ("${row.eventTag}") does not decode as an AuthEvent: ${String(error)}`,
       });
-    const stored = yield* decodeStoredMeta(row.payload).pipe(Effect.mapError(failed));
-    const payload = yield* decodeEvent(upcastPayload(stored.version ?? 1, row.payload)).pipe(
+    const parsed = parseJson(row.payloadJson);
+    if (Option.isNone(parsed)) return yield* failed("the stored payload is not JSON");
+    const stored = yield* decodeStoredMeta(parsed.value).pipe(Effect.mapError(failed));
+    const payload = yield* decodeEvent(upcastPayload(stored.version ?? 1, parsed.value)).pipe(
       Effect.mapError(failed),
     );
     return {
       id: row.id,
       eventTag: payload._tag,
-      actorUserId: Option.fromNullishOr(row.actorUserId).pipe(Option.map(UserId)),
+      actorUserId: Option.map(row.actorUserId, UserId),
       occurredAt: row.occurredAt,
-      correlationId: Option.fromNullishOr(row.correlationId),
+      correlationId: row.correlationId,
       traceId: Option.fromNullishOr(stored.meta?.traceId),
       spanId: Option.fromNullishOr(stored.meta?.spanId),
       ip: Option.fromNullishOr(stored.meta?.ip),
       userAgent: Option.fromNullishOr(stored.meta?.userAgent),
-      tenantId: Option.fromNullishOr(row.tenantId),
+      tenantId: row.tenantId,
       payload,
     };
   });
@@ -256,37 +261,40 @@ const blankFields = (value: unknown, fields: ReadonlyArray<string>): unknown =>
       )
     : value;
 
-/** True when erasing `userId` must touch this row: the predicate `listReferencing` applies in SQL (actor column equal, or the id anywhere in the stored payload). */
-const references = (row: StoredRow, userId: string): boolean =>
-  row.actorUserId === userId || JSON.stringify(row.payload).includes(userId);
-
-/** ESA-005: what erasing `userId` does to one row. Nothing unless the row names them; otherwise the alias substituted everywhere and the free-text fields blanked. */
-const scrubRow = (row: StoredRow, userId: string, alias: string): StoredRow =>
-  references(row, userId)
-    ? {
-        ...row,
-        actorUserId: row.actorUserId === null ? null : row.actorUserId.replaceAll(userId, alias),
-        payload: blankFields(replaceDeep(row.payload, userId, alias), piiFieldsOf(row.eventTag)),
-      }
-    : row;
-
-const newestFirst = (records: ReadonlyArray<AuditLogRecord>): ReadonlyArray<AuditLogRecord> =>
-  [...records].sort(
-    (a, b) =>
-      DateTime.toEpochMillis(b.occurredAt) - DateTime.toEpochMillis(a.occurredAt) ||
-      (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
-  );
-
-const matchesFilter = (record: AuditLogRecord, input?: AuditLogListInput): boolean =>
-  (input?.eventTag === undefined || record.eventTag === input.eventTag) &&
-  (input?.actorUserId === undefined ||
-    (Option.isSome(record.actorUserId) && record.actorUserId.value === input.actorUserId)) &&
-  (input?.occurredAfter === undefined ||
-    DateTime.toEpochMillis(record.occurredAt) >= DateTime.toEpochMillis(input.occurredAfter)) &&
-  (input?.occurredBefore === undefined ||
-    DateTime.toEpochMillis(record.occurredAt) <= DateTime.toEpochMillis(input.occurredBefore));
+/**
+ * ESA-005: what erasing `userId` does to one row the store found referencing them. The alias is
+ * substituted everywhere and the free-text fields (each event's declared `pii`) are blanked. `None`
+ * when that changes nothing, so a rerun counts zero rows. Pure and total, because the store
+ * applies it inside its own atomic unit; written once, so both adapters scrub identically.
+ */
+const scrubRow =
+  (userId: string, alias: string) =>
+  (row: AuditLogStore.AuditRow): Option.Option<AuditLogStore.AuditRewrite> => {
+    const parsed = parseJson(row.payloadJson);
+    const payloadJson = Option.match(parsed, {
+      // Not JSON (a hand-edited row): all that can be done is to replace the id in the text.
+      onNone: () => row.payloadJson.replaceAll(userId, alias),
+      onSome: (payload) =>
+        JSON.stringify(blankFields(replaceDeep(payload, userId, alias), piiFieldsOf(row.eventTag))),
+    });
+    const actorUserId = Option.map(row.actorUserId, (actor) => actor.replaceAll(userId, alias));
+    return payloadJson === row.payloadJson && Equal.equals(actorUserId, row.actorUserId)
+      ? Option.none()
+      : Option.some({ actorUserId, payloadJson });
+  };
 
 const DEFAULT_BATCH = 500;
+
+/** L-5: a replay's page size is a positive integer; anything else would drop, skip or fail a page. */
+const validBatchSize = (batchSize: number | undefined): Effect.Effect<number> =>
+  batchSize === undefined
+    ? Effect.succeed(DEFAULT_BATCH)
+    : Number.isInteger(batchSize) && batchSize >= 1
+      ? Effect.succeed(batchSize)
+      : Defects.invalidConfiguration(
+          "AuditLog.replay.batchSize",
+          `awthaq: batchSize must be a positive integer, got ${batchSize}`,
+        );
 
 /** A fresh alias, unrelated to the id it replaces — so nothing can be derived back from it. */
 const newAlias = Effect.map(
@@ -294,170 +302,110 @@ const newAlias = Effect.map(
   ([a, b]) => `erased-${a.toString(16).padStart(8, "0")}${b.toString(16).padStart(8, "0")}`,
 );
 
-// ---- layerMemory ------------------------------------------------------------
+// ---- the one implementation -----------------------------------------------------
 
 /**
- * Dev/test convenience — explicitly *not* durable (evaporates at process
- * exit, exactly the gap BEH-EA-100 exists to close). Deliberately has no
- * dependencies of its own — `AuthEvents.layer` needs `AuditLog` everywhere
- * it's composed (every wire-level test in this repo, not just one plugin's
- * own), so it must not pull a real crypto dependency into every one of those
- * compositions; the row id is the event's own `eventId`.
+ * Written once over `AuditLogStore` (ADR-EA-041). It needs nothing else: the row id is the event's
+ * own `eventId`, minted in `publish`, so `AuthEvents.layer` can sit on top of it everywhere it is
+ * composed without pulling a crypto dependency into every composition.
  */
-export const layerMemory = Layer.effect(
+export const layer = Layer.effect(
   AuditLog,
   Effect.gen(function* () {
-    const state = yield* Ref.make<ReadonlyArray<StoredRow>>([]);
+    const store = yield* AuditLogStore.AuditLogStore;
 
     const record: AuditLogShape["record"] = (event) =>
-      toStoredRow(event).pipe(Effect.flatMap((row) => Ref.update(state, (rows) => [...rows, row])));
-
-    const decodeAll = (rows: ReadonlyArray<StoredRow>) => Effect.forEach(rows, decodeRow);
-
-    const list: AuditLogShape["list"] = (input) =>
-      Ref.get(state).pipe(
-        Effect.flatMap(decodeAll),
-        Effect.map((records) => newestFirst(records.filter((r) => matchesFilter(r, input)))),
+      toStoredRow(event).pipe(
+        Effect.flatMap(store.append),
+        Effect.asVoid,
+        relabel("AuditLog.record"),
       );
 
+    const list: AuditLogShape["list"] = (input) =>
+      store
+        .select(
+          {
+            eventTag: Option.fromNullishOr(input?.eventTag),
+            actorUserId: Option.fromNullishOr(input?.actorUserId),
+            from: Option.fromNullishOr(input?.occurredAfter),
+            to: Option.fromNullishOr(input?.occurredBefore),
+          },
+          // A history listing is replica-eligible by classification (ADR-EA-024).
+          "eventual",
+        )
+        .pipe(
+          relabel("AuditLog.list"),
+          // L-1: the store applies the filter, so only the rows asked for are decoded.
+          Effect.flatMap((rows) => Effect.forEach(rows, decodeRow)),
+        );
+
     const replay: AuditLogShape["replay"] = (input) =>
-      Stream.paginate(input?.after ?? null, (after: string | null) =>
-        Ref.get(state).pipe(
-          Effect.flatMap((rows) => {
-            const batch = [...rows]
-              .filter(
-                (row) =>
-                  (after === null || row.id > after) &&
-                  (input?.eventTag === undefined || row.eventTag === input.eventTag),
+      Stream.unwrap(
+        Effect.map(validBatchSize(input?.batchSize), (limit) =>
+          Stream.paginate(Option.fromNullishOr(input?.after), (after: Option.Option<string>) =>
+            store
+              .pageAfter(
+                { after, eventTag: Option.fromNullishOr(input?.eventTag), limit },
+                "eventual",
               )
-              .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-              .slice(0, input?.batchSize ?? DEFAULT_BATCH);
-            const last = batch.at(-1);
-            return decodeAll(batch).pipe(
-              Effect.map((records) => [
-                records,
-                last === undefined ? Option.none<string | null>() : Option.some(last.id),
-              ]),
-            );
-          }),
+              .pipe(
+                relabel("AuditLog.replay"),
+                Effect.flatMap((rows) => {
+                  const last = rows.at(-1);
+                  return Effect.forEach(rows, decodeRow).pipe(
+                    Effect.map((records) => [
+                      records,
+                      last === undefined
+                        ? Option.none<Option.Option<string>>()
+                        : Option.some(Option.some(last.id)),
+                    ]),
+                  );
+                }),
+              ),
+          ),
         ),
       );
 
     const pseudonymizeActor: AuditLogShape["pseudonymizeActor"] = (userId) =>
-      Effect.gen(function* () {
-        const alias = yield* newAlias;
-        return yield* Ref.modify(state, (rows) => {
-          let rewritten = 0;
-          const next = rows.map((row) => {
-            const scrubbed = scrubRow(row, userId, alias);
-            if (JSON.stringify(scrubbed) === JSON.stringify(row)) return row;
-            rewritten += 1;
-            return scrubbed;
-          });
-          return [rewritten, next];
-        });
-      });
+      Effect.flatMap(newAlias, (alias) =>
+        store.rewriteReferencing(userId, scrubRow(userId, alias)),
+      ).pipe(relabel("AuditLog.pseudonymizeActor"));
 
-    const purge: AuditLogShape["purge"] = (input) =>
-      Ref.modify(state, (rows) => {
-        const cutoff = DateTime.toEpochMillis(input.before);
-        const doomed = (row: StoredRow): boolean =>
-          DateTime.toEpochMillis(row.occurredAt) < cutoff &&
-          (input.eventTags === undefined || input.eventTags.some((tag) => tag === row.eventTag)) &&
-          !(input.exceptTags ?? []).some((tag) => tag === row.eventTag);
-        const kept = rows.filter((row) => !doomed(row));
-        return [rows.length - kept.length, kept] as const;
-      });
+    const purge: AuditLogShape["purge"] = (input) => {
+      const exceptTags = input.exceptTags ?? [];
+      // L-4: an empty allow-list names no tag, so it matches nothing (it is not "every tag").
+      if (input.eventTags === undefined) {
+        return store
+          .deleteBefore({ cutoff: input.before, eventTags: Option.none(), exceptTags })
+          .pipe(relabel("AuditLog.purge"));
+      }
+      return Arr.isReadonlyArrayNonEmpty(input.eventTags)
+        ? store
+            .deleteBefore({
+              cutoff: input.before,
+              eventTags: Option.some(input.eventTags),
+              exceptTags,
+            })
+            .pipe(relabel("AuditLog.purge"))
+        : Effect.succeed(0);
+    };
 
     return AuditLog.of({ record, list, replay, pseudonymizeActor, purge });
   }),
 );
 
-// ---- layerSql -----------------------------------------------------------------
+// ---- transitional aliases (removed in phase 7) -----------------------------------
 
-const toStored = (row: SqlRepositories.AuditLogRow): StoredRow => row;
+/**
+ * Dev/test convenience — explicitly *not* durable (evaporates at process exit, exactly the gap
+ * BEH-EA-100 exists to close). Deliberately has no dependencies of its own.
+ */
+export const layerMemory = layer.pipe(Layer.provide(AuditLogStore.layerMemory));
 
-export const layerSql = Layer.effect(
+// The annotation is the TS2883 exception (declaration emit cannot name the repository through the
+// adapter's inferred layer type); this alias is removed with `layerMemory` in phase 7.
+export const layerSql: Layer.Layer<
   AuditLog,
-  Effect.gen(function* () {
-    const repo = yield* SqlRepositories.AuditLogRepository;
-    // The row id is the event's own `eventId`, minted in `publish` — no `Crypto` needed here.
-    const record: AuditLogShape["record"] = (event) =>
-      toStoredRow(event).pipe(
-        Effect.flatMap((row) => repo.insert(row)),
-        Effect.catchTags({
-          SqlError: storeUnavailable("AuditLog.record"),
-          SchemaError: Effect.die,
-          // An insert that returns no row broke the repository's own contract.
-          NoSuchElementError: Effect.die,
-        }),
-      );
-
-    const list: AuditLogShape["list"] = (input) =>
-      repo
-        .list({
-          eventTag: input?.eventTag ?? null,
-          actorUserId: input?.actorUserId ?? null,
-          occurredAfter: input?.occurredAfter ?? null,
-          occurredBefore: input?.occurredBefore ?? null,
-        })
-        .pipe(
-          orStoreUnavailable("AuditLog.list"),
-          Effect.flatMap((rows) => Effect.forEach(rows, (row) => decodeRow(toStored(row)))),
-        );
-
-    const replay: AuditLogShape["replay"] = (input) =>
-      Stream.paginate(input?.after ?? null, (after: string | null) =>
-        repo
-          .page({
-            after,
-            eventTag: input?.eventTag ?? null,
-            limit: input?.batchSize ?? DEFAULT_BATCH,
-          })
-          .pipe(
-            orStoreUnavailable("AuditLog.replay"),
-            Effect.flatMap((rows) => {
-              const last = rows.at(-1);
-              return Effect.forEach(rows, (row) => decodeRow(toStored(row))).pipe(
-                Effect.map((records) => [
-                  records,
-                  last === undefined ? Option.none<string | null>() : Option.some(last.id),
-                ]),
-              );
-            }),
-          ),
-      );
-
-    const pseudonymizeActor: AuditLogShape["pseudonymizeActor"] = (userId) =>
-      Effect.gen(function* () {
-        const alias = yield* newAlias;
-        const rows = yield* repo
-          .listReferencing(userId)
-          .pipe(orStoreUnavailable("AuditLog.pseudonymizeActor"));
-        let rewritten = 0;
-        for (const row of rows) {
-          const scrubbed = scrubRow(toStored(row), userId, alias);
-          if (JSON.stringify(scrubbed) === JSON.stringify(toStored(row))) continue;
-          yield* repo
-            .rewrite({ id: row.id, actorUserId: scrubbed.actorUserId, payload: scrubbed.payload })
-            .pipe(orStoreUnavailable("AuditLog.pseudonymizeActor"));
-          rewritten += 1;
-        }
-        return rewritten;
-      });
-
-    const purge: AuditLogShape["purge"] = (input) =>
-      SqlStore.drainBatches((limit) =>
-        repo
-          .deleteOccurredBefore({
-            cutoff: input.before,
-            eventTags: input.eventTags ?? null,
-            exceptTags: input.exceptTags ?? [],
-            limit,
-          })
-          .pipe(orStoreUnavailable("AuditLog.purge")),
-      );
-
-    return AuditLog.of({ record, list, replay, pseudonymizeActor, purge });
-  }),
-);
+  never,
+  SqlRepositories.AuditLogRepository | SqlClient.SqlClient
+> = layer.pipe(Layer.provide(AuditLogStoreSql.layer));

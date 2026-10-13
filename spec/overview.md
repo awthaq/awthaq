@@ -93,6 +93,7 @@ The exact core endpoint inventory is in [ADR-EA-003](decisions/003-httpapi-as-co
 ### Ports stratum (2)
 
 <!-- surface:ports -->
+AuditLogStore
 ClientAddress
 Defects
 Encryption
@@ -137,6 +138,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `HostResolver` | `Context.Service` | `layerNode` (`node:dns`, loaded lazily), `layerStatic(table)`; `pin(url)` resolves once, requires every answer public and returns the address to connect to (BEH-EA-312), `refusal(url)` is its refusal half |
 | `OutboundUrl` | helpers | `problem(field, url, options?)`, the SSRF floor for a URL an administrator supplies (https, no credentials, no private/loopback/link-local/reserved address or internal name; IPv6 parsed); `isPublicAddress`, `isIpLiteral` |
 | `PinnedHttp` | helpers | `send(request)` connects to an address `HostResolver.pin` judged, with the URL's own name as Host and SNI, judging the address again, no redirect, a body only up to a cap (webhooks, IdP metadata import); `pinnedRequestOptions` |
+| `AuditLogStore` | `Context.Service` | the store port under `AuditLog` (`append`, `select`, `pageAfter`, `rewriteReferencing`, `deleteBefore`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `AuditLogStoreSql`; the bar an adapter clears is `@awthaq/test`'s `StoreContract.auditLog` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
 | `Ids`, `Store`, `PruneExpired` | helpers | the identifier brands of the core entities (`UserId`, `AccountId`, `SessionId`, `VerificationTokenId`, `E164`; `@awthaq/sql`'s `Models` re-exports them), what every core store port shares (`StoreUnavailable`, `Consistency`, `ReadOptions`; [ADR-EA-041](decisions/041-domain-store-ports.md)) and the in-memory eviction the `Ref` adapters use (TMS-004) |
 | `Hmac`, `RefreshingCache`, `Defects`, `Tenant` | helpers | constant-time comparison and HMAC, a single-flight TTL cache, tagged defect classes, the ambient `TenantContext` |
 

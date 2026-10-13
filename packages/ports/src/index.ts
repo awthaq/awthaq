@@ -24,6 +24,7 @@
 //
 // See spec/overview.md for the full package map.
 
+export * as AuditLogStore from "./AuditLogStore.ts";
 export * as ClientAddress from "./ClientAddress.ts";
 export * as Defects from "./Defects.ts";
 export * as Encryption from "./Encryption.ts";

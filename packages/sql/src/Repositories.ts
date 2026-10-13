@@ -2141,11 +2141,16 @@ export interface AuditLogRow {
   readonly correlationId: string | null;
   /** BEH-EA-231: the stamp the row was inserted with. */
   readonly tenantId: string | null;
-  readonly payload: unknown;
+  /** The stored envelope as JSON text. The store keeps it opaque; `AuditLog` (core) owns the codec. */
+  readonly payload: string;
 }
 
 export interface AuditLogRepositoryShape {
-  readonly insert: (input: {
+  /**
+   * Idempotent on `id`: `INSERT ... ON CONFLICT (id) DO NOTHING RETURNING id`, so a duplicate
+   * `eventId` is `false` (not an outage), and never aborts an enclosing Postgres transaction.
+   */
+  readonly insertIfAbsent: (input: {
     readonly id: string;
     readonly eventTag: string;
     readonly actorUserId: string | null;
@@ -2153,8 +2158,8 @@ export interface AuditLogRepositoryShape {
     readonly correlationId: string | null;
     /** An explicit non-null value wins over the ambient `TenantContext` (BEH-EA-231). */
     readonly tenantId?: string | null;
-    readonly payload: unknown;
-  }) => Effect.Effect<AuditLogRow, Cause.NoSuchElementError | RepositoryError>;
+    readonly payload: string;
+  }) => Effect.Effect<boolean, RepositoryError>;
   /** RRC-001: a history listing — `"eventual"` (replica-eligible) unless `options.consistency` says otherwise. */
   readonly list: (
     input: {
@@ -2166,9 +2171,9 @@ export interface AuditLogRepositoryShape {
     options?: ReadRouting.ReadOptions,
   ) => Effect.Effect<ReadonlyArray<AuditLogRow>, RepositoryError>;
   /**
-   * ESA-003: one page of the log in ascending `id` order (ids are time-ordered),
-   * strictly after `after` when given — the cursor read `AuditLog.replay` pages
-   * with. Replica-eligible like `list`.
+   * ESA-003: one page of the log in ascending `id` order, strictly after `after` when given — the
+   * cursor read `AuditLog.replay` pages with. Ids compare as bytes (Postgres: `COLLATE "C"`), so a
+   * locale never reorders a replay. Replica-eligible like `list`.
    */
   readonly page: (
     input: {
@@ -2182,22 +2187,26 @@ export interface AuditLogRepositoryShape {
    * ESA-005: every row that names `userId` — as its actor, or anywhere in its
    * payload — read from the primary (an erasure must see every row). The
    * payload match is a substring test over the stored JSON text; ids are
-   * uuid-shaped, so a hit is a reference.
+   * uuid-shaped, so a hit is a reference. `lock` (Postgres `FOR UPDATE`, a no-op elsewhere)
+   * holds the rows for the rest of the enclosing transaction, so the rewrite that follows cannot
+   * race a concurrent one.
    */
   readonly listReferencing: (
     userId: string,
+    options?: { readonly lock?: boolean },
   ) => Effect.Effect<ReadonlyArray<AuditLogRow>, RepositoryError>;
   /** ESA-005: rewrites one row's actor and payload in place (erasure pseudonymization); id, tag, time and correlation are untouched. */
   readonly rewrite: (input: {
     readonly id: string;
     readonly actorUserId: string | null;
-    readonly payload: unknown;
+    readonly payload: string;
   }) => Effect.Effect<void, RepositoryError>;
   /**
    * ALF-010: retention. Deletes up to `limit` rows that occurred before `cutoff`
    * — only those whose tag is in `eventTags` when it is given, and never those in
    * `exceptTags` — and resolves to how many went. The `occurredAt` index
-   * (core migration 26) serves the range.
+   * (core migration 26) serves the range. An empty `eventTags` matches nothing
+   * (`IN ()` is a syntax error on Postgres).
    */
   readonly deleteOccurredBefore: (input: {
     readonly cutoff: DateTime.Utc;
@@ -2217,9 +2226,10 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
     AuditLogRepository,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const models = makeModels(yield* resolveDialect(sql));
+      const dialect = yield* resolveDialect(sql);
+      const models = makeModels(dialect);
 
-      const insertQuery = SqlSchema.findOne({
+      const insertQuery = SqlSchema.findOneOption({
         Request: Schema.Struct({
           id: Schema.String,
           eventTag: Schema.String,
@@ -2227,13 +2237,14 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
           tenantId: Schema.NullOr(Schema.String),
           occurredAt: models.wire.dateTime,
           correlationId: Schema.NullOr(Schema.String),
-          payload: Schema.fromJsonString(Schema.Unknown),
+          payload: Schema.String,
         }),
-        Result: models.AuditLogRow,
+        Result: Schema.Struct({ id: Schema.String }),
         execute: (r) => sql`
         INSERT INTO auth_audit_log (id, "eventTag", "actorUserId", "tenantId", "occurredAt", "correlationId", payload)
         VALUES (${r.id}, ${r.eventTag}, ${r.actorUserId}, ${r.tenantId}, ${r.occurredAt}, ${r.correlationId}, ${r.payload})
-        RETURNING *
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id
       `,
       });
 
@@ -2273,27 +2284,35 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
           }),
           Result: models.AuditLogRow,
           execute: (r) => {
+            // Byte order, not the database's locale: a replay's checkpoint is an id comparison.
+            const id = dialect === "pg" ? client`id COLLATE "C"` : client`id`;
             const conditions = [
-              ...(r.after === null ? [] : [client`id > ${r.after}`]),
+              ...(r.after === null ? [] : [client`${id} > ${r.after}`]),
               ...(r.eventTag === null ? [] : [client`"eventTag" = ${r.eventTag}`]),
             ];
-            return client`SELECT * FROM auth_audit_log WHERE ${client.and(conditions)} ORDER BY id ASC LIMIT ${r.limit}`;
+            return client`SELECT * FROM auth_audit_log WHERE ${client.and(conditions)} ORDER BY ${id} ASC LIMIT ${r.limit}`;
           },
         }),
       );
 
       const referencingQuery = SqlSchema.findAll({
-        Request: Schema.Struct({ userId: Schema.String, pattern: Schema.String }),
+        Request: Schema.Struct({
+          userId: Schema.String,
+          pattern: Schema.String,
+          lock: Schema.Boolean,
+        }),
         Result: models.AuditLogRow,
         execute: (r) =>
-          sql`SELECT * FROM auth_audit_log WHERE "actorUserId" = ${r.userId} OR payload LIKE ${r.pattern} ESCAPE '\\'`,
+          r.lock && dialect === "pg"
+            ? sql`SELECT * FROM auth_audit_log WHERE "actorUserId" = ${r.userId} OR payload LIKE ${r.pattern} ESCAPE '\\' ORDER BY id FOR UPDATE`
+            : sql`SELECT * FROM auth_audit_log WHERE "actorUserId" = ${r.userId} OR payload LIKE ${r.pattern} ESCAPE '\\'`,
       });
 
       const rewriteQuery = SqlSchema.void({
         Request: Schema.Struct({
           id: Schema.String,
           actorUserId: Schema.NullOr(Schema.String),
-          payload: Schema.fromJsonString(Schema.Unknown),
+          payload: Schema.String,
         }),
         execute: (r) =>
           sql`UPDATE auth_audit_log SET "actorUserId" = ${r.actorUserId}, payload = ${r.payload} WHERE id = ${r.id}`,
@@ -2324,10 +2343,10 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
       });
 
       const deleteOccurredBefore: AuditLogRepositoryShape["deleteOccurredBefore"] = (input) =>
-        deleteOccurredBeforeQuery(input).pipe(
-          Effect.map((rows) => rows.length),
-          traced("AuditLog.deleteOccurredBefore"),
-        );
+        (input.eventTags !== null && input.eventTags.length === 0
+          ? Effect.succeed(0)
+          : deleteOccurredBeforeQuery(input).pipe(Effect.map((rows) => rows.length))
+        ).pipe(traced("AuditLog.deleteOccurredBefore"));
 
       // ADR-EA-037: inside a transaction the insert runs in a savepoint. On Postgres a failed
       // statement aborts the whole transaction, so without one a failed audit write would take the
@@ -2338,12 +2357,13 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
           Option.isSome(open) ? SqlTransaction.transactional(sql)(effect) : effect,
         );
 
-      const insert: AuditLogRepositoryShape["insert"] = (input) =>
+      const insertIfAbsent: AuditLogRepositoryShape["insertIfAbsent"] = (input) =>
         Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
           Effect.flatMap((ambient) =>
             inSavepoint(insertQuery({ ...input, tenantId: input.tenantId ?? ambient })),
           ),
-          traced("AuditLog.insert", { id: input.id, eventTag: input.eventTag }),
+          Effect.map(Option.isSome),
+          traced("AuditLog.insertIfAbsent", { id: input.id, eventTag: input.eventTag }),
         );
 
       const list: AuditLogRepositoryShape["list"] = (input, options) =>
@@ -2361,15 +2381,17 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
       // The id is matched as a literal substring of the JSON text: escape LIKE's own wildcards.
       const likeEscape = (value: string): string => value.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-      const listReferencing: AuditLogRepositoryShape["listReferencing"] = (userId) =>
-        referencingQuery({ userId, pattern: `%${likeEscape(userId)}%` }).pipe(
-          traced("AuditLog.listReferencing"),
-        );
+      const listReferencing: AuditLogRepositoryShape["listReferencing"] = (userId, options) =>
+        referencingQuery({
+          userId,
+          pattern: `%${likeEscape(userId)}%`,
+          lock: options?.lock === true,
+        }).pipe(traced("AuditLog.listReferencing"));
 
       const rewrite: AuditLogRepositoryShape["rewrite"] = (input) =>
         rewriteQuery(input).pipe(traced("AuditLog.rewrite", { id: input.id }));
 
-      return { insert, list, page, listReferencing, rewrite, deleteOccurredBefore };
+      return { insertIfAbsent, list, page, listReferencing, rewrite, deleteOccurredBefore };
     }),
   );
 
