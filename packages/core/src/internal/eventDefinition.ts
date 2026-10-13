@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
 export const MetaKey = "~awthaq/event";
 
 // ---- the erased (runtime) shape: plain data, so it can be validated with a Schema -------------
-export const ActorSpecSchema = Schema.Union([
+const ActorSpecSchema = Schema.Union([
   Schema.TaggedStruct("None", {}),
   Schema.TaggedStruct("Field", { field: Schema.String }),
   Schema.TaggedStruct("Prefixed", { field: Schema.String, prefix: Schema.String }),
