@@ -17,7 +17,7 @@
 
 import type { Api } from "@awthaq/api";
 import { StoreFailure, TenantScoped } from "@awthaq/sql";
-import { OrganizationRecords } from "@awthaq/organization";
+import { OrganizationDirectory } from "@awthaq/organization";
 import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -129,13 +129,13 @@ export const layerStore = Layer.effect(
 
 /**
  * BEH-EA-246: bearer authentication for the `scim` group. Requires `ScimRecords`,
- * `OrganizationRecords` and `Crypto`.
+ * the exposed `OrganizationDirectory` and `Crypto`.
  */
 export const ScimAuthenticationLive = Layer.effect(
   ScimApi.ScimAuthentication,
   Effect.gen(function* () {
     const records = yield* ScimRecords.ScimRecords;
-    const orgs = yield* OrganizationRecords.OrganizationRecords;
+    const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const crypto = yield* Crypto.Crypto;
 
     const bearer: HttpApiMiddleware.HttpApiMiddlewareSecurity<
@@ -154,10 +154,9 @@ export const ScimAuthenticationLive = Layer.effect(
         // Constant-time even though the lookup was an equality: no early exit on a partial match.
         const equal = Hmac.constantTimeEqualString(hash, connection.tokenHash);
         if (!equal || Option.isSome(connection.revokedAt)) return yield* ScimApi.unauthorized();
-        const organization = yield* orgs.findById(connection.organizationId);
-        if (Option.isNone(organization) || Option.isSome(organization.value.suspendedAt)) {
-          return yield* ScimApi.unauthorized();
-        }
+        // BEH-EA-237: an unknown or suspended organization authenticates nothing.
+        const organization = yield* directory.findActive(connection.organizationId);
+        if (Option.isNone(organization)) return yield* ScimApi.unauthorized();
         return connection;
       }).pipe(
         Effect.flatMap((connection) =>

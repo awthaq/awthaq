@@ -24,7 +24,7 @@ import * as Layer from "effect/Layer";
  * Taps every `OrganizationHooks` observe point that can move a
  * `RelationshipResolver` answer (`OrganizationQadi.relationships`):
  * membership add/remove/role change (incl. `leave` and invitation
- * acceptance), organization deletion, team-membership add/remove/role change,
+ * acceptance), organization deletion, suspension and reinstatement (BEH-EA-237: it changes every relation of the organization), team-membership add/remove/role change,
  * team update/move/deletion (a move changes `team-role:<name>`, which walks
  * ancestors), and dynamic-role CRUD (a role's statements feed the
  * `<resource>:<action>` relations). It also taps
@@ -58,6 +58,8 @@ export const DecisionCacheInvalidationLive = Layer.unwrap(
       OrganizationHooks.AfterUpdateMemberRole.tap(clear),
       OrganizationHooks.AfterAcceptInvitation.tap(clear),
       OrganizationHooks.AfterDeleteOrganization.tap(clear),
+      OrganizationHooks.AfterSuspendOrganization.tap(clear),
+      OrganizationHooks.AfterReinstateOrganization.tap(clear),
       OrganizationHooks.AfterAddTeamMember.tap(clear),
       OrganizationHooks.AfterRemoveTeamMember.tap(clear),
       OrganizationHooks.AfterUpdateTeam.tap(clear),

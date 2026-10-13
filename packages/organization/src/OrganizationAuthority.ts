@@ -17,8 +17,8 @@ import * as Option from "effect/Option";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
-import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
@@ -94,7 +94,7 @@ export class OrganizationAuthority extends Context.Service<
   static readonly layer = Layer.effect(
     OrganizationAuthority,
     Effect.gen(function* () {
-      const orgs = yield* OrganizationRecords.OrganizationRecords;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
       const members = yield* MembershipRecords.MembershipRecords;
       const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
       const teams = yield* TeamRecords.TeamRecords;
@@ -168,10 +168,7 @@ export class OrganizationAuthority extends Context.Service<
       const checkRoleCeiling: OrganizationAuthorityShape["checkRoleCeiling"] = Effect.fnUntraced(
         function* ({ organizationId, roles, ceiling }) {
           // EP-003: a suspended organization answers like an unknown one.
-          const org = yield* orgs.findById(organizationId);
-          if (Option.isNone(org) || Option.isSome(org.value.suspendedAt)) {
-            return yield* new OrganizationErrors.OrganizationNotFound();
-          }
+          yield* directory.requireActive(organizationId);
           const byRole = yield* statementsByRole(organizationId);
           if (roles.some((name) => !byRole.has(name))) return Option.some("unknownRole" as const);
           if (ceiling.some((name) => !byRole.has(name))) {

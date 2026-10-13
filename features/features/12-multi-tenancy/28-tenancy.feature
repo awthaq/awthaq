@@ -373,6 +373,14 @@ Feature: Multi-Tenancy
       Then "alice" reading the organization "acme" is refused with "OrganizationNotFound"
       And "alice" updating the organization "acme" is refused with "OrganizationNotFound"
 
+    @REQ-EA-1294
+    Scenario: A veto hook can refuse a suspension, and the organization stays active
+      Given a signed-in user "alice" who owns the organization "acme"
+      And a platform administrator "superadmin"
+      When "superadmin" tries to suspend the organization "acme" with the reason "billing hold"
+      Then the suspension is refused with "HookAborted"
+      And "alice" can read the organization "acme"
+
     @REQ-EA-853
     Scenario: A suspended organization answers an outsider exactly as it answers an unknown id
       Given a signed-in user "alice" who owns the organization "acme"

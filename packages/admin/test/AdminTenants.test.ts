@@ -2,7 +2,7 @@
 // composed the way an application does — `Organization` beside `AdminTenants` —
 // and driven domain-level, like `Admin.test.ts`.
 import { Api } from "@awthaq/api";
-import { AuditLog, Sessions, Users } from "@awthaq/core";
+import { AuditLog, HookPoint, Sessions, Users } from "@awthaq/core";
 import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -36,7 +36,15 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const buildLayer = (config: Partial<Admin.AdminConfigShape>) =>
+const buildLayer = (
+  config: Partial<Admin.AdminConfigShape>,
+  // Plan 04: taps on the organization hook points (a suspension veto, an observer).
+  taps: Layer.Layer<
+    never,
+    never,
+    Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+  > = Layer.empty,
+) =>
   // `AdminTenants` `dependsOn: [Organization]`, so the type system makes the organization
   // plugin part of the composition: it must sit *under* `AdminTenants`, not beside it.
   AdminTenants.AdminTenants.layer.pipe(
@@ -53,6 +61,7 @@ const buildLayer = (config: Partial<Admin.AdminConfigShape>) =>
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(taps),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
 
@@ -174,5 +183,73 @@ describe("AdminTenants (BEH-EA-237)", () => {
       const reinstated = yield* auditLog.list({ eventTag: "auth.admin.organizationUnsuspended" });
       assert.strictEqual(reinstated.length, 1);
     }).pipe(Effect.provide(buildLayer(superadminOnly))),
+  );
+
+  it.effect(
+    "suspension fires AfterSuspendOrganization with the administrator as actor, and reinstatement its pair",
+    () => {
+      const seen: Array<string> = [];
+      return Effect.gen(function* () {
+        const tenants = yield* AdminTenants.AdminTenants;
+        const organization = yield* Organization.Organization;
+        const org = yield* organization.create({
+          caller: asCaller("owner-1"),
+          name: "Acme",
+          slug: "acme",
+        });
+        const superadmin = asCaller("superadmin-1");
+        yield* tenants.suspendOrganization(superadmin, org.id, { reason: "abuse" });
+        yield* tenants.unsuspendOrganization(superadmin, org.id);
+        assert.deepStrictEqual(seen, [
+          "suspended:PlatformAdmin:superadmin-1:abuse",
+          "reinstated:PlatformAdmin:superadmin-1",
+        ]);
+      }).pipe(
+        Effect.provide(
+          buildLayer(
+            superadminOnly,
+            Layer.mergeAll(
+              OrganizationHooks.AfterSuspendOrganization.tap((input) => {
+                seen.push(
+                  `suspended:${input.actor._tag}:${input.actor._tag === "PlatformAdmin" ? input.actor.adminUserId : ""}:${input.reason}`,
+                );
+                return Effect.void;
+              }),
+              OrganizationHooks.AfterReinstateOrganization.tap((input) => {
+                seen.push(
+                  `reinstated:${input.actor._tag}:${input.actor._tag === "PlatformAdmin" ? input.actor.adminUserId : ""}`,
+                );
+                return Effect.void;
+              }),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect(
+    "a BeforeSuspendOrganization veto makes suspend HookAborted and leaves the organization active",
+    () =>
+      Effect.gen(function* () {
+        const tenants = yield* AdminTenants.AdminTenants;
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const refused = yield* tenants
+          .suspendOrganization(asCaller("superadmin-1"), org.id, {})
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "HookAborted");
+        assert.strictEqual((yield* organization.get(owner, org.id)).id, org.id);
+      }).pipe(
+        Effect.provide(
+          buildLayer(
+            superadminOnly,
+            OrganizationHooks.BeforeSuspendOrganization.tap(() =>
+              Effect.fail(new HookPoint.HookAbort({ code: "BILLING_HOLD" })),
+            ),
+          ),
+        ),
+      ),
   );
 });

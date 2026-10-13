@@ -432,7 +432,9 @@ describe("a sign-in through a connection with a role mapping", () => {
         yield* rolesOf(outcome.session.session.userId, organizationId),
         Option.some(["admin"]),
       );
-      assert.deepStrictEqual(seen, [`IdentityProvider:${connection.id}`]);
+      // The creator's own membership fired first (D7); the mapping's add is the identity provider's.
+      assert.deepStrictEqual(seen.slice(1), [`IdentityProvider:${connection.id}`]);
+      assert.strictEqual(seen[0]?.startsWith("User:"), true);
     }).pipe(
       Effect.provide(
         SamlLive(

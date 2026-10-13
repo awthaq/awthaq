@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-35 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-014](../models/14-organization.md) as `@awthaq/organization`; MTI-011) <br> 1.1 (2026-10-13): BEH-EA-284: the records are Keyed by organization id, every cross-organization method takes a witness, and the stores fail with StoreUnavailable (plan 05 phase 6) <br> 1.2 (2026-10-13): BEH-EA-330, organization state is reached through system modules that take an actor (ADR-EA-040, architecture plan 04 phase 1) <br> 1.3 (2026-10-13): BEH-EA-288: one `Bound` for every role-conferring path, `Unbounded` an explicit choice; membership is `OrganizationMembers` (add, setRoles, remove), so a directory's and an identity provider's changes run the same limit, owner invariant, veto, cascade and observers as a member's; the statement check now precedes the owner invariant (D4) and an unchanged role set is a no-op everywhere (D5) (ADR-EA-040, architecture plan 04 phase 3) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-014](../models/14-organization.md) as `@awthaq/organization`; MTI-011) <br> 1.1 (2026-10-13): BEH-EA-284: the records are Keyed by organization id, every cross-organization method takes a witness, and the stores fail with StoreUnavailable (plan 05 phase 6) <br> 1.2 (2026-10-13): BEH-EA-330, organization state is reached through system modules that take an actor (ADR-EA-040, architecture plan 04 phase 1) <br> 1.3 (2026-10-13): BEH-EA-288: one `Bound` for every role-conferring path, `Unbounded` an explicit choice; membership is `OrganizationMembers` (add, setRoles, remove), so a directory's and an identity provider's changes run the same limit, owner invariant, veto, cascade and observers as a member's; the statement check now precedes the owner invariant (D4) and an unchanged role set is a no-op everywhere (D5) (ADR-EA-040, architecture plan 04 phase 3) <br> 1.4 (2026-10-13): BEH-EA-283: creation is one transaction and the creator's membership is observable (D3, D7); `OrganizationDirectory` is the system module for the organization row (ADR-EA-040, architecture plan 04 phase 4) |
 ---
 
 > `@awthaq/organization` composes as `Auth.make([Organization])` and serves the `organization` HTTP group at `/organization/...`, all behind `Api.Authentication` and `Api.CsrfProtection`. It is the multi-tenant membership plugin ([MOD-EA-014](../models/14-organization.md)): the behaviors below are what an application relies on to treat an organization as a tenant boundary. Roles and statements are the plugin's own `PermissionEngine` ([ADR-EA-025](../decisions/025-global-roles-vs-organization-roles.md)), never a qadi round trip; tenancy resolution and tenant-stamped rows are [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none) through [BEH-EA-237](28-tenancy.md#beh-ea-237-a-suspended-organization-refuses-organization-scoped-access), and the qadi relationship grammar is [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership).
@@ -29,7 +29,7 @@ REQUIREMENT: `POST /organization` MUST create the organization and make the
              caller belongs to.
 ```
 
-The creator's membership and the organization are written together, so there is never an organization nobody belongs to. The finite default quota exists so an open sign-up cannot mint unbounded tenants; a deployment that wants that opts out explicitly.
+The creator's membership and the organization are written in one transaction (`OrganizationDirectory.create`), so there is never an organization nobody belongs to, and the creator's membership fires `AfterAddMember` like any other. The finite default quota exists so an open sign-up cannot mint unbounded tenants; a deployment that wants that opts out explicitly.
 
 _Previous: [BEH-EA-253](30-scim.md#beh-ea-253-provisioning-lifecycle-changes-are-published-as-events) | Next: [BEH-EA-284](35-organization.md#beh-ea-284-organization-data-is-member-only-and-a-non-member-cannot-tell-an-organization-that-exists-from-one-that-does-not)_
 

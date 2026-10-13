@@ -77,6 +77,38 @@ export class AfterDeleteOrganization extends HookPoint.observe<AfterDeleteOrgani
   DeleteOrganizationInput,
 ) {}
 
+/**
+ * EP-003/BEH-EA-237 (plan 04): a platform administrator suspends or reinstates an organization. A veto
+ * aborts it with the typed `HookAborted`; the observe point is what `DecisionCacheInvalidationLive` taps,
+ * so a long-lived decision cache never keeps answering for a suspended organization.
+ */
+const SuspendOrganizationInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+  reason: Schema.optional(Schema.String),
+});
+export class BeforeSuspendOrganization extends HookPoint.veto<BeforeSuspendOrganization>()(
+  "organization.suspend.before",
+  SuspendOrganizationInput,
+) {}
+export class AfterSuspendOrganization extends HookPoint.observe<AfterSuspendOrganization>()(
+  "organization.suspend.after",
+  SuspendOrganizationInput,
+) {}
+
+const ReinstateOrganizationInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+});
+export class BeforeReinstateOrganization extends HookPoint.veto<BeforeReinstateOrganization>()(
+  "organization.reinstate.before",
+  ReinstateOrganizationInput,
+) {}
+export class AfterReinstateOrganization extends HookPoint.observe<AfterReinstateOrganization>()(
+  "organization.reinstate.after",
+  ReinstateOrganizationInput,
+) {}
+
 // ---- membership -------------------------------------------------------------
 
 const AddMemberInput = Schema.Struct({
@@ -342,6 +374,10 @@ export const OrganizationHooksLive = Layer.mergeAll(
   AfterUpdateOrganization.layer,
   BeforeDeleteOrganization.layer,
   AfterDeleteOrganization.layer,
+  BeforeSuspendOrganization.layer,
+  AfterSuspendOrganization.layer,
+  BeforeReinstateOrganization.layer,
+  AfterReinstateOrganization.layer,
   BeforeAddMember.layer,
   AfterAddMember.layer,
   BeforeRemoveMember.layer,

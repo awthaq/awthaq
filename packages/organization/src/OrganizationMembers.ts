@@ -24,9 +24,9 @@ import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
-import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
 import { requireWithin } from "./internal/bound.ts";
@@ -137,7 +137,7 @@ export class OrganizationMembers extends Context.Service<
     OrganizationMembers,
     Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
-      const orgs = yield* OrganizationRecords.OrganizationRecords;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
       const members = yield* MembershipRecords.MembershipRecords;
       const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
       const teams = yield* TeamRecords.TeamRecords;
@@ -155,17 +155,7 @@ export class OrganizationMembers extends Context.Service<
 
       /** EP-003: a suspended organization answers exactly like an unknown one (MTI-009, BEH-EA-237). */
       const requireActive = (organizationId: string) =>
-        orgs.findById(organizationId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new OrganizationErrors.OrganizationNotFound()),
-              onSome: (record) =>
-                Option.isSome(record.suspendedAt)
-                  ? Effect.fail(new OrganizationErrors.OrganizationNotFound())
-                  : Effect.void,
-            }),
-          ),
-        );
+        Effect.asVoid(directory.requireActive(organizationId));
 
       /** RRM-001/RRM-002: every role-assignment path stores only role names this organization recognizes. */
       const requireKnownRoles = (

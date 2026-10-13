@@ -531,7 +531,9 @@ describe("SCIM Users: membership goes through OrganizationMembers (plan 04)", ()
         const { connection } = yield* seedConnection();
         const scim = yield* Scim.Scim;
         yield* scim.createUser(connection, { userName: "ada@acme.example" });
-        assert.deepStrictEqual(seen, [`Directory:${connection.id}`]);
+        // The creator's own membership fired first (D7), by the organization's creator.
+        assert.deepStrictEqual(seen.slice(1), [`Directory:${connection.id}`]);
+        assert.strictEqual(seen[0]?.startsWith("User:"), true);
       }).pipe(
         Effect.provide(
           ScimLive(

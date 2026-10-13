@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
+import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
@@ -820,6 +821,7 @@ const SqlSystemLive = OrganizationSystem.layer.pipe(
   Layer.provideMerge(sqlRecords(MembershipRecords.layerSql)),
   Layer.provideMerge(ActiveContextRecords.layerSql),
   Layer.provideMerge(sqlRecords(OrgRoleRecords.layerSql)),
+  Layer.provideMerge(sqlRecords(InvitationRecords.layerSql)),
   Layer.provideMerge(sqlRecords(TeamRecords.layerSql)),
   Layer.provideMerge(SqlTransaction.layerSql),
   Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),

@@ -49,8 +49,8 @@ import {
   Organization,
   OrganizationActor,
   OrganizationAuthority,
+  OrganizationDirectory,
   OrganizationMembers,
-  OrganizationRecords,
 } from "@awthaq/organization";
 import { TenantScoped } from "@awthaq/sql";
 import * as Crypto from "effect/Crypto";
@@ -740,7 +740,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
       const records = yield* SamlRecords.SamlRecords;
-      const orgs = yield* OrganizationRecords.OrganizationRecords;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
       // ADR-EA-040: the role mapping goes through the exposed members module, bounded by the connection's ceiling.
       const memberSystem = yield* OrganizationMembers.OrganizationMembers;
       const authority = yield* OrganizationAuthority.OrganizationAuthority;
@@ -772,11 +772,11 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             Option.match({
               onNone: () => Effect.succeedNone,
               onSome: (connection) =>
-                orgs
-                  .findById(connection.organizationId)
+                directory
+                  .findActive(connection.organizationId)
                   .pipe(
                     Effect.map((organization) =>
-                      Option.isSome(organization) && Option.isNone(organization.value.suspendedAt)
+                      Option.isSome(organization)
                         ? Option.some(connection)
                         : Option.none<SamlRecords.ConnectionRecord>(),
                     ),

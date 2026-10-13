@@ -37,17 +37,18 @@ import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationApi from "./OrganizationApi.ts";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
-import { OrganizationConfig, type OrganizationLimits } from "./OrganizationConfig.ts";
+import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationHandlers from "./OrganizationHandlers.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import { organizationMigrations } from "./OrganizationMigrations.ts";
 import { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationMembers from "./OrganizationMembers.ts";
 import * as OrganizationSystem from "./OrganizationSystem.ts";
 import * as OrganizationTeams from "./OrganizationTeams.ts";
 import type { OrganizationShape } from "./OrganizationShape.ts";
+import { limitsOf as resolveLimits } from "./internal/limits.ts";
 import { hexOf, NO_INVITATION_TOKEN_HASH } from "./internal/tokens.ts";
-import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
@@ -59,10 +60,6 @@ import * as TeamRecords from "./TeamRecords.ts";
 // guard `TenantScoping.test.ts` kept it in an allowlist far from the code). A method keyed by an
 // organization id takes no witness: the key is the scope.
 
-/** A caller's own memberships, whichever organizations they are in. */
-const ownMembershipsGrant = TenantScoped.crossTenant(
-  "organization: a user's own memberships across organizations, keyed by the caller's identity",
-);
 /** The invitation id alone is the capability. */
 const invitationIdGrant = TenantScoped.crossTenant(
   "organization: the invitation id is the capability; acceptance re-checks the invitee's email",
@@ -137,7 +134,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     contributes: Layer.mergeAll(organizationErasure, organizationExport),
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
-      const orgs = yield* OrganizationRecords.OrganizationRecords;
       const members = yield* MembershipRecords.MembershipRecords;
       const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
       const invitations = yield* InvitationRecords.InvitationRecords;
@@ -145,13 +141,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const teams = yield* TeamRecords.TeamRecords;
       // ADR-EA-040: the plugin's system interfaces, built beneath this `make` by `exposes`.
       const authority = yield* OrganizationAuthority.OrganizationAuthority;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
       const teamSystem = yield* OrganizationTeams.OrganizationTeams;
       const memberSystem = yield* OrganizationMembers.OrganizationMembers;
       const users = yield* Users.Users;
       const mailer = yield* Mailer.Mailer;
       // OHS-002: the cascades below commit or roll back as one unit. `layerNoop`
       // for an in-memory composition, `layerSql` over the real client otherwise.
-      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const crypto = yield* Crypto.Crypto;
       // EP-007 (ADR-EA-018): the configuration in force is decided per operation, not frozen at
       // layer build. A `provideService(OrganizationConfig, ...)` in the *calling* fiber (the tenant
@@ -162,12 +158,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const configNow = Effect.contextWith((context: Context.Context<never>) =>
         Effect.succeed(Context.getOrUndefined(context, OrganizationConfig) ?? builtConfig),
       );
-      const beforeCreate = yield* OrganizationHooks.BeforeCreateOrganization;
-      const afterCreate = yield* OrganizationHooks.AfterCreateOrganization;
-      const beforeUpdate = yield* OrganizationHooks.BeforeUpdateOrganization;
-      const afterUpdate = yield* OrganizationHooks.AfterUpdateOrganization;
-      const beforeDelete = yield* OrganizationHooks.BeforeDeleteOrganization;
-      const afterDelete = yield* OrganizationHooks.AfterDeleteOrganization;
       const beforeCreateInvitation = yield* OrganizationHooks.BeforeCreateInvitation;
       const afterCreateInvitation = yield* OrganizationHooks.AfterCreateInvitation;
       const beforeAccept = yield* OrganizationHooks.BeforeAcceptInvitation;
@@ -278,46 +268,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        * outsiders alike; only the platform administrator's surface reads it.
        * `list` still returns it, flagged `suspended`, so a member sees why.
        */
-      const requireOrganization = (organizationId: string) =>
-        orgs.findById(organizationId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new OrganizationApi.OrganizationNotFound()),
-              onSome: (record) =>
-                Option.isSome(record.suspendedAt)
-                  ? Effect.fail(new OrganizationApi.OrganizationNotFound())
-                  : Effect.succeed(record),
-            }),
-          ),
-        );
+      const requireOrganization = directory.requireActive;
 
       /** EP-006: the static limits with this organization's `limitsFor` overrides merged over them. */
       const limitsOf = (organizationId: string) =>
-        Effect.flatMap(configNow, (orgConfig) =>
-          (orgConfig.limitsFor === undefined
-            ? Effect.succeed<OrganizationLimits>({})
-            : orgConfig.limitsFor(organizationId)
-          ).pipe(
-            Effect.map((override) => ({
-              membershipLimit: override.membershipLimit ?? orgConfig.membershipLimit,
-              invitationLimit: override.invitationLimit ?? orgConfig.invitationLimit,
-              maximumTeams: override.maximumTeams ?? orgConfig.teams.maximumTeams,
-              maximumMembersPerTeam:
-                override.maximumMembersPerTeam ?? orgConfig.teams.maximumMembersPerTeam,
-              maximumRolesPerOrganization:
-                override.maximumRolesPerOrganization ??
-                orgConfig.dynamicAccessControl.maximumRolesPerOrganization,
-            })),
-          ),
-        );
+        Effect.flatMap(configNow, (orgConfig) => resolveLimits(orgConfig, organizationId));
 
-      /** DRS-007: a `homeRegion` must come from the configured vocabulary. */
-      const requireKnownRegion = (region: string | null | undefined) =>
-        Effect.flatMap(configNow, (orgConfig) =>
-          region === undefined || region === null || orgConfig.regions.includes(region)
-            ? Effect.void
-            : Effect.fail(new OrganizationApi.UnknownRegion({ region })),
-        );
+      // ---- organizations: authorization on top of `OrganizationDirectory` ---------------------
 
       const create: OrganizationShape["create"] = Effect.fnUntraced(function* ({
         caller,
@@ -327,73 +284,25 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         metadata,
         homeRegion,
       }) {
-        const orgConfig = yield* configNow;
         const callerId = Users.UserId(caller.ref.id);
-        yield* requireKnownRegion(homeRegion);
-        const allowed = yield* orgConfig.allowUserToCreateOrganization(callerId);
-        if (!allowed)
-          return yield* Effect.fail(new OrganizationApi.OrganizationCreationNotAllowed());
-
-        const ownedOrgs = yield* members.listByUser(ownMembershipsGrant, callerId);
-        const ownedCount = ownedOrgs.filter((m) => m.role.includes(orgConfig.creatorRole)).length;
-        if (ownedCount >= orgConfig.organizationLimit) {
-          return yield* Effect.fail(new OrganizationApi.OrganizationLimitReached());
-        }
-
-        const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateOrganization)(
-          beforeCreate.run({ actor: OrganizationActor.user(caller), callerId, name, slug }),
-        );
-
-        const record = yield* orgs
-          .create({ name: vetoed.name, slug: vetoed.slug, logo, metadata, homeRegion })
-          .pipe(
-            Effect.catchTag("OrganizationRecordSlugTaken", () =>
-              Effect.fail(new OrganizationApi.OrganizationSlugTaken()),
-            ),
-          );
-        // A brand-new organization has no memberships, so this cannot collide.
-        const membership = yield* members
-          .create({
-            userId: callerId,
-            organizationId: record.id,
-            role: [orgConfig.creatorRole],
-          })
-          .pipe(Effect.catchTag("MembershipRecordAlreadyExists", Effect.die));
-        yield* events.publish({
-          _tag: "auth.organization.created",
-          organizationId: record.id,
-          creatorUserId: callerId,
+        // Who may create at all is authorization; the region, the quota, the veto and the
+        // organization with its creator's membership are the Directory's.
+        const allowed = yield* (yield* configNow).allowUserToCreateOrganization(callerId);
+        if (!allowed) return yield* new OrganizationApi.OrganizationCreationNotAllowed();
+        return yield* directory.create(OrganizationActor.user(caller), {
+          owner: callerId,
+          name,
+          slug,
+          logo,
+          metadata,
+          homeRegion,
         });
-        yield* events.publish({
-          _tag: "auth.organization.memberAdded",
-          organizationId: record.id,
-          userId: callerId,
-          role: membership.role,
-        });
-
-        yield* afterCreate.run({
-          actor: OrganizationActor.user(caller),
-          callerId,
-          name: vetoed.name,
-          slug: vetoed.slug,
-          organizationId: record.id,
-        });
-
-        return record;
       });
 
-      const checkSlug: OrganizationShape["checkSlug"] = (slug) =>
-        orgs.findBySlug(slug).pipe(Effect.map(Option.isNone));
+      const checkSlug: OrganizationShape["checkSlug"] = directory.isSlugAvailable;
 
       const list: OrganizationShape["list"] = (caller) =>
-        members.listByUser(ownMembershipsGrant, Users.UserId(caller.ref.id)).pipe(
-          Effect.flatMap((rows) =>
-            orgs.listByIds(
-              ownMembershipsGrant,
-              rows.map((r) => r.organizationId),
-            ),
-          ),
-        );
+        directory.listForUser(Users.UserId(caller.ref.id));
 
       const get: OrganizationShape["get"] = Effect.fnUntraced(function* (caller, organizationId) {
         const record = yield* requireOrganization(organizationId);
@@ -405,7 +314,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, input) {
           const record = yield* requireOrganization(organizationId);
           yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
-          const memberRows = yield* members.listByOrganization(organizationId, {
+          const memberRows = yield* memberSystem.list(organizationId, {
             limit: input?.membersLimit,
             offset: input?.membersOffset,
           });
@@ -425,81 +334,23 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization",
             "update",
           );
-          yield* requireKnownRegion(input.homeRegion);
-          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateOrganization)(
-            beforeUpdate.run({
-              actor: OrganizationActor.user(caller),
-              organizationId,
-              name: input.name,
-              slug: input.slug,
-            }),
-          );
-          const record = yield* orgs
-            .update(organizationId, { ...input, name: vetoed.name, slug: vetoed.slug })
-            .pipe(
-              Effect.catchTag("OrganizationRecordNotFound", () =>
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: organization vanished between check and write",
-                ),
-              ),
-              Effect.catchTag("OrganizationRecordSlugTaken", () =>
-                Effect.fail(new OrganizationApi.OrganizationSlugTaken()),
-              ),
-            );
-          yield* events.publish({ _tag: "auth.organization.updated", organizationId });
-          yield* afterUpdate.run({
-            actor: OrganizationActor.user(caller),
+          return yield* directory.update(OrganizationActor.user(caller), {
             organizationId,
-            name: vetoed.name,
-            slug: vetoed.slug,
+            ...input,
           });
-          return record;
         },
       );
 
       const delete_: OrganizationShape["delete"] = Effect.fnUntraced(
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
-          if ((yield* configNow).disableOrganizationDeletion) {
-            return yield* Effect.fail(new OrganizationApi.OrganizationDeletionDisabled());
-          }
           yield* requirePermission(
             Users.UserId(caller.ref.id),
             organizationId,
             "organization",
             "delete",
           );
-          yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteOrganization)(
-            beforeDelete.run({ actor: OrganizationActor.user(caller), organizationId }),
-          );
-          // OHS-002: the five-table cascade is one transaction — a failure at any
-          // step leaves every organization_* row untouched. Hooks and events stay
-          // outside it: they only run once the delete has committed.
-          yield* sqlTransaction
-            .withTransaction(
-              Effect.gen(function* () {
-                yield* members.removeAllForOrganization(organizationId);
-                yield* invitations.removeAllForOrganization(organizationId);
-                yield* teams.removeAllTeamsForOrganization(organizationId);
-                yield* orgRoles.removeAllForOrganization(organizationId);
-                // CWM-003: no session may keep pointing at the deleted organization.
-                yield* activeContext.clearOrganization(organizationId);
-                yield* orgs
-                  .delete(organizationId)
-                  .pipe(
-                    Effect.catchTag("OrganizationRecordNotFound", () =>
-                      Defects.invariantViolation(
-                        "RowVanished",
-                        "awthaq: organization vanished between check and write",
-                      ),
-                    ),
-                  );
-              }),
-            )
-            .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({ _tag: "auth.organization.deleted", organizationId });
-          yield* afterDelete.run({ actor: OrganizationActor.user(caller), organizationId });
+          yield* directory.delete(OrganizationActor.user(caller), { organizationId });
         },
       );
 
@@ -583,8 +434,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       /** EP-003: the active-context paths read memberships directly, so they check suspension themselves. */
       const isSuspended = (organizationId: string) =>
-        orgs
-          .findById(organizationId)
+        directory
+          .find(organizationId)
           .pipe(
             Effect.map((found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt)),
           );

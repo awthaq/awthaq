@@ -18,7 +18,16 @@
 // middleware, behind `HttpRouter.toWebHandler`.
 import { Api } from "@awthaq/api";
 import { Admin, AdminTenants } from "@awthaq/admin";
-import { AuditLog, AuthEvents, Accounts, Hooks, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Accounts,
+  HookPoint,
+  Hooks,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import {
   ConnectionRecords,
   Organization,
@@ -164,6 +173,16 @@ export type OrganizationServices =
   | TenantConfig
   | RelationshipResolver;
 
+/**
+ * Plan 04: a platform suspension runs `BeforeSuspendOrganization`; this world's policy hook refuses
+ * one whose reason is "billing hold", as a billing system holding an account would (BEH-EA-237).
+ */
+const RefuseBillingHold = OrganizationHooks.BeforeSuspendOrganization.tap((input) =>
+  input.reason === "billing hold"
+    ? Effect.fail(new HookPoint.HookAbort({ code: "BILLING_HOLD" }))
+    : Effect.succeed(input),
+);
+
 const buildOrganizationStack = () => {
   const AuthenticationLive = Authentication.AuthenticationLive.pipe(
     Layer.provide(Authentication.PrincipalResolverLive),
@@ -202,6 +221,7 @@ const buildOrganizationStack = () => {
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(RefuseBillingHold),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
 };

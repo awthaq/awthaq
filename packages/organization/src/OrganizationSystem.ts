@@ -9,12 +9,14 @@
 import type { AuthEvents } from "@awthaq/core";
 import type { SqlTransaction } from "@awthaq/ports";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationMembers from "./OrganizationMembers.ts";
 import * as OrganizationTeams from "./OrganizationTeams.ts";
 import * as Layer from "effect/Layer";
 
 /** The tags the plugin exposes, for the manifest (`plugin list --graph`). */
 export const services = [
+  OrganizationDirectory.OrganizationDirectory,
   OrganizationTeams.OrganizationTeams,
   OrganizationMembers.OrganizationMembers,
   OrganizationAuthority.OrganizationAuthority,
@@ -24,7 +26,10 @@ export const services = [
 export const layer = Layer.mergeAll(
   OrganizationTeams.OrganizationTeams.layer,
   OrganizationMembers.OrganizationMembers.layer,
-).pipe(Layer.provideMerge(OrganizationAuthority.OrganizationAuthority.layer));
+).pipe(
+  Layer.provideMerge(OrganizationAuthority.OrganizationAuthority.layer),
+  Layer.provideMerge(OrganizationDirectory.OrganizationDirectory.layer),
+);
 
 /**
  * The core services and port `layer` requires beyond the plugin's own records and hook points.

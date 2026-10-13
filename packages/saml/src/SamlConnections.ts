@@ -23,7 +23,7 @@
 // what gets pinned afterwards is the fingerprint, not the document.
 
 import type { Api } from "@awthaq/api";
-import { OrganizationAuthority, OrganizationRecords } from "@awthaq/organization";
+import { OrganizationAuthority, OrganizationDirectory } from "@awthaq/organization";
 import { OutboundUrl } from "@awthaq/ports";
 import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
@@ -203,12 +203,12 @@ export class SamlConnectionStore extends Context.Service<
   SamlConnectionStoreShape
 >()("awthaq/saml/SamlConnectionStore") {}
 
-/** Requires `SamlRecords`, `OrganizationRecords`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
+/** Requires `SamlRecords`, the exposed `OrganizationDirectory`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
 export const layerStore = Layer.effect(
   SamlConnectionStore,
   Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
-    const orgs = yield* OrganizationRecords.OrganizationRecords;
+    const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
     const crypto = yield* Crypto.Crypto;
@@ -311,7 +311,7 @@ export const layerStore = Layer.effect(
         : Effect.void;
 
     const create: SamlConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
-      const found = yield* orgs.findById(input.organizationId);
+      const found = yield* directory.find(input.organizationId);
       if (Option.isNone(found))
         return yield* Effect.fail(invalid("the organization does not exist"));
       const name = input.name.trim();

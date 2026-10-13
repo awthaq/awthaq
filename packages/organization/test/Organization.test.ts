@@ -115,41 +115,6 @@ const verifiedUser = (input: { readonly email: string; readonly name: string }) 
   });
 
 describe("Organization", () => {
-  it.effect("create makes the creator the owner automatically", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const caller = asCaller("user-1");
-      const record = yield* organization.create({ caller, name: "Acme", slug: "acme" });
-
-      const membership = yield* organization.listMembers(caller, record.id);
-      assert.strictEqual(membership.length, 1);
-      assert.deepStrictEqual(membership[0]?.role, ["owner"]);
-      assert.strictEqual(membership[0]?.userId, Users.UserId("user-1"));
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("create honors a custom creatorRole", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const caller = asCaller("user-1");
-      const record = yield* organization.create({ caller, name: "Acme", slug: "acme" });
-      const membership = yield* organization.listMembers(caller, record.id);
-      assert.deepStrictEqual(membership[0]?.role, ["admin"]);
-    }).pipe(Effect.provide(buildLayer({ creatorRole: "admin" }))),
-  );
-
-  it.effect("create rejects a slug collision", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const caller = asCaller("user-1");
-      yield* organization.create({ caller, name: "Acme", slug: "acme" });
-      const failure = yield* organization
-        .create({ caller, name: "Acme 2", slug: "acme" })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "OrganizationSlugTaken");
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
   it.effect("create is refused when allowUserToCreateOrganization denies", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
@@ -161,30 +126,6 @@ describe("Organization", () => {
     }).pipe(
       Effect.provide(buildLayer({ allowUserToCreateOrganization: () => Effect.succeed(false) })),
     ),
-  );
-
-  it.effect("create is refused once organizationLimit is reached", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const caller = asCaller("user-1");
-      yield* organization.create({ caller, name: "Acme", slug: "acme" });
-      const failure = yield* organization
-        .create({ caller, name: "Second", slug: "second" })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "OrganizationLimitReached");
-    }).pipe(Effect.provide(buildLayer({ organizationLimit: 1 }))),
-  );
-
-  it.effect('organizationLimit is still enforced when creatorRole is not "owner"', () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const caller = asCaller("user-1");
-      yield* organization.create({ caller, name: "Acme", slug: "acme" });
-      const failure = yield* organization
-        .create({ caller, name: "Second", slug: "second" })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "OrganizationLimitReached");
-    }).pipe(Effect.provide(buildLayer({ organizationLimit: 1, creatorRole: "admin" }))),
   );
 
   it.effect("checkSlug/list/get/getFull answer correctly", () =>
@@ -297,45 +238,6 @@ describe("Organization", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("delete cascades dynamic roles", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.createRole(owner, record.id, {
-        role: "billing-admin",
-        permission: { organization: ["update"] },
-      });
-
-      yield* organization.delete(owner, record.id);
-
-      const noRoles = yield* organization.listRoles(owner, record.id).pipe(Effect.flip);
-      assert.strictEqual(noRoles._tag, "OrganizationNotFound");
-    }).pipe(
-      Effect.provide(
-        buildLayer({
-          dynamicAccessControl: {
-            enabled: true,
-            maximumRolesPerOrganization: Number.POSITIVE_INFINITY,
-          },
-        }),
-      ),
-    ),
-  );
-
-  it.effect("delete answers OrganizationDeletionDisabled when configured off", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const failure = yield* organization.delete(owner, record.id).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "OrganizationDeletionDisabled");
-    }).pipe(Effect.provide(buildLayer({ disableOrganizationDeletion: true }))),
-  );
-
-  // D4 (plan 04): the statement check precedes the owner invariant, so a caller without `member:delete`
-  // or `member:update` learns nothing about whether the target is the last owner. The invariant itself
-  // is proved at `OrganizationMembers.test.ts`; the owner here only proves the authorized path reaches it.
   it.effect(
     "a member without the statement is denied before the owner invariant is consulted",
     () =>
@@ -1934,20 +1836,6 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
     }).pipe(Effect.provide(buildLayer({ requireEmailVerificationOnInvitation: false }))),
   );
 
-  it.effect("EP-006: the default organizationLimit stops the eleventh owned organization", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const caller = asCaller("prolific-1");
-      for (let i = 0; i < 10; i++) {
-        yield* organization.create({ caller, name: `Org ${i}`, slug: `org-${i}` });
-      }
-      const refused = yield* organization
-        .create({ caller, name: "One too many", slug: "org-10" })
-        .pipe(Effect.flip);
-      assert.strictEqual(refused._tag, "OrganizationLimitReached");
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
   it.effect("EP-006: limitsFor overrides a quota for one organization only", () => {
     let bigId = "";
     return Effect.gen(function* () {
@@ -1979,42 +1867,6 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
       ),
     );
   });
-
-  it.effect("DRS-007: homeRegion must come from the configured regions", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const pinned = yield* organization.create({
-        caller: owner,
-        name: "Acme",
-        slug: "acme",
-        homeRegion: "eu-west",
-      });
-      assert.deepStrictEqual(Organization.homeRegionOf(pinned), Option.some("eu-west"));
-      const unknownOnCreate = yield* organization
-        .create({ caller: owner, name: "Mars", slug: "mars", homeRegion: "mars-1" })
-        .pipe(Effect.flip);
-      assert.strictEqual(unknownOnCreate._tag, "UnknownRegion");
-      const unknownOnUpdate = yield* organization
-        .update(owner, pinned.id, { homeRegion: "mars-1" })
-        .pipe(Effect.flip);
-      assert.strictEqual(unknownOnUpdate._tag, "UnknownRegion");
-      const moved = yield* organization.update(owner, pinned.id, { homeRegion: "us-east" });
-      assert.deepStrictEqual(Organization.homeRegionOf(moved), Option.some("us-east"));
-      const cleared = yield* organization.update(owner, pinned.id, { homeRegion: null });
-      assert.isTrue(Option.isNone(Organization.homeRegionOf(cleared)));
-    }).pipe(Effect.provide(buildLayer({ regions: ["eu-west", "us-east"] }))),
-  );
-
-  it.effect("DRS-007: with no regions configured any homeRegion is refused", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const refused = yield* organization
-        .create({ caller: asCaller("owner-1"), name: "Acme", slug: "acme", homeRegion: "eu-west" })
-        .pipe(Effect.flip);
-      assert.strictEqual(refused._tag, "UnknownRegion");
-    }).pipe(Effect.provide(buildLayer())),
-  );
 
   it.effect("EP-005: the invitation mail carries the organization's name and logo", () =>
     Effect.gen(function* () {

@@ -36,7 +36,7 @@
 // any one of them.
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
-import * as OrganizationRecords from "./OrganizationRecords.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
 
@@ -180,7 +180,7 @@ export const relationships = Layer.effect(
   Effect.gen(function* () {
     const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const members = yield* MembershipRecords.MembershipRecords;
-    const orgs = yield* OrganizationRecords.OrganizationRecords;
+    const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const teams = yield* TeamRecords.TeamRecords;
     const lookup = yield* ResourceOrganizationLookup;
 
@@ -196,8 +196,8 @@ export const relationships = Layer.effect(
           // EP-003 (ADR-EA-018): a suspended organization confers nothing —
           // membership answers must not open a door the plugin's own gating shut.
           const isSuspended = (organizationId: string) =>
-            orgs
-              .findById(organizationId)
+            directory
+              .find(organizationId)
               .pipe(
                 Effect.map(
                   (found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt),
@@ -257,8 +257,8 @@ export const relationships = Layer.effect(
           // A subject that is simply not in an organization is a genuine
           // negative; an id naming no organization at all is malformed.
           const notRelated = () =>
-            orgs
-              .findById(organizationId)
+            directory
+              .find(organizationId)
               .pipe(
                 Effect.map((found) =>
                   Option.isSome(found) ? ("Unrelated" as const) : ("Unknown" as const),

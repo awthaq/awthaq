@@ -27,9 +27,9 @@ import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
-import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
 import { requireWithin } from "./internal/bound.ts";
@@ -256,7 +256,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
       // Every service is yielded once, here: one captured inside an operation would leak into the
       // `Requires` marker of `HttpApiBuilder` (plan 04 §3.4, ticket 19's rule).
       const events = yield* AuthEvents.AuthEvents;
-      const orgs = yield* OrganizationRecords.OrganizationRecords;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
       const members = yield* MembershipRecords.MembershipRecords;
       const teams = yield* TeamRecords.TeamRecords;
       const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
@@ -288,22 +288,9 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             : Effect.fail(new OrganizationErrors.TeamsDisabled()),
       );
 
-      /**
-       * EP-003 (ADR-EA-018): a suspended organization answers exactly like an unknown one (MTI-009, BEH-EA-237),
-       * for members and outsiders alike.
-       */
+      /** EP-003: a suspended organization answers exactly like an unknown one (MTI-009, BEH-EA-237). */
       const requireActive = (organizationId: string) =>
-        orgs.findById(organizationId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new OrganizationErrors.OrganizationNotFound()),
-              onSome: (record) =>
-                Option.isSome(record.suspendedAt)
-                  ? Effect.fail(new OrganizationErrors.OrganizationNotFound())
-                  : Effect.void,
-            }),
-          ),
-        );
+        Effect.asVoid(directory.requireActive(organizationId));
 
       const gate = (organizationId: string) =>
         requireActive(organizationId).pipe(Effect.andThen(requireEnabled));

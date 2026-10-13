@@ -22,6 +22,7 @@ import {
   MembershipRecords,
   Organization,
   OrganizationActor,
+  OrganizationDirectory,
   OrganizationHooks,
   OrganizationMembers,
   OrganizationQadi,
@@ -48,6 +49,7 @@ import {
 } from "@qadi/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as DecisionCacheInvalidation from "../src/DecisionCacheInvalidation.ts";
 import * as Resolvers from "../src/Resolvers.ts";
@@ -251,6 +253,68 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         yield* organization.removeTeamMember(owner, record.id, team.id, Users.UserId("member-tm"));
 
         assert.isFalse(yield* decide("team-member", team.id, "member-tm"));
+      }),
+    );
+  });
+
+  // Plan 04 (D10): the points a long-lived cache used to miss.
+  layer(AppLive)((it) => {
+    it.effect("suspending an organization clears the cache, and reinstating clears it again", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const directory = yield* OrganizationDirectory.OrganizationDirectory;
+        const owner = asCaller("owner-sus");
+        const record = yield* organization.create({ caller: owner, name: "Sus", slug: "sus" });
+        yield* addMember(record.id, "member-sus", ["member"]);
+        assert.isTrue(yield* decide("member", record.id, "member-sus"));
+        const admin = OrganizationActor.platformAdmin(Users.UserId("admin-sus"));
+
+        yield* directory.suspend(admin, { organizationId: record.id });
+        assert.isFalse(yield* decide("member", record.id, "member-sus"));
+
+        yield* directory.reinstate(admin, { organizationId: record.id });
+        assert.isTrue(yield* decide("member", record.id, "member-sus"));
+      }),
+    );
+
+    it.effect("changing a team role clears the cache so team-role follows it", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-ur");
+        const record = yield* organization.create({ caller: owner, name: "Ur", slug: "ur" });
+        yield* addMember(record.id, "member-ur", ["member"]);
+        const team = yield* organization.createTeam(owner, record.id, "Eng");
+        yield* organization.addTeamMember(owner, record.id, team.id, Users.UserId("member-ur"));
+        assert.isFalse(yield* decide("team-role:lead", team.id, "member-ur"));
+
+        yield* organization.updateTeamMemberRole(
+          owner,
+          record.id,
+          team.id,
+          Users.UserId("member-ur"),
+          ["lead"],
+        );
+
+        assert.isTrue(yield* decide("team-role:lead", team.id, "member-ur"));
+      }),
+    );
+
+    it.effect("moving a team clears the cache so inherited team-role follows the move", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-mv");
+        const record = yield* organization.create({ caller: owner, name: "Mv", slug: "mv" });
+        yield* addMember(record.id, "lead-mv", ["member"]);
+        const parent = yield* organization.createTeam(owner, record.id, "Parent");
+        const child = yield* organization.createTeam(owner, record.id, "Child", parent.id);
+        yield* organization.addTeamMember(owner, record.id, parent.id, Users.UserId("lead-mv"), [
+          "lead",
+        ]);
+        assert.isTrue(yield* decide("team-role:lead", child.id, "lead-mv"));
+
+        yield* organization.moveTeam(owner, record.id, child.id, Option.none());
+
+        assert.isFalse(yield* decide("team-role:lead", child.id, "lead-mv"));
       }),
     );
   });

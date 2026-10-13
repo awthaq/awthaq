@@ -1105,6 +1105,28 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* suspensions.set("first", yield* suspend(admin, name));
   });
 
+  When(
+    "{string} tries to suspend the organization {string} with the reason {string}",
+    function* (adminName: string, name: string, reason: string) {
+      const admin = yield* callerNamed(adminName);
+      const id = yield* organizationNamed(name);
+      const { outcomes } = yield* World;
+      const tag = yield* organization(
+        outcomeTag(
+          Effect.flatMap(AdminTenants.AdminTenants, (tenants) =>
+            tenants.suspendOrganization(admin, id, { reason }),
+          ),
+        ),
+      );
+      yield* outcomes.set("suspension", tag);
+    },
+  );
+
+  Then("the suspension is refused with {string}", function* (tag: string) {
+    const { outcomes } = yield* World;
+    assert.equal(yield* outcomes.get("suspension"), tag);
+  });
+
   Given(
     "{string} has suspended the organization {string}",
     function* (admin: string, name: string) {
