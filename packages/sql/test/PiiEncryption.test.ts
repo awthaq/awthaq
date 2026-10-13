@@ -204,7 +204,10 @@ describe("PII column encryption (CSG-006)", () => {
           assert.strictEqual((yield* users.findById(created.id)).metadata, '{"plan":"pro"}');
           const byEmail = yield* users.findByEmail("META@example.com");
           assert.strictEqual(Option.getOrThrow(byEmail).metadata, '{"plan":"pro"}');
-          assert.strictEqual((yield* users.verifyEmail(created.id)).metadata, '{"plan":"pro"}');
+          assert.strictEqual(
+            Option.getOrThrow(yield* users.verifyEmail(created.id)).metadata,
+            '{"plan":"pro"}',
+          );
 
           const updated = yield* users.update(
             yield* M.User.update.makeEffect({

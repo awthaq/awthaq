@@ -1099,15 +1099,18 @@ export const layerSql: Layer.Layer<Users | UserRemoval, never, SqlRepositories.U
           return yield* Effect.fail(identityMismatch(id, "Email", existing.identity._tag));
         }
         if (existing.identity.emailVerified) return existing;
-        const row = yield* repo.verifyEmail(id).pipe(
+        // AAPS-005: the UPDATE applies only to a still-unverified row, so exactly one of two
+        // concurrent callers gets the row back and announces the change; the other finds it
+        // already verified (or gone) and reports that.
+        const updated = yield* repo.verifyEmail(id).pipe(
           Effect.catchTags({
-            NoSuchElementError: () => Effect.fail(userNotFound(id)),
             SchemaError: Effect.die,
             SqlError: storeUnavailable("Users.verifyEmail"),
           }),
         );
+        if (Option.isNone(updated)) return yield* findById(id);
         yield* announce(id, ["emailVerified"]);
-        return yield* toUserRecord(row);
+        return yield* toUserRecord(updated.value);
       });
 
       const verifyPhone: UsersShape["verifyPhone"] = Effect.fnUntraced(function* (id) {

@@ -528,6 +528,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
             Option.isSome(existing) &&
             DateTime.toEpochMillis(now) < DateTime.toEpochMillis(existing.value)
           ) {
+            // BEH-EA-063: expired iff `now >= expiresAt`; a live reservation refuses.
             return [false, s] as const;
           }
           // TMS-004: expired reservations are otherwise never removed.
@@ -634,6 +635,11 @@ export const layerSql = Layer.effect(
     const store = {
       claim: ({ identifier, valueHash, now, operation }) =>
         Effect.gen(function* () {
+          // SOS-004: read the live row first, so a miss is charged to the row it was judged against
+          // (`recordFailedAttempt` is pinned to that row's id). A reissue replaces the live row and its
+          // id: one landing between this read and the spend finds nothing to charge, instead of
+          // spending an attempt of a token the wrong presentation never saw.
+          const judged = yield* repo.findByIdentifier(identifier);
           // BEH-EA-058/062: one atomic `UPDATE ... RETURNING` decides win or lose: no separate read
           // racing this call's own write, the same guarantee `layerMemory`'s `Ref.modify` gives.
           const claimed = yield* repo.tryConsume({ identifier, valueHash, now });
@@ -644,10 +650,10 @@ export const layerSql = Layer.effect(
           // (ADR-EA-037). Outside any unit it runs right here. It is best effort there: the miss must
           // still answer uniformly (BEH-EA-116), so a store failure is logged and counted, never
           // turned into a different response.
-          if (Option.isNone(claimed)) {
+          if (Option.isNone(claimed) && Option.isSome(judged)) {
             yield* SqlTransaction.afterUnit(
               repo
-                .recordFailedAttempt({ identifier, now })
+                .recordFailedAttempt({ id: judged.value.id, now })
                 .pipe(
                   Effect.catchCause((cause) =>
                     Effect.logError(

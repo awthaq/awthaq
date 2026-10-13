@@ -884,6 +884,25 @@ const suite = (
           );
         }).pipe(Effect.provide(shortLivedLayer)),
     );
+
+    // THS-003: `amr` is monotone. Two step-ups landing together must both be recorded; a
+    // read-then-write that lets the later write replace the earlier union loses a method.
+    it.effect("THS-003: concurrent reauthenticate calls both land in amr", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId, amr: ["pwd"] });
+        yield* Effect.all(
+          [
+            sessions.reauthenticate(userId, session.id, ["otp"]),
+            sessions.reauthenticate(userId, session.id, ["hwk"]),
+          ],
+          { concurrency: 2 },
+        );
+        const stored = yield* sessions.findOwned(userId, session.id);
+        const amr = Option.match(stored, { onNone: () => [], onSome: (item) => item.amr });
+        assert.sameMembers([...amr], ["pwd", "otp", "hwk"]);
+      }).pipe(Effect.provide(layer)),
+    );
   });
 };
 
@@ -1041,6 +1060,71 @@ const reuseSuite = (
         ]);
         assert.strictEqual(outcomes.filter(Exit.isSuccess).length, 1);
       }).pipe(Effect.provide(layer)),
+    );
+
+    // RRS-003 ("published once"): the check, the mark and the family revocation are one atomic
+    // step, so two presentations racing each other cannot both announce the reuse.
+    it.effect(
+      "RRS-003: two concurrent presentations of one tombstoned token publish exactly one auth.session.reuse and one family revoke",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const events = yield* AuthEvents.AuthEvents;
+          const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+          yield* Effect.forkChild(
+            events.stream.pipe(
+              Stream.runForEach((event) =>
+                event._tag === "auth.session.reuse" ||
+                (event._tag === "auth.session.revoked" && event.scope === "family")
+                  ? Ref.update(seen, (all) => [...all, event._tag])
+                  : Effect.void,
+              ),
+            ),
+            { startImmediately: true },
+          );
+          const a = yield* sessions.issue({ userId });
+          yield* sessions.issue({ userId, supersedes: a.session.id });
+          yield* Effect.all(
+            [
+              Effect.exit(sessions.verify(a.token)),
+              Effect.exit(sessions.verify(a.token)),
+              Effect.exit(sessions.verify(a.token)),
+            ],
+            { concurrency: "unbounded" },
+          );
+          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          const tags = yield* Ref.get(seen);
+          assert.strictEqual(tags.filter((tag) => tag === "auth.session.reuse").length, 1);
+          assert.strictEqual(tags.filter((tag) => tag === "auth.session.revoked").length, 1);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    // INV-EA-018: an id alone never acts on a session. `supersedes` naming another user's session
+    // tombstones nothing: the foreign session keeps verifying and no superseded event is published.
+    it.effect(
+      "INV-EA-018: issue({ supersedes: another user's session }) founds a fresh family and leaves the foreign session live",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const events = yield* AuthEvents.AuthEvents;
+          const superseded = yield* Ref.make(0);
+          yield* Effect.forkChild(
+            events.stream.pipe(
+              Stream.filter((event) => event._tag === "auth.session.superseded"),
+              Stream.runForEach(() => Ref.update(superseded, (n) => n + 1)),
+            ),
+            { startImmediately: true },
+          );
+          const victim = yield* sessions.issue({ userId });
+          const attackerId = Users.UserId("22222222-2222-2222-2222-222222222222");
+          const mine = yield* sessions.issue({ userId: attackerId, supersedes: victim.session.id });
+          assert.notStrictEqual(mine.session.id, victim.session.id);
+          const stillLive = yield* sessions.verify(victim.token);
+          assert.strictEqual(stillLive.session.id, victim.session.id);
+          assert.isTrue(yield* sessions.isLive(userId, victim.session.id));
+          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          assert.strictEqual(yield* Ref.get(superseded), 0);
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("Sessions.list excludes a tombstoned (superseded) row", () =>
@@ -1221,6 +1305,53 @@ const eventsSuite = (
             assert.strictEqual(rotated.familyId, a.session.id);
           }
         }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "TIR-008: two concurrent revokes of one session publish exactly one auth.session.revoked, and the other fails SessionNotFound",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const outcomes = yield* Ref.make<ReadonlyArray<Exit.Exit<void, unknown>>>([]);
+          const seen = yield* collecting(
+            Effect.all(
+              [
+                Effect.exit(sessions.revoke(a.session.id, "admin")),
+                Effect.exit(sessions.revoke(a.session.id, "admin")),
+              ],
+              { concurrency: 2 },
+            ).pipe(Effect.tap((exits) => Ref.set(outcomes, exits))),
+          );
+          assert.strictEqual(
+            seen.filter((event) => event._tag === "auth.session.revoked").length,
+            1,
+          );
+          const exits = yield* Ref.get(outcomes);
+          assert.strictEqual(exits.filter(Exit.isSuccess).length, 1);
+          const failed = exits.find(Exit.isFailure);
+          assert.strictEqual(
+            failed === undefined
+              ? ""
+              : Cause.pretty(failed.cause).includes("NotFound")
+                ? "NotFound"
+                : "other",
+            "NotFound",
+          );
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("RRS-008: auth.session.superseded.userId is the superseded row's user", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const seen = yield* collecting(sessions.issue({ userId, supersedes: a.session.id }));
+        const event = seen.find((e) => e._tag === "auth.session.superseded");
+        assert.strictEqual(event?._tag, "auth.session.superseded");
+        if (event?._tag === "auth.session.superseded") {
+          assert.strictEqual(event.userId, userId);
+        }
+      }).pipe(Effect.provide(layer)),
     );
 
     it.effect("TIR-008: a failed revoke (unknown id) publishes nothing", () =>

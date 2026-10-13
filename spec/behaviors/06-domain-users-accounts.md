@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-06 |
-> | Revision | 1.6 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-046 names `@awthaq/api-key` among the paths the sign-in gate covers (architecture plan 10 item 0) <br> 1.4 (2026-10-13): deleting a user is `AccountErasure`'s job and only its: `Users` has no `delete`, the row store primitive takes an `ErasureClearance`, and `createWith` abandons a half-made user (architecture plan 03) <br> 1.5 (2026-10-13): BEH-EA-322, every sign-in completes through `SignIn` (architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-323, every sign-up creates through `SignUp` (architecture plan 01) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-046 names `@awthaq/api-key` among the paths the sign-in gate covers (architecture plan 10 item 0) <br> 1.4 (2026-10-13): deleting a user is `AccountErasure`'s job and only its: `Users` has no `delete`, the row store primitive takes an `ErasureClearance`, and `createWith` abandons a half-made user (architecture plan 03) <br> 1.5 (2026-10-13): BEH-EA-322, every sign-in completes through `SignIn` (architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-323, every sign-up creates through `SignUp` (architecture plan 01) <br> 1.7 (2026-10-13): BEH-EA-045 is race-safe on Postgres (the user's account rows are locked before the sibling count); `verifyEmail` announces exactly once under concurrency (plan 02 phase 0) |
 
 ---
 
@@ -130,6 +130,8 @@ REQUIREMENT: Unlinking an Account MUST be refused when it is the User's
 `better-auth/01-core-domain/01-entities-and-invariants.md` §3.4 documents the identical rule and its blame assignment: the request is well-formed, but its effect — zero ways to authenticate — is exactly what the precondition exists to prevent. `archive/PRD.md` §11 (passkey removal, "refuses to remove the last credential when no other method exists") and §17 (unlink) both restate the same guarantee for their own credential types, so this is one rule enforced uniformly across every credential-bearing plugin, not re-derived per plugin.
 
 **As shipped (PV-221):** the deployment policy is `Accounts.config({ allowZeroAccounts: true })` (`Accounts.AccountsPolicy`, default `false`), read by both `layerMemory` and `layerSql`; it may also be applied to a single call with `Effect.provideService` or per tenant with `Tenant.configApplied`. `@awthaq/passkey`'s last-credential guard (BEH-EA-134) is the plugin-side twin and is unchanged (REQ-EA-125, `packages/core/test/Accounts.test.ts`).
+
+**Race-safe on Postgres (plan 02 phase 0).** The sibling count and the delete run in one transaction, and `layerSql` first locks the user's account rows (`SELECT ... FOR UPDATE`, a no-op on SQLite and libSQL, whose drivers already open the transaction as a write transaction). Without the lock, two concurrent unlinks of a user's two *different* accounts each counted two siblings under READ COMMITTED and both committed, leaving none. The case runs under `pnpm test:pg`.
 
 ## BEH-EA-046: Deleting a User cascades to its Accounts and Sessions; deleting or unlinking an Account never cascades to Sessions
 

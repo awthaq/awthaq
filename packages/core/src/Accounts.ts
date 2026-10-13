@@ -630,6 +630,9 @@ export const layerSql: Layer.Layer<
           SqlError: storeUnavailable("Accounts.unlink"),
         }),
       );
+      // BEH-EA-045: on Postgres, lock the user's account rows before counting them, so a concurrent
+      // unlink of a sibling waits for this transaction instead of counting the same siblings.
+      yield* repo.lockByUser(UserId(account.userId)).pipe(orStoreUnavailable("Accounts.unlink"));
       const siblings = yield* repo
         .listByUser(account.userId)
         .pipe(orStoreUnavailable("Accounts.unlink"));

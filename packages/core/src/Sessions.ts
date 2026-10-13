@@ -33,7 +33,7 @@ import {
   orStoreUnavailable,
   retryTransient,
   storeUnavailable,
-  type StoreUnavailable,
+  StoreUnavailable,
 } from "./Errors.ts";
 import * as Observability from "./Observability.ts";
 import * as SecretHash from "./SecretHash.ts";
@@ -810,8 +810,10 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               const ancestor =
                 input.supersedes === undefined
                   ? Option.none()
-                  : Option.filter(HashMap.get(pruned, input.supersedes), (r) =>
-                      Option.isNone(r.supersededAt),
+                  : Option.filter(
+                      HashMap.get(pruned, input.supersedes),
+                      // INV-EA-018: only a live row owned by the issuing user can be superseded.
+                      (r) => Option.isNone(r.supersededAt) && r.userId === input.userId,
                     );
               const created: SessionRow = {
                 id,
@@ -974,26 +976,44 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             // grace window is a stale-but-legitimate holder, never a family-revoking signal.
             if (matched === "current" && Option.isNone(row.value.reusedAt)) {
               const familyId = row.value.familyId;
-              yield* Ref.update(state, (s) => {
-                const marked = HashMap.modify(s, id, (r) => ({ ...r, reusedAt: Option.some(now) }));
-                return HashMap.filter(
-                  marked,
-                  (r) => r.familyId !== familyId || Option.isSome(r.supersededAt),
-                );
+              // RRS-003 "published once": the check, the mark and the family revocation are ONE
+              // `Ref.modify`, and only the call that marked the row announces the reuse.
+              const marked = yield* Ref.modify(state, (s) => {
+                const current = HashMap.get(s, id);
+                if (
+                  Option.isNone(current) ||
+                  Option.isNone(current.value.supersededAt) ||
+                  Option.isSome(current.value.reusedAt)
+                ) {
+                  return [false, s];
+                }
+                const flagged = HashMap.set(s, id, {
+                  ...current.value,
+                  reusedAt: Option.some(now),
+                });
+                return [
+                  true,
+                  HashMap.filter(
+                    flagged,
+                    (r) => r.familyId !== familyId || Option.isSome(r.supersededAt),
+                  ),
+                ];
               });
-              yield* events.publish({
-                _tag: "auth.session.reuse",
-                sessionId: id,
-                familyId,
-                userId: row.value.userId,
-              });
-              yield* events.publish({
-                _tag: "auth.session.revoked",
-                userId: row.value.userId,
-                sessionId: null,
-                scope: "family",
-                reason: "reuseDetected",
-              });
+              if (marked) {
+                yield* events.publish({
+                  _tag: "auth.session.reuse",
+                  sessionId: id,
+                  familyId,
+                  userId: row.value.userId,
+                });
+                yield* events.publish({
+                  _tag: "auth.session.revoked",
+                  userId: row.value.userId,
+                  sessionId: null,
+                  scope: "family",
+                  reason: "reuseDetected",
+                });
+              }
             }
             return yield* Effect.fail(
               new SessionNotFound({ message: "awthaq: no such session", id }),
@@ -1338,10 +1358,17 @@ export const layerSql: Layer.Layer<
           // what this new row inherits; no live `supersedes` ancestor founds a
           // fresh family, `familyId = id`.
           let familyId = id;
-          let superseded: { readonly id: SessionId; readonly familyId: string } | undefined;
+          let superseded:
+            | { readonly id: SessionId; readonly familyId: string; readonly userId: UserId }
+            | undefined;
           if (input.supersedes !== undefined) {
             const ancestor = yield* repo
-              .tombstone({ id: input.supersedes, supersededBy: id, supersededAt: now })
+              .tombstone({
+                id: input.supersedes,
+                userId: input.userId,
+                supersededBy: id,
+                supersededAt: now,
+              })
               .pipe(
                 Effect.catchTags({
                   NoSuchElementError: () => Effect.succeed(undefined),
@@ -1349,7 +1376,11 @@ export const layerSql: Layer.Layer<
               );
             if (ancestor !== undefined) {
               familyId = SessionId(ancestor.familyId);
-              superseded = { id: input.supersedes, familyId: ancestor.familyId };
+              superseded = {
+                id: input.supersedes,
+                familyId: ancestor.familyId,
+                userId: UserId(ancestor.userId),
+              };
             }
           }
           const insert = yield* repo.models.Session.insert
@@ -1408,7 +1439,7 @@ export const layerSql: Layer.Layer<
             sessionId: superseded.id,
             supersededBy: id,
             familyId: superseded.familyId,
-            userId: input.userId,
+            userId: superseded.userId,
           });
         }
         for (const goneId of evicted) {
@@ -1507,21 +1538,31 @@ export const layerSql: Layer.Layer<
           // RRS-005: see `layerMemory.verify` — a previous secret is never reuse.
           if (matched === "current" && row.reusedAt === null) {
             const familyId = SessionId(row.familyId);
-            yield* repo.markReused(id, now);
-            yield* repo.revokeFamily(familyId);
-            yield* events.publish({
-              _tag: "auth.session.reuse",
-              sessionId: id,
-              familyId,
-              userId: UserId(row.userId),
-            });
-            yield* events.publish({
-              _tag: "auth.session.revoked",
-              userId: UserId(row.userId),
-              sessionId: null,
-              scope: "family",
-              reason: "reuseDetected",
-            });
+            // RRS-003 "published once": the mark applies only to a tombstoned row not yet flagged,
+            // and the family revocation commits with it, so of any number of concurrent
+            // presentations exactly one gets `Some` and announces the reuse.
+            const marked = yield* SqlTransaction.transactional(sql)(
+              Effect.gen(function* () {
+                const flagged = yield* repo.markReusedOnce(id, now);
+                if (Option.isSome(flagged)) yield* repo.revokeFamily(familyId);
+                return flagged;
+              }),
+            );
+            if (Option.isSome(marked)) {
+              yield* events.publish({
+                _tag: "auth.session.reuse",
+                sessionId: id,
+                familyId,
+                userId: UserId(row.userId),
+              });
+              yield* events.publish({
+                _tag: "auth.session.revoked",
+                userId: UserId(row.userId),
+                sessionId: null,
+                scope: "family",
+                reason: "reuseDetected",
+              });
+            }
           }
           return yield* Effect.fail(
             new SessionNotFound({ message: "awthaq: no such session", id }),
@@ -1615,24 +1656,23 @@ export const layerSql: Layer.Layer<
 
     // TIR-008: each primitive deletes, then publishes exactly one
     // `auth.session.revoked` for the call.
+    // TIR-008: ONE `DELETE ... RETURNING`, so of two concurrent revokes of one session exactly one
+    // sees the row, publishes, and succeeds; the other fails `SessionNotFound`.
     const revoke: SessionsShape["revoke"] = (id, reason) =>
-      repo.findById(id).pipe(
-        Effect.catchTags({
-          NoSuchElementError: () =>
-            Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
-        }),
-        Effect.flatMap((row) =>
-          repo.delete(id).pipe(
-            Effect.andThen(
+      repo.deleteReturning(id).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
+            onSome: (userId) =>
               events.publish({
                 _tag: "auth.session.revoked",
-                userId: UserId(row.userId),
+                userId,
                 sessionId: id,
                 scope: "one",
                 reason,
               }),
-            ),
-          ),
+          }),
         ),
         Effect.catchTags({
           SqlError: storeUnavailable("Sessions.revoke"),
@@ -1641,19 +1681,25 @@ export const layerSql: Layer.Layer<
       );
 
     const revokeOwned: SessionsShape["revokeOwned"] = (userId, id, reason) =>
-      repo.deleteOwned(id, userId).pipe(
-        Effect.flatMap((deleted) =>
-          deleted
-            ? events.publish({
+      repo.deleteReturning(id, userId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
+            onSome: () =>
+              events.publish({
                 _tag: "auth.session.revoked",
                 userId,
                 sessionId: id,
                 scope: "one",
                 reason,
-              })
-            : Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
+              }),
+          }),
         ),
-        Effect.catchTag("SqlError", storeUnavailable("Sessions.revokeOwned")),
+        Effect.catchTags({
+          SqlError: storeUnavailable("Sessions.revokeOwned"),
+          SchemaError: Effect.die,
+        }),
       );
 
     const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep, reason) =>
@@ -1767,30 +1813,60 @@ export const layerSql: Layer.Layer<
     const isLive: SessionsShape["isLive"] = (userId, id) =>
       findOwned(userId, id).pipe(Effect.map(Option.isSome));
 
+    /** THS-003: how many times a step-up retries its compare-and-swap before the store is reported as contended. */
+    const REAUTHENTICATE_ATTEMPTS = 5;
+
     const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(
       function* (userId, id, amr) {
         const now = yield* DateTime.now;
         const notFound = () =>
           Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id }));
-        // THS-003: union the newly proven methods into the stored `amr` (monotone).
-        // BEH-EA-319: a dead or foreign row is `notFound` here already; the UPDATE's own
-        // WHERE repeats the guard, so a row that dies between the read and the write is
-        // still refused.
-        const unioned =
-          amr === undefined || amr.length === 0
-            ? undefined
-            : yield* repo.findById(id).pipe(
-                Effect.map((current) => JSON.stringify(unionAmr(parseAmr(current.amr), amr))),
-                Effect.catchTags({
-                  NoSuchElementError: notFound,
-                }),
-              );
-        const row = yield* repo.reauthenticate(id, userId, now, unioned).pipe(
-          Effect.catchTags({
-            NoSuchElementError: notFound,
-          }),
-        );
-        return toSessionView(row);
+        // BEH-EA-319: a dead or foreign row is `notFound`; the UPDATE's own WHERE repeats the
+        // guard, so a row that dies between the read and the write is still refused.
+        if (amr === undefined || amr.length === 0) {
+          const row = yield* repo.reauthenticate(id, userId, now).pipe(
+            Effect.catchTags({
+              NoSuchElementError: notFound,
+            }),
+          );
+          return toSessionView(row);
+        }
+        // THS-003: `amr` only ever grows. The union is computed from the stored value and written
+        // back only while the row still holds it (compare-and-swap), so two concurrent step-ups
+        // both land instead of the later write erasing the earlier method.
+        for (let attempt = 0; attempt < REAUTHENTICATE_ATTEMPTS; attempt++) {
+          const current = yield* repo.findById(id).pipe(
+            Effect.catchTags({
+              NoSuchElementError: notFound,
+            }),
+          );
+          if (
+            current.userId !== userId ||
+            !isLiveAt(now, {
+              absoluteExpiresAt: current.absoluteExpiresAt,
+              idleExpiresAt: current.idleExpiresAt,
+              supersededAt: Option.fromNullishOr(current.supersededAt),
+            })
+          ) {
+            return yield* notFound();
+          }
+          const updated = yield* repo
+            .reauthenticate(
+              id,
+              userId,
+              now,
+              JSON.stringify(unionAmr(parseAmr(current.amr), amr)),
+              current.amr,
+            )
+            .pipe(
+              Effect.map(Option.some),
+              Effect.catchTags({
+                NoSuchElementError: () => Effect.succeed(Option.none()),
+              }),
+            );
+          if (Option.isSome(updated)) return toSessionView(updated.value);
+        }
+        return yield* Effect.fail(new StoreUnavailable({ operation: "Sessions.reauthenticate" }));
       },
       Effect.catchTags({
         SqlError: storeUnavailable("Sessions.reauthenticate"),

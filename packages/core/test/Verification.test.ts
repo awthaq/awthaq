@@ -4,7 +4,7 @@
 // `Ref`) and `layerSql` (a real, in-memory SQLite database via
 // `@effect/sql-sqlite-node`) — per
 // spec/decisions/016-verification-sql-claiming.md (ADR-EA-016).
-import { SqlTransaction } from "@awthaq/ports";
+import { Hmac, SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -293,6 +293,19 @@ const suite = (
         });
         assert.isTrue(first);
         assert.isTrue(second);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // BEH-EA-063: a reservation is expired iff `now >= expiresAt`, in both layers.
+    it.effect("BEH-EA-063: a reservation is expired at exactly its expiresAt", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const ttl = Duration.seconds(30);
+        assert.isTrue(yield* verification.reserve({ identifier: "promote:edge", ttl }));
+        yield* TestClock.adjust(Duration.millis(Duration.toMillis(ttl) - 1));
+        assert.isFalse(yield* verification.reserve({ identifier: "promote:edge", ttl }));
+        yield* TestClock.adjust(Duration.millis(1));
+        assert.isTrue(yield* verification.reserve({ identifier: "promote:edge", ttl }));
       }).pipe(Effect.provide(layer)),
     );
 
@@ -944,6 +957,80 @@ describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () =
         assert.strictEqual(late._tag, "Verification/TokenConsumed");
       }).pipe(Effect.provide(SqlAuditLayer)),
   );
+
+  // SOS-004: a miss is charged to the row it was judged against. A reissue replaces the live row
+  // (and its id) while the miss is between its claim and its spend; the spend finds nothing of
+  // the old row and must not touch the new token.
+  it.effect("SOS-004: a reissue racing a miss never charges the new token", () => {
+    const identifier = "email-otp:reissue-race@example.com";
+    const reissuedValue = Effect.runSync(Deferred.make<Redacted.Redacted<string>>());
+    // Reissues the identifier just after a claim attempt missed, before the spend lands.
+    const ReissuingRepository = Layer.effect(
+      Repositories.VerificationRepository,
+      Effect.gen(function* () {
+        const real = yield* Repositories.VerificationRepository;
+        const crypto = yield* Crypto.Crypto;
+        return {
+          ...real,
+          tryConsume: (input: Parameters<typeof real.tryConsume>[0]) =>
+            real.tryConsume(input).pipe(
+              Effect.tap((claimed) =>
+                Option.isSome(claimed)
+                  ? Effect.void
+                  : Effect.gen(function* () {
+                      const value = "654321";
+                      const hash = yield* crypto
+                        .digest("SHA-256", new TextEncoder().encode(value))
+                        .pipe(
+                          Effect.map((bytes) => Hmac.toHex(bytes)),
+                          Effect.orDie,
+                        );
+                      const insert = yield* real.models.VerificationToken.insert
+                        .makeEffect({
+                          identifier,
+                          valueHash: hash,
+                          maxAttempts: 2,
+                          expiresAt: DateTime.addDuration(input.now, Duration.minutes(5)),
+                          consumedAt: null,
+                        })
+                        .pipe(Effect.orDie);
+                      yield* real.upsertLive(insert).pipe(Effect.orDie);
+                      yield* Deferred.succeed(reissuedValue, Redacted.make(value));
+                    }),
+              ),
+            ),
+        };
+      }),
+    ).pipe(Layer.provide(Repositories.VerificationRepositoryLive), Layer.provide(NodeCrypto.layer));
+    const RacingLayer = Verification.layerSql.pipe(
+      Layer.provide(ReissuingRepository),
+      Layer.provide(Repositories.VerificationReservationsRepositoryLive),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provideMerge(AuthEvents.layer),
+      Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(SqlLive),
+      Layer.provideMerge(Migrated),
+    );
+    return Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      yield* verification.issue({
+        identifier,
+        ttl: Duration.minutes(5),
+        format: { _tag: "Numeric", digits: 6 },
+        maxAttempts: 2,
+      });
+      // One wrong guess: it misses, and the "reissue" lands before the spend.
+      yield* verification.consume(identifier, Redacted.make("000000")).pipe(Effect.flip);
+      const fresh = yield* Deferred.await(reissuedValue);
+      // The new token's budget of 2 is untouched: one more wrong guess still leaves it usable.
+      const secondWrong = yield* verification
+        .consume(identifier, Redacted.make("111111"))
+        .pipe(Effect.flip);
+      assert.strictEqual(secondWrong._tag, "Verification/TokenConsumed");
+      const consumed = yield* verification.consume(identifier, fresh);
+      assert.strictEqual(consumed.identifier, identifier);
+    }).pipe(Effect.provide(RacingLayer));
+  });
 
   it.effect("layerMemory: a miss publishes exactly one replay row", () =>
     Effect.gen(function* () {

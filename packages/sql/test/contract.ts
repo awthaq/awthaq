@@ -897,8 +897,22 @@ export const contractCases = (
           const old = yield* make("old");
           const fresh = yield* make("fresh");
 
+          // INV-EA-018: a foreign owner cannot tombstone the row; the owner can.
+          const intruder = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "rotation-intruder@example.com", name: "I" }),
+          );
+          const refused = yield* sessions
+            .tombstone({
+              id: old.id,
+              userId: intruder.id,
+              supersededBy: fresh.id,
+              supersededAt: now,
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(refused._tag, "NoSuchElementError");
           const tombstoned = yield* sessions.tombstone({
             id: old.id,
+            userId: user.id,
             supersededBy: fresh.id,
             supersededAt: now,
           });
@@ -906,7 +920,12 @@ export const contractCases = (
           assert.isNotNull(tombstoned.supersededAt);
           assert.strictEqual(tombstoned.reusedAt, null);
 
-          yield* sessions.markReused(old.id, now);
+          // RRS-003: the mark applies once; a second call finds nothing to flag.
+          const flagged = yield* sessions.markReusedOnce(old.id, now);
+          assert.strictEqual(Option.getOrUndefined(flagged)?.familyId, old.familyId);
+          assert.isTrue(Option.isNone(yield* sessions.markReusedOnce(old.id, now)));
+          // A live (non-tombstoned) row is never flagged.
+          assert.isTrue(Option.isNone(yield* sessions.markReusedOnce(fresh.id, now)));
           const reread = yield* sessions.findById(old.id);
           assert.isNotNull(reread.reusedAt);
 
@@ -1276,22 +1295,35 @@ export const contractCases = (
       30_000,
     );
 
-    it.effect("GC-005: deleteOwned deletes only the owner's row, in one statement", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Repositories.SessionsRepository;
-        const owner = yield* makeUser("owner@example.com");
-        const other = yield* makeUser("not-owner@example.com");
-        const now = yield* DateTime.now;
-        const future = DateTime.addDuration(now, Duration.days(1));
-        const row = yield* insertLiveSession(owner.id, {
-          absoluteExpiresAt: future,
-          idleExpiresAt: future,
-        });
-        assert.isFalse(yield* sessions.deleteOwned(row.id, other.id));
-        assert.strictEqual((yield* sessions.findById(row.id)).id, row.id);
-        assert.isTrue(yield* sessions.deleteOwned(row.id, owner.id));
-        assert.isFalse(yield* sessions.deleteOwned(row.id, owner.id));
-      }).pipe(Effect.provide(RepositoriesLive)),
+    it.effect(
+      "TIR-008/GC-005: deleteReturning deletes once, and only the owner's row when asked",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Repositories.SessionsRepository;
+          const owner = yield* makeUser("owner@example.com");
+          const other = yield* makeUser("not-owner@example.com");
+          const now = yield* DateTime.now;
+          const future = DateTime.addDuration(now, Duration.days(1));
+          const row = yield* insertLiveSession(owner.id, {
+            absoluteExpiresAt: future,
+            idleExpiresAt: future,
+          });
+          assert.isTrue(Option.isNone(yield* sessions.deleteReturning(row.id, other.id)));
+          assert.strictEqual((yield* sessions.findById(row.id)).id, row.id);
+          assert.strictEqual(
+            Option.getOrUndefined(yield* sessions.deleteReturning(row.id, owner.id)),
+            owner.id,
+          );
+          assert.isTrue(Option.isNone(yield* sessions.deleteReturning(row.id, owner.id)));
+          const again = yield* insertLiveSession(owner.id, {
+            absoluteExpiresAt: future,
+            idleExpiresAt: future,
+          });
+          assert.strictEqual(
+            Option.getOrUndefined(yield* sessions.deleteReturning(again.id)),
+            owner.id,
+          );
+        }).pipe(Effect.provide(RepositoriesLive)),
     );
 
     // ---- DRS-001 (ADR-EA-018): the ambient tenant is stamped on every insert path ----
@@ -1456,9 +1488,14 @@ export const contractCases = (
           idleExpiresAt: future,
         });
         const successor = Schema.decodeUnknownSync(Models.SessionId)("successor-1");
-        yield* sessions.tombstone({ id: row.id, supersededBy: successor, supersededAt: now });
+        yield* sessions.tombstone({
+          id: row.id,
+          userId: row.userId,
+          supersededBy: successor,
+          supersededAt: now,
+        });
         const again = yield* sessions
-          .tombstone({ id: row.id, supersededBy: successor, supersededAt: now })
+          .tombstone({ id: row.id, userId: row.userId, supersededBy: successor, supersededAt: now })
           .pipe(Effect.flip);
         assert.strictEqual(again._tag, "NoSuchElementError");
       }).pipe(Effect.provide(RepositoriesLive)),

@@ -15,7 +15,6 @@ import { Encryption, KeyProvider } from "@awthaq/ports";
 import { PasswordHasher } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
@@ -27,11 +26,13 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as Accounts from "../src/Accounts.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 import * as Users from "../src/Users.ts";
 
 const MemoryLayer = Accounts.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+// `test:pg` runs this file on Postgres, where the concurrent-unlink case (BEH-EA-045) is meaningful.
+const SqlLive = TestSql.layer("core_Accounts");
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 18:
 // `Repositories.AccountsRepositoryLive` now requires `Encryption` to
@@ -128,6 +129,24 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
         const only = yield* accounts.link({ userId, providerId: "google", subject: "sub-2" });
         const refusal = yield* accounts.unlink(only.id).pipe(Effect.flip);
         assert.strictEqual(refusal._tag, "LastAccountRefusal");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // BEH-EA-045: the last-account check and the delete are one atomic step. On Postgres' default
+    // READ COMMITTED two concurrent unlinks of a user's two DIFFERENT accounts would each count
+    // two siblings and both commit; the row lock makes the second wait and recount.
+    it.effect("BEH-EA-045: concurrent unlinks of a user's two accounts leave at least one", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const first = yield* accounts.link({ userId, providerId: "google", subject: "race-a" });
+        const second = yield* accounts.link({ userId, providerId: "github", subject: "race-b" });
+        yield* Effect.all(
+          [accounts.unlink(first.id), accounts.unlink(second.id)].map(Effect.exit),
+          {
+            concurrency: 2,
+          },
+        );
+        assert.isAtLeast((yield* accounts.listByUser(userId)).length, 1);
       }).pipe(Effect.provide(layer)),
     );
 

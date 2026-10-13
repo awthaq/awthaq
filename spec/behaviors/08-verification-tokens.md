@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-08 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) <br> 1.4 (2026-10-13): `Verification.redeem` owns the claim-and-use transaction in both adapters; BEH-EA-058 "as shipped" text, BEH-EA-059 and BEH-EA-062 notes (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) <br> 1.4 (2026-10-13): `Verification.redeem` owns the claim-and-use transaction in both adapters; BEH-EA-058 "as shipped" text, BEH-EA-059 and BEH-EA-062 notes (ADR-EA-039, plan 07) <br> 1.5 (2026-10-13): BEH-EA-063: a reservation is expired iff `now >= expiresAt` in both layers; SOS-004: a miss is charged to the row it was judged against (plan 02 phase 0) |
 
 ---
 
@@ -130,6 +130,10 @@ REQUIREMENT: A caller that needs to claim an identifier exclusively (a
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as a distinct operation from ordinary consumption — `reserve-verification-value` — used, for example, to serialize the "promote an unverified user on email proof" operation (§2.3) against a concurrent second promotion of the same user. awthaq's plan reuses the same generic `Verification` entity for this purpose rather than introducing a second, lock-specific table.
+
+**The boundary (plan 02 phase 0).** A reservation is expired iff `now >= expiresAt`, so a reservation made with a zero `ttl` is free at once in both layers, and one made with a positive `ttl` is free at exactly `expiresAt`.
+
+**A miss is charged to the token it was judged against (SOS-004).** `layerSql` reads the live row before it tries to claim, and spends a failed attempt on that row's id, not on the identifier: a reissue between the miss and the spend replaces the live row and its id, so the new token is never charged for a presentation it did not see.
 
 **The resend window (MLO-002).** `reserve` is the resend-window primitive: `MagicLink` and `EmailOtp` reserve `<purpose>-resend:<normalised address>` for their `resendWindow` before minting and mailing a second artifact, so two concurrent requests (or a client hammering "resend") send one message, below and independent of the rate limiter (BEH-EA-268, BEH-EA-272).
 

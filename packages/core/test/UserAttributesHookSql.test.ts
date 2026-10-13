@@ -53,4 +53,25 @@ describe("Users.layerSql attribute-change hook (AAPS-005)", () => {
       assert.strictEqual(seen.length, 2);
     }).pipe(Effect.provide(TestLayer)),
   );
+
+  // AAPS-005: the unverified-to-verified transition is one atomic step, so of two concurrent
+  // calls exactly one announces it.
+  it.effect("two concurrent verifyEmail calls announce emailVerified exactly once", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "race-sql@example.com" },
+        name: "Race",
+      });
+      yield* Effect.all([users.verifyEmail(user.id), users.verifyEmail(user.id)], {
+        concurrency: 2,
+      });
+      assert.strictEqual(
+        seen.filter(
+          (entry) => entry.userId === user.id && entry.attributes.includes("emailVerified"),
+        ).length,
+        1,
+      );
+    }).pipe(Effect.provide(TestLayer)),
+  );
 });

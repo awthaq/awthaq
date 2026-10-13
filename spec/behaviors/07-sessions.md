@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-07 |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) <br> 1.5 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) <br> 1.5 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.6 (2026-10-13): BEH-EA-053 names the ownership rule for `supersedes`; RRS-003's reuse is published once; THS-003's union and TIR-008's revoke are one atomic step in both layers (plan 02 phase 0) |
 
 ---
 
@@ -100,6 +100,8 @@ REQUIREMENT: Every sign-in and every privilege-changing operation
 **As shipped for an email change (REQ-EA-686):** a password change (an authenticated request) rotates the caller's own session and revokes the others. An email change is confirmed by a mailed token (`POST /change-email/confirm`, public: the link may be opened in another browser), so the confirming request carries no session to rotate; the confirmation therefore ends **every** session of the account in the same transaction as the address change (`Sessions.revokeAll(userId, "emailChanged")`, which publishes `auth.session.revoked` with reason `emailChanged`), and the owner signs in afresh under the new address. No replacement session is minted: minting one for an unauthenticated confirmer would hand a session to whoever holds the link.
 
 `archive/design/usage-examples-v4.md` §5.3 states this directly: "A new session is issued at every sign-in and after password or email change; the old row is deleted." (Revised by RRS-003/ESR-002: the old row is now tombstoned, atomically with the new row's insertion, so a later presentation of the superseded token is detectable as reuse.) `better-auth/01-core-domain/01-entities-and-invariants.md` §2.3 documents the same rule for a related case — promoting a previously-unverified user on proof of mailbox ownership strips every pre-existing session and account, and a fresh session is minted only afterward by the caller, never by reusing whatever session happened to exist before the proof resolved.
+
+**Ownership and atomicity of the supersede (plan 02 phase 0, INV-EA-018).** `supersedes` names a session the issuing user owns: a foreign user's session, a session already tombstoned and an absent one are all "no ancestor", so the new session founds a fresh family, nothing is tombstoned and no `auth.session.superseded` is published. The event describes the tombstoned row (`userId` is that row's user). Reuse detection is **once-only** (RRS-003): the check that the presented row is tombstoned and not yet flagged, the `reusedAt` mark and the family revocation are one atomic step (one `Ref.modify`; one transaction whose first statement is a conditional `UPDATE ... RETURNING`), so of any number of concurrent presentations exactly one publishes `auth.session.reuse` and the family `auth.session.revoked`. A revocation is one `DELETE ... RETURNING` (TIR-008), so of two concurrent revokes of one session exactly one publishes and the other fails `SessionNotFound`; `reauthenticate`'s union into `amr` is a compare-and-swap in `layerSql` (a lost step-up is retried against the new value), so concurrent step-ups both land (THS-003).
 
 ## BEH-EA-054: Sessions expose a device list, per-device revocation, and revoke-others
 

@@ -114,8 +114,10 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
         yield* M.User.insert.makeEffect({ email: "verify@example.com", name: "V" }),
       );
       assert.strictEqual(user.emailVerified, false);
-      const verified = yield* users.verifyEmail(user.id);
+      const verified = Option.getOrThrow(yield* users.verifyEmail(user.id));
       assert.strictEqual(verified.emailVerified, true);
+      // AAPS-005: a second verification finds nothing to change.
+      assert.isTrue(Option.isNone(yield* users.verifyEmail(user.id)));
     }).pipe(Effect.provide(RepositoriesLive)),
   );
 

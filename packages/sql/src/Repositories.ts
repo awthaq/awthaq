@@ -191,11 +191,11 @@ export interface UsersRepositoryShape {
   /**
    * BEH-EA-042: `emailVerified` is excluded from `update`/`jsonUpdate` (see
    * `Models.ts`), so flipping it needs its own repository operation rather
-   * than the generic `update`.
+   * than the generic `update`. AAPS-005: the statement applies only to a row that has an email
+   * and is not yet verified, so of two concurrent callers exactly one gets `Some` (and announces
+   * the change); `None` means no such row, no email, or already verified.
    */
-  readonly verifyEmail: (
-    id: UserId,
-  ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
+  readonly verifyEmail: (id: UserId) => Effect.Effect<Option.Option<User>, RepositoryError>;
   /** FAMS-002: `phoneVerified`'s only writer, mirroring `verifyEmail`. */
   readonly verifyPhone: (
     id: UserId,
@@ -525,21 +525,29 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
     // PPS-007: one `UPDATE ... RETURNING *`, decoded through the dialect
     // model. The boolean binds through the dialect's own wire codec (`TRUE`
     // on pg, `1` on SQLite), so there is no per-dialect literal branch (TS-002).
-    const verifyEmailQuery = SqlSchema.findOne({
+    const verifyEmailQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         id: UserId,
         verified: models.wire.boolean,
+        unverified: models.wire.boolean,
         updatedAt: models.wire.dateTime,
       }),
       Result: models.User,
       execute: (r) =>
-        sql`UPDATE users SET "emailVerified" = ${r.verified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
+        sql`UPDATE users SET "emailVerified" = ${r.verified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND "emailVerified" = ${r.unverified} AND email IS NOT NULL RETURNING *`,
     });
 
     const verifyEmail: UsersRepositoryShape["verifyEmail"] = (id) =>
       DateTime.now.pipe(
-        Effect.flatMap((updatedAt) => verifyEmailQuery({ id, verified: true, updatedAt })),
-        Effect.flatMap(revealUser),
+        Effect.flatMap((updatedAt) =>
+          verifyEmailQuery({ id, verified: true, unverified: false, updatedAt }),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
+          }),
+        ),
         traced("Users.verifyEmail", { id }),
       );
 
@@ -782,6 +790,14 @@ export interface AccountsRepositoryShape {
    * once per row.
    */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
+  /**
+   * BEH-EA-045: locks every account row of `userId` for the rest of the enclosing transaction
+   * (Postgres `SELECT ... FOR UPDATE`; a no-op on SQLite and libSQL, whose drivers already open
+   * the transaction as a write transaction). Two concurrent unlinks of a user's two different
+   * accounts would otherwise each count two siblings under READ COMMITTED and both commit,
+   * leaving the user with none.
+   */
+  readonly lockByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
 }
 
 /** The provider-token columns written together by `updateProviderTokens` (plaintext; encrypted by the repository). */
@@ -854,7 +870,8 @@ export const AccountsRepositoryLive: Layer.Layer<
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const encryption = yield* Encryption.Encryption;
-    const models = makeModels(yield* resolveDialect(sql));
+    const dialect = yield* resolveDialect(sql);
+    const models = makeModels(dialect);
     const repo = yield* SqlModel.makeRepository(models.Account, {
       tableName: "accounts",
       spanPrefix: "Accounts",
@@ -1140,6 +1157,14 @@ export const AccountsRepositoryLive: Layer.Layer<
         traced("Accounts.deleteAllByUser", { userId }),
       );
 
+    const lockByUser: AccountsRepositoryShape["lockByUser"] = (userId) =>
+      dialect === "pg"
+        ? sql`SELECT id FROM accounts WHERE "userId" = ${userId} FOR UPDATE`.pipe(
+            Effect.asVoid,
+            traced("Accounts.lockByUser", { userId }),
+          )
+        : Effect.void;
+
     return {
       models,
       insert,
@@ -1149,6 +1174,7 @@ export const AccountsRepositoryLive: Layer.Layer<
       updatePasswordHash,
       findAad,
       updateProviderTokens,
+      lockByUser,
       delete: repo.delete,
       // `subject`/`issuer` identify a person at an IdP: only `providerId` is
       // safe as a span attribute.
@@ -1246,30 +1272,44 @@ export interface SessionsRepositoryShape {
     RepositoryError
   >;
   /**
-   * GC-005: deletes session `id` only when it belongs to `userId`, in one
-   * statement — ownership is enforced atomically, not by a preceding lookup.
-   * `true` when a row was deleted (owned and present), `false` for an unknown
-   * id and a foreign id alike, so a caller cannot tell them apart.
+   * TIR-008/GC-005: deletes session `id` in ONE statement (`DELETE ... RETURNING`) and answers
+   * the user it belonged to, so exactly one of two concurrent revokes sees the row and
+   * publishes the event. When `owner` is given the row is deleted only if it belongs to that
+   * user: ownership is enforced by the statement, not by a preceding lookup. `None` for an
+   * unknown id and a foreign id alike, so a caller cannot tell them apart.
    */
-  readonly deleteOwned: (id: SessionId, userId: UserId) => Effect.Effect<boolean, SqlError>;
+  readonly deleteReturning: (
+    id: SessionId,
+    owner?: UserId,
+  ) => Effect.Effect<Option.Option<UserId>, RepositoryError>;
   /**
    * RRS-003: tombstones the superseded row in a rotation — sets
    * `supersededBy`/`supersededAt`, never deletes it. Returns the
    * now-tombstoned row (its own `familyId` is what the new row inherits).
    * ESR-002: applies only to a still-live row (`supersededAt IS NULL`), so two
    * concurrent supersedes of one row cannot both tombstone it and fork its
-   * family — the loser gets `NoSuchElementError`.
+   * family — the loser gets `NoSuchElementError`. INV-EA-018: and only a row
+   * owned by `userId`; an id alone never acts on another user's session, so a
+   * foreign row is `NoSuchElementError` too.
    */
   readonly tombstone: (input: {
     readonly id: SessionId;
+    readonly userId: UserId;
     readonly supersededBy: SessionId;
     readonly supersededAt: DateTime.Utc;
   }) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
-  /** RRS-003: marks a tombstoned row's own `reusedAt`, the first time it is presented again. */
-  readonly markReused: (
+  /**
+   * RRS-003: marks a tombstoned row's own `reusedAt`, ONCE: the statement applies only to a
+   * tombstoned row whose `reusedAt` is still NULL, so of any number of concurrent presentations
+   * exactly one gets `Some` (the row's family and owner) and publishes the reuse.
+   */
+  readonly markReusedOnce: (
     id: SessionId,
     reusedAt: DateTime.Utc,
-  ) => Effect.Effect<void, RepositoryError>;
+  ) => Effect.Effect<
+    Option.Option<{ readonly familyId: SessionId; readonly userId: UserId }>,
+    RepositoryError
+  >;
   /** RRS-003: bulk hard-deletes every still-live (non-tombstoned) row sharing `familyId` — a confirmed-compromised family has no further lineage worth preserving. */
   readonly revokeFamily: (familyId: SessionId) => Effect.Effect<void, SqlError>;
   /**
@@ -1297,6 +1337,8 @@ export interface SessionsRepositoryShape {
     now: DateTime.Utc,
     /** THS-003: the already-unioned `amr` JSON to store; `undefined` leaves it untouched. */
     amr?: string,
+    /** THS-003: with `amr`, the stored JSON the union was computed from: the write applies only if it is still that (compare-and-swap), so concurrent step-ups cannot lose a method. */
+    expectedAmr?: string,
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
 }
 
@@ -1584,15 +1626,25 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
     const listLiveIds: SessionsRepositoryShape["listLiveIds"] = (userId, now) =>
       liveIdsQuery({ userId, now }).pipe(traced("Sessions.listLiveIds", { userId }));
 
-    const deleteOwned: SessionsRepositoryShape["deleteOwned"] = (id, userId) =>
-      sql`DELETE FROM sessions WHERE id = ${id} AND "userId" = ${userId} RETURNING id`.pipe(
-        Effect.map((rows) => rows.length > 0),
-        traced("Sessions.deleteOwned", { id, userId }),
+    const deleteReturningQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ id: SessionId, owner: Schema.NullOr(UserId) }),
+      Result: Schema.Struct({ userId: UserId }),
+      execute: (request) =>
+        request.owner === null
+          ? sql`DELETE FROM sessions WHERE id = ${request.id} RETURNING "userId"`
+          : sql`DELETE FROM sessions WHERE id = ${request.id} AND "userId" = ${request.owner} RETURNING "userId"`,
+    });
+
+    const deleteReturning: SessionsRepositoryShape["deleteReturning"] = (id, owner) =>
+      deleteReturningQuery({ id, owner: owner ?? null }).pipe(
+        Effect.map((rows) => Option.map(Option.fromNullishOr(rows[0]), (row) => row.userId)),
+        traced("Sessions.deleteReturning", { id }),
       );
 
     const tombstoneQuery = SqlSchema.findOne({
       Request: Schema.Struct({
         id: SessionId,
+        userId: UserId,
         supersededBy: SessionId,
         supersededAt: models.wire.dateTime,
       }),
@@ -1600,7 +1652,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       execute: (request) => sql`
           UPDATE sessions
           SET "supersededBy" = ${request.supersededBy}, "supersededAt" = ${request.supersededAt}
-          WHERE "id" = ${request.id} AND "supersededAt" IS NULL
+          WHERE "id" = ${request.id} AND "userId" = ${request.userId} AND "supersededAt" IS NULL
           RETURNING *
         `,
     });
@@ -1615,14 +1667,17 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
     // through a `Request` schema, so the dialect's own wire codec is the
     // one and only encoder (interpolating a raw `DateTime.Utc` would bind
     // its internal fields instead of a timestamp).
-    const markReusedQuery = SqlSchema.void({
+    const markReusedQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({ id: SessionId, reusedAt: models.wire.dateTime }),
+      Result: Schema.Struct({ familyId: SessionId, userId: UserId }),
       execute: (request) =>
-        sql`UPDATE sessions SET "reusedAt" = ${request.reusedAt} WHERE "id" = ${request.id}`,
+        sql`UPDATE sessions SET "reusedAt" = ${request.reusedAt}
+            WHERE "id" = ${request.id} AND "supersededAt" IS NOT NULL AND "reusedAt" IS NULL
+            RETURNING "familyId", "userId"`,
     });
 
-    const markReused: SessionsRepositoryShape["markReused"] = (id, reusedAt) =>
-      markReusedQuery({ id, reusedAt }).pipe(traced("Sessions.markReused", { id }));
+    const markReusedOnce: SessionsRepositoryShape["markReusedOnce"] = (id, reusedAt) =>
+      markReusedQuery({ id, reusedAt }).pipe(traced("Sessions.markReusedOnce", { id }));
 
     const revokeFamily: SessionsRepositoryShape["revokeFamily"] = (familyId) =>
       sql`DELETE FROM sessions WHERE "familyId" = ${familyId} AND "supersededAt" IS NULL`.pipe(
@@ -1636,9 +1691,12 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         userId: UserId,
         now: models.wire.dateTime,
         amr: Schema.NullOr(Schema.String),
+        expectedAmr: Schema.NullOr(Schema.String),
       }),
       Result: models.Session,
-      execute: (request) => sql`
+      execute: (request) =>
+        request.expectedAmr === null
+          ? sql`
           UPDATE sessions
           SET "authenticatedAt" = ${request.now},
               "amr" = COALESCE(${request.amr}, "amr")
@@ -1648,14 +1706,35 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
             AND "absoluteExpiresAt" > ${request.now}
             AND "idleExpiresAt" > ${request.now}
           RETURNING *
+        `
+          : sql`
+          UPDATE sessions
+          SET "authenticatedAt" = ${request.now},
+              "amr" = COALESCE(${request.amr}, "amr")
+          WHERE "id" = ${request.id}
+            AND "userId" = ${request.userId}
+            AND "amr" = ${request.expectedAmr}
+            AND "supersededAt" IS NULL
+            AND "absoluteExpiresAt" > ${request.now}
+            AND "idleExpiresAt" > ${request.now}
+          RETURNING *
         `,
     });
 
-    const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, userId, now, amr) =>
-      reauthenticateQuery({ id, userId, now, amr: amr ?? null }).pipe(
-        Effect.flatMap(revealSession),
-        traced("Sessions.reauthenticate", { id }),
-      );
+    const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (
+      id,
+      userId,
+      now,
+      amr,
+      expectedAmr,
+    ) =>
+      reauthenticateQuery({
+        id,
+        userId,
+        now,
+        amr: amr ?? null,
+        expectedAmr: expectedAmr ?? null,
+      }).pipe(Effect.flatMap(revealSession), traced("Sessions.reauthenticate", { id }));
 
     return {
       models,
@@ -1667,10 +1746,10 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       touch,
       deleteAllForUserExcept,
       deleteAllByUser,
-      deleteOwned,
+      deleteReturning,
       listLiveIds,
       tombstone,
-      markReused,
+      markReusedOnce,
       revokeFamily,
       reauthenticate,
       deleteExpiredBefore,
@@ -1758,13 +1837,15 @@ export interface VerificationRepositoryShape {
     readonly now: DateTime.Utc;
   }) => Effect.Effect<Option.Option<VerificationToken>, RepositoryError>;
   /**
-   * SOS-004: a wrong presentation against the live row for `identifier`: `attempts + 1`, and
-   * the row is consumed (burned) once that reaches `maxAttempts` — one atomic statement, so
-   * concurrent guesses cannot overshoot the budget. A row with no budget, an expired one and an
-   * unknown identifier are untouched.
+   * SOS-004: a wrong presentation against the live row `id`: `attempts + 1`, and the row is
+   * consumed (burned) once that reaches `maxAttempts` — one atomic statement, so concurrent guesses
+   * cannot overshoot the budget. Pinned to the row's id, not its identifier: a presentation is
+   * charged to the row it was judged against, so a `reissue` (which replaces the live row, and its
+   * id) between the miss and the spend never charges the new token. A row with no budget, a
+   * consumed or expired one and an unknown id are untouched.
    */
   readonly recordFailedAttempt: (input: {
-    readonly identifier: string;
+    readonly id: VerificationTokenId;
     readonly now: DateTime.Utc;
   }) => Effect.Effect<void, RepositoryError>;
   /** BCR-003: sweeps every token (live or already-consumed) naming this user — the cascade `Account.ts`'s `deleteUser` needs. */
@@ -1910,12 +1991,12 @@ export const VerificationRepositoryLive: Layer.Layer<
     // SOS-004: both right-hand sides read the pre-update `attempts`, so `attempts + 1 >= maxAttempts`
     // burns the row in the same statement that counts the miss.
     const recordFailedAttemptQuery = SqlSchema.void({
-      Request: Schema.Struct({ identifier: Schema.String, now: models.wire.dateTime }),
+      Request: Schema.Struct({ id: VerificationTokenId, now: models.wire.dateTime }),
       execute: (request) => sql`
         UPDATE verification_tokens
         SET attempts = attempts + 1,
             "consumedAt" = CASE WHEN attempts + 1 >= "maxAttempts" THEN ${request.now} ELSE "consumedAt" END
-        WHERE identifier = ${request.identifier}
+        WHERE id = ${request.id}
           AND "consumedAt" IS NULL
           AND "expiresAt" > ${request.now}
           AND "maxAttempts" IS NOT NULL
@@ -2003,7 +2084,7 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
         INSERT INTO verification_reservations (identifier, "tenantId", "expiresAt")
         VALUES (${request.identifier}, ${request.tenantId}, ${request.expiresAt})
         ON CONFLICT(identifier) DO UPDATE SET "expiresAt" = excluded."expiresAt", "tenantId" = excluded."tenantId"
-        WHERE verification_reservations."expiresAt" < ${request.now}
+        WHERE verification_reservations."expiresAt" <= ${request.now}
         RETURNING *
       `,
     });
