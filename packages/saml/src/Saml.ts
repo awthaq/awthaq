@@ -39,6 +39,7 @@ import {
   SessionCookie,
   Sessions,
   SignIn,
+  SignUp,
   Tenant,
   Users,
   Verification,
@@ -726,10 +727,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const spKeys = yield* SamlSpKeys.SamlSpKeys;
       const xmlSignature = yield* XmlSignature.XmlSignature;
       const crypto = yield* Crypto.Crypto;
-      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const settings = yield* SamlConfig.SamlConfig;
-      const beforeSignUp = yield* Hooks.BeforeSignUp;
-      const afterSignUp = yield* Hooks.AfterSignUp;
+      const creation = yield* SignUp.make;
       const completion = yield* SignIn.make;
 
       const acsUrl = SamlConfig.acsUrl(settings);
@@ -1054,48 +1053,25 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
                 return existing.value.id;
               }
               const name = attributeOf(assertion, NAME_ATTRIBUTES) ?? email ?? subject;
-              const vetoed = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
-                beforeSignUp.run({
-                  ...(email === undefined ? {} : { email }),
-                  name,
-                  strategy: providerId,
-                }),
-              );
-              const created = yield* sqlTransaction
-                .withTransaction(
-                  Effect.gen(function* () {
-                    const user = yield* users
-                      .create({
-                        identity:
-                          vetoed.email === undefined
-                            ? { _tag: "Anonymous" }
-                            : { _tag: "Email", email: vetoed.email },
-                        name: vetoed.name,
-                      })
-                      .pipe(
-                        Effect.catchTag("Users/EmailAlreadyExists", () =>
-                          Effect.fail(new AssertionInvalid({ reason: "emailInUse" })),
-                        ),
-                        Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
-                      );
-                    yield* accounts
-                      .link({
-                        userId: user.id,
-                        providerId,
-                        subject,
-                        issuer: connection.idpEntityId,
-                      })
-                      .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
-                    return user;
-                  }),
-                )
-                .pipe(Effect.catchTag("SqlError", Effect.die));
-              yield* events.publish({ _tag: "auth.user.created", userId: created.id });
-              yield* afterSignUp.run({
-                userId: created.id,
-                ...(vetoed.email === undefined ? {} : { email: vetoed.email }),
+              // ADR-EA-038: `SignUp` vets (`BeforeSignUp`, `strategy` is the provider id), then creates and
+              // links in one unit and announces after it commits.
+              const vetted = yield* creation.vet({
+                identity: email === undefined ? { _tag: "Anonymous" } : { _tag: "Email", email },
+                name,
                 strategy: providerId,
               });
+              const created = yield* creation
+                .create(vetted, {
+                  link: { providerId, subject, issuer: connection.idpEntityId },
+                })
+                .pipe(
+                  Effect.catchTag("SignUp/IdentityTaken", (taken) =>
+                    taken.kind === "Email"
+                      ? Effect.fail(new AssertionInvalid({ reason: "emailInUse" }))
+                      : // A fresh user has no phone, and a fresh user's subject is not yet linked.
+                        Defects.invariantViolation("SamlSignUpConflict", taken.message),
+                  ),
+                );
               return created.id;
             }),
         });
