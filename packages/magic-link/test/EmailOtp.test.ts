@@ -2,6 +2,7 @@
 // domain level — a six-digit code that is hashed, single-use, attempt-budgeted and resend-windowed.
 import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
+import { SignInProbe } from "@awthaq/test";
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -134,6 +135,26 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(replay._tag, "InvalidEmailOtp");
       }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect(
+    "ADR-EA-038 wiring: hands SignIn strategy emailOtp and amr [otp, email], and a new address reaches BeforeSignUp with that strategy",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const probe = yield* SignInProbe.SignInProbe;
+        const { code } = yield* codeFor("probe@example.com");
+        yield* emailOtp.verify({ email: "probe@example.com", code: Redacted.make(code) });
+        const recorded = yield* probe.recorded;
+        assert.deepStrictEqual(
+          recorded.beforeSignUp.map((input) => [input.email, input.strategy]),
+          [["probe@example.com", "emailOtp"]],
+        );
+        assert.deepStrictEqual(
+          recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
+          [["emailOtp", ["otp", "email"]]],
+        );
+      }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(buildLayer())))),
   );
 
   it.effect("SOS-004: three wrong guesses burn the code — the correct one no longer works", () =>

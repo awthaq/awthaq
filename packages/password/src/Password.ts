@@ -21,6 +21,7 @@ import {
   Observability,
   RateLimits,
   Sessions,
+  SignIn,
   Tenant,
   Users,
   Verification,
@@ -1019,11 +1020,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // future `TwoFactor` plugin taps, both attach through.
       const beforeSignUp = yield* Hooks.BeforeSignUp;
       const afterSignUp = yield* Hooks.AfterSignUp;
-      const beforeSignIn = yield* Hooks.BeforeSignIn;
-      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
+      const completion = yield* SignIn.make;
       // ARF-005: consulted by `confirmReset` inside its transaction (the two-factor plugin taps it).
       const beforeCredentialReset = yield* Hooks.BeforeCredentialReset;
-      const afterSignIn = yield* Hooks.AfterSignIn;
 
       // RBS-006: the table above feeds both the registry (BEH-EA-107/110/111 introspection) and the
       // enforcement calls below. EOTS-007: a breach is published, logged and counted, and answers
@@ -1324,19 +1323,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.EmailNotVerified());
         }
 
-        // SCP-001/BAM-005: THE shared sign-in gate, likewise only after the
-        // password is proven correct (a wrong password never learns the
-        // account is suspended).
-        yield* Users.assertCanSignIn(user).pipe(
-          Effect.tapError(() =>
-            events.publish({
-              _tag: "auth.user.signInFailed",
-              strategy: "password",
-              reason: "suspended",
-            }),
-          ),
-        );
-
         if (config.rehashOnLogin && hasher.needsRehash(Redacted.value(hash))) {
           const rehashed = yield* hasher.hash(input.password);
           yield* accounts
@@ -1344,43 +1330,19 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             .pipe(Effect.catchTag("AccountNotFound", Effect.die));
         }
 
-        // NAM-002: the sign-in veto (an Auth.js `signIn` callback returning
-        // `false`), consulted only now that the password is proven — so a
-        // `HookAborted` here can never be used to probe a guessed password.
-        const signInEmail = Users.emailOf(user);
-        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-          beforeSignIn.run({
-            userId: user.id,
-            ...(Option.isSome(signInEmail) ? { email: signInEmail.value } : {}),
-            strategy: "password",
-          }),
-        );
-
-        // BCR-004/THS-002: THE canonical MFA attachment point — consulted
-        // here, right before this flow's own `sessions.issue`, never
-        // centralized inside `Sessions.issue` itself (which is also
-        // called for admin impersonation and same-session token rotation,
-        // neither of which is "a first factor just succeeded").
-        const point = yield* beforeSessionIssue.run({
-          userId: user.id,
-          strategy: "password",
-          amr: ["pwd"],
-        });
-        if (point._tag === "Diverted") {
-          return yield* Effect.fail(point.value);
-        }
-        const issued = yield* sessions.issue({
-          userId: user.id,
-          request: sessionRequest(input),
-          amr: ["pwd"],
-        });
-        yield* events.publish({
-          _tag: "auth.user.signedIn",
-          userId: user.id,
-          strategy: "password",
-        });
-        yield* afterSignIn.run({ userId: user.id, strategy: "password" });
-        return issued;
+        // ADR-EA-038: the credential is proven, so core's sign-in takes over: the suspension gate
+        // (published as `signInFailed{suspended}`), the `BeforeSignIn` veto (NAM-002), the MFA
+        // divert (BCR-004/THS-002), the session and its announcement. An erasure can run between
+        // the proof and here; the user is then refused like any wrong credential.
+        return yield* completion
+          .complete({ userId: user.id, strategy: "password", amr: ["pwd"] }, sessionRequest(input))
+          .pipe(
+            Effect.catchTag("SignIn/UserGone", () =>
+              publishSignInFailed("invalidCredentials", input).pipe(
+                Effect.andThen(Effect.fail(new Api.InvalidCredentials())),
+              ),
+            ),
+          );
       });
 
       const requestReset: PasswordShape["requestReset"] = Effect.fnUntraced(function* (input) {

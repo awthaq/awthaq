@@ -26,6 +26,7 @@
 import {
   AuthEvents,
   Errors,
+  Hooks,
   RateLimits,
   Sessions,
   Users,
@@ -124,6 +125,8 @@ export interface SecondFactorShape {
     readonly strategy: string;
     readonly amr: ReadonlyArray<Sessions.AuthMethod>;
     readonly attempt: number;
+    /** ADR-EA-038: the divert's handoff, stored with the challenge and returned on `consumeChallenge`. */
+    readonly handoff?: Hooks.Handoff | undefined;
   }) => Effect.Effect<TwoFactorChallengeId, Errors.StoreUnavailable>;
   /** Spends a challenge. Every failure — malformed, unknown, expired, replayed, foreign — is the one `InvalidTwoFactorCode`. */
   readonly consumeChallenge: (
@@ -426,7 +429,12 @@ export const layer = Layer.effect(
           identifier: VerificationLink.identifierOf(CHALLENGE_PURPOSE, input.userId),
           ttl: config.challengeTtl,
           userId: input.userId,
-          payload: { strategy: input.strategy, amr: input.amr, attempt: input.attempt },
+          payload: {
+            strategy: input.strategy,
+            amr: input.amr,
+            attempt: input.attempt,
+            ...(input.handoff === undefined ? {} : { handoff: input.handoff }),
+          },
         });
         return TwoFactorChallengeId(
           Redacted.value(
@@ -459,6 +467,7 @@ export const layer = Layer.effect(
           strategy: payload.value.strategy,
           amr: payload.value.amr.filter(Sessions.isAuthMethod),
           attempt: payload.value.attempt,
+          handoff: payload.value.handoff,
         };
       },
     );

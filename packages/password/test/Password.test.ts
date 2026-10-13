@@ -22,6 +22,7 @@ import {
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
+import { SignInProbe } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -39,7 +40,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
-import { tokenOf } from "./harness.ts";
+import { makeTestLayer, tokenOf } from "./harness.ts";
 
 const sha1Hex = (plain: string): string =>
   createHash("sha1").update(plain).digest("hex").toUpperCase();
@@ -1762,5 +1763,104 @@ describe("Password signIn timing floor (TSS-006)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvalidCredentials");
     }).pipe(Effect.provide(layerWith({ signInTimingFloor: "off" }))),
+  );
+});
+
+// ADR-EA-038: sign-in policy (gate, veto, divert, announcement) is tested once at `SignIn`; these prove
+// only what the password plugin hands the module and how it answers a refusal.
+describe("Password sign-in wiring (ADR-EA-038)", () => {
+  it.effect("hands SignIn strategy password and amr [pwd]", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const users = yield* Users.Users;
+      const probe = yield* SignInProbe.SignInProbe;
+      const signedUp = yield* password.signUp({
+        email: "wiring@example.com",
+        password: strongPassword,
+      });
+      yield* users.verifyEmail(signedUp.session.userId);
+      yield* password.signIn({ email: "wiring@example.com", password: strongPassword });
+      const recorded = yield* probe.recorded;
+      assert.deepStrictEqual(
+        recorded.beforeSessionIssue.map((input) => [input.userId, input.strategy, input.amr]),
+        [[signedUp.session.userId, "password", ["pwd"]]],
+      );
+      assert.deepStrictEqual(
+        recorded.beforeSignIn.map((input) => [input.email, input.strategy]),
+        [["wiring@example.com", "password"]],
+      );
+    }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(TestLayer)))),
+  );
+
+  it.effect(
+    "EmailNotVerified precedes the suspension gate: a suspended unverified user learns neither",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const users = yield* Users.Users;
+        const auditLog = yield* AuditLog.AuditLog;
+        const signedUp = yield* password.signUp({
+          email: "unverified@example.com",
+          password: strongPassword,
+        });
+        yield* users.setStatus(signedUp.session.userId, "suspended");
+        const refused = yield* password
+          .signIn({ email: "unverified@example.com", password: strongPassword })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "EmailNotVerified");
+        const failures = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        assert.deepStrictEqual(
+          failures.map((row) =>
+            row.payload._tag === "auth.user.signInFailed" ? row.payload.reason : "?",
+          ),
+          ["emailNotVerified"],
+        );
+      }).pipe(Effect.provide(makeTestLayer({ config: { requireVerifiedEmail: true } }))),
+  );
+
+  it.effect(
+    "a user erased between the proof and the session is the uniform InvalidCredentials, announced as invalidCredentials",
+    () => {
+      const gone = { value: false };
+      return Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const users = yield* Users.Users;
+        const auditLog = yield* AuditLog.AuditLog;
+        const signedUp = yield* password.signUp({
+          email: "erased@example.com",
+          password: strongPassword,
+        });
+        yield* users.verifyEmail(signedUp.session.userId);
+        gone.value = true;
+        const refused = yield* password
+          .signIn({ email: "erased@example.com", password: strongPassword, ip: "203.0.113.7" })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "InvalidCredentials");
+        const failures = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        assert.deepStrictEqual(
+          failures.map((row) =>
+            row.payload._tag === "auth.user.signInFailed" ? row.payload.reason : "?",
+          ),
+          ["invalidCredentials"],
+        );
+      }).pipe(
+        Effect.provide(
+          makeTestLayer({
+            coreOverride: Layer.effect(
+              Users.Users,
+              Effect.map(Users.Users, (real) =>
+                Users.Users.of({
+                  ...real,
+                  findById: (id) =>
+                    gone.value
+                      ? Effect.fail(new Users.UserNotFound({ id, message: "erased" }))
+                      : real.findById(id),
+                }),
+              ),
+            ),
+          }),
+        ),
+      );
+    },
   );
 });

@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-32 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (BAM-007, MLO-005, MLO-002, ARF-005 Fix A; wayfinder ticket 05 §2), replacing [MOD-EA-004](../models/04-magic-link.md)'s non-normative sketch |
+> | Change History | 1.0 (2026-09-29): Initial release (BAM-007, MLO-005, MLO-002, ARF-005 Fix A; wayfinder ticket 05 §2), replacing [MOD-EA-004](../models/04-magic-link.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-269: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) |
 ---
 
 > Status: the `MagicLink` plugin in `@awthaq/magic-link` is implemented and tested (`packages/magic-link/test/MagicLink.test.ts`, `AuthHttp.test.ts`). It shares its channel-credential module with [`EmailOtp`](33-email-otp.md).
@@ -81,7 +81,7 @@ REQUIREMENT: `verify` MUST decode the token and check its purpose before
              session minted (ARF-005 Fix A).
 ```
 
-The user is created *after* the proof, never at request time. A magic link never links, unlinks or replaces any credential of an existing account (an existing password credential is untouched). A refusal publishes `auth.user.signInFailed { strategy: "magicLink" }`.
+The sign-in half of the shared channel step is core's `SignIn.complete` (BEH-EA-322, ADR-EA-038), which makes the gate refusal a published `signInFailed{suspended}`; a user erased between the proof and the session is the one opaque refusal, like any invalid link. The user is created *after* the proof, never at request time. A magic link never links, unlinks or replaces any credential of an existing account (an existing password credential is untouched). A refusal publishes `auth.user.signInFailed { strategy: "magicLink" }`.
 
 _Previous: [BEH-EA-268](32-magic-link.md#beh-ea-268-requesting-a-link-answers-202-for-every-address-and-mails-at-most-one-link-per-window) | Next: [BEH-EA-270](32-magic-link.md#beh-ea-270-a-magic-link-is-a-verification-row-under-its-own-purpose-with-no-table-of-its-own)_
 

@@ -38,6 +38,7 @@ import {
   RateLimits,
   SessionCookie,
   Sessions,
+  SignIn,
   Tenant,
   Users,
   Verification,
@@ -682,6 +683,18 @@ const rules = {
   }),
 };
 
+// ---- the sign-in continuation ----------------------------------------------------------------------
+
+/** What an ACS sign-in owes once its session exists (ADR-EA-038); JSON, because a second factor may hold it for minutes. */
+const SamlContinuationPayload = Schema.Struct({
+  connectionId: Schema.String,
+  nameId: Schema.String,
+  nameIdFormat: Schema.optionalKey(Schema.String),
+  sessionIndex: Schema.optionalKey(Schema.String),
+  /** The roles the connection's rules mapped from the assertion; absent when no rule matched (BEH-EA-316). */
+  roles: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 // ---- the plugin --------------------------------------------------------------------------------------
 
 export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
@@ -717,9 +730,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const settings = yield* SamlConfig.SamlConfig;
       const beforeSignUp = yield* Hooks.BeforeSignUp;
       const afterSignUp = yield* Hooks.AfterSignUp;
-      const beforeSignIn = yield* Hooks.BeforeSignIn;
-      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-      const afterSignIn = yield* Hooks.AfterSignIn;
+      const completion = yield* SignIn.make;
 
       const acsUrl = SamlConfig.acsUrl(settings);
       // The configured numbers tune the declared defaults (`sso` belongs to the `Sso` plugin's own budget).
@@ -940,19 +951,18 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       });
 
       /**
-       * BEH-EA-316: the assertion's attributes, through the connection's rules, into the organization's roles, under the
-       * connection's ceiling (`canGrant`, RRM-001). A mapping that cannot be applied (a role that no longer exists, a member who
-       * out-privileges the connection, the last owner, a membership limit) is logged and skipped: the identity provider proved
-       * who the user is, and that is still true; what it may confer is bounded, never a reason to lock them out.
+       * BEH-EA-316: the roles the connection's rules mapped from the assertion's attributes, applied to the
+       * organization's membership under the connection's ceiling (`canGrant`, RRM-001). A mapping that cannot be
+       * applied (a role that no longer exists, a member who out-privileges the connection, the last owner, a
+       * membership limit) is logged and skipped: the identity provider proved who the user is, and that is still
+       * true; what it may confer is bounded, never a reason to lock them out.
        */
-      const applyRoleMapping = (
+      const applyRoles = (
         connection: SamlRecords.ConnectionRecord,
-        assertion: SignedAssertion,
+        roles: ReadonlyArray<string>,
         userId: Users.UserId,
-      ) => {
-        const roles = SamlRoleMapping.rolesFor(connection.roleMapping, assertion);
-        if (roles === undefined) return Effect.void;
-        return organization
+      ) =>
+        organization
           .syncMemberRoles({
             organizationId: connection.organizationId,
             userId,
@@ -968,7 +978,43 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
               }),
             ),
           );
-      };
+
+      /**
+       * ADR-EA-038: what this connection's sign-in owes once its session exists, whichever request mints
+       * that session: role mapping (BEH-EA-316) and the Single Logout record (BEH-EA-315). It runs from
+       * `SignIn.issue` in the connection's tenant, so a sign-in finished by a second factor
+       * (`/two-factor/verify`) is recorded and role-mapped exactly like one the ACS finishes itself.
+       * Role mapping is applied only to a fully authenticated sign-in, still before the session
+       * reaches the client.
+       */
+      const continuation = SignIn.continuation({
+        id: "saml",
+        kind: "saml.acs",
+        payload: SamlContinuationPayload,
+        make: Effect.succeed(
+          (payload: typeof SamlContinuationPayload.Type, context: SignIn.ContinuationContext) =>
+            Effect.gen(function* () {
+              if (payload.roles !== undefined) {
+                const connection = yield* usableConnection(payload.connectionId);
+                if (Option.isSome(connection)) {
+                  yield* applyRoles(connection.value, payload.roles, context.userId);
+                }
+              }
+              // BEH-EA-315: remember which identity the IdP knows this session by, so a Single Logout can find it again.
+              yield* records.saveSession({
+                sessionId: context.sessionId,
+                connectionId: payload.connectionId,
+                nameId: payload.nameId,
+                nameIdFormat: payload.nameIdFormat,
+                sessionIndex: payload.sessionIndex,
+              });
+              yield* records.pruneSessions(
+                DateTime.subtractDuration(yield* DateTime.now, settings.sessionRecordRetention),
+              );
+            }),
+        ),
+      });
+      yield* continuation.register;
 
       /** Step 7: the account, the sign-in gate, the hooks and the session. Runs as the connection's tenant. */
       const signIn = Effect.fnUntraced(function* (
@@ -1054,53 +1100,36 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             }),
         });
 
-        // SCP-001/BAM-005: THE shared sign-in gate — the IdP proved the identity; a suspended user still gets no session.
-        const user = yield* users
-          .findById(targetUserId)
-          .pipe(Effect.catchTag("UserNotFound", Effect.die), Effect.tap(Users.assertCanSignIn));
-        const userEmail = Users.emailOf(user);
-        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-          beforeSignIn.run({
-            userId: targetUserId,
-            ...(Option.isSome(userEmail) ? { email: userEmail.value } : {}),
-            strategy: providerId,
-          }),
-        );
-        // The divert context and the issued session must agree on how the first factor was proven.
-        const amr = ["fed"] satisfies ReadonlyArray<Sessions.AuthMethod>;
-        const point = yield* beforeSessionIssue.run({
-          userId: targetUserId,
-          strategy: providerId,
-          amr,
-        });
-        if (point._tag === "Diverted") return yield* Effect.fail(point.value);
-        yield* applyRoleMapping(connection, assertion, targetUserId);
-        const issued = yield* sessions.issue({
-          userId: targetUserId,
-          request: {
-            ...(input.ip !== undefined ? { ip: input.ip } : {}),
-            ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
-          },
-          amr,
-        });
-        // BEH-EA-315: remember which identity the IdP knows this session by, so a Single Logout can find it again.
-        yield* records.saveSession({
-          sessionId: issued.session.id,
-          connectionId: connection.id,
-          nameId: assertion.nameId.value,
-          nameIdFormat: assertion.nameId.format,
-          sessionIndex: assertion.sessionIndex,
-        });
-        yield* records.pruneSessions(
-          DateTime.subtractDuration(yield* DateTime.now, settings.sessionRecordRetention),
-        );
-        yield* events.publish({
-          _tag: "auth.user.signedIn",
-          userId: targetUserId,
-          strategy: providerId,
-        });
-        yield* afterSignIn.run({ userId: targetUserId, strategy: providerId });
-        return issued;
+        // ADR-EA-038: the IdP proved the identity, so core's sign-in takes over (gate, veto, MFA divert, session,
+        // announcement). The role mapping and the Single Logout record ride as a continuation, so they also
+        // apply when a second factor finishes the sign-in.
+        const roles = SamlRoleMapping.rolesFor(connection.roleMapping, assertion);
+        return yield* completion
+          .complete(
+            {
+              userId: targetUserId,
+              strategy: providerId,
+              amr: ["fed"],
+              continuation: yield* continuation.of({
+                connectionId: connection.id,
+                nameId: assertion.nameId.value,
+                ...(assertion.nameId.format === undefined
+                  ? {}
+                  : { nameIdFormat: assertion.nameId.format }),
+                ...(assertion.sessionIndex === undefined
+                  ? {}
+                  : { sessionIndex: assertion.sessionIndex }),
+                ...(roles === undefined ? {} : { roles }),
+              }),
+            },
+            input,
+          )
+          .pipe(
+            // An erasure can run between the IdP's proof and here: the uniform rejection, not a server error.
+            Effect.catchTag("SignIn/UserGone", () =>
+              Effect.fail(new AssertionInvalid({ reason: "accountMissing" })),
+            ),
+          );
       });
 
       const acs: SamlShape["acs"] = Effect.fnUntraced(function* (input) {

@@ -1,15 +1,17 @@
 // THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-259 to BEH-EA-266): the plugin
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
-import { AuditLog, AuthEvents, Hooks, Users, VerificationLink } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, SignIn, Users, VerificationLink } from "@awthaq/core";
 import { Encryption, Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SecondFactor from "../src/SecondFactor.ts";
@@ -350,25 +352,87 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
+  // ADR-EA-038: the divert's handoff rides the challenge, and `finalizeSignIn` is `SignIn.resume` + `issue`.
   it.effect(
-    "a session is refused for a user suspended between the first factor and the second",
-    () =>
-      Effect.gen(function* () {
+    "a first factor's tenant and continuation survive the second factor: the session keeps them and records [...amr, otp, mfa]",
+    () => {
+      const continued: Array<{ readonly n: number; readonly sessionId: string }> = [];
+      const continuation = SignIn.continuation({
+        id: "test",
+        kind: "test.continuation",
+        payload: Schema.Struct({ n: Schema.Number }),
+        make: Effect.succeed(
+          (payload: { readonly n: number }, context: SignIn.ContinuationContext) =>
+            Effect.sync(() => {
+              continued.push({ n: payload.n, sessionId: context.sessionId });
+            }),
+        ),
+      });
+      return Effect.gen(function* () {
         const twoFactor = yield* TwoFactor.TwoFactor;
-        const users = yield* Users.Users;
-        const user = yield* enrolledUser("suspended@example.com");
-        const divert = yield* divertedSignIn(user.email);
-        yield* users.setStatus(user.userId, "suspended");
+        const gate = yield* Hooks.BeforeSessionIssue;
+        const user = yield* enrolledUser("handoff@example.com");
+        const diverted = yield* gate.run({
+          userId: user.userId,
+          strategy: "saml:org:conn",
+          amr: ["fed"],
+          handoff: {
+            tenantId: "tenant-1",
+            continuation: yield* continuation.of({ n: 7 }),
+          },
+        });
+        if (diverted._tag !== "Diverted") return assert.fail("expected a divert");
         yield* nextStep;
-        const failure = yield* twoFactor
-          .verify({
-            challengeId: Redacted.make(divert.challengeId),
-            code: secret(yield* codeFor(user.secret)),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "UserSuspended");
-      }).pipe(Effect.provide(buildLayer())),
+        const issued = yield* twoFactor.verify({
+          challengeId: Redacted.make(diverted.value.challengeId),
+          code: secret(yield* codeFor(user.secret)),
+        });
+        assert.deepStrictEqual(issued.session.amr, ["fed", "otp", "mfa"]);
+        assert.deepStrictEqual(Option.getOrUndefined(issued.session.tenantId), "tenant-1");
+        assert.deepStrictEqual(continued, [{ n: 7, sessionId: issued.session.id }]);
+      }).pipe(Effect.provide(continuation.layer.pipe(Layer.provideMerge(buildLayer()))));
+    },
   );
+
+  it.effect("a wrong code re-issues the challenge carrying the same handoff", () => {
+    const continued: Array<number> = [];
+    const continuation = SignIn.continuation({
+      id: "test",
+      kind: "test.continuation",
+      payload: Schema.Struct({ n: Schema.Number }),
+      make: Effect.succeed((payload: { readonly n: number }) =>
+        Effect.sync(() => {
+          continued.push(payload.n);
+        }),
+      ),
+    });
+    return Effect.gen(function* () {
+      const twoFactor = yield* TwoFactor.TwoFactor;
+      const gate = yield* Hooks.BeforeSessionIssue;
+      const user = yield* enrolledUser("retry@example.com");
+      const diverted = yield* gate.run({
+        userId: user.userId,
+        strategy: "saml:org:conn",
+        amr: ["fed"],
+        handoff: { continuation: yield* continuation.of({ n: 3 }) },
+      });
+      if (diverted._tag !== "Diverted") return assert.fail("expected a divert");
+      const wrong = yield* twoFactor
+        .verify({
+          challengeId: Redacted.make(diverted.value.challengeId),
+          code: secret("000000"),
+        })
+        .pipe(Effect.flip);
+      if (wrong._tag !== "InvalidTwoFactorCode" || wrong.challengeId === undefined)
+        return assert.fail("expected a retry challenge");
+      yield* nextStep;
+      yield* twoFactor.verify({
+        challengeId: Redacted.make(wrong.challengeId),
+        code: secret(yield* codeFor(user.secret)),
+      });
+      assert.deepStrictEqual(continued, [3]);
+    }).pipe(Effect.provide(continuation.layer.pipe(Layer.provideMerge(buildLayer()))));
+  });
 });
 
 describe("TwoFactor: recovery codes (BEH-EA-264, BCR-002)", () => {

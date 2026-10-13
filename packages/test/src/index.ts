@@ -15,3 +15,4 @@ export * as TestAuth from "./TestAuth.ts";
 export * as LaggingReplica from "./LaggingReplica.ts";
 export * as CookieAssertions from "./CookieAssertions.ts";
 export * as RedactionGuard from "./RedactionGuard.ts";
+export * as SignInProbe from "./SignInProbe.ts";

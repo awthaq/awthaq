@@ -500,6 +500,34 @@ describe("sign-in continuations", () => {
     },
   );
 
+  it.effect(
+    "the continuation runs in the clearance's tenant, wherever the session is issued",
+    () => {
+      const recorder = newRecorder();
+      const tenants: Array<Option.Option<string>> = [];
+      const watching = SignIn.continuation({
+        id: "watching",
+        kind: "test.watching",
+        payload: Schema.Struct({}),
+        make: Effect.succeed(() =>
+          Effect.gen(function* () {
+            tenants.push(yield* Tenant.TenantContext);
+          }),
+        ),
+      });
+      return Effect.gen(function* () {
+        const signIn = yield* SignIn.make;
+        const user = yield* makeUser();
+        const continuation = yield* watching.of({});
+        const cleared = yield* signIn
+          .clear({ userId: user.id, strategy: "saml:o:c", amr: ["fed"], continuation })
+          .pipe(Tenant.withTenant("t1"));
+        yield* signIn.issue(cleared);
+        assert.deepStrictEqual(tenants, [Option.some("t1")]);
+      }).pipe(Effect.provide(watching.layer.pipe(Layer.provideMerge(envFor(recorder)))));
+    },
+  );
+
   it.effect("an unregistered kind is a defect, never a silent skip", () => {
     const recorder = newRecorder();
     return Effect.gen(function* () {

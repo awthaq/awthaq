@@ -34,8 +34,10 @@ import type * as Users from "./Users.ts";
 
 export type { Attempt, Clearance, IssuedSession, SessionRequest } from "./internal/signInSteps.ts";
 export { UserGone } from "./internal/signInSteps.ts";
-// The registry class rides this namespace so an inferred composition type can name it (TS2883).
+// The registry class and the three hook points `make` requires ride this namespace so a plugin whose
+// inferred layer type mentions them can name them through the `SignIn` import it already has (TS2883).
 export * from "./SignInContinuationRegistry.ts";
+export { AfterSignIn, BeforeSessionIssue, BeforeSignIn } from "./Hooks.ts";
 
 export type ClearError =
   | Steps.UserGone
@@ -80,8 +82,9 @@ export const make = Effect.map(Steps.makeSteps, (steps) => {
 /**
  * The typed front door for a sign-in continuation: work a first factor owes once its session
  * exists, whichever request finally mints it. `of(payload)` is what the first factor passes as
- * `Attempt.continuation` (the payload is encoded to JSON so it can cross a divert); `layer`
- * registers the handler (`AuthPlugin.layer(Self, { contributes })`), which decodes it again.
+ * `Attempt.continuation` (the payload is encoded to JSON so it can cross a divert); `layer` (or
+ * `register`, for a handler that closes over the plugin's own `make` scope) registers the handler,
+ * which decodes it again.
  */
 export const continuation = <P, I extends Schema.Json, E, R>(options: {
   /** The contributing plugin's id. */
@@ -96,6 +99,20 @@ export const continuation = <P, I extends Schema.Json, E, R>(options: {
 }) => {
   const decode = Schema.decodeUnknownEffect(options.payload);
   const encode = Schema.encodeEffect(options.payload);
+  /** Registers the handler; a plugin whose handler closes over its own `make` scope yields this there. */
+  const register = Effect.gen(function* () {
+    const registry = yield* SignInContinuationRegistry;
+    const run = yield* options.make;
+    yield* registry.register({
+      id: options.id,
+      kind: options.kind,
+      run: (payload, context) =>
+        decode(payload).pipe(
+          Effect.catchTag("SchemaError", Effect.die),
+          Effect.flatMap((decoded) => run(decoded, context)),
+        ),
+    });
+  });
   return {
     kind: options.kind,
     of: (payload: P) =>
@@ -104,20 +121,8 @@ export const continuation = <P, I extends Schema.Json, E, R>(options: {
         // ADR-EA-028 D3: a codec bug is a defect, not a request outcome.
         Effect.catchTag("SchemaError", Effect.die),
       ),
-    layer: Layer.effectDiscard(
-      Effect.gen(function* () {
-        const registry = yield* SignInContinuationRegistry;
-        const run = yield* options.make;
-        yield* registry.register({
-          id: options.id,
-          kind: options.kind,
-          run: (payload, context) =>
-            decode(payload).pipe(
-              Effect.catchTag("SchemaError", Effect.die),
-              Effect.flatMap((decoded) => run(decoded, context)),
-            ),
-        });
-      }),
-    ),
+    register,
+    /** `AuthPlugin.layer(Self, { contributes })`: registers the handler when the layer is built. */
+    layer: Layer.effectDiscard(register),
   };
 };

@@ -1,8 +1,9 @@
 // BAM-007, MLO-005, MLO-002, ARF-005 Fix A (BEH-EA-267 to BEH-EA-270): the MagicLink plugin at the
 // domain level — real in-memory stores, the real mail dispatcher, the real `@awthaq/two-factor`
 // gates for the MFA divert.
-import { AuditLog, HookPoint, Hooks, Sessions, Users, Verification } from "@awthaq/core";
+import { AuditLog, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
+import { SignInProbe } from "@awthaq/test";
 import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -178,40 +179,28 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("a BeforeSignIn veto refuses (HookAborted) and no session is issued", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const audit = yield* AuditLog.AuditLog;
-      const { token } = yield* requestAndRead("banned@example.com");
-      const failure = yield* magicLink.verify({ token }).pipe(Effect.flip);
-      if (failure._tag !== "HookAborted") return assert.fail(failure._tag);
-      assert.strictEqual(failure.code, "USER_BANNED");
-      assert.strictEqual((yield* audit.list({ eventTag: "auth.session.issued" })).length, 0);
-    }).pipe(
-      // A tap requires its point: provide the composition's own to it (per-composition registry, ELC-001).
-      Effect.provide(
-        Hooks.BeforeSignIn.tap((input) =>
-          input.email === "banned@example.com"
-            ? Effect.fail(new HookPoint.HookAbort({ code: "USER_BANNED" }))
-            : Effect.succeed(input),
-        ).pipe(Layer.provideMerge(buildLayer())),
-      ),
-    ),
-  );
-
-  it.effect("a suspended user gets no session", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const users = yield* Users.Users;
-      const user = yield* users.create({
-        identity: { _tag: "Email", email: "susp@example.com" },
-        name: "S",
-      });
-      const { token } = yield* requestAndRead("susp@example.com");
-      yield* users.setStatus(user.id, "suspended");
-      const failure = yield* magicLink.verify({ token }).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "UserSuspended");
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "ADR-EA-038 wiring: hands SignIn strategy magicLink and amr [email], and a new address reaches BeforeSignUp with that strategy",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const probe = yield* SignInProbe.SignInProbe;
+        const { token } = yield* requestAndRead("probe@example.com");
+        yield* magicLink.verify({ token });
+        const recorded = yield* probe.recorded;
+        assert.deepStrictEqual(
+          recorded.beforeSignUp.map((input) => [input.email, input.strategy]),
+          [["probe@example.com", "magicLink"]],
+        );
+        assert.deepStrictEqual(
+          recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
+          [["magicLink", ["email"]]],
+        );
+        assert.deepStrictEqual(
+          recorded.afterSignIn.map((input) => input.strategy),
+          ["magicLink"],
+        );
+      }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(buildLayer())))),
   );
 
   it.effect(

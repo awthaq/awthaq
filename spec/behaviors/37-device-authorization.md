@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-37 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-013](../models/13-device-authorization.md) as `@awthaq/device-authorization`; DAG-004, DAG-005, DAG-007, wayfinder tickets 06 and 10) <br> 1.1 (2026-10-13): Rate-limit rules renamed and tunable with `RateLimits.overrides` (plan 06) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-013](../models/13-device-authorization.md) as `@awthaq/device-authorization`; DAG-004, DAG-005, DAG-007, wayfinder tickets 06 and 10) <br> 1.1 (2026-10-13): Rate-limit rules renamed and tunable with `RateLimits.overrides` (plan 06) <br> 1.2 (2026-10-13): BEH-EA-300: redemption is `SignIn.clear`, the atomic consume, then `SignIn.issue` (ADR-EA-038, architecture plan 01) |
 ---
 
 > `@awthaq/device-authorization` composes as `Auth.make([DeviceAuthorization])` and serves three groups: `device_authorization` (`POST /device/code`, `POST /device/token`, the anonymous back channel a device speaks), `device_authorization.verification` (`POST /device/verify`, under `OptionalAuthentication`) and `device_authorization.decision` (`POST /device/approve`, `POST /device/deny`, behind `Api.Authentication`). It is the OAuth 2.0 Device Authorization Grant ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)): an input-constrained client shows a short code, the person approves it on a second, signed-in device, and the client's poll receives an ordinary bearer session. It is the login backend of `@awthaq/cli` ([BEH-EA-227](26-cli.md), [BEH-EA-307](26-cli.md#beh-ea-307-interactive-login-is-the-device-authorization-grant-polled-with-backoff)). The numbers and the state machine are fixed in [MOD-EA-013](../models/13-device-authorization.md) "Security parameters" and "Design constraints"; this file is where they become requirements.
@@ -72,7 +72,7 @@ REQUIREMENT: The state MUST only advance `pending -> approved | denied`; a
              `device_code` `invalid_request`.
 ```
 
-A poll that arrives too soon is a `slow_down`, never a `429`. The interval check reads `lastPolledAt` and is deliberately not a compare-and-swap: two polls arriving together both pass it and race at the redemption claim ([BEH-EA-304](37-device-authorization.md#beh-ea-304-redemption-issues-an-ordinary-bearer-session-only-after-winning-an-atomic-claim)), where exactly one wins. A client MUST add 5 seconds to its interval on every `slow_down` ([BEH-EA-307](26-cli.md#beh-ea-307-interactive-login-is-the-device-authorization-grant-polled-with-backoff)).
+An approved grant is redeemed in three steps (ADR-EA-038): `SignIn.clear` (the gate, the `BeforeSignIn` veto, the `BeforeSessionIssue` divert, with the grant's `amr`), then the atomic consume that exactly one concurrent poll wins, then `SignIn.issue`. A user erased since approval, or a divert, ends the grant (`invalid_grant`, `access_denied`); a suspension or a veto leaves it for a later poll. A poll that arrives too soon is a `slow_down`, never a `429`. The interval check reads `lastPolledAt` and is deliberately not a compare-and-swap: two polls arriving together both pass it and race at the redemption claim ([BEH-EA-304](37-device-authorization.md#beh-ea-304-redemption-issues-an-ordinary-bearer-session-only-after-winning-an-atomic-claim)), where exactly one wins. A client MUST add 5 seconds to its interval on every `slow_down` ([BEH-EA-307](26-cli.md#beh-ea-307-interactive-login-is-the-device-authorization-grant-polled-with-backoff)).
 
 _Previous: [BEH-EA-299](37-device-authorization.md#beh-ea-299-a-code-request-mints-a-hashed-device-code-and-an-unambiguous-user-code-for-a-registered-client) | Next: [BEH-EA-301](37-device-authorization.md#beh-ea-301-opening-the-verification-page-claims-an-unclaimed-code-for-the-first-user-and-shows-context-only-to-them)_
 

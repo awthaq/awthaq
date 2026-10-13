@@ -34,10 +34,10 @@ import {
   DataExport,
   Erasure,
   HookPoint,
-  Hooks,
   Migrations,
   RateLimits,
   Sessions,
+  SignIn,
   Users,
 } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
@@ -734,16 +734,12 @@ export class DeviceAuthorization extends AuthPlugin.Service<
     make: Effect.gen(function* () {
       const grants = yield* DeviceGrantRecords.DeviceGrantRecords;
       const clients = yield* DeviceClientRecords.DeviceClientRecords;
-      const users = yield* Users.Users;
-      const sessions = yield* Sessions.Sessions;
       const events = yield* AuthEvents.AuthEvents;
       const crypto = yield* Crypto.Crypto;
       const settings = yield* DeviceAuthorizationConfig;
       const beforeApproval = yield* BeforeDeviceApproval;
       const afterApproval = yield* AfterDeviceApproval;
-      const beforeSignIn = yield* Hooks.BeforeSignIn;
-      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-      const afterSignIn = yield* Hooks.AfterSignIn;
+      const signIn = yield* SignIn.make;
 
       // The configured numbers tune the declared defaults, for the registry and on every call.
       const limits = yield* RateLimits.budget(DeviceAuthorization, {
@@ -1086,41 +1082,31 @@ export class DeviceAuthorization extends AuthPlugin.Service<
           return yield* new DeviceAuthorizationApi.AuthorizationPending();
         }
 
-        // Approved. Design constraint 3: every fallible check first...
+        // Approved. Design constraint 3: every fallible check first (core's `SignIn.clear`: the gate, the
+        // sign-in veto and the MFA/policy divert, ADR-EA-038)...
         const userId = grant.userId.value;
-        const user = yield* users
-          .findById(userId)
-          .pipe(
-            Effect.catchTag("UserNotFound", () =>
-              grants
-                .remove(grant.id)
-                .pipe(Effect.andThen(Effect.fail(new DeviceAuthorizationApi.InvalidGrant()))),
-            ),
-          );
-        yield* Users.assertCanSignIn(user);
-        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-          beforeSignIn.run({ userId, ...Users.emailField(user), strategy: STRATEGY }),
+        const cleared = yield* signIn.clear({ userId, strategy: STRATEGY, amr: grant.amr }).pipe(
+          // The approving user was erased since: the grant can never be redeemed.
+          Effect.catchTag("SignIn/UserGone", () =>
+            grants
+              .remove(grant.id)
+              .pipe(Effect.andThen(Effect.fail(new DeviceAuthorizationApi.InvalidGrant()))),
+          ),
+          // A second factor or a policy tap applies as to any sign-in; a device cannot answer a challenge, so a
+          // divert ends the grant (`access_denied`) rather than leaving it to be polled to expiry.
+          Effect.catchTag("TwoFactorRequired", () =>
+            grants
+              .remove(grant.id)
+              .pipe(Effect.andThen(Effect.fail(new DeviceAuthorizationApi.AccessDenied()))),
+          ),
         );
-        // A second factor or a policy tap applies as to any sign-in; a device cannot answer a challenge, so a
-        // divert ends the grant (`access_denied`) rather than leaving it to be polled to expiry.
-        const point = yield* beforeSessionIssue.run({ userId, strategy: STRATEGY, amr: grant.amr });
-        if (point._tag === "Diverted") {
-          yield* grants.remove(grant.id);
-          return yield* new DeviceAuthorizationApi.AccessDenied();
-        }
         // ...then the atomic claim; the session is minted strictly after it was won.
         const claimed = yield* grants.consume(grant.id, userId);
         if (Option.isNone(claimed)) return yield* invalidGrant;
-        const issued = yield* sessions.issue({
-          userId,
-          request: {
-            ...(input.ip === undefined ? {} : { ip: input.ip }),
-            ...(context?.userAgent === undefined ? {} : { userAgent: context.userAgent }),
-          },
-          amr: claimed.value.amr,
+        const issued = yield* signIn.issue(cleared, {
+          ip: input.ip,
+          userAgent: context?.userAgent,
         });
-        yield* events.publish({ _tag: "auth.user.signedIn", userId, strategy: STRATEGY });
-        yield* afterSignIn.run({ userId, strategy: STRATEGY });
         return { session: issued.session, token: issued.token, scope: claimed.value.scopes };
       });
 

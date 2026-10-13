@@ -1,5 +1,5 @@
 // ADR-EA-028: a store outage during sign-in is a typed `StoreUnavailable` (503), never a defect.
-import { Accounts, Errors, Sessions } from "@awthaq/core";
+import { Accounts, Errors } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -7,22 +7,6 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Password from "../src/Password.ts";
 import { email, letForkedFibersRun, makeTestLayer, strongPassword, tokenOf } from "./harness.ts";
-
-/** The real in-memory `Sessions`, except that `issue` reports an outage once `down.value` is set. */
-const sessionsDownWhen = (down: { value: boolean }) =>
-  Layer.effect(
-    Sessions.Sessions,
-    Effect.gen(function* () {
-      const real = yield* Sessions.Sessions;
-      return Sessions.Sessions.of({
-        ...real,
-        issue: (input) =>
-          down.value
-            ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
-            : real.issue(input),
-      });
-    }),
-  );
 
 /** The real in-memory `Accounts`, except that reading the credential hash reports an outage once `down.value` is set. */
 const accountsDownWhen = (down: { value: boolean }) =>
@@ -51,16 +35,6 @@ const registered = Effect.gen(function* () {
 });
 
 describe("ADR-EA-028: password sign-in during a store outage", () => {
-  it.effect("ADR-EA-028: Sessions.issue outage is StoreUnavailable", () => {
-    const down = { value: false };
-    return Effect.gen(function* () {
-      const password = yield* registered;
-      down.value = true;
-      const failure = yield* password.signIn({ email, password: strongPassword }).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(makeTestLayer({ coreOverride: sessionsDownWhen(down) })));
-  });
-
   it.effect("ADR-EA-028: Accounts.findCredentialHash outage is StoreUnavailable", () => {
     const down = { value: false };
     return Effect.gen(function* () {

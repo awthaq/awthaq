@@ -24,7 +24,6 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import {
-  AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
   DataExport,
@@ -34,6 +33,7 @@ import {
   Hooks,
   RateLimits,
   Sessions,
+  SignIn,
   Users,
 } from "@awthaq/core";
 import { ClientAddress, Defects, RateLimiter } from "@awthaq/ports";
@@ -181,14 +181,16 @@ export const sessionGate = Layer.unwrap(
           // BEH-EA-304: an `amr` that already says `mfa` was recorded by this very gate's own completion
           // (`finalizeSignIn`), so a flow that inherits it (a device grant approved from such a session)
           // has nothing left to prove. No first-factor flow ever presents `mfa` here.
-          if ((input.amr ?? []).includes("mfa")) return Option.none();
+          if (input.amr.includes("mfa")) return Option.none();
           const userId = Users.UserId(input.userId);
           if (!(yield* factor.isEnrolled(userId))) return Option.none();
           const challengeId = yield* factor.issueChallenge({
             userId,
             strategy: input.strategy,
-            amr: (input.amr ?? []).filter(Sessions.isAuthMethod),
+            amr: input.amr.filter(Sessions.isAuthMethod),
             attempt: 0,
+            // ADR-EA-038: the first factor's tenant and continuation ride the challenge to `resume`.
+            handoff: input.handoff,
           });
           return Option.some(new Hooks.TwoFactorRequired({ userId: input.userId, challengeId }));
         }).pipe(Effect.orDie),
@@ -481,9 +483,8 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       const factor = yield* SecondFactor;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const events = yield* AuthEvents.AuthEvents;
       const config = yield* TwoFactorConfig;
-      const afterSignIn = yield* Hooks.AfterSignIn;
+      const completion = yield* SignIn.make;
 
       // RBS-006: the table above feeds both the registry and the enforcement calls. EOTS-007: a breach is
       // published, logged and counted, and answers `Api.RateLimited`. The failure budget follows the
@@ -513,37 +514,31 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       /**
        * THS-001 step 5/11: the ONE place this plugin mints a session, and it accepts only a
        * `VerifiedChallenge` — a spent challenge joined to a proof that the same user's second factor
-       * passed — so a session without a verified second factor does not type-check. Records
-       * `[...first-factor amr, "otp", "mfa"]` (AOMS-003), and re-runs the sign-in gate: the user may
-       * have been suspended in the minutes since the first factor passed.
+       * passed — so a session without a verified second factor does not type-check (ADR-EA-020).
+       * The mint itself is core's `SignIn` (ADR-EA-038): `resume` re-runs the sign-in gate (the
+       * user may have been suspended in the minutes since the first factor passed) and restores the
+       * first factor's tenant and continuation from the challenge's handoff; `issue` records
+       * `[...first-factor amr, "otp", "mfa"]` (AOMS-003), runs the continuation (a SAML session's
+       * Single Logout record) and announces the sign-in.
        */
       const finalizeSignIn = Effect.fnUntraced(function* (
         challenge: VerifiedChallenge,
         request: { readonly ip?: string | undefined; readonly userAgent?: string | undefined },
       ) {
-        const user = yield* users
-          .findById(challenge.userId)
+        const cleared = yield* completion
+          .resume({
+            userId: challenge.userId,
+            strategy: challenge.strategy,
+            amr: Sessions.unionAmr(challenge.amr, ["otp", "mfa"]),
+            handoff: challenge.handoff,
+          })
           .pipe(
-            Effect.catchTag("UserNotFound", () =>
+            // An erasure can run between the first factor and here: the one opaque answer.
+            Effect.catchTag("SignIn/UserGone", () =>
               Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({})),
             ),
           );
-        yield* Users.assertCanSignIn(user);
-        const issued = yield* sessions.issue({
-          userId: challenge.userId,
-          request: {
-            ...(request.ip === undefined ? {} : { ip: request.ip }),
-            ...(request.userAgent === undefined ? {} : { userAgent: request.userAgent }),
-          },
-          amr: Sessions.unionAmr(challenge.amr, ["otp", "mfa"]),
-        });
-        yield* events.publish({
-          _tag: "auth.user.signedIn",
-          userId: challenge.userId,
-          strategy: challenge.strategy,
-        });
-        yield* afterSignIn.run({ userId: challenge.userId, strategy: challenge.strategy });
-        return issued;
+        return yield* completion.issue(cleared, request);
       });
 
       /**
@@ -573,6 +568,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
                     strategy: consumed.strategy,
                     amr: consumed.amr,
                     attempt: consumed.attempt + 1,
+                    handoff: consumed.handoff,
                   })
                   .pipe(
                     Effect.flatMap((next) =>

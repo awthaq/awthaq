@@ -176,10 +176,15 @@ export const makeSteps = Effect.gen(function* () {
           `awthaq: no sign-in continuation is registered for "${kind}"`,
         );
       }
-      yield* handler.run(cleared.continuation.value.payload, {
+      const run = handler.run(cleared.continuation.value.payload, {
         userId: cleared.user.id,
         sessionId: issued.session.id,
         strategy: cleared.strategy,
+      });
+      // The first factor's tenant, as for the mint: its records are stamped by the ambient tenant.
+      yield* Option.match(cleared.tenantId, {
+        onNone: () => run,
+        onSome: (tenantId) => run.pipe(withTenant(tenantId)),
       });
     }
     yield* events.publish({

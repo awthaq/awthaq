@@ -33,6 +33,7 @@ import {
   RateLimits,
   SessionCookie,
   Sessions,
+  SignIn,
   Tenant,
   Users,
   Verification,
@@ -751,7 +752,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
-      const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
       // EP-007 (ADR-EA-018 Decision 8): the per-request policy — trusted origins, auto-link list,
@@ -823,15 +823,10 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const jwksCaches = yield* IdToken.makeJwksCaches;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const encryption = yield* Encryption.Encryption;
-      // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
-      // future `TwoFactor` plugin taps, consulted at the sign-in-completing
-      // path of `callback` only (never `flow.link`, which issues no new
-      // session).
-      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-      const afterSignIn = yield* Hooks.AfterSignIn;
-      // NAM-002: the sign-in veto every sign-in-completing flow consults, and
-      // the sign-up veto/observer for the first-login user creation below.
-      const beforeSignIn = yield* Hooks.BeforeSignIn;
+      // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement, consulted at
+      // the sign-in-completing path of `callback` only (never `flow.link`, which issues no new session).
+      const completion = yield* SignIn.make;
+      // NAM-002: the sign-up veto/observer for the first-login user creation below.
       const beforeSignUp = yield* Hooks.BeforeSignUp;
       const afterSignUp = yield* Hooks.AfterSignUp;
 
@@ -1106,9 +1101,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           // silently leaving a stale (possibly already-expired) access
           // token as this account's only stored credential.
           onSome: (account) =>
-            accounts
-              .updateProviderTokens(account.id, toProviderTokenSet(tokens, exchangedAt))
-              .pipe(Effect.as(account.userId), Effect.orDie),
+            accounts.updateProviderTokens(account.id, toProviderTokenSet(tokens, exchangedAt)).pipe(
+              Effect.as(account.userId),
+              // The row was read a moment ago: a vanished account is an invariant, an outage flows (ADR-EA-028).
+              Effect.catchTag("AccountNotFound", Effect.die),
+            ),
           onNone: () =>
             Effect.gen(function* () {
               if (flow.link !== undefined) {
@@ -1125,7 +1122,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     Effect.catchTag("AccountAlreadyLinked", () =>
                       CallbackFailure.callbackFailed("account-already-linked"),
                     ),
-                    Effect.orDie,
                   );
                 return userId;
               }
@@ -1164,7 +1160,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     tokens: toProviderTokenSet(tokens, exchangedAt),
                     ...issuerField(provider.issuer),
                   })
-                  .pipe(Effect.orDie);
+                  .pipe(
+                    // A concurrent callback linked this identity between the lookup and here.
+                    Effect.catchTag("AccountAlreadyLinked", () =>
+                      CallbackFailure.callbackFailed("account-already-linked"),
+                    ),
+                  );
                 return existing.value.id;
               }
 
@@ -1284,48 +1285,20 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           return { callbackURL: flow.callbackURL, session: undefined };
         }
 
-        // SCP-001/BAM-005: THE shared sign-in gate — the provider proved the
-        // identity; a suspended user still gets no session.
-        const signedInUser = yield* users
-          .findById(targetUserId)
-          .pipe(Effect.catchTag("UserNotFound", Effect.die), Effect.tap(Users.assertCanSignIn));
-        // NAM-002: the sign-in veto, before the MFA divert point below.
-        const signedInEmail = Users.emailOf(signedInUser);
-        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-          beforeSignIn.run({
-            userId: targetUserId,
-            ...(Option.isSome(signedInEmail) ? { email: signedInEmail.value } : {}),
-            strategy: providerId,
-          }),
-        );
-
-        // BCR-004/THS-002: same canonical MFA attachment point
-        // `@awthaq/password`'s own `signIn` consults, right before this
-        // flow's own `sessions.issue`.
-        const point = yield* beforeSessionIssue.run({
-          userId: targetUserId,
-          strategy: providerId,
-          amr: ["fed"],
-        });
-        if (point._tag === "Diverted") {
-          return yield* Effect.fail(point.value);
-        }
-        // CSD-003: the callback request is the browser's own, so its
-        // address and user agent are what the device list should show.
-        const issued = yield* sessions.issue({
-          userId: targetUserId,
-          request: {
-            ...(input.ip !== undefined ? { ip: input.ip } : {}),
-            ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
-          },
-          amr: ["fed"],
-        });
-        yield* events.publish({
-          _tag: "auth.user.signedIn",
-          userId: targetUserId,
-          strategy: providerId,
-        });
-        yield* afterSignIn.run({ userId: targetUserId, strategy: providerId });
+        // ADR-EA-038: the provider proved the identity, so core's sign-in takes over (gate, veto,
+        // MFA divert, session, announcement). CSD-003: the callback request is the browser's own,
+        // so its address and user agent are what the device list should show. An erasure can run
+        // between the proof and here: the one opaque callback failure, not a server error.
+        const issued = yield* completion
+          .complete(
+            { userId: targetUserId, strategy: providerId, amr: ["fed"] },
+            { ip: input.ip, userAgent: input.userAgent },
+          )
+          .pipe(
+            Effect.catchTag("SignIn/UserGone", () =>
+              CallbackFailure.callbackFailed("account-missing"),
+            ),
+          );
         if (flow.native !== true) return { callbackURL: flow.callbackURL, session: issued };
 
         // MNA-003 (ticket 17): a native app can only receive the deep-link URL, so

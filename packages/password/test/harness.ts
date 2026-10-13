@@ -79,7 +79,9 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-export const makeTestLayer = <Wrapped extends Sessions.Sessions | Accounts.Accounts = never>(
+export const makeTestLayer = <
+  Wrapped extends Sessions.Sessions | Accounts.Accounts | Users.Users = never,
+>(
   options: {
     readonly httpClient?: Layer.Layer<HttpClient.HttpClient>;
     readonly config?: Partial<Password.PasswordConfigShape>;

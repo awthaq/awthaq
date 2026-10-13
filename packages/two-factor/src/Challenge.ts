@@ -13,8 +13,8 @@
 // the claimed user, a challenge minted for user A cannot be consumed as user B's.
 //
 // The payload carries what the finished sign-in needs: the first factor's `strategy` (for the
-// audit trail), its `amr` (so the session records `[...amr, "otp", "mfa"]`) and how many wrong codes
-// this sign-in has spent (`attempt`).
+// audit trail), its `amr` (so the session records `[...amr, "otp", "mfa"]`), how many wrong codes
+// this sign-in has spent (`attempt`) and the divert's `handoff` (tenant and continuation, ADR-EA-038).
 //
 // Three types, in order — each producible only by the step before it:
 //
@@ -24,7 +24,7 @@
 //   private to this module, and `finalizeSignIn` — the one place this plugin calls `Sessions.issue`
 //   — accepts nothing else, so "a session minted without a verified second factor" does not type-check.
 
-import { Sessions, Users } from "@awthaq/core";
+import { Hooks, Sessions, Users } from "@awthaq/core";
 import { Defects } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Effect from "effect/Effect";
@@ -42,6 +42,9 @@ export const ChallengePayload = Schema.Struct({
   strategy: Schema.String,
   amr: Schema.Array(Schema.String),
   attempt: Schema.Number,
+  // ADR-EA-038: what the divert carried (the first factor's tenant and continuation), returned to
+  // `SignIn.resume`. Optional: a challenge written before the field existed decodes without it.
+  handoff: Schema.optionalKey(Hooks.Handoff),
 });
 export type ChallengePayload = typeof ChallengePayload.Type;
 
@@ -54,6 +57,8 @@ export interface ConsumedChallenge {
   readonly amr: ReadonlyArray<Sessions.AuthMethod>;
   /** Wrong codes already spent on this sign-in (0 for the first challenge). */
   readonly attempt: number;
+  /** The divert's handoff, to hand back to `SignIn.resume` (ADR-EA-038). */
+  readonly handoff?: Hooks.Handoff | undefined;
 }
 
 export type TwoFactorMethodUsed = "totp" | "recovery";

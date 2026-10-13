@@ -8,7 +8,7 @@
 // RSA keypair signing a real RS256 `id_token` that `Jwt.ts`'s own verifier
 // checks — not a stub that always returns `true`.
 import { createHmac, generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
-import { Accounts, Errors, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, AuditLog, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Authentication } from "@awthaq/server";
@@ -31,7 +31,7 @@ import * as OAuthProvider from "../src/OAuthProvider.ts";
 import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { FakeReply, fakeHttpClient, hangingRoute, type FakeRoutes } from "./FakeProvider.ts";
-import { TestAuth } from "@awthaq/test";
+import { SignInProbe, TestAuth } from "@awthaq/test";
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
 // requires `Encryption` — a fixed test key, isolated from the real
@@ -3727,62 +3727,105 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
     },
   );
 
-  describe("ADR-EA-028: a store outage during the callback is StoreUnavailable, not a defect", () => {
-    const sessionsDown = Layer.effect(
-      Sessions.Sessions,
-      Effect.gen(function* () {
-        const real = yield* Sessions.Sessions;
-        return Sessions.Sessions.of({
-          ...real,
-          issue: () => Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" })),
-        });
-      }),
-    );
-    const usersDown = Layer.effect(
-      Users.Users,
-      Effect.gen(function* () {
-        const real = yield* Users.Users;
-        return Users.Users.of({
-          ...real,
-          findById: () => Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findById" })),
-        });
-      }),
-    );
-    const callbackUnder = <Wrapped extends Sessions.Sessions | Users.Users>(
-      coreOverride: Layer.Layer<Wrapped, never, Wrapped>,
-    ) =>
-      Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state } = yield* oauth.authorize("acme", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        return yield* oauth
-          .callback("acme", { code: "auth-code", state, iss: undefined, cookieState: state })
-          .pipe(Effect.flip);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: {
-              "/token": { access_token: "at-1" },
-              "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
-            },
-            coreOverride,
-          }),
+  // ADR-EA-038: sign-in/sign-up policy (gate, veto, divert, announcement) is tested once at `SignIn`
+  // and `SignUp`; these prove only what OAuth hands them and how it answers a refusal.
+  describe("sign-in wiring (ADR-EA-038)", () => {
+    const acmeRoutes = {
+      "/token": { access_token: "at-1" },
+      "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
+    } as const;
+
+    const callbackOnce = Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+      return yield* oauth.callback("acme", {
+        code: "auth-code",
+        state,
+        iss: undefined,
+        cookieState: state,
+      });
+    });
+
+    it.effect(
+      "hands SignIn strategy = provider id and amr [fed]; the silent sign-up reaches BeforeSignUp with the provider id",
+      () =>
+        Effect.gen(function* () {
+          const probe = yield* SignInProbe.SignInProbe;
+          const result = yield* callbackOnce;
+          assert.deepStrictEqual(result.session?.session.amr, ["fed"]);
+          const recorded = yield* probe.recorded;
+          assert.deepStrictEqual(
+            recorded.beforeSignUp.map((input) => [input.email, input.strategy]),
+            [["ada@example.com", "acme"]],
+          );
+          assert.deepStrictEqual(
+            recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
+            [["acme", ["fed"]]],
+          );
+        }).pipe(
+          Effect.provide(
+            SignInProbe.layer.pipe(
+              Layer.provideMerge(buildLayer({ providers: [acme()], httpRoutes: acmeRoutes })),
+            ),
+          ),
         ),
-      );
-
-    it.effect("ADR-EA-028: Sessions.issue outage is StoreUnavailable", () =>
-      Effect.gen(function* () {
-        assert.strictEqual((yield* callbackUnder(sessionsDown))._tag, "StoreUnavailable");
-      }),
     );
 
-    it.effect("ADR-EA-028: Users.findById outage is StoreUnavailable", () =>
-      Effect.gen(function* () {
-        assert.strictEqual((yield* callbackUnder(usersDown))._tag, "StoreUnavailable");
-      }),
+    it.effect(
+      "a user erased between the provider's proof and the session is OAuthCallbackFailed, not a server error",
+      () =>
+        Effect.gen(function* () {
+          const failure = yield* callbackOnce.pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: acmeRoutes,
+              coreOverride: Layer.effect(
+                Users.Users,
+                Effect.map(Users.Users, (real) =>
+                  Users.Users.of({
+                    ...real,
+                    findById: (id) =>
+                      Effect.fail(new Users.UserNotFound({ id, message: "erased" })),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+    );
+
+    // CSD-004: a rejected callback is the OAuth strategy's failure signal.
+    it.effect(
+      "a callback whose state does not match publishes auth.user.signInFailed (callbackRejected)",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const auditLog = yield* AuditLog.AuditLog;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          const failure = yield* oauth
+            .callback("acme", {
+              code: "auth-code",
+              state,
+              iss: undefined,
+              cookieState: "not-the-state",
+              ip: "203.0.113.4",
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+          const [event] = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+          assert.deepStrictEqual(event?.payload, {
+            _tag: "auth.user.signInFailed",
+            strategy: "acme",
+            reason: "callbackRejected",
+            clientIp: "203.0.113.4",
+          });
+        }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
     );
   });
 });

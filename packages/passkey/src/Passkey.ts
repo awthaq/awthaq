@@ -37,6 +37,7 @@ import {
   Observability,
   RateLimits,
   Sessions,
+  SignIn,
   Tenant,
   Users,
 } from "@awthaq/core";
@@ -1053,11 +1054,8 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const builtConfig = yield* PasskeyConfig;
       const configNow = Tenant.configInForce(PasskeyConfig, builtConfig);
       const crypto = yield* Crypto.Crypto;
-      // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
-      // future `TwoFactor` plugin taps.
-      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-      const afterSignIn = yield* Hooks.AfterSignIn;
-      const beforeSignIn = yield* Hooks.BeforeSignIn;
+      // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement.
+      const signIn = yield* SignIn.make;
 
       // ---- layer-build validation and operator warnings --------------------
 
@@ -1508,61 +1506,21 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
             .pipe(Effect.orDie);
 
-          // WPS-001: a deleted user's passkey credential row can outlive
-          // the account (no FK, no cascade) — cryptographic verification
-          // above only proves possession of *a* registered authenticator,
-          // never that the account it names still exists. Defense in
-          // depth, right where `Sessions.issue` would otherwise mint a
-          // session for a dead `userId` with no existence check of its
-          // own: same uniform `InvalidCredentials` collapse BEH-EA-136
-          // already applies to every other failure in this ceremony.
-          const user = yield* users
-            .findById(stored.userId)
-            .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
-
-          // SCP-001/BAM-005: THE shared sign-in gate, after the credential is
-          // proven and before any session exists.
-          yield* Users.assertCanSignIn(user);
-
-          // NAM-002: the sign-in veto, before the MFA divert point below.
-          const signedInEmail = Users.emailOf(user);
-          yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-            beforeSignIn.run({
-              userId: stored.userId,
-              ...(Option.isSome(signedInEmail) ? { email: signedInEmail.value } : {}),
-              strategy: "passkey",
-            }),
-          );
-
-          // BCR-004/THS-002: same canonical MFA attachment point
-          // `@awthaq/password`'s own `signIn` consults, right before this
-          // flow's own `sessions.issue`.
-          const amr = passkeyAmr(verified);
-          const point = yield* beforeSessionIssue.run({
-            userId: stored.userId,
-            strategy: "passkey",
-            amr,
-          });
-          if (point._tag === "Diverted") {
-            return yield* Effect.fail(point.value);
-          }
-          const issued = yield* sessions.issue({
-            userId: stored.userId,
-            request: {
-              ...(input.ip !== undefined ? { ip: input.ip } : {}),
-              ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
-            },
-            // THS-003/HSK-005: the kind of key (hardware-bound or synced), plus user
-            // verification when the authenticator performed it.
-            amr,
-          });
-          yield* events.publish({
-            _tag: "auth.user.signedIn",
-            userId: stored.userId,
-            strategy: "passkey",
-          });
-          yield* afterSignIn.run({ userId: stored.userId, strategy: "passkey" });
-          return issued;
+          // ADR-EA-038: core's sign-in completes it (lookup, gate, veto, MFA divert, session,
+          // announcement). WPS-001: a deleted user's passkey credential row can outlive the
+          // account (no FK, no cascade), and cryptographic verification above only proves possession
+          // of *a* registered authenticator, never that the account it names still exists; a missing
+          // user collapses to the same uniform `InvalidCredentials` as every other failure in this
+          // ceremony (BEH-EA-136). THS-003/HSK-005: `amr` is the kind of key (hardware-bound or
+          // synced), plus user verification when the authenticator performed it.
+          return yield* signIn
+            .complete(
+              { userId: stored.userId, strategy: "passkey", amr: passkeyAmr(verified) },
+              { ip: input.ip, userAgent: context?.userAgent },
+            )
+            .pipe(
+              Effect.catchTag("SignIn/UserGone", () => Effect.fail(new Api.InvalidCredentials())),
+            );
         },
       );
 

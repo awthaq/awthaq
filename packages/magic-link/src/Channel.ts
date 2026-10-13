@@ -13,22 +13,22 @@
 //    `AfterSignUp`. The user is created here, after the proof, never at request time: an unanswered
 //    request creates nothing.
 // 2. **The mailbox is now proven**, so `emailVerified` flips (idempotent).
-// 3. **The shared sign-in gate**: `Users.assertCanSignIn` (a suspended user gets no session), then the
-//    `BeforeSignIn` veto, then `BeforeSessionIssue` — the MFA divert (ARF-005 Fix A). A user with a
+// 3. **The shared sign-in** is core's `SignIn.complete` (ADR-EA-038): the suspension gate, the
+//    `BeforeSignIn` veto, then `BeforeSessionIssue`, the MFA divert (ARF-005 Fix A). A user with a
 //    confirmed second factor is diverted to `TwoFactorRequired` exactly as a password or passkey
 //    sign-in is: mailbox possession alone never mints a session for a 2FA-protected account.
 // 4. **The session** records how it was proven (`amr`), the sign-in is announced (`auth.user.signedIn`)
-//    and `AfterSignIn` observes.
+//    and `AfterSignIn` observes. A user erased between the proof and the session is refused with
+//    the same opaque `ChannelInvalid`.
 //
 // Nothing here touches an existing password credential: a magic link or code signs the person in; it
 // does not link, unlink or replace any credential.
 
-import { AuthEvents, Hooks, HookPoint, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, Hooks, HookPoint, Sessions, SignIn, Users } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import type * as Redacted from "effect/Redacted";
 
 /** The address exactly as compared and stored: trimmed and lower-cased (`Users` lower-cases too, BEH-EA-041). */
 export const normalizeEmail = (email: string): string => email.trim().toLowerCase();
@@ -38,10 +38,7 @@ export class ChannelInvalid extends Data.TaggedError("MagicLink/ChannelInvalid")
   readonly reason: "noAddress" | "userMissing" | "signUpDisabled";
 }> {}
 
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
+export type IssuedSession = SignIn.IssuedSession;
 
 export interface Completion {
   /** The plugin's own strategy label — `magicLink` or `emailOtp` (also the `BeforeSessionIssue` strategy). */
@@ -74,13 +71,10 @@ export interface Channel {
 /** Resolves the core services once, at plugin build; the returned closure carries no further requirements. */
 export const make = Effect.gen(function* () {
   const users = yield* Users.Users;
-  const sessions = yield* Sessions.Sessions;
   const events = yield* AuthEvents.AuthEvents;
   const beforeSignUp = yield* Hooks.BeforeSignUp;
   const afterSignUp = yield* Hooks.AfterSignUp;
-  const beforeSignIn = yield* Hooks.BeforeSignIn;
-  const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-  const afterSignIn = yield* Hooks.AfterSignIn;
+  const signIn = yield* SignIn.make;
 
   /** A user for `email`: the existing one, or — when allowed and the veto passes — a new one. */
   const resolveUser = Effect.fnUntraced(function* (completion: Completion) {
@@ -145,39 +139,18 @@ export const make = Effect.gen(function* () {
         IdentityMismatch: Effect.die,
       }),
     );
-    // SCP-001/BAM-005: THE shared sign-in gate, after the proof and before any session exists.
-    yield* Users.assertCanSignIn(user);
-    // NAM-002: the sign-in veto, before the MFA divert point below.
-    yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-      beforeSignIn.run({
-        userId: user.id,
-        ...Users.emailField(user),
-        strategy: completion.strategy,
-      }),
-    );
-    // ARF-005 Fix A / BCR-004: THE canonical MFA attachment point, consulted right before this
-    // flow's own `sessions.issue` — a user with a confirmed second factor is diverted here.
-    const point = yield* beforeSessionIssue.run({
-      userId: user.id,
-      strategy: completion.strategy,
-      amr: completion.amr,
-    });
-    if (point._tag === "Diverted") return yield* Effect.fail(point.value);
-    const issued = yield* sessions.issue({
-      userId: user.id,
-      request: {
-        ...(completion.ip === undefined ? {} : { ip: completion.ip }),
-        ...(completion.userAgent === undefined ? {} : { userAgent: completion.userAgent }),
-      },
-      amr: completion.amr,
-    });
-    yield* events.publish({
-      _tag: "auth.user.signedIn",
-      userId: user.id,
-      strategy: completion.strategy,
-    });
-    yield* afterSignIn.run({ userId: user.id, strategy: completion.strategy });
-    return issued;
+    // ADR-EA-038: the shared sign-in (gate, veto, MFA divert, session, announcement) is core's.
+    return yield* signIn
+      .complete(
+        { userId: user.id, strategy: completion.strategy, amr: completion.amr },
+        { ip: completion.ip, userAgent: completion.userAgent },
+      )
+      .pipe(
+        // An erasure can run between the proof and the session: the one opaque refusal.
+        Effect.catchTag("SignIn/UserGone", () =>
+          Effect.fail(new ChannelInvalid({ reason: "userMissing" })),
+        ),
+      );
   });
 
   return { complete } satisfies Channel;
