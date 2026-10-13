@@ -94,7 +94,7 @@ export interface NoteRecordsShape {
 }
 
 export class NoteRecords extends Context.Service<NoteRecords, NoteRecordsShape>()(
-  "example/notes/NoteRecords",
+  "example/notes/records/NoteRecords",
 ) {}
 
 /** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
@@ -315,6 +315,9 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
     notes_note: AuthPlugin.Table.partitioned(),
   },
   migrations: notesMigrations,
+  // The record store, memory and SQL, matched: both adapters behind one shape (the compiler checks the pair provides
+  // every `/records/` store the layer requires, the same stores in both, and nothing else).
+  records: { memory: layerMemory, sql: layerSql },
   // The hook points this plugin owns (`BeforeCreateNote`/`AfterCreateNote`): a plugin layer that requires a
   // point it does not declare here does not compile, and `TestAuth.layer` provides the declared ones.
   hookPoints: NotesHooksLive,
