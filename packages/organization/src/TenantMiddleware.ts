@@ -18,7 +18,12 @@
 //
 // - `…WithRls` also runs each tenanted request inside `TenantScope.withTenant`, so
 //   on Postgres with `TenantScope.enableRls()` the whole request is confined to its
-//   tenant at the database — one transaction per tenanted request, hence separate.
+//   tenant at the database — one transaction per tenanted request, hence separate. What that
+//   confines is whatever `enableRls` covered: the core tables, and with
+//   `enableRls({ plugins: auth.tenancy })` every plugin's Partitioned table (webhooks, admin)
+//   and Derived table beneath it, plus the organization-keyed tables under `includeKeyed`. A
+//   records method that must cross tenants presents a `CrossTenant` witness and is lifted
+//   (`TenantScoped.lift`), so a platform listing or an erasure sweep still sees every tenant.
 // - `…WithConfig(TenantConfig)` also provides that tenant's configuration layers
 //   for the request (BEH-EA-236, ADR-EA-005's `LayerMap.Service` seam). `TenantConfig`
 //   is the application's own `LayerMap.Service` keyed by tenant id, whose `lookup`

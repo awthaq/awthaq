@@ -192,6 +192,41 @@ Feature: Multi-Tenancy
       When the sessions are read with no tenant set
       Then every row is visible
 
+    # @skip: needs a real Postgres session; covered by the pg suites `pnpm run test:pg` — packages/webhooks/test/WebhookRecords.test.ts, packages/organization/test/TenantMiddleware.test.ts ("the database is the backstop")
+    @skip
+    @REQ-EA-1287
+    Scenario: A plugin's partitioned table is confined inside a tenant scope once its declarations are handed to row-level security
+      Given row-level security is enabled on Postgres for the declared tables of the composition
+      And a webhook endpoint stamped "tenant-a" and a webhook endpoint stamped "tenant-b"
+      When the endpoints are read by an unfiltered statement inside a tenant scope for "tenant-a"
+      Then only the "tenant-a" endpoint is visible
+
+    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/webhooks/test/WebhookRecords.test.ts, `runTenantIsolationTests` (rls)
+    @skip
+    @REQ-EA-1288
+    Scenario: A derived table is confined through its parent
+      Given row-level security is enabled on Postgres for the declared tables of the composition
+      And a webhook delivery of an endpoint stamped "tenant-a" and a webhook delivery of an endpoint stamped "tenant-b"
+      When the deliveries are read by an unfiltered statement inside a tenant scope for "tenant-a"
+      Then only the delivery of the "tenant-a" endpoint is visible
+
+    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/admin/test/ImpersonationRecords.test.ts, "verifyChain under RLS (real Postgres)"
+    @skip
+    @REQ-EA-1289
+    Scenario: A witnessed cross-tenant read still sees every tenant under row-level security
+      Given row-level security is enabled on Postgres for the declared tables of the composition
+      And an impersonation episode stamped "tenant-a" and one stamped "tenant-b"
+      When the hash chain is verified with a cross-tenant witness inside a tenant scope for "tenant-a"
+      Then the chain is intact and both episodes were read
+
+    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/TenantScope.postgres.test.ts, "disableRls removes every policy"
+    @skip
+    @REQ-EA-1290
+    Scenario: Disabling row-level security removes every policy, whatever enabled it
+      Given row-level security is enabled on Postgres for the declared tables of the composition
+      When row-level security is disabled
+      Then no table has an "awthaq_tenant" policy
+
   # BEH-EA-234 — spec/behaviors/28-tenancy.md; see also ADR-EA-010
   @BEH-EA-234
   Rule: The tenant middleware resolves the organization once per request

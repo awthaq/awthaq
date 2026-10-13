@@ -704,4 +704,5 @@ TestAuth.runTenantIsolationTests(vitestFramework, {
     { table: "organization_team_membership", insert: insertRow, methods: membershipMethods },
     { table: "organization_team_closure", insert: insertRow, methods: closureMethods },
   ],
+  rls: { layer: SqlLayer },
 });

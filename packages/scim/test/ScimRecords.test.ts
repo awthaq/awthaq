@@ -381,4 +381,5 @@ TestAuth.runTenantIsolationTests(vitestFramework, {
     { table: "scim_connection", insert: insertRow, methods: connectionMethods },
     { table: "scim_resource", insert: insertRow, methods: resourceMethods },
   ],
+  rls: { layer: SqlLayer },
 });

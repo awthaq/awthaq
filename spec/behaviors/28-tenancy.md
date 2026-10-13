@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-28 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) <br> 1.3 (2026-10-13): BEH-EA-328: Keyed tables take their organization id explicitly, and BEH-EA-235: a connection's client secret is a sealed column (plan 05 phase 6) |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) <br> 1.3 (2026-10-13): BEH-EA-328: Keyed tables take their organization id explicitly, and BEH-EA-235: a connection's client secret is a sealed column (plan 05 phase 6) <br> 1.4 (2026-10-13): BEH-EA-233: the plugin-table RLS rollout is documented (`packages/sql/README.md`) and exercised by every plugin conformance call with `rls` (plan 05 phase 12) |
 ---
 
 > A tenant is an `Organization` row ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)); everything below is opt-in and zero-cost for a single-tenant deployment.
@@ -70,7 +70,7 @@ REQUIREMENT: `TenantScope.enableRls()` MUST enable and force a row-level-securit
              row (single-tenant deployments and maintenance keep working).
 ```
 
-`withTenant` opens (or nests into) one transaction and sets the transaction-local `awthaq.tenant_id`, so a pooled connection never leaks a tenant to the next request. RLS covers `users`/`accounts` only through `enableRls({ includeDirectory: true })`, and a composition's plugin tables only through `enableRls({ plugins: auth.tenancy })` (Partitioned tables by their column, Derived tables through their parent's policy, Keyed organization-id tables also with `includeKeyed: true`); `disableRls` drops the `awthaq_tenant` policy from every table that has one ([BEH-EA-326](28-tenancy.md#beh-ea-326-a-partitioned-plugin-table-is-filtered-by-the-store-identically-in-memory-and-sql), [BEH-EA-327](28-tenancy.md#beh-ea-327-a-cross-tenant-statement-presents-a-witness-and-the-witness-lifts-rls)). It is defence in depth ([ADR-EA-009](../decisions/009-authorization-delegated-to-qadi.md)), bypassed by superusers, `BYPASSRLS` roles and, absent `FORCE`, the table owner.
+`withTenant` opens (or nests into) one transaction and sets the transaction-local `awthaq.tenant_id`, so a pooled connection never leaks a tenant to the next request. RLS covers `users`/`accounts` only through `enableRls({ includeDirectory: true })`, and a composition's plugin tables only through `enableRls({ plugins: auth.tenancy })` (Partitioned tables by their column, Derived tables through their parent's policy, Keyed organization-id tables also with `includeKeyed: true`); `disableRls` drops the `awthaq_tenant` policy from every table that has one ([BEH-EA-326](28-tenancy.md#beh-ea-326-a-partitioned-plugin-table-is-filtered-by-the-store-identically-in-memory-and-sql), [BEH-EA-327](28-tenancy.md#beh-ea-327-a-cross-tenant-statement-presents-a-witness-and-the-witness-lifts-rls)). Every plugin records suite that calls `TestAuth.runTenantIsolationTests` passes `rls`, so under `pnpm run test:pg` an unfiltered statement on each declared Partitioned, Keyed and Derived table is confined to the scope's tenant by the database, from a non-owner role, and a witnessed one is not; `organization_org` (its ids are minted by the records) and `organization_active_context` (its parent is a core table the organization suite does not migrate) are exercised through the middleware test instead. It is defence in depth ([ADR-EA-009](../decisions/009-authorization-delegated-to-qadi.md)), bypassed by superusers, `BYPASSRLS` roles and, absent `FORCE`, the table owner.
 
 _Previous: [BEH-EA-232](28-tenancy.md#beh-ea-232-the-identity-directory-is-global-across-tenants) | Next: [BEH-EA-234](28-tenancy.md#beh-ea-234-the-tenant-middleware-resolves-the-organization-once-per-request)_
 

@@ -26,6 +26,7 @@ suites=(
   packages/sql/test/UnitOfWork.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
+  packages/api-key/test/StoreOutage.test.ts
   packages/core/test/AuthEventsUnitOfWork.test.ts
   packages/core/test/SignUpSql.test.ts
   packages/core/test/Users.test.ts
@@ -34,6 +35,7 @@ suites=(
   packages/core/test/Verification.test.ts
   packages/device-authorization/test/DeviceAuthorization.test.ts
   packages/device-authorization/test/AuthHttp.test.ts
+  packages/device-authorization/test/StoreOutage.test.ts
   packages/jwt/test/KeyRing.test.ts
   packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
@@ -45,6 +47,7 @@ suites=(
   packages/organization/test/OrganizationRecords.test.ts
   packages/organization/test/OrganizationSql.test.ts
   packages/organization/test/TeamRecords.test.ts
+  packages/organization/test/TenantMiddleware.test.ts
   packages/passkey/test/ChallengeStore.test.ts
   packages/passkey/test/PasskeyCredentials.test.ts
   packages/passkey/test/PasskeyUserHandle.test.ts

@@ -539,6 +539,7 @@ TestAuth.runTenantIsolationTests(vitestFramework, {
     { table: "saml_sp_key", insert: insertRow, methods: keyMethods },
     { table: "saml_session", insert: insertRow, methods: sessionMethods },
   ],
+  rls: { layer: SqlLayer },
 });
 
 // ---- the sealed `privateKey` column: the substrate's wiring suite over both adapters -----------------------

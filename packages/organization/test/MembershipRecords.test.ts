@@ -285,4 +285,5 @@ TestAuth.runTenantIsolationTests(vitestFramework, {
     { name: "layerSql", layer: SqlLayer },
   ],
   cases: [isolationCase],
+  rls: { layer: SqlLayer },
 });

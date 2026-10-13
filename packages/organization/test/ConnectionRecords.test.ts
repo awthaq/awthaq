@@ -293,6 +293,7 @@ TestAuth.runTenantIsolationTests(vitestFramework, {
     { table: "organization_oauth_connection", insert: insertRow, methods: isolationMethods },
     { table: "organization_oauth_connection_domain", insert: insertRow, methods: isolationMethods },
   ],
+  rls: { layer: SqlLayer },
 });
 
 // ---- the sealed `clientSecret` column: the substrate's wiring suite over both adapters ----------------------
