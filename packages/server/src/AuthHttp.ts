@@ -108,9 +108,9 @@ export type DeclaredMiddleware<Groups extends HttpApiGroup.Constraint> = Extract
   HostMiddleware
 >;
 
-export interface MiddlewareOptions<CR, PR> {
+export interface MiddlewareOptions<CE, CR, PR> {
   /** The CSRF secret and allowed origins (`Csrf.layerConfig` in production, a fixed test config in `TestAuth`). */
-  readonly csrf: Layer.Layer<Csrf.CsrfConfig, never, CR>;
+  readonly csrf: Layer.Layer<Csrf.CsrfConfig, CE, CR>;
   /** Defaults to `Authentication.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
   readonly principalResolver?: Layer.Layer<Authentication.PrincipalResolver, never, PR>;
 }
@@ -125,14 +125,19 @@ export interface MiddlewareOptions<CR, PR> {
  * `Effect.serviceOption`, so the host provides one registry beneath both the plugins that contribute and the
  * middleware that reads.
  */
-export function middlewareFor<Groups extends HttpApiGroup.Constraint, CR = never, PR = never>(
+export function middlewareFor<
+  Groups extends HttpApiGroup.Constraint,
+  CE = never,
+  CR = never,
+  PR = never,
+>(
   api: HttpApi.HttpApi<"auth", Groups>,
-  options: MiddlewareOptions<CR, PR>,
-): Layer.Layer<DeclaredMiddleware<Groups>, never, Sessions.Sessions | Crypto.Crypto | CR | PR>;
+  options: MiddlewareOptions<CE, CR, PR>,
+): Layer.Layer<DeclaredMiddleware<Groups>, CE, Sessions.Sessions | Crypto.Crypto | CR | PR>;
 export function middlewareFor(
   api: HttpApi.HttpApi<"auth", HttpApiGroup.Constraint>,
-  options: MiddlewareOptions<unknown, unknown>,
-): Layer.Layer<never, never, unknown> {
+  options: MiddlewareOptions<unknown, unknown, unknown>,
+): Layer.Layer<never, unknown, unknown> {
   const declared = new Set<string>();
   HttpApi.reflect(api, {
     onGroup: () => {},
@@ -147,7 +152,7 @@ export function middlewareFor(
   // for the plugins by position, not by an accident of build order.
   const user = Layer.fresh(Authentication.AuthenticationLive).pipe(Layer.provide(resolver));
   // `Layer`'s `ROut` is contravariant, so `never` is what the slot accepts from any one middleware layer.
-  const entry = (key: string, layer: Layer.Layer<never, never, unknown>) => ({ key, layer });
+  const entry = (key: string, layer: Layer.Layer<never, unknown, unknown>) => ({ key, layer });
   const table = [
     entry(Api.Authentication.key, user),
     entry(
@@ -167,7 +172,7 @@ export function middlewareFor(
       Layer.fresh(Csrf.CsrfProtectionLive).pipe(Layer.provide(options.csrf)),
     ),
   ];
-  return table.reduce<Layer.Layer<never, never, unknown>>(
+  return table.reduce<Layer.Layer<never, unknown, unknown>>(
     (acc, entry) => (declared.has(entry.key) ? Layer.merge(acc, entry.layer) : acc),
     Layer.empty,
   );

@@ -6,16 +6,41 @@
 // that refuses a subject without the permission and admits one with it, and a
 // `BeforeSignUp` allow-list tap that refuses a disallowed e-mail domain.
 
-import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
+import { Organization } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { Mailer } from "@awthaq/ports";
-import { Auth, HookPoint, Hooks, Retention, SecuritySignals, Slots, Users } from "@awthaq/core";
+import {
+  ClientAddress,
+  Encryption,
+  KeyProvider,
+  Mailer,
+  PasswordHasher,
+  RateLimiter,
+  SqlTransaction,
+} from "@awthaq/ports";
+import {
+  Accounts,
+  AuditLog,
+  Auth,
+  AuthEvents,
+  DataExport,
+  Erasure,
+  HookPoint,
+  Hooks,
+  Persistence,
+  RateLimits,
+  Retention,
+  SecuritySignals,
+  Sessions,
+  Slots,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
-import { AuthHttp, Authentication, BodyLimit, RequestContext } from "@awthaq/server";
-import { TestAuth } from "@awthaq/test";
+import { AuthHttp, Authentication, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
 import { EvaluationServicesNone, role } from "@qadi/core";
 import { RequirePermissionLive } from "@qadi/http";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { createServer } from "node:http";
 import * as Effect from "effect/Effect";
@@ -25,6 +50,7 @@ import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 
 // 1. Compose Password and Organization together — `Auth.make` folds both
 //    plugins' own HttpApi contracts and Layers into one `api`/`layer`
@@ -63,26 +89,68 @@ const GuardLive = RequirePermissionLive.pipe(
   Layer.provide(Roles.Roles.layer),
 );
 
-// 2. `TestAuth.layer` derives the host middleware the composed groups declare (`Authentication`,
-//    `CsrfProtection`); only the CSRF secret is this app's own. The secret below is a fixed,
-//    checked-in placeholder fit only for this local demo: `CsrfConfig`'s own doc comment is
-//    explicit that a real deployment must never default it.
-//    `TestAuth`'s own bundled memory ports (`Users`/`Accounts`/`Sessions`/`Mailer`/a
-//    permissive rate limiter) are real but deliberately lean, so Organization's record
-//    services and `Password`'s `HttpClient` (the breach-check transport) are supplied here.
+// 2. The host middleware (`Authentication`, `CsrfProtection`) is derived from the groups the composed api
+//    declares, by `AuthHttp.middlewareFor`; only the CSRF configuration is this app's own. The secret below is a
+//    fixed, checked-in placeholder fit only for this local demo: `CsrfConfig`'s own doc comment is explicit that
+//    a real deployment must never default it (it reads `Csrf.layerConfig` from the environment).
 export const demoCsrfSecret = "memory-server-example-dev-only-csrf-secret";
-const OrganizationStores = Layer.mergeAll(
-  OrganizationMemory.layer,
-  // Every lifecycle-hook point's own default (no-tap) layer — required
-  // once per composition, per `OrganizationHooksLive`'s own doc comment.
-  OrganizationHooks.OrganizationHooksLive,
+const DemoCsrfConfig = Layer.succeed(Csrf.CsrfConfig, {
+  secret: Redacted.make(demoCsrfSecret),
+  allowedOrigins: [],
+});
+
+// The in-memory persistence a single-process server runs on: plan 02's `Persistence.memory` bundle (the five
+// stores and the no-op transaction, a matched pair), the core services written over it, and the foundation
+// every store reads (`Crypto`, `AuthEvents` over an in-memory `AuditLog`, every hook point's default layer).
+const Foundation = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  Layer.provideMerge(Hooks.HooksLive),
+  Layer.provideMerge(NodeCrypto.layer),
 );
-// The one thing `Password` needs that `TestAuth`'s bundle deliberately leaves to the caller:
-// the HTTP transport for the breach-check lookup (on by default: a sign-up asks the
-// pwnedpasswords range API whether the password is known). `Verification`, the
-// `PasswordHasher`, `AuthEvents` and `AuditLog` all come from the bundle (ETVS-004) — `Roles`
-// below is built over that same `AuthEvents`/`AuditLog`, so its audit events land next to
-// everyone else's. A test passes its own client so it never touches the network.
+
+const Ports = Layer.mergeAll(
+  // The production-cost hasher: `Password` reads it from the environment's `AUTH_ARGON2_*` knobs.
+  PasswordHasher.layerArgon2id,
+  // DESS-002: a development mailer that prints every message, including the verification token, to the
+  // log, so a sign-up can be finished without an inbox. Never for production: a real deployment provides
+  // its own `Mailer` here.
+  Mailer.layerConsole,
+  // CSD-010: the real single-process limiter (RBS-007), so the sign-in budget (5 per account per 15
+  // minutes) answers 429. One `Ref` per process: a deployment with several instances swaps in a shared store
+  // (`RateLimiter.layer` over `RateLimiterStoreSql.layerStoreSql`).
+  RateLimiter.layerMemory,
+  RateLimits.layer,
+  // `Auth.make` provides its own `SlotsRegistry`; this one is for the guard below, which builds `Roles.layer`
+  // outside `Auth.make` and whose `Slots.override` requires one.
+  Slots.layer,
+  ClientAddress.layerDirect,
+  Authentication.CredentialResolversLive,
+  // A throwaway key generated at boot: nothing encrypted under it survives a restart, which is exactly
+  // what an in-memory server is (`KeyProvider.layerEnv` is the production path).
+  Encryption.layer.pipe(Layer.provide(KeyProvider.layerEphemeral)),
+);
+
+const Core = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Users.layer,
+      Accounts.layer,
+      Sessions.layer,
+      Verification.layer,
+      Ports,
+      SqlTransaction.layerNoop,
+    ).pipe(Layer.provide(Persistence.memory)),
+  ),
+  Layer.provideMerge(Foundation),
+);
+
+// Each composed plugin's own record stores and hook points, as the plugins declare them: a host picks the
+// `memory` or the `sql` bundle the way it picks a database.
+const PluginRecords = Layer.mergeAll(
+  Organization.Organization.records.memory,
+  Roles.Roles.records.memory,
+  Organization.Organization.hookPoints,
+);
 
 // The catalog `Roles` reads when it is built (a `Context.Reference`, so it must be in the
 // context of whatever builds `Roles.layer` first: the services below are all built under it).
@@ -90,9 +158,9 @@ const RolesConfigLive = Roles.config([platformAdmin]);
 
 // The hook seam a host uses for policy the library does not own (TS-007): a `BeforeSignUp` veto
 // tap that refuses any e-mail outside an allow-list, so a private deployment stays private. A
-// veto surfaces as the typed `HookAborted` (403) naming the point. `TestAuth.layer` builds the
-// point in its own bundle and provides it to `services`, so the tap registers in the same
-// per-composition registry the sign-up flow consults (ADR-EA-033).
+// veto surfaces as the typed `HookAborted` (403) naming the point. The core hook points are built once
+// in `Foundation`, so the tap registers in the same per-composition registry the sign-up flow consults
+// (ADR-EA-033).
 const allowedEmailDomains: ReadonlyArray<string> = ["example.com"];
 
 const SignUpAllowList = Hooks.BeforeSignUp.tap((input) =>
@@ -101,30 +169,25 @@ const SignUpAllowList = Hooks.BeforeSignUp.tap((input) =>
     : Effect.fail(new HookPoint.HookAbort({ code: "EMAIL_DOMAIN_NOT_ALLOWED" })),
 );
 
-// 3. `TestAuth.layer` is the whole pipeline over memory — the same
-//    machinery `packages/*/test/AuthHttp.test.ts` files and this repo's
-//    own BDD suite already exercise for real, just not previously
-//    packaged as something runnable on its own.
+// 3. The whole pipeline over memory: the routes, core's own `session`/`account` handlers, the composed
+//    plugin layer, the host's services (the breach-check transport, the guard, the sign-up tap), then the
+//    derived middleware, the plugins' records, the persistence and the HTTP platform services.
 const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
-  TestAuth.layer(built, {
-    // `TestAuth`'s bundled limiter is the permissive test one; this example serves real
-    // HTTP, so it asks for the real single-process limiter (RBS-007).
-    // CSD-010: enforcing, so the sign-in budget (5 per account per 15 minutes) answers 429.
-    // It is one `Ref` per process: a deployment with several instances swaps in a shared
-    // store (`RateLimiter.layer` over `RateLimiterStoreSql.layerStoreSql`).
-    rateLimiter: "enforcing",
-    csrf: { secret: Redacted.make(demoCsrfSecret) },
-    services: Layer.mergeAll(
-      // DESS-002: a development mailer that prints every message, including the
-      // verification token, to the log, so a sign-up can be finished without an inbox. Never
-      // for production: a real deployment provides its own `Mailer` here.
-      Mailer.layerConsole,
-      OrganizationStores,
-      httpClient,
-      GuardLive,
-      SignUpAllowList,
-    ).pipe(Layer.provideMerge(RolesConfigLive)),
-  });
+  AuthHttp.routes(built.api).pipe(
+    Layer.provide(AuthHttp.coreHandlers),
+    Layer.provideMerge(built.layer),
+    Layer.provideMerge(
+      Layer.mergeAll(httpClient, GuardLive, SignUpAllowList).pipe(
+        Layer.provideMerge(RolesConfigLive),
+      ),
+    ),
+    Layer.provide(AuthHttp.middlewareFor(built.api, { csrf: DemoCsrfConfig })),
+    Layer.provideMerge(PluginRecords),
+    Layer.provideMerge(Core),
+    Layer.provideMerge(HttpServer.layerServices),
+    Layer.provideMerge(HttpRouter.layer),
+    Layer.provideMerge(built.userFieldsLayer),
+  );
 
 const AppLayer = makeAppLayer(FetchHttpClient.layer);
 

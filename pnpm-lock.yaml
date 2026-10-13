@@ -140,9 +140,6 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../../packages/server
-      '@awthaq/test':
-        specifier: workspace:*
-        version: link:../../packages/test
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)

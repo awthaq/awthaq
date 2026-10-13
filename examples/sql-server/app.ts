@@ -35,7 +35,7 @@ import {
   PasswordHasher,
   RateLimiter,
 } from "@awthaq/ports";
-import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
+import { AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
 import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -113,10 +113,6 @@ const CoreLive = Layer.mergeAll(
   Layer.provideMerge(NodeCrypto.layer),
 );
 
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
 // 5. The rate limiter enforces the rules the plugin registers, against a shared SQL store so the
 //    limits hold across replicas and restarts.
 const RateLimiterMigrated = Layer.effectDiscard(RateLimiterStoreSql.migrate).pipe(
@@ -130,13 +126,11 @@ const RateLimiterLive = RateLimiter.layer.pipe(
 
 // 6. Cross-cutting services: erasure and export over the hook registries, one SQL transaction
 //    domain, the client-address resolver (`layerDirect` reads the socket peer; behind a proxy
-//    use `layerTrustedProxy`) and CSRF protection keyed by `AWTHAQ_CSRF_SECRET` (>= 32 bytes).
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Csrf.layerConfig),
-  Layer.provide(NodeCrypto.layer),
-);
+//    use `layerTrustedProxy`). The host middleware (`Authentication`, `CsrfProtection`) is derived from the
+//    groups the composed api declares: CSRF keyed by `AWTHAQ_CSRF_SECRET` (>= 32 bytes).
+const MiddlewareLive = AuthHttp.middlewareFor(auth.api, { csrf: Csrf.layerConfig });
 const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect)),
+  Layer.provideMerge(ClientAddress.layerDirect),
 );
 
 // 7. Mount the composed api. The OpenAPI document and Scalar UI are unauthenticated, so they are
@@ -158,7 +152,7 @@ const DocsLive = Layer.unwrap(
 // needs no inbox. Never for production: a real deployment provides its own `Mailer`.
 const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
   Layer.mergeAll(RoutesLive, DocsLive).pipe(
-    Layer.provideMerge(AuthenticationLive),
+    Layer.provide(MiddlewareLive),
     Layer.provideMerge(ServicesLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Hooks.HooksLive),
