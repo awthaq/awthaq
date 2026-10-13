@@ -42,9 +42,9 @@ import {
   Users,
 } from "@awthaq/core";
 import {
-  MembershipRecords,
   Organization,
   OrganizationActor,
+  OrganizationMembers,
   OrganizationTeams,
 } from "@awthaq/organization";
 import { Defects, SqlTransaction } from "@awthaq/ports";
@@ -598,9 +598,8 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       const creation = yield* SignUp.make;
       const sessions = yield* Sessions.Sessions;
       const erasure = yield* Erasure.AccountErasure;
-      const organization = yield* Organization.Organization;
+      const memberSystem = yield* OrganizationMembers.OrganizationMembers;
       const records = yield* ScimRecords.ScimRecords;
-      const members = yield* MembershipRecords.MembershipRecords;
       // ADR-EA-040: Groups are organization teams, reached through the exposed system module.
       const teams = yield* OrganizationTeams.OrganizationTeams;
       const cfg = yield* ScimConfig;
@@ -654,12 +653,17 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         return { link: link.value, user };
       });
 
+      /** The directory connection that acts on organization state (it reaches every hook input). */
+      const actorOf = (connection: Connection) => OrganizationActor.directory(connection.id);
+
       const membershipAdded = (connection: Connection, userId: Users.UserId) =>
-        organization
-          .addMember({
+        memberSystem
+          .add(actorOf(connection), {
             organizationId: connection.organizationId,
             userId,
             role: [cfg.memberRole],
+            // The deployment configured this directory's member role: nothing bounds it.
+            bound: OrganizationActor.Bound.Unbounded(),
           })
           .pipe(
             // Already a member (a re-provision): fine, the goal state holds.
@@ -846,6 +850,8 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
                     Effect.fail(ScimApi.forbidden("The organization is not available")),
                   UnknownOrgRole: () =>
                     Effect.fail(ScimApi.forbidden("The configured member role is unknown")),
+                  // `Unbounded` has no ceiling to exceed.
+                  RolePermissionEscalation: Effect.die,
                 }),
               );
               return link;
@@ -992,9 +998,6 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
 
       // ---- Groups (organization teams) --------------------------------------------------------------
 
-      /** The directory connection that acts on a team (reaches every hook input and, later, every event). */
-      const actorOf = (connection: Connection) => OrganizationActor.directory(connection.id);
-
       /**
        * What a team operation's refusal means to a directory (BEH-EA-251): a policy refusal (teams off, a quota, a
        * veto, an unavailable organization) is `403`, the last team or a team with children `409`, a missing team
@@ -1069,7 +1072,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         for (const userId of userIds) {
           const link = yield* records.find(connection.id, "User", userId);
           const membership = Option.isSome(link)
-            ? yield* members.findByUserAndOrg(Users.UserId(userId), connection.organizationId)
+            ? yield* memberSystem.find(connection.organizationId, Users.UserId(userId))
             : Option.none();
           if (Option.isNone(link) || Option.isNone(membership)) {
             return yield* ScimApi.badRequest(

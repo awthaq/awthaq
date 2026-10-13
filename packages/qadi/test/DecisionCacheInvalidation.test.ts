@@ -21,7 +21,9 @@ import {
   InvitationRecords,
   MembershipRecords,
   Organization,
+  OrganizationActor,
   OrganizationHooks,
+  OrganizationMembers,
   OrganizationQadi,
   OrganizationRecords,
   OrgRoleRecords,
@@ -113,6 +115,17 @@ const AppLive = Layer.mergeAll(
   Layer.provideMerge(OrganizationLive),
 );
 
+/** Arranges a membership the way `Organization.addMember` once did: a trusted add by the application. */
+const addMember = (organizationId: string, user: string, role: ReadonlyArray<string>) =>
+  Effect.flatMap(OrganizationMembers.OrganizationMembers, (members) =>
+    members.add(OrganizationActor.application("qadi test"), {
+      organizationId,
+      userId: Users.UserId(user),
+      role,
+      bound: OrganizationActor.Bound.Unbounded(),
+    }),
+  );
+
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({
     ref: new Api.PrincipalRef({ type: "user", id }),
@@ -149,11 +162,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-rm");
         const record = yield* organization.create({ caller: owner, name: "Rm", slug: "rm" });
-        yield* organization.addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-rm"),
-          role: ["member"],
-        });
+        yield* addMember(record.id, "member-rm", ["member"]);
         assert.isTrue(yield* decide("member", record.id, "member-rm"));
 
         yield* organization.removeMember(owner, record.id, Users.UserId("member-rm"));
@@ -167,11 +176,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-lv");
         const record = yield* organization.create({ caller: owner, name: "Lv", slug: "lv" });
-        yield* organization.addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-lv"),
-          role: ["member"],
-        });
+        yield* addMember(record.id, "member-lv", ["member"]);
         assert.isTrue(yield* decide("member", record.id, "member-lv"));
 
         yield* organization.leave(asCaller("member-lv"), record.id);
@@ -185,11 +190,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-role");
         const record = yield* organization.create({ caller: owner, name: "Role", slug: "role" });
-        yield* organization.addMember({
-          organizationId: record.id,
-          userId: Users.UserId("admin-role"),
-          role: ["admin"],
-        });
+        yield* addMember(record.id, "admin-role", ["admin"]);
         assert.isTrue(yield* decide("admin", record.id, "admin-role"));
 
         yield* organization.updateMemberRole(owner, record.id, Users.UserId("admin-role"), [
@@ -242,11 +243,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-tm");
         const record = yield* organization.create({ caller: owner, name: "Tm", slug: "tm" });
-        yield* organization.addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-tm"),
-          role: ["member"],
-        });
+        yield* addMember(record.id, "member-tm", ["member"]);
         const team = yield* organization.createTeam(owner, record.id, "Eng");
         yield* organization.addTeamMember(owner, record.id, team.id, Users.UserId("member-tm"));
         assert.isTrue(yield* decide("team-member", team.id, "member-tm"));
@@ -272,11 +269,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
           const organization = yield* Organization.Organization;
           const owner = asCaller("owner-ctl");
           const record = yield* organization.create({ caller: owner, name: "Ctl", slug: "ctl" });
-          yield* organization.addMember({
-            organizationId: record.id,
-            userId: Users.UserId("member-ctl"),
-            role: ["member"],
-          });
+          yield* addMember(record.id, "member-ctl", ["member"]);
           assert.isTrue(yield* decide("member", record.id, "member-ctl"));
 
           yield* organization.removeMember(owner, record.id, Users.UserId("member-ctl"));

@@ -45,7 +45,13 @@ import {
   Verification,
 } from "@awthaq/core";
 import { ClientAddress, Defects, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
-import { OrganizationRecords, Organization } from "@awthaq/organization";
+import {
+  Organization,
+  OrganizationActor,
+  OrganizationAuthority,
+  OrganizationMembers,
+  OrganizationRecords,
+} from "@awthaq/organization";
 import { TenantScoped } from "@awthaq/sql";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -735,7 +741,9 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const events = yield* AuthEvents.AuthEvents;
       const records = yield* SamlRecords.SamlRecords;
       const orgs = yield* OrganizationRecords.OrganizationRecords;
-      const organization = yield* Organization.Organization;
+      // ADR-EA-040: the role mapping goes through the exposed members module, bounded by the connection's ceiling.
+      const memberSystem = yield* OrganizationMembers.OrganizationMembers;
+      const authority = yield* OrganizationAuthority.OrganizationAuthority;
       const spKeys = yield* SamlSpKeys.SamlSpKeys;
       const xmlSignature = yield* XmlSignature.XmlSignature;
       const crypto = yield* Crypto.Crypto;
@@ -975,22 +983,24 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         roles: ReadonlyArray<string>,
         userId: Users.UserId,
       ) =>
-        organization
-          .syncMemberRoles({
-            organizationId: connection.organizationId,
-            userId,
-            roles,
-            ceiling: connection.roleMapping.ceiling,
-          })
-          .pipe(
-            Effect.asVoid,
-            Effect.catch((error) =>
-              Effect.logWarning("awthaq/saml: role mapping not applied", {
-                connectionId: connection.id,
-                reason: error._tag,
-              }),
-            ),
-          );
+        authority.ceilingOf(connection.organizationId, connection.roleMapping.ceiling).pipe(
+          Effect.flatMap((bound) =>
+            memberSystem.setRoles(OrganizationActor.identityProvider(connection.id), {
+              organizationId: connection.organizationId,
+              userId,
+              roles,
+              bound,
+              ifAbsent: "add",
+            }),
+          ),
+          Effect.asVoid,
+          Effect.catch((error) =>
+            Effect.logWarning("awthaq/saml: role mapping not applied", {
+              connectionId: connection.id,
+              reason: error._tag,
+            }),
+          ),
+        );
 
       /**
        * ADR-EA-038: what this connection's sign-in owes once its session exists, whichever request mints

@@ -20,12 +20,13 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
+import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import { TestAuth } from "@awthaq/test";
-import { grant } from "./support.ts";
+import { grant, addMember } from "./support.ts";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents` (session
@@ -236,7 +237,7 @@ describe("Organization", () => {
       assert.strictEqual(invitationsDenied._tag, "OrganizationNotFound");
 
       // A real member (not just owner/admin) may still read all three.
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("outsider-1"),
         role: ["member"],
@@ -253,7 +254,7 @@ describe("Organization", () => {
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -279,7 +280,7 @@ describe("Organization", () => {
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -332,27 +333,33 @@ describe("Organization", () => {
     }).pipe(Effect.provide(buildLayer({ disableOrganizationDeletion: true }))),
   );
 
+  // D4 (plan 04): the statement check precedes the owner invariant, so a caller without `member:delete`
+  // or `member:update` learns nothing about whether the target is the last owner. The invariant itself
+  // is proved at `OrganizationMembers.test.ts`; the owner here only proves the authorized path reaches it.
   it.effect(
-    "the owner invariant rejects removeMember, updateMemberRole, and leave for the last owner",
+    "a member without the statement is denied before the owner invariant is consulted",
     () =>
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
+        const member = asCaller("member-1");
         const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        yield* addMember({
+          organizationId: record.id,
+          userId: Users.UserId("member-1"),
+          role: ["member"],
+        });
         const ownerId = Users.UserId("owner-1");
-
-        const removeFailure = yield* organization
-          .removeMember(owner, record.id, ownerId)
+        const removeDenied = yield* organization
+          .removeMember(member, record.id, ownerId)
           .pipe(Effect.flip);
-        assert.strictEqual(removeFailure._tag, "OwnerInvariantViolation");
-
-        const roleFailure = yield* organization
-          .updateMemberRole(owner, record.id, ownerId, ["member"])
+        assert.strictEqual(removeDenied._tag, "OrganizationPermissionDenied");
+        const roleDenied = yield* organization
+          .updateMemberRole(member, record.id, ownerId, ["member"])
           .pipe(Effect.flip);
-        assert.strictEqual(roleFailure._tag, "OwnerInvariantViolation");
-
-        const leaveFailure = yield* organization.leave(owner, record.id).pipe(Effect.flip);
-        assert.strictEqual(leaveFailure._tag, "OwnerInvariantViolation");
+        assert.strictEqual(roleDenied._tag, "OrganizationPermissionDenied");
+        const invariant = yield* organization.leave(owner, record.id).pipe(Effect.flip);
+        assert.strictEqual(invariant._tag, "OwnerInvariantViolation");
       }).pipe(Effect.provide(buildLayer())),
   );
 
@@ -364,12 +371,12 @@ describe("Organization", () => {
         const owner = asCaller("owner-1");
         const member = asCaller("member-1");
         const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: record.id,
           userId: Users.UserId("owner-2"),
           role: ["owner"],
         });
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: record.id,
           userId: Users.UserId("member-1"),
           role: ["member"],
@@ -412,7 +419,7 @@ describe("Organization", () => {
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -421,22 +428,6 @@ describe("Organization", () => {
       const members = yield* organization.listMembers(owner, record.id);
       assert.strictEqual(members.length, 1);
     }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("addMember respects membershipLimit", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const failure = yield* organization
-        .addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-1"),
-          role: ["member"],
-        })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "MembershipLimitReached");
-    }).pipe(Effect.provide(buildLayer({ membershipLimit: 1 }))),
   );
 
   it.effect(
@@ -876,7 +867,7 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("hr-1"),
         role: ["hr"],
@@ -907,7 +898,7 @@ describe("Organization", () => {
     it.effect("a lower tier cannot change the role of a member who out-privileges it", () =>
       Effect.gen(function* () {
         const { organization, hr, org } = yield* setup;
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: org.id,
           userId: Users.UserId("owner-2"),
           role: ["owner"],
@@ -922,7 +913,7 @@ describe("Organization", () => {
     it.effect("a caller can still assign a role it fully covers (no over-blocking)", () =>
       Effect.gen(function* () {
         const { organization, hr, org } = yield* setup;
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: org.id,
           userId: Users.UserId("plain-1"),
           role: ["member"],
@@ -957,17 +948,13 @@ describe("Organization", () => {
       }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
-    it.effect("invite and addMember reject an undefined role name", () =>
+    it.effect("invite rejects an undefined role name", () =>
       Effect.gen(function* () {
         const { organization, owner, org } = yield* setup;
         const inviteFailure = yield* organization
           .invite(owner, org.id, { email: "x@example.com", role: ["ghost"] })
           .pipe(Effect.flip);
         assert.strictEqual(inviteFailure._tag, "UnknownOrgRole");
-        const addFailure = yield* organization
-          .addMember({ organizationId: org.id, userId: Users.UserId("u-2"), role: ["ghost"] })
-          .pipe(Effect.flip);
-        assert.strictEqual(addFailure._tag, "UnknownOrgRole");
       }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
   });
@@ -978,12 +965,12 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("admin-1"),
         role: ["admin"],
       });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -1088,7 +1075,10 @@ describe("Organization", () => {
           role: "owner",
           permission: { member: [] },
         });
-        const attrs = yield* organization.attributesFor(org.id, Users.UserId("owner-1"));
+        const attrs = yield* (yield* OrganizationAuthority.OrganizationAuthority).attributesFor(
+          org.id,
+          Users.UserId("owner-1"),
+        );
         assert.isTrue(Option.isSome(attrs));
         if (Option.isSome(attrs)) {
           assert.isTrue((attrs.value.permissions["organization"] ?? []).includes("delete"));
@@ -1144,7 +1134,7 @@ describe("Organization", () => {
         role: "custom-updater",
         permission: { organization: ["update"] },
       });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("member-1"),
         role: ["custom-updater"],
@@ -1232,7 +1222,7 @@ describe("Organization", () => {
         const { organization, org, eng, platform } = yield* tree;
         const member = asCaller("member-1");
         const outsider = asCaller("outsider-1");
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: org.id,
           userId: Users.UserId("member-1"),
           role: ["member"],
@@ -1269,7 +1259,7 @@ describe("Organization", () => {
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
       for (const id of ["lead-1", "worker-1", "worker-2"]) {
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: org.id,
           userId: Users.UserId(id),
           role: ["member"],
@@ -1334,7 +1324,7 @@ describe("Organization", () => {
     it.effect("org admin retains authority over every team", () =>
       Effect.gen(function* () {
         const { organization, org, eng, sales } = yield* setup;
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: org.id,
           userId: Users.UserId("admin-1"),
           role: ["admin"],
@@ -1441,7 +1431,7 @@ describe("Organization", () => {
       assert.strictEqual(membersDenied._tag, "OrganizationNotFound");
 
       // A real member (not just owner/admin) may still read both.
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("outsider-1"),
         role: ["member"],
@@ -1518,13 +1508,11 @@ describe("Organization", () => {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const failure = yield* organization
-          .addMember({
-            organizationId: org.id,
-            userId: Users.UserId("owner-1"),
-            role: ["member"],
-          })
-          .pipe(Effect.flip);
+        const failure = yield* addMember({
+          organizationId: org.id,
+          userId: Users.UserId("owner-1"),
+          role: ["member"],
+        }).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AlreadyMember");
         const members = yield* organization.listMembers(owner, org.id);
         assert.strictEqual(members.length, 1);
@@ -1538,7 +1526,7 @@ describe("Organization", () => {
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
         const existing = yield* verifiedUser({ email: "member@example.com", name: "Member" });
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: org.id,
           userId: existing.id,
           role: ["member"],
@@ -1568,7 +1556,7 @@ describe("Organization", () => {
             role: ["admin"],
           });
           // Added directly (e.g. SCIM) after the invitation went out.
-          yield* organization.addMember({
+          yield* addMember({
             organizationId: org.id,
             userId: invitee.id,
             role: ["member"],
@@ -1581,7 +1569,10 @@ describe("Organization", () => {
             )
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "AlreadyMember");
-          const attrs = yield* organization.attributesFor(org.id, invitee.id);
+          const attrs = yield* (yield* OrganizationAuthority.OrganizationAuthority).attributesFor(
+            org.id,
+            invitee.id,
+          );
           assert.isTrue(Option.isSome(attrs));
           if (Option.isSome(attrs)) assert.deepStrictEqual(attrs.value.role, ["member"]);
           const stale = yield* organization.getInvitation(owner, invitation.id);
@@ -1598,7 +1589,7 @@ describe("Organization", () => {
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -1689,7 +1680,7 @@ describe("Organization", () => {
         identity: { _tag: "Email", email: "stranger@example.com" },
         name: "Stranger",
       });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("plain-1"),
         role: ["member"],
@@ -1828,12 +1819,12 @@ describe("Organization", () => {
           const auditLog = yield* AuditLog.AuditLog;
           const owner = asCaller("owner-1");
           const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-          yield* organization.addMember({
+          yield* addMember({
             organizationId: org.id,
             userId: Users.UserId("member-1"),
             role: ["member"],
           });
-          yield* organization.addMember({
+          yield* addMember({
             organizationId: org.id,
             userId: Users.UserId("member-2"),
             role: ["member"],
@@ -1966,7 +1957,7 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
       const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
       bigId = big.id;
       const attempt = (organizationId: string, userId: string) =>
-        organization.addMember({
+        addMember({
           organizationId,
           userId: Users.UserId(userId),
           role: ["member"],
@@ -2103,7 +2094,7 @@ describe("Per-tenant configuration (EP-007)", () => {
         const small = yield* organization.create({ caller: owner, name: "Small", slug: "small" });
         const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
         const add = (organizationId: string, userId: string) =>
-          organization.addMember({
+          addMember({
             organizationId,
             userId: Users.UserId(userId),
             role: ["member"],
@@ -2131,7 +2122,7 @@ describe("Per-tenant configuration (EP-007)", () => {
         slug: "acme",
       });
       const add = (userId: string) =>
-        organization.addMember({
+        addMember({
           organizationId: org.id,
           userId: Users.UserId(userId),
           role: ["member"],

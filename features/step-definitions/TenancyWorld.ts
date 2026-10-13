@@ -24,6 +24,7 @@ import {
   Organization,
   OrganizationConnections,
   OrganizationHooks,
+  OrganizationMembers,
   OrganizationQadi,
   OrganizationRecords,
   TenantMiddleware,
@@ -156,6 +157,7 @@ export const PLATFORM_ADMIN = "superadmin";
 
 export type OrganizationServices =
   | Organization.Organization
+  | OrganizationMembers.OrganizationMembers
   | OrganizationRecords.OrganizationRecords
   | AdminTenants.AdminTenants
   | AuditLog.AuditLog

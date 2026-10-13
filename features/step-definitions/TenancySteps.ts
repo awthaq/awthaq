@@ -6,7 +6,9 @@ import { Encryption, Tenant } from "@awthaq/ports";
 import {
   ConnectionRecords,
   Organization,
+  OrganizationActor,
   OrganizationConnections,
+  OrganizationMembers,
   OrganizationRecords,
 } from "@awthaq/organization";
 import { AdminTenants } from "@awthaq/admin";
@@ -296,11 +298,12 @@ const authorize = Effect.fn("features.tenancy.authorize")(function* (providerId:
 
 const addMemberTo = (organizationId: string, userId: string) =>
   Effect.gen(function* () {
-    const plugin = yield* Organization.Organization;
-    return yield* plugin.addMember({
+    const members = yield* OrganizationMembers.OrganizationMembers;
+    return yield* members.add(OrganizationActor.application("bdd"), {
       organizationId,
       userId: Users.UserId(userId),
       role: ["member"],
+      bound: OrganizationActor.Bound.Unbounded(),
     });
   });
 

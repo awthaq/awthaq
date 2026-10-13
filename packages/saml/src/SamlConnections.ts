@@ -15,7 +15,7 @@
 //   - an email domain routes to exactly one connection;
 //   - a connection that signs its AuthnRequests has an SP signing key (generated when there is none, BEH-EA-314);
 //   - a role mapping names only roles the organization has, confers no more than its ceiling (the `canGrant` rule of RRM-001,
-//     `Organization.checkRoleCeiling`), and mentions `owner` only where the deployment allowed it (BEH-EA-316).
+//     `OrganizationAuthority.checkRoleCeiling`), and mentions `owner` only where the deployment allowed it (BEH-EA-316).
 //
 // An IdP's metadata can be imported (`idp: { metadataXml }`, or fetched by the caller from a URL and passed the same way) and
 // refreshed (`refreshMetadata`): the certificates it lists become the trust set. That is exactly as trustworthy as the channel
@@ -23,7 +23,7 @@
 // what gets pinned afterwards is the fingerprint, not the document.
 
 import type { Api } from "@awthaq/api";
-import { Organization, OrganizationRecords } from "@awthaq/organization";
+import { OrganizationAuthority, OrganizationRecords } from "@awthaq/organization";
 import { OutboundUrl } from "@awthaq/ports";
 import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
@@ -203,13 +203,13 @@ export class SamlConnectionStore extends Context.Service<
   SamlConnectionStoreShape
 >()("awthaq/saml/SamlConnectionStore") {}
 
-/** Requires `SamlRecords`, `OrganizationRecords`, the `Organization` service, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
+/** Requires `SamlRecords`, `OrganizationRecords`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
 export const layerStore = Layer.effect(
   SamlConnectionStore,
   Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
     const orgs = yield* OrganizationRecords.OrganizationRecords;
-    const organization = yield* Organization.Organization;
+    const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
     const crypto = yield* Crypto.Crypto;
     const settings = yield* SamlConfig.SamlConfig;
@@ -278,7 +278,7 @@ export const layerStore = Layer.effect(
       const conferred = [
         ...new Set([...mapping.rules.flatMap((rule) => rule.roles), ...mapping.defaultRoles]),
       ];
-      const verdict = yield* organization
+      const verdict = yield* authority
         .checkRoleCeiling({ organizationId, roles: conferred, ceiling: mapping.ceiling })
         .pipe(
           Effect.catchTag("OrganizationNotFound", () =>

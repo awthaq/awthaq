@@ -136,6 +136,12 @@ export const SamlLive = <Wrapped extends Sessions.Sessions | Users.Users = never
   fetcher: Layer.Layer<SamlMetadataFetcher.SamlMetadataFetcher> = fakeFetcher({}).layer,
   /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
   coreOverride?: Layer.Layer<Wrapped, never, Wrapped>,
+  /** Plan 04: taps on the organization hook points (an observer that records the actor of a role mapping). */
+  taps: Layer.Layer<
+    never,
+    never,
+    Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+  > = Layer.empty,
 ) =>
   Saml.Saml.layer.pipe(
     Layer.provide(coreOverride ?? Layer.empty),
@@ -155,6 +161,7 @@ export const SamlLive = <Wrapped extends Sessions.Sessions | Users.Users = never
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(taps),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
     Layer.provideMerge(Saml.config({ baseUrl: BASE_URL, ...samlConfig })),
   );

@@ -4,7 +4,7 @@
 // out-privileges the connection is never reshaped by it, the last owner is never demoted, and a mapping that cannot be applied
 // never locks the user out.
 import { AuditLog, Users } from "@awthaq/core";
-import { MembershipRecords, Organization } from "@awthaq/organization";
+import { MembershipRecords, Organization, OrganizationHooks } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -416,6 +416,40 @@ describe("a sign-in through a connection with a role mapping", () => {
         assert.strictEqual(yield* members.countOwners(organizationId), 1);
       }).pipe(Effect.provide(SamlLive({ allowOwnerRoleMapping: true }))),
   );
+
+  it.effect("an applied mapping fires AfterAddMember with an IdentityProvider actor", () => {
+    const seen: Array<string> = [];
+    return Effect.gen(function* () {
+      yield* atNow;
+      const { connection, organizationId } = yield* seedConnection({ roleMapping: groupsRule });
+      const outcome = yield* signInWith(
+        connection.id,
+        { email: ["ada@acme.example"], groups: ["admins"] },
+        "ada@acme.example",
+        "_idp1",
+      );
+      assert.deepStrictEqual(
+        yield* rolesOf(outcome.session.session.userId, organizationId),
+        Option.some(["admin"]),
+      );
+      assert.deepStrictEqual(seen, [`IdentityProvider:${connection.id}`]);
+    }).pipe(
+      Effect.provide(
+        SamlLive(
+          {},
+          undefined,
+          undefined,
+          undefined,
+          OrganizationHooks.AfterAddMember.tap((input) => {
+            seen.push(
+              `${input.actor._tag}:${"connectionId" in input.actor ? input.actor.connectionId : ""}`,
+            );
+            return Effect.void;
+          }),
+        ),
+      ),
+    );
+  });
 
   it.effect("a role that no longer exists is logged and skipped: the sign-in still succeeds", () =>
     Effect.gen(function* () {

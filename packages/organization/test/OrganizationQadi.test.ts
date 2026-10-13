@@ -20,6 +20,7 @@ import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
 import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
+import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationQadi from "../src/OrganizationQadi.ts";
 import * as PermissionEngine from "../src/PermissionEngine.ts";
@@ -27,7 +28,7 @@ import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 import { TestAuth } from "@awthaq/test";
-import { grant } from "./support.ts";
+import { grant, addMember } from "./support.ts";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -117,12 +118,12 @@ describe("OrganizationQadi", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("admin-1"),
         role: ["admin"],
       });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -216,7 +217,7 @@ describe("OrganizationQadi", () => {
         const owner = asCaller("owner-1");
         const acme = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
         yield* organization.create({ caller: owner, name: "Globex", slug: "globex" });
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: acme.id,
           userId: Users.UserId("member-1"),
           role: ["member"],
@@ -267,7 +268,7 @@ describe("OrganizationQadi", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -336,7 +337,7 @@ describe("OrganizationQadi", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("lead-1"),
         role: ["member"],
@@ -393,7 +394,7 @@ describe("OrganizationQadi", () => {
         ["lead-1", "team-lead"],
         ["plain-1", "member"],
       ] as const) {
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: record.id,
           userId: Users.UserId(user),
           role: [role],
@@ -435,7 +436,10 @@ describe("OrganizationQadi", () => {
           ([resource, actions]) => actions.map((action) => [resource, action] as const),
         );
         for (const user of ["owner-1", "admin-1", "hr-1", "lead-1", "plain-1"]) {
-          const attrs = yield* organization.attributesFor(record.id, Users.UserId(user));
+          const attrs = yield* (yield* OrganizationAuthority.OrganizationAuthority).attributesFor(
+            record.id,
+            Users.UserId(user),
+          );
           assert.isTrue(Option.isSome(attrs));
           if (Option.isNone(attrs)) continue;
           for (const [resource, action] of vocabulary) {
@@ -488,7 +492,7 @@ describe("OrganizationQadi", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("admin-1"),
         role: ["admin"],

@@ -1,0 +1,9 @@
+---
+"@awthaq/organization": minor
+"@awthaq/saml": patch
+"@awthaq/scim": patch
+---
+
+Membership is a system module, `OrganizationMembers` (`add`, `setRoles`, `remove`, `find`, `list`, `listForUser`), exposed by `Organization.layer` (ADR-EA-040, BEH-EA-330). It owns the owner invariant, `membershipLimit`, role names, the grant `Bound`, MTI-003 uniqueness, the veto, the removal cascade (membership, active context, team memberships in one transaction) and the events and observe points, for every caller. The SAML role mapping is `setRoles` with an `IdentityProvider` actor and `ceilingOf` as its `Bound`; SCIM provisioning is `add` with a `Directory` actor and `Unbounded`; the authorized `removeMember`, `updateMemberRole`, `leave` and `listMembers` delegate. `Organization.addMember`, `syncMemberRoles`, `checkRoleCeiling` and `attributesFor` leave `OrganizationShape` (the interface has 41 methods): they are `OrganizationMembers.add`, `OrganizationMembers.setRoles({ ifAbsent: "add" })`, and `OrganizationAuthority.checkRoleCeiling` / `attributesFor`.
+
+Migration: `organization.addMember({ organizationId, userId, role })` becomes `OrganizationMembers.add(OrganizationActor.application("..."), { organizationId, userId, role, bound: OrganizationActor.Bound.Unbounded() })`; `syncMemberRoles({ roles, ceiling })` becomes `OrganizationMembers.setRoles(actor, { roles, bound: yield* OrganizationAuthority.ceilingOf(organizationId, ceiling), ifAbsent: "add" })`. Behaviour: a caller without `member:delete` / `member:update` is now answered `403` before the owner invariant (it was `409` for the last owner, which leaked that fact); setting a member's roles to exactly what they hold is a no-op for HTTP too (no write, veto, event or observer); a veto tap that rewrites the roles is bounded on what is stored. `@awthaq/saml` and `@awthaq/scim` require the exposed `OrganizationMembers` / `OrganizationAuthority` instead of `Organization`'s removed methods.

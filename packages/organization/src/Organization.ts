@@ -42,6 +42,7 @@ import * as OrganizationHandlers from "./OrganizationHandlers.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import { organizationMigrations } from "./OrganizationMigrations.ts";
 import { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
+import * as OrganizationMembers from "./OrganizationMembers.ts";
 import * as OrganizationSystem from "./OrganizationSystem.ts";
 import * as OrganizationTeams from "./OrganizationTeams.ts";
 import type { OrganizationShape } from "./OrganizationShape.ts";
@@ -145,6 +146,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       // ADR-EA-040: the plugin's system interfaces, built beneath this `make` by `exposes`.
       const authority = yield* OrganizationAuthority.OrganizationAuthority;
       const teamSystem = yield* OrganizationTeams.OrganizationTeams;
+      const memberSystem = yield* OrganizationMembers.OrganizationMembers;
       const users = yield* Users.Users;
       const mailer = yield* Mailer.Mailer;
       // OHS-002: the cascades below commit or roll back as one unit. `layerNoop`
@@ -166,12 +168,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const afterUpdate = yield* OrganizationHooks.AfterUpdateOrganization;
       const beforeDelete = yield* OrganizationHooks.BeforeDeleteOrganization;
       const afterDelete = yield* OrganizationHooks.AfterDeleteOrganization;
-      const beforeRemove = yield* OrganizationHooks.BeforeRemoveMember;
-      const afterRemove = yield* OrganizationHooks.AfterRemoveMember;
-      const beforeUpdateRole = yield* OrganizationHooks.BeforeUpdateMemberRole;
-      const afterUpdateRole = yield* OrganizationHooks.AfterUpdateMemberRole;
-      const beforeAdd = yield* OrganizationHooks.BeforeAddMember;
-      const afterAdd = yield* OrganizationHooks.AfterAddMember;
       const beforeCreateInvitation = yield* OrganizationHooks.BeforeCreateInvitation;
       const afterCreateInvitation = yield* OrganizationHooks.AfterCreateInvitation;
       const beforeAccept = yield* OrganizationHooks.BeforeAcceptInvitation;
@@ -186,7 +182,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const afterUpdateRoleHook = yield* OrganizationHooks.AfterUpdateRole;
       const beforeDeleteRole = yield* OrganizationHooks.BeforeDeleteRole;
       const afterDeleteRole = yield* OrganizationHooks.AfterDeleteRole;
-      const afterRemoveTeamMember = yield* OrganizationHooks.AfterRemoveTeamMember;
 
       const statementsByRole = authority.statementsByRole;
       const effectivePermissionsOf = authority.effectivePermissions;
@@ -262,21 +257,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const held = PermissionEngine.effectivePermissions(granter.role, byRole);
           const requested = PermissionEngine.effectivePermissions(roleNames, byRole);
           if (!PermissionEngine.canGrant(requested, held)) {
-            return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
-          }
-        });
-
-      /** RRM-001: a lower tier cannot alter (demote/reshape) a member who out-privileges it. */
-      const requireOutranks = (
-        organizationId: string,
-        granter: MembershipRecords.MembershipRecord,
-        target: MembershipRecords.MembershipRecord,
-      ) =>
-        Effect.gen(function* () {
-          const byRole = yield* statementsByRole(organizationId);
-          const held = PermissionEngine.effectivePermissions(granter.role, byRole);
-          const targetHeld = PermissionEngine.effectivePermissions(target.role, byRole);
-          if (!PermissionEngine.canGrant(targetHeld, held)) {
             return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
           }
         });
@@ -523,125 +503,30 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
+      // ---- members: authorization on top of `OrganizationMembers` ----------------------------
+      //
+      // Visibility (MTI-009), the `member:*` statements and the caller's grant ceiling are decided
+      // here; the owner invariant, role names, the veto, the transaction and the events are the
+      // module's, once, for every caller (SCIM and SAML included).
+
       const listMembers: OrganizationShape["listMembers"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
           yield* requireOrganization(organizationId);
           yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
-          return yield* members.listByOrganization(organizationId, input);
+          return yield* memberSystem.list(organizationId, input);
         },
       );
-
-      /** True iff removing/changing a membership's role away from `owner` would leave zero owners. */
-      const wouldViolateOwnerInvariant = (
-        organizationId: string,
-        targetHeldOwner: boolean,
-        nextHeldOwner: boolean,
-      ) =>
-        targetHeldOwner && !nextHeldOwner
-          ? members.countOwners(organizationId).pipe(Effect.map((count) => count <= 1))
-          : Effect.succeed(false);
-
-      /**
-       * CWM-003/N9: removing a membership (`removeMember` and `leave` alike) also
-       * drops everything that hangs off it — the user's team memberships in this
-       * organization and any session's active organization/team pointing at it —
-       * in one transaction, so a removed member can no longer answer `team-member`
-       * in qadi or keep the organization "active". Returns the teams the user was
-       * on so the caller can announce each departure once the transaction commits.
-       */
-      const dropMembership = (organizationId: string, userId: Users.UserId) =>
-        sqlTransaction
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* members
-                .remove(userId, organizationId)
-                .pipe(
-                  Effect.catchTag("MembershipRecordNotFound", () =>
-                    Defects.invariantViolation(
-                      "RowVanished",
-                      "awthaq: membership vanished between check and write",
-                    ),
-                  ),
-                );
-              yield* activeContext.clearOrganizationForUser(userId, organizationId);
-              return yield* teams.removeUserFromOrganizationTeams(organizationId, userId);
-            }),
-          )
-          .pipe(Effect.catchTag("SqlError", Effect.die));
-
-      const announceTeamDepartures = (
-        actor: OrganizationActor.Actor,
-        organizationId: string,
-        userId: Users.UserId,
-        teamIds: ReadonlyArray<string>,
-      ) =>
-        Effect.forEach(
-          teamIds,
-          (teamId) =>
-            events
-              .publish({
-                _tag: "auth.organization.teamMemberRemoved",
-                organizationId,
-                teamId,
-                userId,
-              })
-              .pipe(
-                Effect.andThen(
-                  afterRemoveTeamMember.run({
-                    actor,
-                    organizationId,
-                    teamId,
-                    userId,
-                  }),
-                ),
-              ),
-          { discard: true },
-        );
 
       const removeMember: OrganizationShape["removeMember"] = Effect.fnUntraced(
         function* (caller, organizationId, targetUserId) {
           yield* requireOrganization(organizationId);
-          // MTI-009: a non-member learns nothing about who else is in the
-          // organization — the target lookup below would otherwise answer
-          // `MembershipNotFound` before any permission check.
-          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
-          const target = yield* members.findByUserAndOrg(targetUserId, organizationId).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(new OrganizationApi.MembershipNotFound()),
-                onSome: Effect.succeed,
-              }),
-            ),
-          );
-          const violates = yield* wouldViolateOwnerInvariant(
-            organizationId,
-            target.role.includes("owner"),
-            false,
-          );
-          if (violates) return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
-
-          yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "member", "delete");
-          yield* HookPoint.aborted(OrganizationHooks.BeforeRemoveMember)(
-            beforeRemove.run({
-              actor: OrganizationActor.user(caller),
-              organizationId,
-              userId: targetUserId,
-            }),
-          );
-          const leftTeams = yield* dropMembership(organizationId, targetUserId);
-          yield* events.publish({
-            _tag: "auth.organization.memberRemoved",
-            organizationId,
-            userId: targetUserId,
-          });
-          yield* announceTeamDepartures(
-            OrganizationActor.user(caller),
-            organizationId,
-            targetUserId,
-            leftTeams,
-          );
-          yield* afterRemove.run({
-            actor: OrganizationActor.user(caller),
+          // MTI-009: a non-member learns nothing about who else is in the organization.
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requireMembership(callerId, organizationId);
+          // D4: the statement check comes first, so a caller without `member:delete` cannot probe
+          // whether a member is the last owner.
+          yield* requirePermission(callerId, organizationId, "member", "delete");
+          yield* memberSystem.remove(OrganizationActor.user(caller), {
             organizationId,
             userId: targetUserId,
           });
@@ -651,65 +536,24 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const updateMemberRole: OrganizationShape["updateMemberRole"] = Effect.fnUntraced(
         function* (caller, organizationId, targetUserId, role) {
           yield* requireOrganization(organizationId);
-          // MTI-009: see `removeMember`.
-          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
-          const target = yield* members.findByUserAndOrg(targetUserId, organizationId).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(new OrganizationApi.MembershipNotFound()),
-                onSome: Effect.succeed,
-              }),
-            ),
-          );
-          const violates = yield* wouldViolateOwnerInvariant(
-            organizationId,
-            target.role.includes("owner"),
-            role.includes("owner"),
-          );
-          if (violates) return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
-
-          const granter = yield* requirePermission(
-            Users.UserId(caller.ref.id),
-            organizationId,
-            "member",
-            "update",
-          );
-          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateMemberRole)(
-            beforeUpdateRole.run({
-              actor: OrganizationActor.user(caller),
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requireMembership(callerId, organizationId);
+          const granter = yield* requirePermission(callerId, organizationId, "member", "update");
+          const { membership } = yield* memberSystem
+            .setRoles(OrganizationActor.user(caller), {
               organizationId,
               userId: targetUserId,
-              role,
-            }),
-          );
-          // RRM-001: after the veto hook (a tap may rewrite the role), the
-          // caller must hold every statement it is conferring, and must not
-          // out-privilege-lose against the member it is changing.
-          yield* requireOutranks(organizationId, granter, target);
-          yield* requireGrantable(organizationId, granter, vetoed.role);
-          const updated = yield* members
-            .updateRole(targetUserId, organizationId, vetoed.role)
+              roles: role,
+              bound: OrganizationActor.Bound.Ceiling({
+                statements: yield* effectivePermissionsOf(organizationId, granter),
+              }),
+              ifAbsent: "fail",
+            })
             .pipe(
-              Effect.catchTag("MembershipRecordNotFound", () =>
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: membership vanished between check and write",
-                ),
-              ),
+              // Only `ifAbsent: "add"` can raise these.
+              Effect.catchTags({ AlreadyMember: Effect.die, MembershipLimitReached: Effect.die }),
             );
-          yield* events.publish({
-            _tag: "auth.organization.memberRoleUpdated",
-            organizationId,
-            userId: targetUserId,
-            role: vetoed.role,
-          });
-          yield* afterUpdateRole.run({
-            actor: OrganizationActor.user(caller),
-            organizationId,
-            userId: targetUserId,
-            role: vetoed.role,
-          });
-          return updated;
+          return membership;
         },
       );
 
@@ -717,179 +561,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
           const callerId = Users.UserId(caller.ref.id);
-          const own = yield* members.findByUserAndOrg(callerId, organizationId).pipe(
-            Effect.flatMap(
-              Option.match({
-                // PV-300 (MTI-009): a non-member leaving is answered exactly like an unknown id.
-                onNone: () => Effect.fail(new OrganizationApi.OrganizationNotFound()),
-                onSome: Effect.succeed,
-              }),
-            ),
-          );
-          const violates = yield* wouldViolateOwnerInvariant(
-            organizationId,
-            own.role.includes("owner"),
-            false,
-          );
-          if (violates) return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
-
-          // PCS-002: `leave` removes a membership like `removeMember` does, so it
-          // runs the same remove-member hooks — `DecisionCacheInvalidationLive`
-          // (and any other observer) must see a member leaving.
-          yield* HookPoint.aborted(OrganizationHooks.BeforeRemoveMember)(
-            beforeRemove.run({
-              actor: OrganizationActor.user(caller),
-              organizationId,
-              userId: callerId,
-            }),
-          );
-          const leftTeams = yield* dropMembership(organizationId, callerId);
-          yield* events.publish({
-            _tag: "auth.organization.memberRemoved",
-            organizationId,
-            userId: callerId,
-          });
-          yield* announceTeamDepartures(
-            OrganizationActor.user(caller),
-            organizationId,
-            callerId,
-            leftTeams,
-          );
-          yield* afterRemove.run({
-            actor: OrganizationActor.user(caller),
+          // PV-300 (MTI-009): a non-member leaving is answered exactly like an unknown id.
+          yield* requireMembership(callerId, organizationId);
+          yield* memberSystem.remove(OrganizationActor.user(caller), {
             organizationId,
             userId: callerId,
           });
         },
       );
-
-      const addMember: OrganizationShape["addMember"] = Effect.fnUntraced(function* ({
-        organizationId,
-        userId,
-        role,
-      }) {
-        yield* requireOrganization(organizationId);
-        const count = yield* members.countByOrganization(organizationId);
-        if (count >= (yield* limitsOf(organizationId)).membershipLimit) {
-          return yield* Effect.fail(new OrganizationApi.MembershipLimitReached());
-        }
-        const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeAddMember)(
-          beforeAdd.run({
-            actor: OrganizationActor.application("organization.addMember"),
-            organizationId,
-            userId,
-            role,
-          }),
-        );
-        // RRM-001: a trusted, caller-less server-side primitive (SCIM/import) —
-        // it bypasses the grant guard by design, but still only stores role
-        // names the organization recognizes.
-        yield* requireKnownRoles(yield* statementsByRole(organizationId), vetoed.role);
-        // MTI-003: never overwrite or duplicate an existing membership — a role
-        // change goes through `updateMemberRole` (and its canGrant guard).
-        const existing = yield* members.findByUserAndOrg(userId, organizationId);
-        if (Option.isSome(existing)) return yield* Effect.fail(new OrganizationApi.AlreadyMember());
-        const membership = yield* members
-          .create({ userId, organizationId, role: vetoed.role })
-          .pipe(
-            Effect.catchTag("MembershipRecordAlreadyExists", () =>
-              Effect.fail(new OrganizationApi.AlreadyMember()),
-            ),
-          );
-        yield* events.publish({
-          _tag: "auth.organization.memberAdded",
-          organizationId,
-          userId,
-          role: vetoed.role,
-        });
-        yield* afterAdd.run({
-          actor: OrganizationActor.application("organization.addMember"),
-          organizationId,
-          userId,
-          role: vetoed.role,
-        });
-        return membership;
-      });
-
-      const checkRoleCeiling: OrganizationShape["checkRoleCeiling"] = authority.checkRoleCeiling;
-
-      const syncMemberRoles: OrganizationShape["syncMemberRoles"] = Effect.fnUntraced(function* ({
-        organizationId,
-        userId,
-        roles,
-        ceiling,
-      }) {
-        yield* requireOrganization(organizationId);
-        const byRole = yield* statementsByRole(organizationId);
-        yield* requireKnownRoles(byRole, roles);
-        const held = PermissionEngine.effectivePermissions(ceiling, byRole);
-        if (
-          !PermissionEngine.canGrant(PermissionEngine.effectivePermissions(roles, byRole), held)
-        ) {
-          return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
-        }
-        const existing = yield* members.findByUserAndOrg(userId, organizationId);
-        if (Option.isNone(existing)) {
-          const membership = yield* addMember({ organizationId, userId, role: roles });
-          return { membership, change: "added" as const };
-        }
-        const current = existing.value;
-        if (
-          current.role.length === roles.length &&
-          roles.every((name) => current.role.includes(name))
-        ) {
-          return { membership: current, change: "unchanged" as const };
-        }
-        // RRM-001: a source never reshapes a member who out-privileges it.
-        if (
-          !PermissionEngine.canGrant(
-            PermissionEngine.effectivePermissions(current.role, byRole),
-            held,
-          )
-        ) {
-          return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
-        }
-        if (
-          yield* wouldViolateOwnerInvariant(
-            organizationId,
-            current.role.includes("owner"),
-            roles.includes("owner"),
-          )
-        ) {
-          return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
-        }
-        const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateMemberRole)(
-          beforeUpdateRole.run({
-            actor: OrganizationActor.application("organization.syncMemberRoles"),
-            organizationId,
-            userId,
-            role: roles,
-          }),
-        );
-        const updated = yield* members
-          .updateRole(userId, organizationId, vetoed.role)
-          .pipe(
-            Effect.catchTag("MembershipRecordNotFound", () =>
-              Defects.invariantViolation(
-                "RowVanished",
-                "awthaq: membership vanished between check and write",
-              ),
-            ),
-          );
-        yield* events.publish({
-          _tag: "auth.organization.memberRoleUpdated",
-          organizationId,
-          userId,
-          role: vetoed.role,
-        });
-        yield* afterUpdateRole.run({
-          actor: OrganizationActor.application("organization.syncMemberRoles"),
-          organizationId,
-          userId,
-          role: vetoed.role,
-        });
-        return { membership: updated, change: "updated" as const };
-      });
 
       const activeOrganizationOf = (caller: Api.UserPrincipal) =>
         activeContext.findBySessionId(caller.sessionId).pipe(
@@ -1846,8 +1525,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const attributesFor: OrganizationShape["attributesFor"] = authority.attributesFor;
-
       return Organization.of({
         create,
         checkSlug,
@@ -1860,9 +1537,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         removeMember,
         updateMemberRole,
         leave,
-        addMember,
-        checkRoleCeiling,
-        syncMemberRoles,
         getActiveMember,
         getActiveMemberRole,
         setActive,
@@ -1893,7 +1567,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         updateTeamMemberRole,
         removeTeamMember,
         setActiveTeam,
-        attributesFor,
       });
     }),
   });

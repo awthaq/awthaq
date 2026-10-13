@@ -147,60 +147,6 @@ export interface OrganizationShape {
     | HookPoint.HookAborted
     | Errors.StoreUnavailable
   >;
-  /** Server-only: no invitation round-trip, no HTTP endpoint — a trusted, app-driven direct add. */
-  readonly addMember: (input: {
-    readonly organizationId: string;
-    readonly userId: Users.UserId;
-    readonly role: ReadonlyArray<string>;
-  }) => Effect.Effect<
-    MembershipRecords.MembershipRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.MembershipLimitReached
-    | OrganizationApi.AlreadyMember
-    | OrganizationApi.UnknownOrgRole
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /**
-   * BEH-EA-316 (the SAML role mapping's guard, RRM-001's `canGrant` rule with a role ceiling standing in for the caller): why
-   * `roles` cannot be conferred by a source whose most is `ceiling` (role names of this organization), or `None` when they
-   * can. `unknownRole`/`unknownCeiling`: a name this organization does not recognize; `exceedsCeiling`: `roles` hold a
-   * statement the ceiling does not (an `owner` mapping under a `member` ceiling).
-   */
-  readonly checkRoleCeiling: (input: {
-    readonly organizationId: string;
-    readonly roles: ReadonlyArray<string>;
-    readonly ceiling: ReadonlyArray<string>;
-  }) => Effect.Effect<
-    Option.Option<"unknownRole" | "unknownCeiling" | "exceedsCeiling">,
-    OrganizationApi.OrganizationNotFound | Errors.StoreUnavailable
-  >;
-  /**
-   * BEH-EA-316: makes `userId`'s roles in the organization exactly `roles`, on behalf of a source (an identity provider's
-   * mapping) that has no caller: adds the membership when there is none, otherwise re-roles it. `canGrant` bounds it twice:
-   * `roles` must be within `ceiling`, and so must what the member holds now (a member who out-privileges the source is
-   * never demoted or reshaped by it: `RolePermissionEscalation`). The last owner is never demoted
-   * (`OwnerInvariantViolation`); limits, hooks and events are those of `addMember` / `updateMemberRole`.
-   */
-  readonly syncMemberRoles: (input: {
-    readonly organizationId: string;
-    readonly userId: Users.UserId;
-    readonly roles: ReadonlyArray<string>;
-    readonly ceiling: ReadonlyArray<string>;
-  }) => Effect.Effect<
-    {
-      readonly membership: MembershipRecords.MembershipRecord;
-      readonly change: "added" | "updated" | "unchanged";
-    },
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.MembershipLimitReached
-    | OrganizationApi.AlreadyMember
-    | OrganizationApi.UnknownOrgRole
-    | OrganizationApi.RolePermissionEscalation
-    | OrganizationApi.OwnerInvariantViolation
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
   readonly getActiveMember: (
     caller: Api.UserPrincipal,
   ) => Effect.Effect<
@@ -565,23 +511,5 @@ export interface OrganizationShape {
   ) => Effect.Effect<
     ActiveContextRecords.ActiveContextRecord,
     OrganizationApi.TeamMembershipNotFound | Errors.StoreUnavailable
-  >;
-  /**
-   * A user's role(s) and effective permission set within an organization —
-   * `Option.none` if they aren't a member. Not exposed over HTTP; exists so
-   * `Organization.attributes` (this plugin's `AttributeResolver` contribution,
-   * ticket 18) can answer from the same computation `requirePermission`
-   * itself uses, rather than duplicating `statementsByRole`/
-   * `effectivePermissionsOf`'s logic in a second place.
-   */
-  readonly attributesFor: (
-    organizationId: string,
-    userId: Users.UserId,
-  ) => Effect.Effect<
-    Option.Option<{
-      readonly role: ReadonlyArray<string>;
-      readonly permissions: PermissionEngine.Statements;
-    }>,
-    Errors.StoreUnavailable
   >;
 }

@@ -10,6 +10,7 @@ import { Api } from "@awthaq/api";
 import { Sessions, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
+import { addMember } from "./support.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -110,7 +111,7 @@ describe("Organization.relationships composed into a real qadi policy", () => {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
         const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: record.id,
           userId: Users.UserId("member-1"),
           role: ["member"],
@@ -157,7 +158,7 @@ describe("Organization.relationships composed into a real qadi policy", () => {
           ["plain-1", "member"],
           ["target-1", "member"],
         ] as const) {
-          yield* organization.addMember({
+          yield* addMember({
             organizationId: record.id,
             userId: Users.UserId(user),
             role: [role],

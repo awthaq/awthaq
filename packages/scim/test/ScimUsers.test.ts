@@ -2,7 +2,7 @@
 // ownership, immutability, deactivation and deletion — driven at the domain level over
 // the same layer graph an application builds (`support.ts`).
 import { Accounts, AuditLog, AuthEvents, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
-import { InvitationRecords, MembershipRecords } from "@awthaq/organization";
+import { InvitationRecords, MembershipRecords, OrganizationHooks } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -521,6 +521,36 @@ const ErasedBetweenReads: typeof Users.layerMemory = Layer.effect(
     });
   }),
 ).pipe(Layer.provideMerge(Users.layerMemory));
+
+describe("SCIM Users: membership goes through OrganizationMembers (plan 04)", () => {
+  it.effect(
+    "provisioning fires AfterAddMember with a Directory actor naming the connection",
+    () => {
+      const seen: Array<string> = [];
+      return Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        yield* scim.createUser(connection, { userName: "ada@acme.example" });
+        assert.deepStrictEqual(seen, [`Directory:${connection.id}`]);
+      }).pipe(
+        Effect.provide(
+          ScimLive(
+            {},
+            {},
+            undefined,
+            undefined,
+            OrganizationHooks.AfterAddMember.tap((input) => {
+              seen.push(
+                `${input.actor._tag}:${"connectionId" in input.actor ? input.actor.connectionId : ""}`,
+              );
+              return Effect.void;
+            }),
+          ),
+        ),
+      );
+    },
+  );
+});
 
 describe("SCIM Users: DELETE (BEH-EA-250)", () => {
   it.effect("by default DELETE deactivates: the user, its accounts and history remain", () =>

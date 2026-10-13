@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-35 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-014](../models/14-organization.md) as `@awthaq/organization`; MTI-011) <br> 1.1 (2026-10-13): BEH-EA-284: the records are Keyed by organization id, every cross-organization method takes a witness, and the stores fail with StoreUnavailable (plan 05 phase 6) <br> 1.2 (2026-10-13): BEH-EA-330, organization state is reached through system modules that take an actor (ADR-EA-040, architecture plan 04 phase 1) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-014](../models/14-organization.md) as `@awthaq/organization`; MTI-011) <br> 1.1 (2026-10-13): BEH-EA-284: the records are Keyed by organization id, every cross-organization method takes a witness, and the stores fail with StoreUnavailable (plan 05 phase 6) <br> 1.2 (2026-10-13): BEH-EA-330, organization state is reached through system modules that take an actor (ADR-EA-040, architecture plan 04 phase 1) <br> 1.3 (2026-10-13): BEH-EA-288: one `Bound` for every role-conferring path, `Unbounded` an explicit choice; membership is `OrganizationMembers` (add, setRoles, remove), so a directory's and an identity provider's changes run the same limit, owner invariant, veto, cascade and observers as a member's; the statement check now precedes the owner invariant (D4) and an unchanged role set is a no-op everywhere (D5) (ADR-EA-040, architecture plan 04 phase 3) |
 ---
 
 > `@awthaq/organization` composes as `Auth.make([Organization])` and serves the `organization` HTTP group at `/organization/...`, all behind `Api.Authentication` and `Api.CsrfProtection`. It is the multi-tenant membership plugin ([MOD-EA-014](../models/14-organization.md)): the behaviors below are what an application relies on to treat an organization as a tenant boundary. Roles and statements are the plugin's own `PermissionEngine` ([ADR-EA-025](../decisions/025-global-roles-vs-organization-roles.md)), never a qadi round trip; tenancy resolution and tenant-stamped rows are [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none) through [BEH-EA-237](28-tenancy.md#beh-ea-237-a-suspended-organization-refuses-organization-scoped-access), and the qadi relationship grammar is [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership).
@@ -129,6 +129,11 @@ REQUIREMENT: Every path that assigns roles (`invite`, `updateMemberRole`,
              `admin` and `member` and every configured static role name are
              reserved: a dynamic role MUST NOT take one (`409`). A dynamic role
              whose statements exceed the creator's own MUST be refused `403`.
+             The bound is one value, `Bound`: a `Ceiling` of the statements the
+             source holds (the caller's, a SAML connection's role ceiling) or the
+             explicit `Unbounded` of a trusted source (SCIM's configured member
+             role, application code). A veto tap that rewrites the roles is
+             bounded on what is stored.
 ```
 
 Without the guard, any holder of `member:update` could promote themselves: the endpoint that edits roles would be the privilege-escalation path. The guard is the discretionary-access-control rule "you cannot give what you do not have", applied uniformly rather than per endpoint.
