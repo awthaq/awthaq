@@ -252,92 +252,89 @@ const deviceAuthorizationMigrations: Migrations.Migrations = [
 
 // ---- rate limits -----------------------------------------------------------------------------------------------------------------------------
 
-/** One budget: where it is enforced, what it is keyed by, how much it allows. */
-interface Budget<Input> {
-  readonly group: string;
-  readonly endpoint: string;
-  /** The rule's own name, as `EnforceMeta.rule` and the static `rateLimits` declaration report it. */
-  readonly name: string;
-  readonly dimension: RateLimits.EnforceMeta["dimension"];
-  readonly limit: number;
-  readonly window: Duration.Duration;
-  readonly keyOf: (input: Input) => string;
-}
+// BEH-EA-105/107/111: declared once. The static `rateLimits` listing is derived from this table at the
+// default configuration and the layer registers it with `RateLimits.budget`, tuning each rule to the
+// configured numbers (`DeviceAuthorizationConfig`). A breach is published, logged and counted
+// (EOTS-007), whether it is a request throttle (`spend`) or a failure budget (`guard`, BCR-006).
+//
+// The three endpoints that look a user code up share one budget per source and one per session (a
+// guesser cannot spread attempts across them): the rules name the explicit bucket `userCode`, which
+// must start with this plugin's own group, and the key part (`ip:`, `session:`) keeps the two
+// dimensions' counters apart.
+const userCode = "device_authorization.userCode";
 
-const ipKey = (prefix: string) => (input: { readonly ip?: string | undefined }) =>
-  `${prefix}:ip:${input.ip ?? "unknown"}`;
-
-const metaOf = (budget: Budget<never>): RateLimits.EnforceMeta => ({
-  group: budget.group,
-  endpoint: budget.endpoint,
-  rule: budget.name,
-  dimension: budget.dimension,
-});
-
-const makeBudgets = (settings: DeviceAuthorizationConfigShape) => {
-  const lookup = (group: string, endpoint: string) => ({
-    byIp: {
-      group,
-      endpoint,
-      name: `${endpoint}-ip`,
-      dimension: "ip",
-      ...settings.userCodeRateLimit.ip,
-      // One budget for all three endpoints that look a code up: a guesser cannot spread attempts across them.
-      keyOf: ipKey("device:user-code"),
-    } satisfies Budget<{ readonly ip?: string | undefined }>,
-    bySession: {
-      group,
-      endpoint,
-      name: `${endpoint}-session`,
-      dimension: "principal",
-      ...settings.userCodeRateLimit.session,
-      keyOf: (input: { readonly sessionId: string }) =>
-        `device:user-code:session:${input.sessionId}`,
-    } satisfies Budget<{ readonly sessionId: string }>,
-  });
-  return {
-    codeByIp: {
-      group: "device_authorization",
-      endpoint: "code",
-      name: "code-ip",
-      dimension: "ip",
-      ...settings.codeRateLimit.ip,
-      keyOf: ipKey("device:code"),
-    } satisfies Budget<{ readonly ip?: string | undefined }>,
-    codeByClient: {
-      group: "device_authorization",
-      endpoint: "code",
-      name: "code-client",
-      dimension: "custom",
-      ...settings.codeRateLimit.client,
-      keyOf: (input: { readonly clientId: string }) => `device:code:client:${input.clientId}`,
-    } satisfies Budget<{ readonly clientId: string }>,
-    invalidGrantByIp: {
-      group: "device_authorization",
-      endpoint: "token",
-      name: "token-invalid-ip",
-      dimension: "ip",
-      ...settings.invalidGrantRateLimit,
-      keyOf: ipKey("device:token-invalid"),
-    } satisfies Budget<{ readonly ip?: string | undefined }>,
-    verify: lookup("device_authorization.verification", "verify"),
-    approve: lookup("device_authorization.decision", "approve"),
-    deny: lookup("device_authorization.decision", "deny"),
-  };
+const rules = {
+  codeByIp: RateLimits.rule({
+    group: "device_authorization",
+    endpoint: "code",
+    key: RateLimits.Key.ip,
+    ...defaultConfig.codeRateLimit.ip,
+  }),
+  codeByClient: RateLimits.rule({
+    group: "device_authorization",
+    endpoint: "code",
+    key: RateLimits.Key.client,
+    ...defaultConfig.codeRateLimit.client,
+  }),
+  invalidGrantByIp: RateLimits.failureRule({
+    group: "device_authorization",
+    endpoint: "token",
+    key: RateLimits.Key.ip,
+    ...defaultConfig.invalidGrantRateLimit,
+  }),
+  verifyByIp: RateLimits.failureRule({
+    group: "device_authorization.verification",
+    endpoint: "verify",
+    key: RateLimits.Key.ip,
+    bucket: userCode,
+    ...defaultConfig.userCodeRateLimit.ip,
+  }),
+  verifyBySession: RateLimits.failureRule({
+    group: "device_authorization.verification",
+    endpoint: "verify",
+    key: RateLimits.Key.session,
+    bucket: userCode,
+    ...defaultConfig.userCodeRateLimit.session,
+  }),
+  approveByIp: RateLimits.failureRule({
+    group: "device_authorization.decision",
+    endpoint: "approve",
+    key: RateLimits.Key.ip,
+    bucket: userCode,
+    ...defaultConfig.userCodeRateLimit.ip,
+  }),
+  approveBySession: RateLimits.failureRule({
+    group: "device_authorization.decision",
+    endpoint: "approve",
+    key: RateLimits.Key.session,
+    bucket: userCode,
+    ...defaultConfig.userCodeRateLimit.session,
+  }),
+  denyByIp: RateLimits.failureRule({
+    group: "device_authorization.decision",
+    endpoint: "deny",
+    key: RateLimits.Key.ip,
+    bucket: userCode,
+    ...defaultConfig.userCodeRateLimit.ip,
+  }),
+  denyBySession: RateLimits.failureRule({
+    group: "device_authorization.decision",
+    endpoint: "deny",
+    key: RateLimits.Key.session,
+    bucket: userCode,
+    ...defaultConfig.userCodeRateLimit.session,
+  }),
 };
 
-/** Every budget, in registration order: what the static `rateLimits` declaration lists and the registry registers. */
-const allBudgets = (budgets: ReturnType<typeof makeBudgets>): ReadonlyArray<Budget<never>> => [
-  budgets.codeByIp,
-  budgets.codeByClient,
-  budgets.invalidGrantByIp,
-  budgets.verify.byIp,
-  budgets.verify.bySession,
-  budgets.approve.byIp,
-  budgets.approve.bySession,
-  budgets.deny.byIp,
-  budgets.deny.bySession,
-];
+/** The per-source and per-session rule of each user-code lookup endpoint. */
+const lookupRules = {
+  verify: { ip: "verifyByIp", session: "verifyBySession" },
+  approve: { ip: "approveByIp", session: "approveBySession" },
+  deny: { ip: "denyByIp", session: "denyBySession" },
+} satisfies Record<
+  "verify" | "approve" | "deny",
+  { readonly ip: keyof typeof rules; readonly session: keyof typeof rules }
+>;
 
 // ---- the service ---------------------------------------------------------------------------------------------------------------------------------------
 
@@ -711,11 +708,8 @@ export class DeviceAuthorization extends AuthPlugin.Service<
   contract: DeviceAuthorizationApi.DeviceAuthorizationApi,
   tables: ["device_authorization_grant", "device_authorization_client"],
   migrations: deviceAuthorizationMigrations,
-  // PV-241: the default budgets (`DeviceAuthorizationConfig` tunes them), from the same table the layer enforces.
-  rateLimits: AuthPlugin.declareRateLimits(
-    ["device_authorization", "device_authorization.verification", "device_authorization.decision"],
-    allBudgets(makeBudgets(defaultConfig)),
-  ),
+  // PV-241: the typed rule table at the default configuration (`DeviceAuthorizationConfig` tunes it at build).
+  rateLimitRules: rules,
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
   config: [
     ConfigDescriptor.make(DeviceAuthorizationConfig, {
@@ -744,7 +738,6 @@ export class DeviceAuthorization extends AuthPlugin.Service<
       const sessions = yield* Sessions.Sessions;
       const events = yield* AuthEvents.AuthEvents;
       const crypto = yield* Crypto.Crypto;
-      const limiter = yield* RateLimiter.RateLimiter;
       const settings = yield* DeviceAuthorizationConfig;
       const beforeApproval = yield* BeforeDeviceApproval;
       const afterApproval = yield* AfterDeviceApproval;
@@ -752,64 +745,20 @@ export class DeviceAuthorization extends AuthPlugin.Service<
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
 
-      const budgets = makeBudgets(settings);
-
-      // Every budget is introspectable through the registry (BEH-EA-111): the static declaration registers
-      // them, and the config tunes each default (`RateLimits.registerDeclared`, PV-241).
-      const enforced = allBudgets(budgets);
-      // The explicit type breaks the inference cycle through `DeviceAuthorization.layer` (its own initializer
-      // names the class) — the narrow exception `MagicLink`/`Password` document too.
-      const registerRules: Effect.Effect<
-        void,
-        RateLimits.RateLimitScopeViolation,
-        RateLimits.RateLimitsRegistry
-      > = RateLimits.registerDeclared(DeviceAuthorization, {
-        key: (rule) => (rule.dimension === "ip" ? "ip" : () => `device:${rule.name}`),
-        tune: (rule) => enforced.find((budget) => budget.name === rule.name),
+      // The configured numbers tune the declared defaults, for the registry and on every call.
+      const limits = yield* RateLimits.budget(DeviceAuthorization, {
+        tune: Effect.succeed({
+          codeByIp: settings.codeRateLimit.ip,
+          codeByClient: settings.codeRateLimit.client,
+          invalidGrantByIp: settings.invalidGrantRateLimit,
+          verifyByIp: settings.userCodeRateLimit.ip,
+          approveByIp: settings.userCodeRateLimit.ip,
+          denyByIp: settings.userCodeRateLimit.ip,
+          verifyBySession: settings.userCodeRateLimit.session,
+          approveBySession: settings.userCodeRateLimit.session,
+          denyBySession: settings.userCodeRateLimit.session,
+        }),
       });
-      yield* registerRules.pipe(Effect.orDie);
-
-      /** Consumes one unit of a budget; a breach is published, logged and counted (EOTS-007), and answers 429. */
-      const spend = <I>(budget: Budget<I>, input: I): Effect.Effect<void, Api.RateLimited> =>
-        RateLimits.enforce({
-          key: budget.keyOf(input),
-          limit: budget.limit,
-          window: budget.window,
-          meta: metaOf(budget),
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
-
-      /** The read half of a failure budget (BCR-006): refuses once it is spent, without counting this call. */
-      const assertBudget = <I>(budget: Budget<I>, input: I): Effect.Effect<void, Api.RateLimited> =>
-        limiter
-          .check({ key: budget.keyOf(input), limit: budget.limit, window: budget.window })
-          .pipe(
-            Effect.catchTag("RateLimitExceeded", (error) =>
-              events
-                .publish({
-                  _tag: "auth.rateLimit.exceeded",
-                  ...metaOf(budget),
-                  retryAfterMillis: error.retryAfterMillis,
-                })
-                .pipe(
-                  Effect.andThen(
-                    Effect.fail(new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis })),
-                  ),
-                ),
-            ),
-          );
-
-      /** Charges one failure; a race past the limit is ignored, the next `assertBudget` refuses it. */
-      const charge = <I>(budget: Budget<I>, input: I) =>
-        limiter
-          .consume({ key: budget.keyOf(input), limit: budget.limit, window: budget.window })
-          .pipe(Effect.ignore);
 
       // ---- clients ---------------------------------------------------------------------------------
 
@@ -880,14 +829,14 @@ export class DeviceAuthorization extends AuthPlugin.Service<
 
       const requestCode: DeviceAuthorizationShape["requestCode"] = Effect.fnUntraced(
         function* (input, context) {
-          yield* spend(budgets.codeByIp, { ip: input.ip });
+          yield* limits.spend("codeByIp", { ip: input.ip });
           const client = yield* liveClient(input.clientId);
           if (Option.isNone(client)) return yield* new DeviceAuthorizationApi.InvalidClient();
           if (input.scope.some((scope) => !client.value.scopes.includes(scope))) {
             return yield* new DeviceAuthorizationApi.InvalidScope();
           }
           // Only a registered client's id becomes a bucket key: an attacker cannot mint buckets by inventing ids.
-          yield* spend(budgets.codeByClient, { clientId: client.value.clientId });
+          yield* limits.spend("codeByClient", { clientId: client.value.clientId });
           const now = yield* DateTime.now;
           const grantId = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
           const interval = Math.max(1, Math.ceil(Duration.toSeconds(settings.interval)));
@@ -943,14 +892,14 @@ export class DeviceAuthorization extends AuthPlugin.Service<
         userCode: string,
         who: Source & { readonly sessionId?: string | undefined },
       ) {
-        const set = budgets[endpoint];
-        yield* assertBudget(set.byIp, { ip: who.ip });
+        const names = lookupRules[endpoint];
+        yield* limits.guard(names.ip, { ip: who.ip });
         if (who.sessionId !== undefined)
-          yield* assertBudget(set.bySession, { sessionId: who.sessionId });
+          yield* limits.guard(names.session, { sessionId: who.sessionId });
         const miss = Effect.gen(function* () {
-          yield* charge(set.byIp, { ip: who.ip });
+          yield* limits.charge(names.ip, { ip: who.ip });
           if (who.sessionId !== undefined)
-            yield* charge(set.bySession, { sessionId: who.sessionId });
+            yield* limits.charge(names.session, { sessionId: who.sessionId });
           return yield* new DeviceAuthorizationApi.InvalidUserCode();
         });
         const normalized = UserCode.normalize(userCode);
@@ -1094,9 +1043,9 @@ export class DeviceAuthorization extends AuthPlugin.Service<
       // ---- polling -----------------------------------------------------------------------------------
 
       const poll: DeviceAuthorizationShape["poll"] = Effect.fnUntraced(function* (input, context) {
-        yield* assertBudget(budgets.invalidGrantByIp, { ip: input.ip });
+        yield* limits.guard("invalidGrantByIp", { ip: input.ip });
         const invalidGrant = Effect.gen(function* () {
-          yield* charge(budgets.invalidGrantByIp, { ip: input.ip });
+          yield* limits.charge("invalidGrantByIp", { ip: input.ip });
           return yield* new DeviceAuthorizationApi.InvalidGrant();
         });
         const found = yield* grants.findByDeviceHash(

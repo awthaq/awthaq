@@ -227,6 +227,29 @@ describe("shared buckets (BEH-EA-107)", () => {
     }).pipe(Effect.provide(Live)),
   );
 
+  it.effect("rules of different key strategies may share a bucket name with their own sizing", () =>
+    Effect.gen(function* () {
+      // `ip:` and `session:` parts never meet, so these are two counters that merely share a prefix.
+      const lookups = handOwner("invite", ["invite"], {
+        byIp: ipRuleIn("invite", "invite.lookup"),
+        bySession: RateLimits.rule({
+          group: "invite",
+          endpoint: "e",
+          key: RateLimits.Key.session,
+          limit: 7,
+          window: minute,
+          bucket: "invite.lookup",
+        }),
+      });
+      const limits = yield* RateLimits.budget(lookups);
+      yield* limits.spend("bySession", { sessionId: "s1" });
+      yield* limits.spend("byIp", { ip: "1.1.1.1" });
+      yield* limits.spend("byIp", { ip: "1.1.1.1" });
+      const refused = yield* limits.spend("byIp", { ip: "1.1.1.1" }).pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "RateLimited");
+    }).pipe(Effect.provide(Live)),
+  );
+
   it.effect("unequal sizing in one bucket is a defect", () =>
     Effect.gen(function* () {
       const uneven = handOwner("invite", ["invite"], {

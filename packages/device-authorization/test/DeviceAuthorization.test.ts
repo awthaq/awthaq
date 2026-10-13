@@ -17,6 +17,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -613,31 +614,43 @@ for (const options of suites) {
           }).pipe(Effect.provide(layer({ rateLimiter: "enforcing" }))),
       );
 
-      it.effect("polling with codes that never existed spends a per-source budget", () =>
-        Effect.gen(function* () {
-          const plugin = yield* service;
-          const bogus = {
-            deviceCode: Redacted.make("nope"),
-            clientId: CLI_CLIENT_ID,
-            ip: DEVICE_IP,
-          };
-          for (let i = 0; i < 3; i++) {
-            const miss = yield* plugin.poll(bogus).pipe(Effect.flip);
-            assert.strictEqual(miss._tag, "InvalidGrant");
-          }
-          const refused = yield* plugin.poll(bogus).pipe(Effect.flip);
-          assert.strictEqual(refused._tag, "RateLimited");
-        }).pipe(
-          Effect.provide(
-            layer({
-              rateLimiter: "enforcing",
-              config: {
-                ...DeviceAuthorization.DeviceAuthorizationConfig.defaultValue(),
-                invalidGrantRateLimit: { limit: 3, window: Duration.minutes(15) },
-              },
-            }),
+      it.effect(
+        "polling with codes that never existed spends a per-source budget, and a refusal is counted",
+        () =>
+          Effect.gen(function* () {
+            const plugin = yield* service;
+            const bogus = {
+              deviceCode: Redacted.make("nope"),
+              clientId: CLI_CLIENT_ID,
+              ip: DEVICE_IP,
+            };
+            // D6: a refused failure-budget lookup used to publish the event but skip the metric.
+            const counter = Metric.withAttributes(RateLimits.exceededCounter, {
+              group: "device_authorization",
+              endpoint: "token",
+              rule: "invalidGrantByIp",
+              dimension: "ip",
+            });
+            const before = (yield* Metric.value(counter)).count;
+            for (let i = 0; i < 3; i++) {
+              const miss = yield* plugin.poll(bogus).pipe(Effect.flip);
+              assert.strictEqual(miss._tag, "InvalidGrant");
+            }
+            assert.strictEqual((yield* Metric.value(counter)).count, before);
+            const refused = yield* plugin.poll(bogus).pipe(Effect.flip);
+            assert.strictEqual(refused._tag, "RateLimited");
+            assert.strictEqual((yield* Metric.value(counter)).count, before + 1);
+          }).pipe(
+            Effect.provide(
+              layer({
+                rateLimiter: "enforcing",
+                config: {
+                  ...DeviceAuthorization.DeviceAuthorizationConfig.defaultValue(),
+                  invalidGrantRateLimit: { limit: 3, window: Duration.minutes(15) },
+                },
+              }),
+            ),
           ),
-        ),
       );
 
       it.effect("every budget is introspectable through the rate-limit registry", () =>

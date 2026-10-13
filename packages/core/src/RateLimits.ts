@@ -163,7 +163,10 @@ export const layer: Layer.Layer<RateLimitModel.RateLimitsRegistry> = Layer.effec
             limit: sizing.limit,
             windowMillis: millisOf(sizing.window),
           };
-          const existing = claimed.get(bucket);
+          // A counter is a bucket AND a key strategy: `ip:` and `session:` parts never meet, so rules
+          // of different strategies may share a bucket name (device's user-code lookups) with their own sizing.
+          const claimKey = `${bucket}\u0000${rule.strategy}`;
+          const existing = claimed.get(claimKey);
           if (
             existing !== undefined &&
             (existing.owner !== claim.owner ||
@@ -179,7 +182,7 @@ export const layer: Layer.Layer<RateLimitModel.RateLimitsRegistry> = Layer.effec
               }),
             );
           }
-          claimed.set(bucket, claim);
+          claimed.set(claimKey, claim);
         }
         yield* Ref.set(buckets, claimed);
         yield* Ref.update(handles, (current) => new Map(current).set(owner.id, handle));
