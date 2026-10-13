@@ -1207,26 +1207,34 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                   },
                 })
                 .pipe(
-                  Effect.catchTag("SignUp/IdentityTaken", (taken) =>
-                    taken.kind === "Email"
-                      ? // A concurrent sign-up claimed the address between our lookup and this insert:
-                        // report whatever the winner has, or nothing if it isn't visible yet.
-                        (profile.email === undefined
-                          ? Effect.succeed(Option.none())
-                          : users.findByEmail(profile.email)
-                        ).pipe(
-                          Effect.flatMap((winner) =>
-                            Option.isSome(winner)
-                              ? conflictingProviders(
-                                  winner.value.id,
-                                  profile.emailVerified === true,
-                                )
-                              : Effect.succeed([]),
-                          ),
-                          Effect.flatMap((providers) => new OAuthApi.AccountExists({ providers })),
-                        )
-                      : // A fresh user has no phone, and a fresh user's subject is not yet linked.
-                        Defects.invariantViolation("OAuthSignUpConflict", taken.message),
+                  Effect.catchTag(
+                    "SignUp/IdentityTaken",
+                    Effect.fnUntraced(function* (taken) {
+                      if (taken.kind === "Account") {
+                        // A concurrent callback linked this identity to another user first.
+                        return yield* CallbackFailure.callbackFailed("account-already-linked");
+                      }
+                      // FAMS-002: no phone identity is created here.
+                      if (taken.kind === "Phone") {
+                        return yield* Defects.invariantViolation(
+                          "OAuthSignUpConflict",
+                          taken.message,
+                        );
+                      }
+                      // A concurrent sign-up claimed the address between our lookup and this insert:
+                      // report whatever the winner has, or nothing if it isn't visible yet.
+                      const winner =
+                        profile.email === undefined
+                          ? Option.none()
+                          : yield* users.findByEmail(profile.email);
+                      const providers = Option.isSome(winner)
+                        ? yield* conflictingProviders(
+                            winner.value.id,
+                            profile.emailVerified === true,
+                          )
+                        : [];
+                      return yield* new OAuthApi.AccountExists({ providers });
+                    }),
                   ),
                 );
               return created.id;

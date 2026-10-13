@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-038 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-10-13 |
-> | Status | Accepted — in progress |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (architecture plan 01) |
+> | Change History | 1.0 (2026-10-13): Initial release (architecture plan 01) <br> 1.1 (2026-10-13): every sign-in and sign-up site is migrated and guarded; status Accepted — implemented |
 
 ---
 

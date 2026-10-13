@@ -1133,3 +1133,16 @@ counting `auth.user.signedIn` now see password sign-ups. Clients of `POST /passw
 1. **Make `RequestContext.layer` a required middleware?** Today it is opt-in, and only `examples/memory-server` installs it (E1). If yes, Phase 6 removes `ip`/`userAgent` threading from every plugin Shape, and a host without the middleware records no address or user agent on sessions. If no, Phase 6 is limited to `SessionDelivery.respond`, and call sites keep passing their request.
 2. **Should a host's `BeforeSignUp` taps apply to SCIM directory provisioning?** This plan says yes, under strategy `scim:<organizationId>:<connectionId>`, so a global sign-up policy (a banned domain, a legal block) cannot be bypassed by a directory. The alternative treats SCIM like an operator import (no veto), which ADR-EA-033 D5 would then have to name as an exemption.
 3. **Should enterprise federation (SAML, and OIDC connections) be subject to the local second-factor divert at all?** The plan makes SAML + 2FA correct (continuation, `amr`, tenant). But `TwoFactorConfig.bypassStrategies` is an exact-string match (`TwoFactor.ts:181`), and SAML strategies are per connection (`saml:<org>:<conn>`), so an application cannot say "the IdP already did MFA" for all SAML at once. If you want that, a prefix match (`"saml:*"`) is a small two-factor change outside this plan's scope.
+
+## Decisions taken (execution of phases 3 to 5)
+
+Open questions were answered with the plan's recommended default; where the plan gave none, the richest option with a real caller.
+
+1. **Password sign-up's first session is a cleared sign-in** (`createSignedIn`): `BeforeSignIn`/`BeforeSessionIssue` run on it and `auth.user.signedIn` is published; `signUp`'s error union gains `TwoFactorRequired`. Two BDD steps and one wiring test were updated to count the sign-up's own sign-in.
+2. **SCIM provisioning is vetted** with strategy `scim:<organizationId>:<connectionId>` (host `BeforeSignUp` taps now apply to SCIM; the changeset says how to exempt it). `Users.createWith` stays public (plan 03 decision 10); SCIM and everyone else now reach it through `SignUp.createWith`.
+3. **Declaration emit (TS2883)**: a plugin that infers a layer type mentioning `SignUp.make`'s requirements names them through the `SignUp` import (`Accounts`, the sign-in hook points, `SignInContinuationRegistry` are re-exported there). `magic-link`'s `Channel.ts` re-exports `Accounts`, `AuthEvents` and `SqlTransaction` for its two layers, which do not import `SignUp`.
+4. **`discardUnannounced.ts` (phase 3 step 1)** was not created: `Users.createWith` already abandons a half-made user without events, so the helper had no caller.
+5. **Seam guard allowlist for user creation** also names `cli/src/Seed.ts` (`awthaq seed admin`) and `test/src/TestAuth.ts` (`signInAs`), both operator or test fixtures, not sign-ups.
+6. **The two remaining `orDie` on `Sessions.issue`** (`changePassword`, `Admin.impersonate`) became the typed `StoreUnavailable` their Shapes already declared.
+
+Not done: phase 6 (the HTTP edge, conditional on Q1 and plan 06 and not taken here); `pnpm test:pg` (no Docker daemon in this environment) for phases 3 to 5, so the SQL composition of `SignUp` is covered only by `SignUpSql.test.ts` over SQLite.

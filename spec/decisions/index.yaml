@@ -153,4 +153,4 @@ entries:
   - id: "ADR-EA-038"
     file: "038-sign-in-and-sign-up-are-core-modules.md"
     title: "Sign-In Completion and Sign-Up Are Core Modules; a Session for a Proven Credential Is Minted Only From a Clearance"
-    status: "Accepted — in progress"
+    status: "Accepted — implemented"

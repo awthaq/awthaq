@@ -227,6 +227,9 @@ export interface CreateInput {
  * is unproven). `updateProfile`'s input has no identity or status field, so
  * there is no generic write path a plugin-level caller could use to change
  * either. SCP-001: `setStatus` is the only writer of `status`.
+ *
+ * ADR-EA-038: a sign-up never calls `create` directly; it goes through `SignUp`, which runs `BeforeSignUp`
+ * and owns the transaction and the announcements. `assertCanSignIn` is called by `SignIn` for every flow.
  */
 export interface UsersShape {
   readonly create: (

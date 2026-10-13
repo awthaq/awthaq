@@ -1097,13 +1097,11 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
             Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
           );
 
-        const issued = yield* sessions
-          .issue({
-            userId: targetUserId,
-            actingAs: { type: caller.ref.type, id: caller.ref.id },
-            absoluteDuration: adminConfig.maxDuration,
-          })
-          .pipe(Effect.orDie);
+        const issued = yield* sessions.issue({
+          userId: targetUserId,
+          actingAs: { type: caller.ref.type, id: caller.ref.id },
+          absoluteDuration: adminConfig.maxDuration,
+        });
         const trimmedReason = reason.trim();
         yield* records.create({
           adminUserId: Users.UserId(caller.ref.id),

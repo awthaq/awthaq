@@ -122,6 +122,14 @@ If your own code has work that must follow the same rule, use the lanes directly
 - A nested `transactional` is a savepoint: its `onCommit` work is dropped if the savepoint rolls back; its `afterUnit` work always reaches the parent. Both lanes take an `Effect<void>` with no error and no requirements, so handle or `orDie` errors inside, and capture any per-request context the work needs before deferring it.
 - A host that opens its own raw `sql.withTransaction` around awthaq calls is not covered: use `SqlTransaction.transactional(sql)`.
 
+## Completing a sign-in and creating a user (ADR-EA-038)
+
+Resolve core's two modules once, in your plugin's `make`, and let them own the sequence; never hand-write it.
+
+- **Sign-in.** `const signIn = yield* SignIn.make`, then `signIn.complete({ userId, strategy, amr }, request)` once your credential is proven: it applies the user lookup, the suspension gate, `BeforeSignIn`, the `BeforeSessionIssue` divert, mints the session, publishes `auth.user.signedIn` and runs `AfterSignIn`. Use `clear` then `issue` when you must do something between the veto and the mint (device authorization consumes its grant there). Map `SignIn/UserGone` to your flow's own uniform refusal. A flow that a second factor can finish later passes a `continuation` and hands the divert's handoff to `SignIn.resume`.
+- **Sign-up.** `const signUp = yield* SignUp.make`, then `signUp.vet({ identity, name, strategy })` (this runs `BeforeSignUp`, so call it before any expensive work) and `create`, `createWith` or `createSignedIn` with the `Vetted` it returned: they create, mark verified, link your credential and run your own `within` work as one unit, answer every collision as `SignUp/IdentityTaken` (map it to your wire answer), and publish `auth.user.created` and run `AfterSignUp` only after the unit commits. List `SqlTransaction.SqlTransaction` among your `ports`.
+- **Never** call `Sessions.issue` for a proven credential or `Users.create` for a sign-up. The compiler refuses a session or a user without a `Clearance` or a `Vetted`, and `core/test/SignInSeams.test.ts` fails on a new caller. Operator imports (`UserImport.importUser`, `awthaq seed admin`) are the named exemption.
+
 ## House rules
 
 - No type assertions in library source: no `as`, `as unknown as`, `as any`. Use `Schema` decoding, `Brand.nominal` for witnesses, or a typed helper.
@@ -137,4 +145,5 @@ If your own code has work that must follow the same rule, use the lanes directly
 5. Hook points with a `.layer` each, provided once.
 6. A test that builds through `Auth.make`, runs the real migrations, exercises an endpoint over a real handler, aborts a veto, and calls `TestAuth.runPluginContractTests` (pass `hooks: [{ point: Hooks.AfterSignUp, input }]` to run the plugin's declared taps against a stub input: an observe tap must not try to abort, a veto tap may only abort with `HookAbort`; BEH-EA-200).
 7. A package README stating what it ships (`pnpm check:readmes` enforces the status banner).
-8. Every event declared with `defineEvent`, its actor chosen and its free-text fields in `pii`.
+8. A flow that signs a person in or creates a user goes through `SignIn`/`SignUp`, never `Sessions.issue`/`Users.create` (ADR-EA-038).
+9. Every event declared with `defineEvent`, its actor chosen and its free-text fields in `pii`.

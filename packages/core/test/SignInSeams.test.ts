@@ -104,4 +104,41 @@ describe("the sign-in seam (ADR-EA-038)", () => {
       },
     ]);
   });
+
+  it("the sign-in hook points and BeforeSignUp are run only by their module", () => {
+    assertExactly(countOf(/\b(beforeSignUp|afterSignUp)\s*\.run\(/g), [
+      {
+        file: "core/src/SignUp.ts",
+        count: 2,
+        why: "SignUp.vet consults BeforeSignUp; the create* methods run AfterSignUp after the commit",
+      },
+    ]);
+  });
+});
+
+describe("the sign-up seam (ADR-EA-038)", () => {
+  it("a user is created for a sign-up only by SignUp; imports are the named exemption", () => {
+    assertExactly(countOf(/\busers\s*\.(create|createOrGet|createWith)\(/g), [
+      {
+        file: "core/src/SignUp.ts",
+        count: 1,
+        why: "SignUp.createWith is the one creation path for a sign-up",
+      },
+      {
+        file: "core/src/UserImport.ts",
+        count: 1,
+        why: "an operator migration is not a sign-up (UserImport.importUser)",
+      },
+      {
+        file: "cli/src/Seed.ts",
+        count: 1,
+        why: "`awthaq seed admin` is an operator bootstrap, not a sign-up",
+      },
+      {
+        file: "test/src/TestAuth.ts",
+        count: 1,
+        why: "signInAs fixes a user for an authorization test, with no sign-up policy involved",
+      },
+    ]);
+  });
 });

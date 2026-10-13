@@ -1706,14 +1706,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // `revokeOthers` nothing to `keep` (the superseded id no longer
         // exists once `issue` has run).
         yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
-        const issued = yield* sessions
-          .issue({
-            userId: input.userId,
-            supersedes: input.currentSessionId,
-            request: sessionRequest(input),
-            amr: ["pwd"],
-          })
-          .pipe(Effect.orDie);
+        const issued = yield* sessions.issue({
+          userId: input.userId,
+          supersedes: input.currentSessionId,
+          request: sessionRequest(input),
+          amr: ["pwd"],
+        });
         return issued;
       });
 
