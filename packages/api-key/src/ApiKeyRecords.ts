@@ -69,7 +69,7 @@ export interface ApiKeyRecordsShape {
 }
 
 export class ApiKeyRecords extends Context.Service<ApiKeyRecords, ApiKeyRecordsShape>()(
-  "awthaq/api-key/ApiKeyRecords",
+  "awthaq/api-key/records/ApiKeyRecords",
 ) {}
 
 // ---- layerMemory ------------------------------------------------------------

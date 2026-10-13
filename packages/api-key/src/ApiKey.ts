@@ -765,6 +765,11 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
     apikey_client: AuthPlugin.Table.global("service clients are deployment-wide"),
   },
   migrations: apiKeyMigrations,
+  // Plan 08 (BEH-EA-T4): the key and client stores, memory and SQL, matched.
+  records: {
+    memory: Layer.mergeAll(ApiKeyRecords.layerMemory, ApiKeyClientRecords.layerMemory),
+    sql: Layer.mergeAll(ApiKeyRecords.layerSql, ApiKeyClientRecords.layerSql),
+  },
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
   config: [
     ConfigDescriptor.make(ApiKeyConfig, {
