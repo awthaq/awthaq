@@ -38,7 +38,6 @@
   "devDependencies": {
     "@awthaq/server": "workspace:*",
     "@awthaq/test": "workspace:*",
-    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
