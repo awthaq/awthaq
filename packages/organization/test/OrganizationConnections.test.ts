@@ -3,25 +3,9 @@
 // an organization's rows into provider configs; `oauthConnections` installs the
 // resolver `@awthaq/oauth` consults after its static registry — proven here end
 // to end by completing a real callback through a stored connection.
-import {
-  Accounts,
-  AuditLog,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, AuditLog, Auth, Persistence, Users } from "@awthaq/core";
 import { OAuth, OAuthConnections } from "@awthaq/oauth";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Encryption, KeyProvider, Mailer, SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -37,10 +21,7 @@ import * as DomainClaims from "../src/DomainClaims.ts";
 import * as OrganizationConnections from "../src/OrganizationConnections.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationDirectory from "../src/OrganizationDirectory.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrganizationSystem from "../src/OrganizationSystem.ts";
 import * as Organization from "../src/Organization.ts";
 import { TestAuth } from "@awthaq/test";
 import { grant } from "./support.ts";
@@ -323,18 +304,9 @@ const RealLive = Layer.mergeAll(
   OrganizationConnections.connectionsOnOrganizationDelete,
 ).pipe(
   Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
-  Layer.provideMerge(ConnectionRecords.layerMemory),
-  Layer.provideMerge(DomainClaims.layerMemory),
-  Layer.provideMerge(OrganizationSystem.layer.pipe(Layer.provide(Organization.config({})))),
-  Layer.provideMerge(OrganizationMemory.layer),
-  Layer.provideMerge(EncryptionLive),
   Layer.provideMerge(
-    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
+    TestAuth.layer(Auth.make([Organization.Organization]), { services: Organization.config({}) }),
   ),
-  Layer.provideMerge(TestAuth.memoryFoundation),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
 );
 
 describe("connections belong to an active organization, and go with it (BEH-EA-235)", () => {
@@ -414,32 +386,28 @@ describe("connections belong to an active organization, and go with it (BEH-EA-2
 
 // ---- end to end: a stored connection completes a real OAuth callback ------------------
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Verification.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+// `OAuth` through `TestAuth.layer`; the store and the resolver that reads it are the test's own `services`, over one
+// records instance, so the connection the test creates is the one the callback resolves.
+const ConnectionsStore = Layer.mergeAll(
+  OrganizationConnections.layerStore,
+  OrganizationConnections.oauthConnections,
+).pipe(
+  Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
+  Layer.provideMerge(
+    Layer.mergeAll(ConnectionRecords.layerMemory, DomainClaims.layerMemory, StubDirectoryLive),
+  ),
+);
 
-const OAuthLive = OAuth.OAuth.layer.pipe(
-  Layer.provide(OrganizationConnections.oauthConnections),
-  Layer.provide(Authentication.OptionalAuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(RateLimiter.layerPermissive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(ClientAddress.layerDirect),
-  Layer.provideMerge(EncryptionLive),
-  Layer.provide(
+const OAuthLive = TestAuth.layer(Auth.make([OAuth.OAuth]), {
+  services: Layer.mergeAll(
+    ConnectionsStore,
     fakeHttpClient({
       "/token": { access_token: "at-1" },
       "/userinfo": { id: "acme-user-1", email: "ada@acme.example", email_verified: true },
     }),
+    OAuth.config({ providers: [], baseUrl, retry: { base: Duration.zero, times: 0 } }),
   ),
-  Layer.provide(OAuth.config({ providers: [], baseUrl, retry: { base: Duration.zero, times: 0 } })),
-  Layer.provideMerge(ConnectionsLive),
-);
+});
 
 describe("a stored connection completes a full OAuth flow (EP-004)", () => {
   it.effect("an organization adds a connection at runtime and its users sign in through it", () =>

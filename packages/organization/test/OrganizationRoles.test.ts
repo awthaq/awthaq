@@ -1,8 +1,7 @@
 // Plan 04 (ADR-EA-040): `OrganizationRoles`, dynamic access control at its own interface, with no principal.
 // The feature gate, the reserved names (RZS-005), the `Bound` (RRM-001), the quota, the veto and the
 // observe point are proved here; `Organization.test.ts` keeps who may manage roles.
-import { HookPoint, Persistence, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
+import { Auth, HookPoint, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -12,11 +11,11 @@ import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
 import * as OrganizationDirectory from "../src/OrganizationDirectory.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import * as OrganizationRoles from "../src/OrganizationRoles.ts";
-import * as OrganizationSystem from "../src/OrganizationSystem.ts";
 
 const dacOn = { enabled: true, maximumRolesPerOrganization: Number.POSITIVE_INFINITY };
+
+const built = Auth.make([Organization.Organization]);
 
 const buildLayer = (
   config: Partial<Organization.OrganizationConfigShape> = { dynamicAccessControl: dacOn },
@@ -25,17 +24,7 @@ const buildLayer = (
     never,
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = Layer.empty,
-) =>
-  OrganizationSystem.layer.pipe(
-    Layer.provide(Organization.config(config)),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(TestAuth.memoryFoundation),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(taps),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+) => TestAuth.layer(built, { services: Organization.config(config), taps });
 
 const application = OrganizationActor.application("OrganizationRoles.test");
 const unbounded = OrganizationActor.Bound.Unbounded();

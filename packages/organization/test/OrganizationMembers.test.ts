@@ -2,8 +2,7 @@
 // owner invariant, the membership limit, role names, the `Bound`, the veto, the removal cascade and
 // the hook order are proved here; the SAML role mapping's cases (BEH-EA-316) live here too, since
 // `setRoles` is its one implementation. `Organization.test.ts` keeps only the authorization half.
-import { AuditLog, HookPoint, Persistence, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
+import { Auth, AuditLog, HookPoint, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -17,11 +16,11 @@ import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationMembers from "../src/OrganizationMembers.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrganizationSystem from "../src/OrganizationSystem.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 import { grant } from "./support.ts";
+
+const built = Auth.make([Organization.Organization]);
 
 const NoTaps = Layer.empty;
 const buildLayer = (
@@ -31,18 +30,7 @@ const buildLayer = (
     never,
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = NoTaps,
-) =>
-  OrganizationSystem.layer.pipe(
-    Layer.provide(Organization.config(config)),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(
-      Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
-    ),
-    Layer.provideMerge(TestAuth.memoryFoundation),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(taps),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+) => TestAuth.layer(built, { services: Organization.config(config), taps });
 
 const application = OrganizationActor.application("OrganizationMembers.test");
 const unbounded = OrganizationActor.Bound.Unbounded();

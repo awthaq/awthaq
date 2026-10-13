@@ -4,83 +4,28 @@
 // Failures are injected with database triggers, so every assertion is about
 // what the database actually holds afterwards.
 import { Api } from "@awthaq/api";
-import { Migrations, Persistence, Sessions, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
-import * as InvitationRecords from "../src/InvitationRecords.ts";
-import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import * as TeamRecords from "../src/TeamRecords.ts";
-import { TestSql } from "@awthaq/test";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestSql } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("organization-sql-test-csrf-secret"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const SqlLive = TestSql.layer("organization_OrganizationSql");
-
-const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
-  Layer.provide(SqlLive),
-);
-
-const sqlRecords = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
-  layer.pipe(Layer.provide(NodeCrypto.layer));
-
-// Every records layer shares the one migrated in-memory database.
-const OrganizationSqlLive = Organization.Organization.layer.pipe(
-  Layer.provide(
-    Organization.config({
-      dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 10 },
-      teams: {
-        enabled: true,
-        maximumTeams: Number.POSITIVE_INFINITY,
-        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
-        allowRemovingAllTeams: true,
-      },
-    }),
-  ),
-  Layer.provide(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(sqlRecords(OrganizationRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(MembershipRecords.layerSql)),
-  Layer.provideMerge(ActiveContextRecords.layerSql),
-  Layer.provideMerge(sqlRecords(InvitationRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(OrgRoleRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(TeamRecords.layerSql)),
-  Layer.provideMerge(Mailer.layerMemory),
-  Layer.provideMerge(SqlTransaction.layerSql),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  Layer.provideMerge(Migrated),
-  Layer.provideMerge(SqlLive),
-);
+// Every record store shares the one migrated database `TestAuth.layer({ records: "sql" })` builds.
+const OrganizationSqlLive = TestAuth.layer(Auth.make([Organization.Organization]), {
+  records: "sql",
+  suite: "organization_OrganizationSql",
+  services: Organization.config({
+    dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 10 },
+    teams: {
+      enabled: true,
+      maximumTeams: Number.POSITIVE_INFINITY,
+      maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+      allowRemovingAllTeams: true,
+    },
+  }),
+});
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({

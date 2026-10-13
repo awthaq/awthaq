@@ -2,30 +2,23 @@
 // appears here: the system interface takes an `Actor`, and every policy a team operation has
 // (`teams.enabled`, the quotas, the last-team rule, vetoes, the transaction, `Bound`) is proved
 // without the authorized layer. `Organization.test.ts` keeps only the authorization half.
-import { HookPoint, Migrations, Persistence, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
+import { Auth, HookPoint, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestSql } from "@awthaq/test";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
-import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
-import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrganizationSystem from "../src/OrganizationSystem.ts";
 import * as OrganizationTeams from "../src/OrganizationTeams.ts";
-import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
-import { TestSql } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
+import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import { grant } from "./support.ts";
 
 const teamsOn = (overrides: Partial<Organization.OrganizationConfigShape["teams"]> = {}) => ({
@@ -38,6 +31,8 @@ const teamsOn = (overrides: Partial<Organization.OrganizationConfigShape["teams"
 
 const NoTaps = Layer.empty;
 
+const built = Auth.make([Organization.Organization]);
+
 /** The system layer over memory records. `taps` are hook layers installed on the shared points. */
 const buildLayer = (
   config: Partial<Organization.OrganizationConfigShape> = { teams: teamsOn() },
@@ -46,18 +41,7 @@ const buildLayer = (
     never,
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = NoTaps,
-) =>
-  OrganizationSystem.layer.pipe(
-    Layer.provide(Organization.config(config)),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(
-      Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
-    ),
-    Layer.provideMerge(TestAuth.memoryFoundation),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(taps),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+) => TestAuth.layer(built, { services: Organization.config(config), taps });
 
 const application = OrganizationActor.application("OrganizationTeams.test");
 const unbounded = OrganizationActor.Bound.Unbounded();
@@ -810,30 +794,11 @@ describe("OrganizationTeams: attach", () => {
 
 // ---- over SQL: the unit really is one transaction -------------------------------------
 
-const SqlLive = TestSql.layer("organization_OrganizationTeams");
-const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
-  Layer.provide(SqlLive),
-);
-const sqlRecords = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
-  layer.pipe(Layer.provide(NodeCrypto.layer));
-
-const SqlSystemLive = OrganizationSystem.layer.pipe(
-  Layer.provide(Organization.config({ teams: teamsOn({ allowRemovingAllTeams: true }) })),
-  Layer.provideMerge(
-    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
-  ),
-  Layer.provideMerge(TestAuth.memoryFoundation),
-  Layer.provideMerge(sqlRecords(OrganizationRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(MembershipRecords.layerSql)),
-  Layer.provideMerge(ActiveContextRecords.layerSql),
-  Layer.provideMerge(sqlRecords(OrgRoleRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(InvitationRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(TeamRecords.layerSql)),
-  Layer.provideMerge(SqlTransaction.layerSql),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  Layer.provideMerge(Migrated),
-  Layer.provideMerge(SqlLive),
-);
+const SqlSystemLive = TestAuth.layer(built, {
+  records: "sql",
+  suite: "organization_OrganizationTeams",
+  services: Organization.config({ teams: teamsOn({ allowRemovingAllTeams: true }) }),
+});
 
 const countRows = (sql: SqlClient.SqlClient, table: string) =>
   sql.unsafe(`SELECT COUNT(*) AS n FROM ${table}`).pipe(

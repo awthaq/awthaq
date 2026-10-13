@@ -1,42 +1,24 @@
 // Plan 04 (F7, ADR-EA-040): the organization-deletion registry. Another plugin's rows that hang off an
 // organization (connections) are removed in the deletion's own transaction, in `order` then id order, and
 // their `afterCommit` runs only once the deletion has committed.
-import { Migrations, Persistence, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
+import { Auth, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
-import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationDeletion from "../src/OrganizationDeletion.ts";
 import * as OrganizationDirectory from "../src/OrganizationDirectory.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
-import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrganizationSystem from "../src/OrganizationSystem.ts";
-import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import * as TeamRecords from "../src/TeamRecords.ts";
-import { TestSql } from "@awthaq/test";
 
 const application = OrganizationActor.application("OrganizationDeletion.test");
 
-const base = OrganizationSystem.layer.pipe(
-  Layer.provide(Organization.config({})),
-  Layer.provideMerge(OrganizationMemory.layer),
-  Layer.provideMerge(
-    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
-  ),
-  Layer.provideMerge(TestAuth.memoryFoundation),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-);
+const built = Auth.make([Organization.Organization]);
+
+const base = TestAuth.layer(built, { services: Organization.config({}) });
 
 const handler = (log: Array<string>, name: string) => ({
   inTransaction: (organizationId: string) =>
@@ -110,12 +92,11 @@ describe("OrganizationDeletion", () => {
 
 // ---- over SQL: a failing contribution rolls the whole deletion back ---------------------------------
 
-const SqlLive = TestSql.layer("organization_OrganizationDeletion");
-const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
-  Layer.provide(SqlLive),
-);
-const sqlRecords = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
-  layer.pipe(Layer.provide(NodeCrypto.layer));
+const SqlSystemLive = TestAuth.layer(built, {
+  records: "sql",
+  suite: "organization_OrganizationDeletion",
+  services: Organization.config({}),
+});
 
 describe("OrganizationDeletion over SQL", () => {
   it.effect("a contribution that fails rolls the deletion back and runs no afterCommit", () => {
@@ -140,33 +121,6 @@ describe("OrganizationDeletion over SQL", () => {
       assert.isTrue(Option.isSome(yield* directory.find(org.id)));
       assert.isTrue(Option.isSome(yield* members.findByUserAndOrg(Users.UserId("o"), org.id)));
       assert.deepStrictEqual(log, []);
-    }).pipe(
-      Effect.provide(
-        failing.pipe(
-          Layer.provideMerge(
-            OrganizationSystem.layer.pipe(
-              Layer.provide(Organization.config({})),
-              Layer.provideMerge(
-                Layer.mergeAll(
-                  Users.layer.pipe(Layer.provide(Persistence.memory)),
-                  Mailer.layerMemory,
-                ),
-              ),
-              Layer.provideMerge(TestAuth.memoryFoundation),
-              Layer.provideMerge(sqlRecords(OrganizationRecords.layerSql)),
-              Layer.provideMerge(sqlRecords(MembershipRecords.layerSql)),
-              Layer.provideMerge(ActiveContextRecords.layerSql),
-              Layer.provideMerge(sqlRecords(InvitationRecords.layerSql)),
-              Layer.provideMerge(sqlRecords(OrgRoleRecords.layerSql)),
-              Layer.provideMerge(sqlRecords(TeamRecords.layerSql)),
-              Layer.provideMerge(SqlTransaction.layerSql),
-              Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-              Layer.provideMerge(Migrated),
-              Layer.provideMerge(SqlLive),
-            ),
-          ),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(failing.pipe(Layer.provideMerge(SqlSystemLive))));
   });
 });

@@ -1,29 +1,24 @@
 // Plan 04 (ADR-EA-040): `OrganizationDirectory`, tested at its own interface, with no principal. The
 // organization row's lifecycle: creating one atomically with its creator's membership, updating, deleting
 // with its cascade, and a platform suspension that runs a veto and an observe point (BEH-EA-237).
-import { HookPoint, Migrations, Persistence, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, HookPoint, Users } from "@awthaq/core";
+import { TestAuth, TestSql } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
-import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationDirectory from "../src/OrganizationDirectory.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
-import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrganizationSystem from "../src/OrganizationSystem.ts";
-import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
-import { TestSql } from "@awthaq/test";
+import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
+import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
+
+const built = Auth.make([Organization.Organization]);
 
 const buildLayer = (
   config: Partial<Organization.OrganizationConfigShape> = {},
@@ -32,18 +27,7 @@ const buildLayer = (
     never,
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = Layer.empty,
-) =>
-  OrganizationSystem.layer.pipe(
-    Layer.provide(Organization.config(config)),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(
-      Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
-    ),
-    Layer.provideMerge(TestAuth.memoryFoundation),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(taps),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+) => TestAuth.layer(built, { services: Organization.config(config), taps });
 
 const application = OrganizationActor.application("OrganizationDirectory.test");
 const admin = OrganizationActor.platformAdmin(Users.UserId("admin-1"));
@@ -296,29 +280,11 @@ describe("OrganizationDirectory.suspend and reinstate (BEH-EA-237)", () => {
 
 // ---- over SQL: the organization and its creator's membership are one transaction ---------------------
 
-const SqlLive = TestSql.layer("organization_OrganizationDirectory");
-const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
-  Layer.provide(SqlLive),
-);
-const sqlRecords = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
-  layer.pipe(Layer.provide(NodeCrypto.layer));
-const SqlSystemLive = OrganizationSystem.layer.pipe(
-  Layer.provide(Organization.config({})),
-  Layer.provideMerge(
-    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
-  ),
-  Layer.provideMerge(TestAuth.memoryFoundation),
-  Layer.provideMerge(sqlRecords(OrganizationRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(MembershipRecords.layerSql)),
-  Layer.provideMerge(ActiveContextRecords.layerSql),
-  Layer.provideMerge(sqlRecords(InvitationRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(OrgRoleRecords.layerSql)),
-  Layer.provideMerge(sqlRecords(TeamRecords.layerSql)),
-  Layer.provideMerge(SqlTransaction.layerSql),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  Layer.provideMerge(Migrated),
-  Layer.provideMerge(SqlLive),
-);
+const SqlSystemLive = TestAuth.layer(built, {
+  records: "sql",
+  suite: "organization_OrganizationDirectory",
+  services: Organization.config({}),
+});
 
 const countRows = (sql: SqlClient.SqlClient, table: string) =>
   sql.unsafe(`SELECT COUNT(*) AS n FROM ${table}`).pipe(

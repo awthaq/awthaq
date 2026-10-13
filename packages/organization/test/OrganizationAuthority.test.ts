@@ -1,39 +1,27 @@
 // Plan 04 (ADR-EA-040): `OrganizationAuthority`, the read-only evaluation path. The plugin's own
 // gating, the `Bound` a role-conferring operation derives, and `OrganizationQadi` all read it, so
 // they cannot disagree (ADR-EA-009). No principal, no write, no hook point appears here.
-import { Persistence, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
+import { Auth, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrganizationSystem from "../src/OrganizationSystem.ts";
 import * as OrganizationTeams from "../src/OrganizationTeams.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as PermissionEngine from "../src/PermissionEngine.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 import { grant } from "./support.ts";
 
+const built = Auth.make([Organization.Organization]);
+
 const buildLayer = (config: Partial<Organization.OrganizationConfigShape> = {}) =>
-  OrganizationSystem.layer.pipe(
-    Layer.provide(Organization.config(config)),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(
-      Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
-    ),
-    Layer.provideMerge(TestAuth.memoryFoundation),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+  TestAuth.layer(built, { services: Organization.config(config) });
 
 const userId = Users.UserId;
 

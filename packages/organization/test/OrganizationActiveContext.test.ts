@@ -2,22 +2,17 @@
 // interface. Keyed by a session reference, not an actor: the membership is the only witness (MTI-001), the
 // pointers are per session, a suspended organization reads as unavailable (BEH-EA-237) and a lapsed pointer
 // is cleared for real on read (CWM-003).
-import { Persistence, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
+import { Auth, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActiveContext from "../src/OrganizationActiveContext.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationDirectory from "../src/OrganizationDirectory.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import * as OrganizationMembers from "../src/OrganizationMembers.ts";
-import * as OrganizationSystem from "../src/OrganizationSystem.ts";
 import * as OrganizationTeams from "../src/OrganizationTeams.ts";
 
 const teamsOn = {
@@ -27,15 +22,9 @@ const teamsOn = {
   allowRemovingAllTeams: true,
 };
 
-const Live = OrganizationSystem.layer.pipe(
-  Layer.provide(Organization.config({ teams: teamsOn })),
-  Layer.provideMerge(OrganizationMemory.layer),
-  Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
-  Layer.provideMerge(Mailer.layerMemory),
-  Layer.provideMerge(TestAuth.memoryFoundation),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-);
+const built = Auth.make([Organization.Organization]);
+
+const Live = TestAuth.layer(built, { services: Organization.config({ teams: teamsOn }) });
 
 const application = OrganizationActor.application("OrganizationActiveContext.test");
 const owner = Users.UserId("owner-1");

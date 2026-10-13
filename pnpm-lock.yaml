@@ -890,9 +890,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/server':
-        specifier: workspace:*
-        version: link:../server
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
