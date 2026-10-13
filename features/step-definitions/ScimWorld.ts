@@ -60,7 +60,11 @@ const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
         Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findByEmail" })),
     });
   }),
-).pipe(Layer.provide(Users.layerMemory));
+).pipe(
+  // provideMerge: the real `UserRemoval` rides along; this double's `Users` wins (`Context.merge`
+  // keeps the later entry).
+  Layer.provideMerge(Users.layerMemory),
+);
 
 /** A `beforeDelete` tap that refuses every deletion, as a legal hold would (BEH-EA-095). */
 const VetoDelete = Hooks.BeforeUserDelete.tap(() =>

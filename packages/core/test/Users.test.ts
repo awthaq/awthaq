@@ -8,21 +8,19 @@ import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as Migrator from "effect/unstable/sql/Migrator";
-import * as Hooks from "../src/Hooks.ts";
+import { ErasureClearance } from "../src/internal/erasureClearance.ts";
 import * as Phone from "../src/Phone.ts";
 import * as Tenant from "../src/Tenant.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
 import * as Users from "../src/Users.ts";
 
-const MemoryLayer = Users.layerMemory.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(Hooks.BeforeUserDelete.layer),
-);
+const MemoryLayer = Users.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
 // PV-010: `:memory:` SQLite by default, a real Postgres schema under `pnpm run test:pg`.
 const SqlLive = TestSql.layer("core_Users");
@@ -35,12 +33,17 @@ const Migrated = Layer.effectDiscard(
 
 const SqlTestLayer = Users.layerSql.pipe(
   Layer.provide(Repositories.UsersRepositoryLive),
-  Layer.provide(Hooks.BeforeUserDelete.layer),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
 
-const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): void => {
+/** The clearance `AccountErasure` would mint once the veto passed; core tests may mint one directly. */
+const clearanceFor = (id: Users.UserId) => ErasureClearance.afterVeto(id, Effect.void);
+
+const suite = (
+  name: string,
+  layer: Layer.Layer<Users.Users | Users.UserRemoval, unknown, never>,
+): void => {
   describe(name, () => {
     // EOTS-004: identifiers and emails are typed fields, never part of a message that reaches logs.
     it.effect("EOTS-004: error messages never contain the id or the email", () =>
@@ -126,7 +129,7 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
     );
 
     it.effect(
-      "findById/updateProfile/verifyEmail/delete all fail with UserNotFound for an unknown id",
+      "findById/updateProfile/verifyEmail all fail with UserNotFound for an unknown id",
       () =>
         Effect.gen(function* () {
           const users = yield* Users.Users;
@@ -139,8 +142,72 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
           assert.strictEqual(updateNotFound._tag, "UserNotFound");
           const verifyNotFound = yield* users.verifyEmail(missing).pipe(Effect.flip);
           assert.strictEqual(verifyNotFound._tag, "UserNotFound");
-          const deleteNotFound = yield* users.delete(missing).pipe(Effect.flip);
-          assert.strictEqual(deleteNotFound._tag, "UserNotFound");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "UserRemoval.remove with a clearance drops the row and its fields; an unknown id is UserNotFound",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const removal = yield* Users.UserRemoval;
+          const created = yield* users.create({
+            identity: { _tag: "Email", email: "removed@example.com" },
+            name: "Removed",
+          });
+          yield* removal.remove(yield* clearanceFor(created.id));
+          assert.strictEqual(
+            (yield* users.findById(created.id).pipe(Effect.flip))._tag,
+            "UserNotFound",
+          );
+          assert.isTrue(Option.isNone(yield* users.findByEmail("removed@example.com")));
+          // The address is free again.
+          yield* users.create({
+            identity: { _tag: "Email", email: "removed@example.com" },
+            name: "Again",
+          });
+          const missing = Users.UserId("00000000-0000-0000-0000-000000000000");
+          const failure = yield* removal.remove(yield* clearanceFor(missing)).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "UserNotFound");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "createWith abandons the user when completion fails, dies or is interrupted, and keeps it when it succeeds",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const input = (email: string) => ({
+            identity: { _tag: "Email" as const, email },
+            name: "Provisioned",
+          });
+          const abandoned = (email: string) =>
+            users.findByEmail(email).pipe(Effect.map(Option.isNone));
+
+          const failed = yield* users
+            .createWith(input("fail@example.com"), () => Effect.fail("boom" as const))
+            .pipe(Effect.flip);
+          assert.strictEqual(failed, "boom");
+          assert.isTrue(yield* abandoned("fail@example.com"));
+
+          const died = yield* users
+            .createWith(input("die@example.com"), () => Effect.die("boom"))
+            .pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(died));
+          assert.isTrue(yield* abandoned("die@example.com"));
+
+          const interrupted = yield* users
+            .createWith(input("interrupt@example.com"), () => Effect.interrupt)
+            .pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(interrupted));
+          assert.isTrue(yield* abandoned("interrupt@example.com"));
+
+          // The abandoned address is free again, and success keeps the user.
+          const kept = yield* users.createWith(input("fail@example.com"), (user) =>
+            Effect.succeed(user.name),
+          );
+          assert.strictEqual(kept.value, "Provisioned");
+          assert.strictEqual((yield* users.findById(kept.user.id)).id, kept.user.id);
         }).pipe(Effect.provide(layer)),
     );
 
@@ -595,7 +662,6 @@ describe("Users (layerSql) profile update racing a delete (GC-004)", () => {
 
   const VanishingLayer = Users.layerSql.pipe(
     Layer.provide(VanishingRepository),
-    Layer.provide(Hooks.BeforeUserDelete.layer),
     Layer.provideMerge(SqlLive),
     Layer.provideMerge(Migrated),
   );
@@ -662,7 +728,6 @@ describe("Users infrastructure failures (MA-004)", () => {
 
   const DownLayer = Users.layerSql.pipe(
     Layer.provide(DownRepository),
-    Layer.provide(Hooks.BeforeUserDelete.layer),
     Layer.provideMerge(SqlLive),
     Layer.provideMerge(Migrated),
   );

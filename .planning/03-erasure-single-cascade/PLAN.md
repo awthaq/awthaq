@@ -1117,3 +1117,30 @@ be idempotent across one erasure.
    authenticates was **not** verified. Open a separate plan, or fold into 10?
 10. **`createWith` naming and lifetime**: keep it as a public `Users` operation, or have plan 01
     privatize it behind `SignUp` once SCIM provisioning moves there?
+
+---
+
+## 11. Decisions taken (execution)
+
+Open questions were answered with the plan's recommended default; where the plan gave none, the richest option with a real caller.
+
+1. **Initiator on the `BeforeUserDelete` input**: no (plan default). No tap needs it; adding it later is additive.
+2. **`auth.admin.userDeleted` / `auth.scim.userDeleted`**: kept (plan default). They carry the audit actor and the "directory acted" record.
+3. **Initiator ids on `auth.user.deleted`** (`adminUserId`, `connectionId`, `organizationId`): added (plan default, the richer option).
+4. **SCIM `DELETE` of a user erased in between**: `404`, nothing published (plan default).
+5. **`scimExport` shipped with the hotfix**: yes (plan default).
+6. **Orphan repair for pre-release deployments that used SCIM `erase`**: none (plan default; nothing is published).
+7. **Initiator tag `Directory`** (not `Scim`): kept (plan default; a future LDAP/HRIS sync fits it).
+8. **Self-service delete vetoed -> 500**: unchanged here (non-goal; recorded for plan 10).
+9. **api-key / saml erasure gaps**: api-key already done by plan 10 item 0 (commit 89fb48c); saml not done here (still open).
+10. **`createWith`**: kept as a public `Users` operation (plan default); plan 01 may privatize it behind `SignUp`.
+
+Deviations from the plan text, found while executing:
+
+- The plan's `ErasureClearance.afterVeto` signature is `<E, R>(userId, veto: Effect<unknown, E, R>)`; it is `<A, E, R>` here so the veto's own success type need not be `unknown` at the call site. Same behaviour.
+- Plan 10 item 0's `ApiKey.test.ts` and `ServiceToken.test.ts` also called `users.delete(owner)` to produce an orphan owner (added after this plan's caller census). They now use `orphanOwner` in `packages/api-key/test/harness.ts`, an erasure over a fresh empty registry (the section 5.3 technique), so the orphan-owner defence-in-depth stays covered.
+- The passkey orphan helper also provides `SqlTransaction.layerNoop` (its test layer has none); the device-authorization helper is local to its test file and needed no harness change (the plan's note about adding `Accounts.layerMemory` to the harness is unnecessary because the helper brings its own `Accounts`/`Verification`).
+- `Host` in `features/step-definitions/CrossCuttingApp.ts` gained `Erasure.AccountErasure` in its `AppServices` union, which the BEH-EA-095 step needs; `Hooks.BeforeUserDelete` stays in `HookPoints` because the step installs a tap on it.
+- The plan's T9 ("erased in between") is built with a `Users` double whose reads of an id succeed once and then fail `UserNotFound`, defined next to the test (`ErasedBetweenReads` in `ScimUsers.test.ts`).
+- New BDD ids are REQ-EA-1268..1270.
+- `pnpm knip` reports only the 101 untracked `.reports/` files; `pnpm test:pg` ran against a throwaway Postgres container and passed.

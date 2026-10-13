@@ -11,7 +11,13 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as ApiKey from "../src/ApiKey.ts";
 import * as ApiKeyRecords from "../src/ApiKeyRecords.ts";
-import { buildLayer, seedUser, type HarnessOptions, type HarnessServices } from "./harness.ts";
+import {
+  buildLayer,
+  orphanOwner,
+  seedUser,
+  type HarnessOptions,
+  type HarnessServices,
+} from "./harness.ts";
 
 // Re-seeded as real users by every test's `provide`, so these are `let`, not constants.
 let owner = Users.UserId("owner-1");
@@ -347,9 +353,8 @@ const suite = (store: HarnessOptions["store"]) => {
       it.effect("a key whose owner row is gone (an orphan) resolves None", () =>
         Effect.gen(function* () {
           const apiKey = yield* ApiKey.ApiKey;
-          const users = yield* Users.Users;
           const created = yield* apiKey.create(owner, { name: "k", scopes: [] });
-          yield* users.delete(owner);
+          yield* orphanOwner(owner);
           assert.isTrue(Option.isNone(yield* apiKey.resolve(created.key)));
         }).pipe(provide()),
       );

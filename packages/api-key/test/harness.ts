@@ -3,7 +3,18 @@
 // registry, with the api-key records either in memory or on a real migrated database
 // (`TestSql`, SQLite by default, Postgres under `AWTHAQ_POSTGRES_URL`).
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Migrations, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  Erasure,
+  Hooks,
+  Migrations,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
@@ -216,6 +227,26 @@ export const makeApp = (options: HarnessOptions) => {
 
   return { handler, withContext, sessionCookie, request, layer };
 };
+
+/**
+ * Erases `userId` through the core cascade with none of the plugins' contributions (not even
+ * api-key's own): the deliberate orphan the owner-standing gate exists for.
+ */
+export const orphanOwner = (userId: Users.UserId) =>
+  Erasure.AccountErasure.use((erasure) =>
+    erasure.eraseAccount(userId, Erasure.ErasureInitiator.Self()),
+  ).pipe(
+    Effect.provide(
+      Erasure.layer.pipe(
+        // `Layer.fresh`: the composition's own registry (holding api-key's contribution) is memoized
+        // by reference, so without `fresh` it would be reused.
+        Layer.provide(Layer.fresh(Erasure.registryLayer)),
+        Layer.provide(Accounts.layerMemory),
+        Layer.provide(Verification.layerMemory),
+      ),
+    ),
+    Effect.orDie,
+  );
 
 /**
  * Registers real users for the key owners: a key resolves only while its owner exists and

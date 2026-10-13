@@ -763,14 +763,57 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         if (Option.isSome(email) && Option.isSome(yield* users.findByEmail(email.value))) {
           return yield* ScimApi.conflict(`An account for ${email.value} already exists`);
         }
-        const created = yield* users
-          .create({
-            identity: Option.match(email, {
-              onNone: () => ({ _tag: "Anonymous" as const }),
-              onSome: (value) => ({ _tag: "Email" as const, email: value }),
-            }),
-            name: nameFromInput(input),
-          })
+        // `createWith` abandons the user (no veto, no event, invitations untouched) if the mapping or
+        // the membership fails, so a failed POST leaves nothing behind (REQ-EA-926).
+        const { user: created, value: link } = yield* users
+          .createWith(
+            {
+              identity: Option.match(email, {
+                onNone: () => ({ _tag: "Anonymous" as const }),
+                onSome: (value) => ({ _tag: "Email" as const, email: value }),
+              }),
+              name: nameFromInput(input),
+            },
+            (user) =>
+              Effect.gen(function* () {
+                const link = yield* records
+                  .link({
+                    connectionId: connection.id,
+                    kind: "User",
+                    resourceId: user.id,
+                    name: userName,
+                    externalId:
+                      input.externalId?.trim() === "" ? undefined : input.externalId?.trim(),
+                  })
+                  .pipe(
+                    Effect.catchTag("ScimLinkConflict", (error) =>
+                      Effect.fail(
+                        ScimApi.conflict(
+                          error.field === "externalId"
+                            ? `externalId ${input.externalId ?? ""} is already provisioned`
+                            : `userName ${userName} is already provisioned`,
+                        ),
+                      ),
+                    ),
+                  );
+                yield* membershipAdded(connection, user.id).pipe(
+                  // The link was written above; abandoning the user must not leave the mapping behind.
+                  Effect.onError(() => records.unlink(connection.id, "User", user.id)),
+                  Effect.catchTags({
+                    MembershipLimitReached: () =>
+                      Effect.fail(
+                        ScimApi.forbidden("The organization's membership limit is reached"),
+                      ),
+                    HookAborted: (aborted) => Effect.fail(ScimApi.forbidden(aborted.message)),
+                    OrganizationNotFound: () =>
+                      Effect.fail(ScimApi.forbidden("The organization is not available")),
+                    UnknownOrgRole: () =>
+                      Effect.fail(ScimApi.forbidden("The configured member role is unknown")),
+                  }),
+                );
+                return link;
+              }),
+          )
           .pipe(
             Effect.catchTags({
               "Users/EmailAlreadyExists": () =>
@@ -787,58 +830,6 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
                 ),
             }),
           );
-
-        /** The user exists but is not (fully) provisioned: remove it so a failed POST leaves nothing behind. */
-        const rollBack = records.unlink(connection.id, "User", created.id).pipe(
-          Effect.andThen(users.delete(created.id)),
-          Effect.catch(() => Effect.void),
-        );
-
-        const link = yield* records
-          .link({
-            connectionId: connection.id,
-            kind: "User",
-            resourceId: created.id,
-            name: userName,
-            externalId: input.externalId?.trim() === "" ? undefined : input.externalId?.trim(),
-          })
-          .pipe(
-            Effect.catchTag("ScimLinkConflict", (error) =>
-              rollBack.pipe(
-                Effect.andThen(
-                  Effect.fail(
-                    ScimApi.conflict(
-                      error.field === "externalId"
-                        ? `externalId ${input.externalId ?? ""} is already provisioned`
-                        : `userName ${userName} is already provisioned`,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        yield* membershipAdded(connection, created.id).pipe(
-          Effect.catchTags({
-            MembershipLimitReached: () =>
-              rollBack.pipe(
-                Effect.andThen(
-                  Effect.fail(ScimApi.forbidden("The organization's membership limit is reached")),
-                ),
-              ),
-            HookAborted: (aborted) =>
-              rollBack.pipe(Effect.andThen(Effect.fail(ScimApi.forbidden(aborted.message)))),
-            OrganizationNotFound: () =>
-              rollBack.pipe(
-                Effect.andThen(Effect.fail(ScimApi.forbidden("The organization is not available"))),
-              ),
-            UnknownOrgRole: () =>
-              rollBack.pipe(
-                Effect.andThen(
-                  Effect.fail(ScimApi.forbidden("The configured member role is unknown")),
-                ),
-              ),
-          }),
-        );
         const settled = wantActive ? created : yield* applyActive(connection, created, false);
         yield* events.publish({
           _tag: "auth.scim.userProvisioned",

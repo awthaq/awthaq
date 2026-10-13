@@ -47,12 +47,11 @@ const EncryptionLive = Encryption.layer.pipe(
 interface Probe {
   /** The order contributions actually ran in. */
   readonly ran: Array<string>;
-  /** A late veto: the point is consulted a second time inside `Users.delete` (BEH-EA-095). */
-  vetoAfter: number;
+  /** How many times the `BeforeUserDelete` point was consulted (BEH-EA-095). */
   consults: number;
 }
 
-const makeProbe = (): Probe => ({ ran: [], vetoAfter: Number.POSITIVE_INFINITY, consults: 0 });
+const makeProbe = (): Probe => ({ ran: [], consults: 0 });
 
 /** Registers `id`'s contribution, which records that it ran and then runs `body`. */
 const contribution = (
@@ -69,12 +68,12 @@ const contribution = (
     ),
   });
 
-/** The veto point: a legal hold on `hold@example.com`, or a veto after `probe.vetoAfter` consults. */
+/** The veto point: a legal hold on `hold@example.com`; every consult is counted. */
 const vetoTap = (probe: Probe) =>
   Hooks.BeforeUserDelete.tap((input) =>
     Effect.suspend(() => {
       probe.consults += 1;
-      return input.email === "hold@example.com" || probe.consults > probe.vetoAfter
+      return input.email === "hold@example.com"
         ? Effect.fail(new HookPoint.HookAbort({ code: "LEGAL_HOLD" }))
         : Effect.succeed(input);
     }),
@@ -287,6 +286,29 @@ const suite = (
       },
     );
 
+    it.effect("the veto is consulted exactly once per erasure, before anything is touched", () => {
+      const probe = makeProbe();
+      const layer = build(probe, contribution(probe, "a", 1));
+      return Effect.gen(function* () {
+        const erasure = yield* Erasure.AccountErasure;
+        const done = yield* seedUser("once@example.com");
+        yield* erasure.eraseAccount(done.user.id, Erasure.ErasureInitiator.Self());
+        assert.strictEqual(probe.consults, 1);
+
+        const held = yield* seedUser("hold@example.com");
+        const failure = yield* erasure
+          .eraseAccount(held.user.id, Erasure.ErasureInitiator.Self())
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "HookAborted");
+        assert.strictEqual(probe.consults, 2);
+        assert.deepStrictEqual(yield* remaining(held.user.id), {
+          user: true,
+          accounts: 1,
+          sessions: 1,
+        });
+      }).pipe(Effect.provide(layer));
+    });
+
     it.effect("an unknown user fails UserNotFound and touches nothing", () => {
       const probe = makeProbe();
       const layer = build(probe, contribution(probe, "a", 1));
@@ -421,29 +443,6 @@ describe("AccountErasure over SQLite: atomicity", () => {
           JSON.stringify(yield* auditLog.list({ actorUserId: user.id })),
           auditBefore,
         );
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "a veto raised late, inside Users.delete, undoes the accounts, sessions and tokens already removed",
-    () => {
-      const probe = makeProbe();
-      // The first consult is `eraseAccount`'s own veto-first check; the second is `Users.delete`'s,
-      // by which point every other core row has been deleted in the transaction.
-      probe.vetoAfter = 1;
-      const layer = sqlLayer(probe, contribution(probe, "a", 1));
-      return Effect.gen(function* () {
-        const erasure = yield* Erasure.AccountErasure;
-        const { user } = yield* seedUser("late@example.com");
-
-        const failure = yield* erasure
-          .eraseAccount(user.id, Erasure.ErasureInitiator.Self())
-          .pipe(Effect.flip);
-
-        assert.strictEqual(failure._tag, "HookAborted");
-        assert.strictEqual(probe.consults, 2);
-        assert.deepStrictEqual(yield* remaining(user.id), { user: true, accounts: 1, sessions: 1 });
       }).pipe(Effect.provide(layer));
     },
   );

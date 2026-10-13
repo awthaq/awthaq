@@ -11,7 +11,13 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as ApiKey from "../src/ApiKey.ts";
 import * as ApiKeyClientRecords from "../src/ApiKeyClientRecords.ts";
-import { buildLayer, seedUser, type HarnessOptions, type HarnessServices } from "./harness.ts";
+import {
+  buildLayer,
+  orphanOwner,
+  seedUser,
+  type HarnessOptions,
+  type HarnessServices,
+} from "./harness.ts";
 
 // Re-seeded as real users by every test's `provide`, so these are `let`, not constants.
 let owner = Users.UserId("owner-1");
@@ -63,7 +69,7 @@ const suite = (store: HarnessOptions["store"]) => {
         yield* users.setStatus(owner, "active");
         yield* apiKey.issueServiceToken(credentials);
 
-        yield* users.delete(owner);
+        yield* orphanOwner(owner);
         const orphan = yield* Effect.flip(apiKey.issueServiceToken(credentials));
         assert.strictEqual(orphan._tag, "InvalidClient");
       }).pipe(provide()),

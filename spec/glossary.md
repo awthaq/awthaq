@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) |
 
 ---
 
@@ -99,6 +99,14 @@ A `Context.Reference` with a fail-closed default that at most one installed plug
 ### Hook point
 
 A service holding a registry cell that other plugins may tap. A veto hook point may abort or amend the value flowing through it; an observe hook point is fail-isolated, so a failing tap cannot fail the operation it observes. Tapping a hook point nobody defines is a compile error, since the point's service type remains unsatisfied. See: [BEH-EA-017](behaviors/03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value), [BEH-EA-089](behaviors/12-hooks.md#beh-ea-089-a-hook-point-is-declared-as-a-service-carrying-its-own-kind).
+
+### Erasure initiator
+
+Who asked for an account erasure: `Self` (the account holder), `Admin { adminUserId }` or `Directory { connectionId, organizationId }` (a SCIM connection). `AccountErasure.eraseAccount(userId, initiator)` requires one and records it on `auth.user.deleted` (`deletedBy` and the initiator's ids).
+
+### Erasure clearance
+
+The proof that `AccountErasure` consulted the `BeforeUserDelete` veto for one user and no tap vetoed. `UserRemoval.remove` accepts nothing else, and only core can mint one, so no code outside `AccountErasure` can delete a user row. Exported as a type only.
 
 ### Registry
 

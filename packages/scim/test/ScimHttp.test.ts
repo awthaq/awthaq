@@ -379,7 +379,11 @@ const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
         Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findByEmail" })),
     });
   }),
-).pipe(Layer.provide(Users.layerMemory));
+).pipe(
+  // provideMerge: the real `UserRemoval` rides along; this double's `Users` wins (`Context.merge`
+  // keeps the later entry).
+  Layer.provideMerge(Users.layerMemory),
+);
 
 describe("SCIM over HTTP: a store outage (ADR-EA-028)", () => {
   it.effect("is a 503 with the RFC 7644 error body and none of the internal error's detail", () =>

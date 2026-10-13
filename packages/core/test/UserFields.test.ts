@@ -22,8 +22,8 @@ import { expectTypeOf } from "vitest";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
 import * as Auth from "../src/Auth.ts";
 import * as AuthPlugin from "../src/AuthPlugin.ts";
-import * as Hooks from "../src/Hooks.ts";
 import * as Migrations from "../src/Migrations.ts";
+import { ErasureClearance } from "../src/internal/erasureClearance.ts";
 import * as UserFields from "../src/UserFields.ts";
 import * as Users from "../src/Users.ts";
 
@@ -174,7 +174,6 @@ const registryLayer = UserFields.layer(auth.userFields);
 
 const MemoryLayer = Users.layerMemory.pipe(
   Layer.provide(NodeCrypto.layer),
-  Layer.provide(Hooks.BeforeUserDelete.layer),
   Layer.provide(registryLayer),
 );
 
@@ -190,11 +189,13 @@ const Migrated = Layer.effectDiscard(
 
 const SqlTestLayer = Users.layerSql.pipe(
   Layer.provide(Repositories.UsersRepositoryLive),
-  Layer.provide(Hooks.BeforeUserDelete.layer),
   Layer.provide(registryLayer),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
+
+/** The clearance `AccountErasure` would mint once the veto passed; core tests may mint one directly. */
+const clearanceFor = (id: Users.UserId) => ErasureClearance.afterVeto(id, Effect.void);
 
 const newUser = Effect.gen(function* () {
   const users = yield* Users.Users;
@@ -364,9 +365,10 @@ describe("UserFields over Users.layerSql: the generated columns", () => {
   it.effect("a deleted user's fields do not resurrect on a re-created id", () =>
     Effect.gen(function* () {
       const users = yield* Users.Users;
+      const removal = yield* Users.UserRemoval;
       const user = yield* newUser;
       yield* users.setFields(user.id, { billing_nickname: "Ada" });
-      yield* users.delete(user.id);
+      yield* removal.remove(yield* clearanceFor(user.id));
       const gone = yield* users.getFields(user.id).pipe(Effect.flip);
       assert.strictEqual(gone._tag, "UserNotFound");
       const again = yield* newUser;

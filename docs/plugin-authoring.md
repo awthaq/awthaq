@@ -71,6 +71,7 @@ A plugin that stores anything about a person must take part in account erasure a
 
 - `Erasure.contribute({ id, make })`: `make` resolves your record stores once and returns `(subject) => Effect<void>` that deletes the subject's rows. It runs inside `AccountErasure.eraseAccount`'s one transaction; a failure rolls the whole erasure back, so let it die rather than swallow it, and keep it idempotent. There is no database cascade (the schema has no foreign keys), so every table keyed by a user id needs one.
 - `DataExport.contribute({ id, make })`: `make` returns `(subject) => Effect<Json>`, the personal data you hold, keyed by your plugin id in the export document. Never include a secret (a hash, a token, key material) or a third party's data; a contribution that fails fails the whole export.
+- A plugin never deletes a user. To remove an account it calls `Erasure.AccountErasure.eraseAccount(userId, initiator)` (`@awthaq/scim`'s `DELETE` with `deleteBehavior: "erase"` is the worked example, with a `Directory` initiator); to abandon a user it is creating (a provisioning that failed halfway) it uses `Users.createWith(input, complete)`, which removes only the user it just made, with no veto and no event. `Users` has no `delete`.
 - Install both with `AuthPlugin.layer(Self, { contributes: Layer.mergeAll(erasure, export) })`. Test each against the registry (`packages/organization/test/OrganizationErasure.test.ts`, `OrganizationExport.test.ts`).
 
 ## Migrations

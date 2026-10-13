@@ -60,18 +60,15 @@ describe("UserAttributes (BEH-EA-161)", () => {
     }).pipe(Effect.provide(AttributesLayer)),
   );
 
-  it.effect("a deleted user's subject resolves to undefined, not a failure", () =>
-    Effect.gen(function* () {
-      const users = yield* Users.Users;
-      const attributeResolver = yield* AttributeResolver;
-      const user = yield* users.create({
-        identity: { _tag: "Email", email: "gone@example.com" },
-        name: "Gone",
-      });
-      yield* users.delete(user.id);
-      const value = yield* attributeResolver.resolve(makeSubjectId(`user:${user.id}`), "email");
-      assert.isUndefined(value);
-    }).pipe(Effect.provide(AttributesLayer)),
+  it.effect(
+    "a subject naming no user (never created, or erased) resolves to undefined, not a failure",
+    () =>
+      Effect.gen(function* () {
+        const attributeResolver = yield* AttributeResolver;
+        const gone = Users.UserId(crypto.randomUUID());
+        const value = yield* attributeResolver.resolve(makeSubjectId(`user:${gone}`), "email");
+        assert.isUndefined(value);
+      }).pipe(Effect.provide(AttributesLayer)),
   );
 });
 
@@ -264,7 +261,7 @@ describe("UserAttributes maps a Users outage to AttributeResolveError (TS-002)",
     promoteIdentity: () => Effect.die("promoteIdentity is not used"),
     changeEmail: () => Effect.die("changeEmail is not used"),
     setStatus: () => Effect.die("setStatus is not used"),
-    delete: () => Effect.die("delete is not used"),
+    createWith: () => Effect.die("createWith is not used"),
     list: () => Effect.die("list is not used"),
     getFields: () => Effect.die("getFields is not used"),
     setFields: () => Effect.die("setFields is not used"),

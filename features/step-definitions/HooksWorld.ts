@@ -1,6 +1,6 @@
 // AH-003 tier 3: 12-hooks.feature's World. Taps and their effects are exercised through the
 // real flows that run them — `Password.signUp`/`signIn` (BeforeSignUp, AfterSignUp,
-// BeforeSessionIssue) and `Users.delete` (BeforeUserDelete) — over `TestAuth`'s bundle, with a
+// BeforeSessionIssue) and `AccountErasure.eraseAccount` (BeforeUserDelete) — over `TestAuth`'s bundle, with a
 // tap layer handed to the composition the way a host application's `Point.tap(...)` is. The
 // plugin-declared side of BEH-EA-091/096 (dependency order, the static manifest) uses real
 // `AuthPlugin`s with `taps` declared on `AuthPlugin.layer`, composed by the real `Auth.make`.

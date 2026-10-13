@@ -1,12 +1,22 @@
 // BEH-EA-299 to BEH-EA-306, spec/models/13-device-authorization.md "Design constraints": the plugin at the
 // service level, over both record stores (memory, and a real migrated database), under `TestClock` so an expiry
 // or an interval is a `TestClock.adjust`, never a sleep.
-import { AuditLog, DataExport, Erasure, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  DataExport,
+  Erasure,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -14,6 +24,15 @@ import * as DeviceAuthorization from "../src/DeviceAuthorization.ts";
 import * as DeviceGrantRecords from "../src/DeviceGrantRecords.ts";
 import * as UserCode from "../src/UserCode.ts";
 import { buildLayer, CLI_CLIENT_ID, type HarnessOptions } from "./support/harness.ts";
+
+/** An erasure that runs the core cascade but none of the plugins' contributions: a deliberate orphan. */
+const OrphaningErasure = Erasure.layer.pipe(
+  // `Layer.fresh`: the composition's own registry (holding this plugin's contribution) is memoized by
+  // reference and `Effect.provide` forks the current memo map, so without `fresh` it would be reused.
+  Layer.provide(Layer.fresh(Erasure.registryLayer)),
+  Layer.provide(Accounts.layerMemory),
+  Layer.provide(Verification.layerMemory),
+);
 
 const VERIFICATION_BASE = "https://app.test/device";
 const DEVICE_IP = "203.0.113.7";
@@ -658,8 +677,9 @@ for (const options of suites) {
         () =>
           Effect.gen(function* () {
             const { issued, caller } = yield* approvedGrant("gone@example.com");
-            const users = yield* Users.Users;
-            yield* users.delete(caller.userId).pipe(Effect.orDie);
+            yield* Erasure.AccountErasure.use((erasure) =>
+              erasure.eraseAccount(caller.userId, Erasure.ErasureInitiator.Self()),
+            ).pipe(Effect.provide(OrphaningErasure), Effect.orDie);
             const refused = yield* poll(issued).pipe(Effect.flip);
             assert.strictEqual(refused._tag, "InvalidGrant");
             assert.isTrue(Option.isNone(yield* grantOf(issued)));

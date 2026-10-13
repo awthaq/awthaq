@@ -3,7 +3,7 @@
 // manifest for the static claims. The names the Gherkin uses for things that do not exist under
 // that name in the shipped API (`HookAbort` as the caller-visible failure, `HookAbort.fail`,
 // "the two-factor plugin's step-up tap") are mapped by the step that receives them, with a comment.
-import { AuditLog, type AuthPlugin, HookPoint, Hooks, Users } from "@awthaq/core";
+import { AuditLog, type AuthPlugin, Erasure, HookPoint, Hooks, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -632,9 +632,9 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       ]);
       const host = (yield* World).host;
       yield* host.run(
-        Effect.flatMap(Users.Users, (users) => users.delete(Users.UserId(alice.userId))).pipe(
-          Effect.orDie,
-        ),
+        Erasure.AccountErasure.use((erasure) =>
+          erasure.eraseAccount(Users.UserId(alice.userId), Erasure.ErasureInitiator.Self()),
+        ).pipe(Effect.orDie),
       );
     },
   );

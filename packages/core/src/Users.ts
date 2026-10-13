@@ -24,32 +24,11 @@ import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
-import * as HookPoint from "./HookPoint.ts";
 import * as Hooks from "./Hooks.ts";
+import type { ErasureClearance } from "./internal/erasureClearance.ts";
 import type * as Phone from "./Phone.ts";
 import * as Tenant from "./Tenant.ts";
 import * as UserFields from "./UserFields.ts";
-
-/**
- * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s own
- * `veto` helper — the same translation, one-point version): BEH-EA-090
- * requires a veto abort to reach the caller as a typed `HookAborted`, not
- * the bare `HookAbort` a tap itself fails with.
- */
-const beforeUserDeleteVeto = <A>(
-  effect: Effect.Effect<A, HookPoint.HookAbort>,
-): Effect.Effect<A, HookPoint.HookAborted> =>
-  effect.pipe(
-    Effect.catchTag(
-      "HookAbort",
-      (abort) =>
-        new HookPoint.HookAborted({
-          point: "auth.user.beforeDelete",
-          code: abort.code,
-          message: abort.message,
-        }),
-    ),
-  );
 
 /** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. INV-EA-018: an identifier, never a capability — UUIDv7, time-ordered and partially predictable, so nothing may act on it without a credential's proof. */
 // MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
@@ -330,14 +309,21 @@ export interface UsersShape {
     },
   ) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
   /**
-   * AOMS-006/CSG-002 (.issues/high): consults `Hooks.BeforeUserDelete`
-   * (BEH-EA-095's own worked example — an Invite-purge veto) after the
-   * existence check, before the row is actually removed; a tap's abort
-   * surfaces as `HookPoint.HookAborted`, never a bare defect.
+   * BEH-EA-046: creates a user and runs `complete` with it. If `complete` fails, dies or is
+   * interrupted, the user is abandoned: its row and declared fields are removed, no veto runs and
+   * nothing is announced, because nobody outside this call has been told the user exists. This is
+   * how a multi-step provisioning (SCIM `POST /Users`: create, link, add to the organization)
+   * leaves nothing behind. It cannot remove any user it did not just create; a committed user is
+   * deleted only by `Erasure.AccountErasure`.
    */
-  readonly delete: (
-    id: UserId,
-  ) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted | StoreUnavailable>;
+  readonly createWith: <A, E, R>(
+    input: CreateInput,
+    complete: (user: UserRecord) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<
+    { readonly user: UserRecord; readonly value: A },
+    E | EmailAlreadyExists | PhoneAlreadyExists | StoreUnavailable,
+    R
+  >;
   /**
    * BAM-005/BEH-EA-036: the admin surface's user listing — keyset-paginated on
    * `(createdAt, id)`, oldest first, opaque cursor in / `nextCursor` out, never an
@@ -397,6 +383,22 @@ export interface UsersPage {
 const DEFAULT_LIST_LIMIT = 50;
 
 export class Users extends Context.Service<Users, UsersShape>()("awthaq/core/Users") {}
+
+/**
+ * ADR-EA-031: the user row's store primitive. Removes the row and its declared fields only: no
+ * veto, no cascade, no event (`Erasure.AccountErasure` owns those). The clearance can only be
+ * minted by `AccountErasure` after the `BeforeUserDelete` veto passed, so nothing else can call
+ * this. Both `Users` layers provide it from the same build, so the row store is shared.
+ */
+export interface UserRemovalShape {
+  readonly remove: (
+    clearance: ErasureClearance,
+  ) => Effect.Effect<void, UserNotFound | StoreUnavailable>;
+}
+
+export class UserRemoval extends Context.Service<UserRemoval, UserRemovalShape>()(
+  "awthaq/core/UserRemoval",
+) {}
 
 /** SAM-004: the held values among `keys` (an unset field is absent). */
 const pickFields = (held: UserFields.Values, keys: ReadonlyArray<string>): UserFields.Values => {
@@ -464,13 +466,6 @@ const statusFields = (
         suspendedUntil: Option.fromNullishOr(options?.until),
       }
     : { statusReason: Option.none<string>(), suspendedUntil: Option.none<DateTime.Utc>() };
-
-/** `Hooks.BeforeUserDelete`'s payload: an Anonymous/Phone user has no email to report. */
-const deleteHookInput = (record: UserRecord) =>
-  Option.match(emailOf(record), {
-    onNone: () => ({ id: record.id }),
-    onSome: (email) => ({ id: record.id, email }),
-  });
 
 interface State {
   readonly byId: HashMap.HashMap<UserId, UserRecord>;
@@ -545,15 +540,13 @@ const attributesChangedAnnouncer = Effect.gen(function* () {
 /**
  * TRBS-005: single-process, test-grade storage — see `Sessions.layerMemory`. Use `layerSql` for any multi-instance deployment.
  *
- * BEH-EA-046: dropping a user's own row is this Layer's whole job — cascading to `Accounts`/`Sessions` is each of those services' own responsibility, triggered by the caller that also calls `Users.delete`, not by this module reaching into them.
+ * BEH-EA-046: deleting a user is `Erasure.AccountErasure`'s job; this module holds the row store (`UserRemoval`) it calls with a clearance.
  */
-export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.BeforeUserDelete> =
-  Layer.effect(
-    Users,
+export const layerMemory: Layer.Layer<Users | UserRemoval, never, Crypto.Crypto> =
+  Layer.effectContext(
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const crypto = yield* Crypto.Crypto;
-      const beforeDelete = yield* Hooks.BeforeUserDelete;
       const announce = yield* attributesChangedAnnouncer;
       // SAM-004: the declared fields, beside (not inside) the user record.
       const registry = yield* UserFields.UserFieldRegistry;
@@ -789,19 +782,21 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           Effect.map(([record]) => record),
         );
 
-      // AOMS-006/CSG-002: `Hooks.BeforeUserDelete` runs between the
-      // existence read and the actual removal — ticket 03's own accepted
-      // trade-off, splitting what used to be one atomic `Ref.modify` into
-      // read-then-hook-then-update. Nothing else in this in-memory,
-      // test-only layer observes a concurrent mutation in that gap (a
-      // single-threaded Effect fiber has no true concurrent writer unless a
-      // tap itself yields to one).
-      const delete_: UsersShape["delete"] = (id) =>
+      /** The row and its declared fields. The only deleter, shared by `remove` and `createWith`. */
+      const removeRow = (id: UserId) =>
         Effect.gen(function* () {
           const existing = yield* findById(id);
-          yield* beforeUserDeleteVeto(beforeDelete.run(deleteHookInput(existing)));
           yield* Ref.update(state, (s) => unindexRecord(s, existing));
           yield* Ref.update(heldFields, HashMap.remove(id));
+        });
+
+      const createWith: UsersShape["createWith"] = (input, complete) =>
+        Effect.gen(function* () {
+          const user = yield* create(input);
+          const value = yield* complete(user).pipe(
+            Effect.onError(() => removeRow(user.id).pipe(Effect.ignoreCause({ log: true }))),
+          );
+          return { user, value };
         });
 
       const getFields: UsersShape["getFields"] = Effect.fnUntraced(function* (id, keys) {
@@ -873,7 +868,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           }),
         );
 
-      return {
+      const users: UsersShape = {
         create,
         createOrGet,
         findById,
@@ -885,11 +880,13 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
         promoteIdentity,
         changeEmail,
         setStatus,
-        delete: delete_,
+        createWith,
         list,
         getFields,
         setFields,
       };
+      const removal: UserRemovalShape = { remove: (clearance) => removeRow(clearance.userId) };
+      return Context.make(Users, users).pipe(Context.add(UserRemoval, removal));
     }),
   );
 
@@ -949,313 +946,321 @@ const toUserRecordOption = (
  * left to `die`. FAMS-002: the same holds for the partial `users_phone_unique`
  * index and `PhoneAlreadyExists`.
  */
-export const layerSql: Layer.Layer<
-  Users,
-  never,
-  SqlRepositories.UsersRepository | Hooks.BeforeUserDelete
-> = Layer.effect(
-  Users,
-  Effect.gen(function* () {
-    const repo = yield* SqlRepositories.UsersRepository;
-    const beforeDelete = yield* Hooks.BeforeUserDelete;
-    const announce = yield* attributesChangedAnnouncer;
-    // SAM-004: the composition's declared fields; their columns exist because `Auth.make`'s generated migrations added them.
-    const registry = yield* UserFields.UserFieldRegistry;
+export const layerSql: Layer.Layer<Users | UserRemoval, never, SqlRepositories.UsersRepository> =
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const repo = yield* SqlRepositories.UsersRepository;
+      const announce = yield* attributesChangedAnnouncer;
+      // SAM-004: the composition's declared fields; their columns exist because `Auth.make`'s generated migrations added them.
+      const registry = yield* UserFields.UserFieldRegistry;
 
-    /** The declared fields of `descriptors` that `id` holds a value for, or `UserNotFound`. */
-    const readDeclared = (
-      operation: string,
-      id: UserId,
-      descriptors: ReadonlyArray<UserFields.Descriptor>,
-    ) =>
-      repo
-        .readFields(
-          id,
-          descriptors.map((descriptor) => ({ name: descriptor.column, kind: descriptor.kind })),
-        )
-        .pipe(
-          orStoreUnavailable(operation),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(userNotFound(id)),
-              onSome: (byColumn) =>
-                Effect.succeed(
-                  pickFields(
-                    Object.fromEntries(
-                      descriptors.flatMap((descriptor) => {
-                        const value = byColumn[descriptor.column];
-                        return value === undefined ? [] : [[descriptor.key, value]];
-                      }),
-                    ),
-                    descriptors.map((descriptor) => descriptor.key),
-                  ),
-                ),
-            }),
-          ),
-        );
-
-    const buildInsert = (input: CreateInput, identity: IdentityInput) =>
-      repo.models.User.insert
-        .makeEffect({
-          email: identity._tag === "Email" ? identity.email : null,
-          phone: identity._tag === "Phone" ? identity.phone : null,
-          name: input.name,
-          metadata: input.metadata ?? null,
-          image: input.image ?? null,
-        })
-        .pipe(Effect.orDie);
-
-    /** A `UniqueViolation` is the domain conflict for `identity`; any other `SqlError` is an outage (`StoreUnavailable`). */
-    const conflictOrUnavailable = (operation: string, identity: IdentityInput) =>
-      Effect.fnUntraced(function* (error: SqlError) {
-        if (error.reason._tag === "UniqueViolation") return yield* identityAlreadyExists(identity);
-        return yield* storeUnavailable(operation)(error);
-      });
-
-    const emailConflictOrUnavailable = (operation: string, email: string) =>
-      Effect.fnUntraced(function* (error: SqlError) {
-        if (error.reason._tag === "UniqueViolation") return yield* Effect.fail(emailExists(email));
-        return yield* storeUnavailable(operation)(error);
-      });
-
-    const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
-      const identity = normalizeIdentity(input.identity);
-      const insert = yield* buildInsert(input, identity);
-      const row = yield* repo
-        .insert(insert)
-        .pipe(
-          Effect.catchTag("SqlError", conflictOrUnavailable("Users.create", identity)),
-          Effect.catchTag("SchemaError", Effect.die),
-        );
-      return yield* toUserRecord(row);
-    });
-
-    const findById: UsersShape["findById"] = (id) =>
-      repo.findById(id).pipe(
-        Effect.catchTags({
-          NoSuchElementError: () => Effect.fail(userNotFound(id)),
-          SchemaError: Effect.die,
-          SqlError: storeUnavailable("Users.findById"),
-        }),
-        Effect.flatMap(toUserRecord),
-      );
-
-    const findByEmail: UsersShape["findByEmail"] = (email) =>
-      repo
-        .findByEmail(email.toLowerCase())
-        .pipe(orStoreUnavailable("Users.findByEmail"), Effect.flatMap(toUserRecordOption));
-
-    const findByPhone: UsersShape["findByPhone"] = (phone) =>
-      repo
-        .findByPhone(phone)
-        .pipe(orStoreUnavailable("Users.findByPhone"), Effect.flatMap(toUserRecordOption));
-
-    // SCP-003: `INSERT ... ON CONFLICT DO NOTHING` (not catch-the-violation):
-    // a Postgres unique violation would abort an enclosing transaction, and an
-    // import runs one per user.
-    const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
-      const identity = normalizeIdentity(input.identity);
-      const insert = yield* buildInsert(input, identity);
-      const inserted = yield* repo
-        .insertIfAbsent(insert)
-        .pipe(orStoreUnavailable("Users.createOrGet"));
-      if (Option.isSome(inserted)) {
-        return { user: yield* toUserRecord(inserted.value), created: true };
-      }
-      const holder =
-        identity._tag === "Email"
-          ? yield* findByEmail(identity.email)
-          : identity._tag === "Phone"
-            ? yield* findByPhone(identity.phone)
-            : Option.none<UserRecord>();
-      // `None` here means the holder vanished between the two statements, or an
-      // Anonymous insert hit a primary-key collision — neither is a domain state.
-      return yield* Option.match(holder, {
-        onNone: () =>
-          Defects.invariantViolation(
-            "CreateOrGetRowVanished",
-            "awthaq: createOrGet found no row after a conflict",
-          ),
-        onSome: (user) => Effect.succeed({ user, created: false }),
-      });
-    });
-
-    // GC-004: one targeted statement, so a row deleted between the caller's read and this write is
-    // `UserNotFound` — what `layerMemory` answers — not a defect, and no other column is rewritten
-    // from a stale read.
-    const updateProfile: UsersShape["updateProfile"] = Effect.fnUntraced(function* (id, input) {
-      const row = yield* repo
-        .updateProfile({ id, name: input.name, metadata: input.metadata, image: input.image })
-        .pipe(orStoreUnavailable("Users.updateProfile"));
-      if (Option.isNone(row)) return yield* Effect.fail(userNotFound(id));
-      yield* announce(id, ["name"]);
-      return yield* toUserRecord(row.value);
-    });
-
-    // `emailVerified` is excluded from the generic `update`/`jsonUpdate`
-    // variants (BEH-EA-042) — flipping it goes through the repository's own
-    // dedicated `verifyEmail` operation, which is the only write that can
-    // touch that column at all.
-    const verifyEmail: UsersShape["verifyEmail"] = Effect.fnUntraced(function* (id) {
-      const existing = yield* findById(id);
-      if (existing.identity._tag !== "Email") {
-        return yield* Effect.fail(identityMismatch(id, "Email", existing.identity._tag));
-      }
-      if (existing.identity.emailVerified) return existing;
-      const row = yield* repo.verifyEmail(id).pipe(
-        Effect.catchTags({
-          NoSuchElementError: () => Effect.fail(userNotFound(id)),
-          SchemaError: Effect.die,
-          SqlError: storeUnavailable("Users.verifyEmail"),
-        }),
-      );
-      yield* announce(id, ["emailVerified"]);
-      return yield* toUserRecord(row);
-    });
-
-    const verifyPhone: UsersShape["verifyPhone"] = Effect.fnUntraced(function* (id) {
-      const existing = yield* findById(id);
-      if (existing.identity._tag !== "Phone") {
-        return yield* Effect.fail(identityMismatch(id, "Phone", existing.identity._tag));
-      }
-      if (existing.identity.phoneVerified) return existing;
-      const row = yield* repo.verifyPhone(id).pipe(
-        Effect.catchTags({
-          NoSuchElementError: () => Effect.fail(userNotFound(id)),
-          SchemaError: Effect.die,
-          SqlError: storeUnavailable("Users.verifyPhone"),
-        }),
-      );
-      return yield* toUserRecord(row);
-    });
-
-    const promoteIdentity: UsersShape["promoteIdentity"] = Effect.fnUntraced(
-      function* (id, requested) {
-        const wanted = normalizePromoted(requested);
-        const existing = yield* findById(id);
-        if (existing.identity._tag !== "Anonymous") {
-          return yield* Effect.fail(identityMismatch(id, "Anonymous", existing.identity._tag));
-        }
-        const promoted = yield* repo
-          .promoteIdentity(id, wanted)
+      /** The declared fields of `descriptors` that `id` holds a value for, or `UserNotFound`. */
+      const readDeclared = (
+        operation: string,
+        id: UserId,
+        descriptors: ReadonlyArray<UserFields.Descriptor>,
+      ) =>
+        repo
+          .readFields(
+            id,
+            descriptors.map((descriptor) => ({ name: descriptor.column, kind: descriptor.kind })),
+          )
           .pipe(
-            Effect.catchTag("SqlError", conflictOrUnavailable("Users.promoteIdentity", wanted)),
+            orStoreUnavailable(operation),
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.fail(userNotFound(id)),
+                onSome: (byColumn) =>
+                  Effect.succeed(
+                    pickFields(
+                      Object.fromEntries(
+                        descriptors.flatMap((descriptor) => {
+                          const value = byColumn[descriptor.column];
+                          return value === undefined ? [] : [[descriptor.key, value]];
+                        }),
+                      ),
+                      descriptors.map((descriptor) => descriptor.key),
+                    ),
+                  ),
+              }),
+            ),
+          );
+
+      const buildInsert = (input: CreateInput, identity: IdentityInput) =>
+        repo.models.User.insert
+          .makeEffect({
+            email: identity._tag === "Email" ? identity.email : null,
+            phone: identity._tag === "Phone" ? identity.phone : null,
+            name: input.name,
+            metadata: input.metadata ?? null,
+            image: input.image ?? null,
+          })
+          .pipe(Effect.orDie);
+
+      /** A `UniqueViolation` is the domain conflict for `identity`; any other `SqlError` is an outage (`StoreUnavailable`). */
+      const conflictOrUnavailable = (operation: string, identity: IdentityInput) =>
+        Effect.fnUntraced(function* (error: SqlError) {
+          if (error.reason._tag === "UniqueViolation")
+            return yield* identityAlreadyExists(identity);
+          return yield* storeUnavailable(operation)(error);
+        });
+
+      const emailConflictOrUnavailable = (operation: string, email: string) =>
+        Effect.fnUntraced(function* (error: SqlError) {
+          if (error.reason._tag === "UniqueViolation")
+            return yield* Effect.fail(emailExists(email));
+          return yield* storeUnavailable(operation)(error);
+        });
+
+      const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
+        const identity = normalizeIdentity(input.identity);
+        const insert = yield* buildInsert(input, identity);
+        const row = yield* repo
+          .insert(insert)
+          .pipe(
+            Effect.catchTag("SqlError", conflictOrUnavailable("Users.create", identity)),
             Effect.catchTag("SchemaError", Effect.die),
           );
-        if (Option.isNone(promoted)) {
-          // Lost a race: another promotion landed between the read and the guarded UPDATE.
-          const current = yield* findById(id);
-          return yield* Effect.fail(identityMismatch(id, "Anonymous", current.identity._tag));
-        }
-        return yield* toUserRecord(promoted.value);
-      },
-    );
+        return yield* toUserRecord(row);
+      });
 
-    const changeEmail: UsersShape["changeEmail"] = Effect.fnUntraced(function* (id, requested) {
-      const email = requested.toLowerCase();
-      const existing = yield* findById(id);
-      const identity = existing.identity;
-      if (identity._tag !== "Email") {
-        return yield* Effect.fail(identityMismatch(id, "Email", identity._tag));
-      }
-      if (identity.email === email) return existing;
-      const changed = yield* repo
-        .changeEmail(id, email)
-        .pipe(
-          Effect.catchTag("SqlError", emailConflictOrUnavailable("Users.changeEmail", email)),
-          Effect.catchTag("SchemaError", Effect.die),
-        );
-      if (Option.isNone(changed)) {
-        const current = yield* findById(id);
-        return yield* Effect.fail(identityMismatch(id, "Email", current.identity._tag));
-      }
-      if (identity.emailVerified) yield* announce(id, ["emailVerified"]);
-      return yield* toUserRecord(changed.value);
-    });
-
-    const setStatus: UsersShape["setStatus"] = Effect.fnUntraced(function* (id, status, options) {
-      const fields = statusFields(status, options);
-      const row = yield* repo
-        .setStatus(id, {
-          status,
-          reason: Option.getOrNull(fields.statusReason),
-          until: Option.getOrNull(fields.suspendedUntil),
-        })
-        .pipe(
+      const findById: UsersShape["findById"] = (id) =>
+        repo.findById(id).pipe(
           Effect.catchTags({
             NoSuchElementError: () => Effect.fail(userNotFound(id)),
             SchemaError: Effect.die,
-            SqlError: storeUnavailable("Users.setStatus"),
+            SqlError: storeUnavailable("Users.findById"),
+          }),
+          Effect.flatMap(toUserRecord),
+        );
+
+      const findByEmail: UsersShape["findByEmail"] = (email) =>
+        repo
+          .findByEmail(email.toLowerCase())
+          .pipe(orStoreUnavailable("Users.findByEmail"), Effect.flatMap(toUserRecordOption));
+
+      const findByPhone: UsersShape["findByPhone"] = (phone) =>
+        repo
+          .findByPhone(phone)
+          .pipe(orStoreUnavailable("Users.findByPhone"), Effect.flatMap(toUserRecordOption));
+
+      // SCP-003: `INSERT ... ON CONFLICT DO NOTHING` (not catch-the-violation):
+      // a Postgres unique violation would abort an enclosing transaction, and an
+      // import runs one per user.
+      const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
+        const identity = normalizeIdentity(input.identity);
+        const insert = yield* buildInsert(input, identity);
+        const inserted = yield* repo
+          .insertIfAbsent(insert)
+          .pipe(orStoreUnavailable("Users.createOrGet"));
+        if (Option.isSome(inserted)) {
+          return { user: yield* toUserRecord(inserted.value), created: true };
+        }
+        const holder =
+          identity._tag === "Email"
+            ? yield* findByEmail(identity.email)
+            : identity._tag === "Phone"
+              ? yield* findByPhone(identity.phone)
+              : Option.none<UserRecord>();
+        // `None` here means the holder vanished between the two statements, or an
+        // Anonymous insert hit a primary-key collision — neither is a domain state.
+        return yield* Option.match(holder, {
+          onNone: () =>
+            Defects.invariantViolation(
+              "CreateOrGetRowVanished",
+              "awthaq: createOrGet found no row after a conflict",
+            ),
+          onSome: (user) => Effect.succeed({ user, created: false }),
+        });
+      });
+
+      // GC-004: one targeted statement, so a row deleted between the caller's read and this write is
+      // `UserNotFound` — what `layerMemory` answers — not a defect, and no other column is rewritten
+      // from a stale read.
+      const updateProfile: UsersShape["updateProfile"] = Effect.fnUntraced(function* (id, input) {
+        const row = yield* repo
+          .updateProfile({ id, name: input.name, metadata: input.metadata, image: input.image })
+          .pipe(orStoreUnavailable("Users.updateProfile"));
+        if (Option.isNone(row)) return yield* Effect.fail(userNotFound(id));
+        yield* announce(id, ["name"]);
+        return yield* toUserRecord(row.value);
+      });
+
+      // `emailVerified` is excluded from the generic `update`/`jsonUpdate`
+      // variants (BEH-EA-042) — flipping it goes through the repository's own
+      // dedicated `verifyEmail` operation, which is the only write that can
+      // touch that column at all.
+      const verifyEmail: UsersShape["verifyEmail"] = Effect.fnUntraced(function* (id) {
+        const existing = yield* findById(id);
+        if (existing.identity._tag !== "Email") {
+          return yield* Effect.fail(identityMismatch(id, "Email", existing.identity._tag));
+        }
+        if (existing.identity.emailVerified) return existing;
+        const row = yield* repo.verifyEmail(id).pipe(
+          Effect.catchTags({
+            NoSuchElementError: () => Effect.fail(userNotFound(id)),
+            SchemaError: Effect.die,
+            SqlError: storeUnavailable("Users.verifyEmail"),
           }),
         );
-      yield* announce(id, ["status"]);
-      return yield* toUserRecord(row);
-    });
+        yield* announce(id, ["emailVerified"]);
+        return yield* toUserRecord(row);
+      });
 
-    const delete_: UsersShape["delete"] = Effect.fnUntraced(function* (id) {
-      const found = yield* findById(id);
-      yield* beforeUserDeleteVeto(beforeDelete.run(deleteHookInput(found)));
-      yield* repo.delete(id).pipe(orStoreUnavailable("Users.delete"));
-    });
+      const verifyPhone: UsersShape["verifyPhone"] = Effect.fnUntraced(function* (id) {
+        const existing = yield* findById(id);
+        if (existing.identity._tag !== "Phone") {
+          return yield* Effect.fail(identityMismatch(id, "Phone", existing.identity._tag));
+        }
+        if (existing.identity.phoneVerified) return existing;
+        const row = yield* repo.verifyPhone(id).pipe(
+          Effect.catchTags({
+            NoSuchElementError: () => Effect.fail(userNotFound(id)),
+            SchemaError: Effect.die,
+            SqlError: storeUnavailable("Users.verifyPhone"),
+          }),
+        );
+        return yield* toUserRecord(row);
+      });
 
-    const list: UsersShape["list"] = (input) =>
-      repo.listPage(input?.cursor, input?.limit).pipe(
-        orStoreUnavailable("Users.list"),
-        Effect.flatMap((page) =>
-          Effect.map(Effect.forEach(page.items, toUserRecord), (items) => ({
-            items,
-            nextCursor: page.nextCursor,
-          })),
-        ),
+      const promoteIdentity: UsersShape["promoteIdentity"] = Effect.fnUntraced(
+        function* (id, requested) {
+          const wanted = normalizePromoted(requested);
+          const existing = yield* findById(id);
+          if (existing.identity._tag !== "Anonymous") {
+            return yield* Effect.fail(identityMismatch(id, "Anonymous", existing.identity._tag));
+          }
+          const promoted = yield* repo
+            .promoteIdentity(id, wanted)
+            .pipe(
+              Effect.catchTag("SqlError", conflictOrUnavailable("Users.promoteIdentity", wanted)),
+              Effect.catchTag("SchemaError", Effect.die),
+            );
+          if (Option.isNone(promoted)) {
+            // Lost a race: another promotion landed between the read and the guarded UPDATE.
+            const current = yield* findById(id);
+            return yield* Effect.fail(identityMismatch(id, "Anonymous", current.identity._tag));
+          }
+          return yield* toUserRecord(promoted.value);
+        },
       );
 
-    const getFields: UsersShape["getFields"] = Effect.fnUntraced(function* (id, keys) {
-      const wanted = yield* UserFields.resolve(registry, keys);
-      return yield* readDeclared("Users.getFields", id, wanted);
-    });
+      const changeEmail: UsersShape["changeEmail"] = Effect.fnUntraced(function* (id, requested) {
+        const email = requested.toLowerCase();
+        const existing = yield* findById(id);
+        const identity = existing.identity;
+        if (identity._tag !== "Email") {
+          return yield* Effect.fail(identityMismatch(id, "Email", identity._tag));
+        }
+        if (identity.email === email) return existing;
+        const changed = yield* repo
+          .changeEmail(id, email)
+          .pipe(
+            Effect.catchTag("SqlError", emailConflictOrUnavailable("Users.changeEmail", email)),
+            Effect.catchTag("SchemaError", Effect.die),
+          );
+        if (Option.isNone(changed)) {
+          const current = yield* findById(id);
+          return yield* Effect.fail(identityMismatch(id, "Email", current.identity._tag));
+        }
+        if (identity.emailVerified) yield* announce(id, ["emailVerified"]);
+        return yield* toUserRecord(changed.value);
+      });
 
-    const setFields: UsersShape["setFields"] = Effect.fnUntraced(function* (id, patch, options) {
-      const checked = yield* UserFields.check(registry, patch, options?.source ?? "server");
-      if (checked.length > 0) {
-        const written = yield* repo
-          .writeFields(
-            id,
-            Object.fromEntries(
-              checked.map(([descriptor, value]): [string, UserFields.Scalar | null] => [
-                descriptor.column,
-                value,
-              ]),
-            ),
-          )
-          .pipe(orStoreUnavailable("Users.setFields"));
-        if (!written) return yield* Effect.fail(userNotFound(id));
-        yield* announce(
-          id,
-          checked.map(([descriptor]) => descriptor.key),
+      const setStatus: UsersShape["setStatus"] = Effect.fnUntraced(function* (id, status, options) {
+        const fields = statusFields(status, options);
+        const row = yield* repo
+          .setStatus(id, {
+            status,
+            reason: Option.getOrNull(fields.statusReason),
+            until: Option.getOrNull(fields.suspendedUntil),
+          })
+          .pipe(
+            Effect.catchTags({
+              NoSuchElementError: () => Effect.fail(userNotFound(id)),
+              SchemaError: Effect.die,
+              SqlError: storeUnavailable("Users.setStatus"),
+            }),
+          );
+        yield* announce(id, ["status"]);
+        return yield* toUserRecord(row);
+      });
+
+      /** The row (its declared columns go with it). The only deleter, shared by `remove` and `createWith`. */
+      const removeRow = Effect.fnUntraced(function* (id: UserId) {
+        yield* findById(id);
+        yield* repo.delete(id).pipe(orStoreUnavailable("UserRemoval.remove"));
+      });
+
+      const createWith: UsersShape["createWith"] = (input, complete) =>
+        Effect.gen(function* () {
+          const user = yield* create(input);
+          const value = yield* complete(user).pipe(
+            Effect.onError(() => removeRow(user.id).pipe(Effect.ignoreCause({ log: true }))),
+          );
+          return { user, value };
+        });
+
+      const list: UsersShape["list"] = (input) =>
+        repo.listPage(input?.cursor, input?.limit).pipe(
+          orStoreUnavailable("Users.list"),
+          Effect.flatMap((page) =>
+            Effect.map(Effect.forEach(page.items, toUserRecord), (items) => ({
+              items,
+              nextCursor: page.nextCursor,
+            })),
+          ),
         );
-      }
-      return yield* readDeclared("Users.setFields", id, [...registry.values()]);
-    });
 
-    return {
-      create,
-      createOrGet,
-      findById,
-      findByEmail,
-      findByPhone,
-      updateProfile,
-      verifyEmail,
-      verifyPhone,
-      promoteIdentity,
-      changeEmail,
-      setStatus,
-      delete: delete_,
-      list,
-      getFields,
-      setFields,
-    };
-  }),
-);
+      const getFields: UsersShape["getFields"] = Effect.fnUntraced(function* (id, keys) {
+        const wanted = yield* UserFields.resolve(registry, keys);
+        return yield* readDeclared("Users.getFields", id, wanted);
+      });
+
+      const setFields: UsersShape["setFields"] = Effect.fnUntraced(function* (id, patch, options) {
+        const checked = yield* UserFields.check(registry, patch, options?.source ?? "server");
+        if (checked.length > 0) {
+          const written = yield* repo
+            .writeFields(
+              id,
+              Object.fromEntries(
+                checked.map(([descriptor, value]): [string, UserFields.Scalar | null] => [
+                  descriptor.column,
+                  value,
+                ]),
+              ),
+            )
+            .pipe(orStoreUnavailable("Users.setFields"));
+          if (!written) return yield* Effect.fail(userNotFound(id));
+          yield* announce(
+            id,
+            checked.map(([descriptor]) => descriptor.key),
+          );
+        }
+        return yield* readDeclared("Users.setFields", id, [...registry.values()]);
+      });
+
+      const users: UsersShape = {
+        create,
+        createOrGet,
+        findById,
+        findByEmail,
+        findByPhone,
+        updateProfile,
+        verifyEmail,
+        verifyPhone,
+        promoteIdentity,
+        changeEmail,
+        setStatus,
+        createWith,
+        list,
+        getFields,
+        setFields,
+      };
+      const removal: UserRemovalShape = { remove: (clearance) => removeRow(clearance.userId) };
+      return Context.make(Users, users).pipe(Context.add(UserRemoval, removal));
+    }),
+  );
 
 /**
  * SAM-004: typed access to declared user fields. Pass the record of declarations — a composition's

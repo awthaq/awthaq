@@ -10,7 +10,16 @@
 // configured: a tap or a subscriber must be in the graph before the first hook run (BEH-EA-024
 // freezes a point at its first read), so configuration after that is a defect in the scenario,
 // and fails loudly.
-import { Auth, AuditLog, AuthEvents, Hooks, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  Auth,
+  AuditLog,
+  AuthEvents,
+  Erasure,
+  Hooks,
+  RateLimits,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -130,6 +139,7 @@ const appLayer = (spec: AppSpec) =>
  */
 export type AppServices =
   | HookPoints
+  | Erasure.AccountErasure
   | AuditLog.AuditLog
   | AuthEvents.AuthEvents
   | Mailer.Mailer

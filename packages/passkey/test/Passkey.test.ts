@@ -7,11 +7,13 @@
 // this suite proves the plugin's own ceremony/persistence/enumeration-safety
 // logic, not `@simplewebauthn/server`'s cryptography (that's
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
-import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, Accounts, Erasure, Sessions, Users, Verification } from "@awthaq/core";
+import { SqlTransaction } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -27,6 +29,16 @@ import {
 } from "./passkeyTestFixtures.ts";
 
 const TestLayer = buildLayer(mockWebAuthn());
+
+/** An erasure that runs the core cascade but none of the plugins' contributions: a deliberate orphan. */
+const OrphaningErasure = Erasure.layer.pipe(
+  // `Layer.fresh`: the composition's own registry (holding this plugin's contribution) is memoized by
+  // reference and `Effect.provide` forks the current memo map, so without `fresh` it would be reused.
+  Layer.provide(Layer.fresh(Erasure.registryLayer)),
+  Layer.provide(Accounts.layerMemory),
+  Layer.provide(Verification.layerMemory),
+  Layer.provide(SqlTransaction.layerNoop),
+);
 
 // HSK-005: a synced (multiDevice) passkey is a software key, a device-bound one a hardware key.
 const SyncedLayer = buildLayer(
@@ -268,12 +280,13 @@ describe("Passkey", () => {
           },
         });
 
-        // The user row is gone, but — today's still-incomplete erasure
-        // cascade (CSG-001/DRS-002, tracked separately) — the credential
-        // row is deliberately left untouched here, to exercise exactly
-        // the orphan this defense-in-depth check exists for regardless
-        // of whether a future cascade also cleans it up.
-        yield* users.delete(user.id);
+        // The user row is gone, but the credential row is deliberately left untouched: the
+        // cascade exists now (`Passkey`'s own erasure contribution), so the orphan this
+        // defense-in-depth check exists for is produced on purpose, through an erasure that
+        // runs the core rows and none of the plugins' contributions.
+        yield* Erasure.AccountErasure.use((erasure) =>
+          erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self()),
+        ).pipe(Effect.provide(OrphaningErasure), Effect.orDie);
 
         const { ceremonyId, options } = yield* passkey.authenticateOptions({});
         const clientDataJSON = buildClientDataJSON({

@@ -9,7 +9,6 @@ import {
   AuthEvents,
   DataExport,
   Erasure,
-  Hooks,
   Migrations,
   Slots,
   Users,
@@ -49,10 +48,7 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerSql.pipe(
-    Layer.provide(Repositories.UsersRepositoryLive),
-    Layer.provide(Hooks.BeforeUserDelete.layer),
-  ),
+  Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
   Accounts.layerSql.pipe(
     Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
   ),

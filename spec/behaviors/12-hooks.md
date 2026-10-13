@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-12 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): `BeforeUserDelete` is consulted once, by `AccountErasure` only; `Users` no longer has `delete` (architecture plan 03) |
 
 ---
 
-> Implemented in `@awthaq/core` (`HookPoint.ts`, `Hooks.ts`; tests `packages/core/test/HookPoint.test.ts`, `HookPoint.types.test.ts`, `HooksWiringMemory.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/design/plugins-as-layers.md` §3.4 and `archive/design/usage-examples-v4.md` §14.
+> Implemented in `@awthaq/core` (`HookPoint.ts`, `Hooks.ts`; tests `packages/core/test/HookPoint.test.ts`, `HookPoint.types.test.ts`, `AccountErasure.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/design/plugins-as-layers.md` §3.4 and `archive/design/usage-examples-v4.md` §14.
 
 ## BEH-EA-089: A hook point is declared as a service carrying its own `kind`
 
@@ -141,7 +141,7 @@ REQUIREMENT: A plugin that needs to react to a change in core-owned data
              migration or service code.
 ```
 
-**As shipped (CSG-001/DRS-002, ADR-EA-033):** erasure — the one reaction that must not be optional or swallowed — is no longer a `BeforeUserDelete` tap the host opts into. `Erasure.AccountErasure.eraseAccount` runs the `BeforeUserDelete` veto first, then, in one `SqlTransaction`, every plugin's `Erasure.contribute` contribution, the core rows and the audit pseudonymization, then publishes `auth.user.deleted`. A plugin's layer (`AuthPlugin.layer(Self, { contributes })`) requires `Erasure.ErasureRegistry`, so omitting the registry does not compile; a contribution that fails rolls everything back (`packages/core/test/AccountErasure.test.ts`). The schema remains FK-less by design (SEA-001): no database-level cascade exists, and none is needed.
+**As shipped (CSG-001/DRS-002, ADR-EA-033):** erasure — the one reaction that must not be optional or swallowed — is no longer a `BeforeUserDelete` tap the host opts into. `Erasure.AccountErasure.eraseAccount` runs the `BeforeUserDelete` veto first and exactly once (no other module consults it; `Users` has no `delete`), then, in one `SqlTransaction`, every plugin's `Erasure.contribute` contribution, the core rows and the audit pseudonymization, then publishes `auth.user.deleted`. A plugin's layer (`AuthPlugin.layer(Self, { contributes })`) requires `Erasure.ErasureRegistry`, so omitting the registry does not compile; a contribution that fails rolls everything back (`packages/core/test/AccountErasure.test.ts`). The schema remains FK-less by design (SEA-001): no database-level cascade exists, and none is needed.
 
 `archive/design/plugins-as-layers.md` §8 shows exactly this pattern: the `Invite` plugin purges its own `acme.invite_invitation` rows for a deleted user by tapping `BeforeUserDelete`, a point core defines, rather than by declaring a foreign key into `users` and relying on a database-level cascade the linker would have to know about. This is the hook-system's contribution to the shared-table isolation BEH-EA-040 requires at the persistence stratum: cross-plugin reactions are explicit, typed, and ordered, never implicit database-level side effects.
 

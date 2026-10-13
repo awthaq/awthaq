@@ -2,8 +2,9 @@
 // ownership, immutability, deactivation and deletion — driven at the domain level over
 // the same layer graph an application builds (`support.ts`).
 import { Accounts, AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { MembershipRecords } from "@awthaq/organization";
+import { InvitationRecords, MembershipRecords } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HashSet from "effect/HashSet";
@@ -222,17 +223,29 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
   );
 
   it.effect(
-    "an organization at its membership limit refuses the POST and leaves no user behind",
+    "an organization at its membership limit refuses the POST and leaves no user, no mapping and every invitation to that address behind",
     () =>
       Effect.gen(function* () {
         const { connection } = yield* seedConnection();
         const users = yield* Users.Users;
         const scim = yield* Scim.Scim;
+        const invitations = yield* InvitationRecords.InvitationRecords;
+        // An administrator invited this address to another organization before the user existed:
+        // abandoning the half-made user is not an erasure and must not sweep it (plan 03 section 3.5).
+        const invitation = yield* invitations.create({
+          organizationId: "another-organization",
+          email: "extra@acme.example",
+          role: ["member"],
+          inviterId: Users.UserId("another-inviter"),
+          tokenHash: "hash-extra",
+          expiresAt: DateTime.addDuration(DateTime.nowUnsafe(), "1 hour"),
+        });
         // The owner already fills the organization's single seat.
         const refused = yield* provision(connection, "extra@acme.example").pipe(Effect.flip);
         assert.strictEqual(refused._tag, "ScimForbidden");
         assert.isTrue(Option.isNone(yield* users.findByEmail("extra@acme.example")));
         assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
+        assert.isTrue(Option.isSome(yield* invitations.findById(invitation.id)));
       }).pipe(Effect.provide(ScimLive({}, { membershipLimit: 1 }))),
   );
 
