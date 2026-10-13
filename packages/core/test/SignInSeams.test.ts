@@ -69,8 +69,8 @@ describe("the sign-in seam (ADR-EA-038)", () => {
       },
       {
         file: "password/src/Password.ts",
-        count: 2,
-        why: "changePassword rotates the caller's own session; the reveal sign-up mints inside its transaction until plan 01 phase 4",
+        count: 1,
+        why: "changePassword rotates the caller's own session",
       },
       {
         file: "admin/src/Admin.ts",

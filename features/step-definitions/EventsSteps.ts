@@ -357,10 +357,13 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       const userId = yield* userIdOf("alice");
       const rows = (yield* auditRows).filter((row) => row.eventTag === "auth.user.signedIn");
-      assert.equal(rows.length, 1);
-      const [row] = rows;
-      assert.ok(row?.payload._tag === "auth.user.signedIn");
-      assert.equal(row.payload.userId, userId);
+      // ADR-EA-038: alice's sign-up is itself a cleared sign-in, so her account has two records:
+      // the sign-up's first session, then the sign-in under test.
+      assert.equal(rows.length, 2);
+      for (const row of rows) {
+        assert.ok(row.payload._tag === "auth.user.signedIn");
+        assert.equal(row.payload.userId, userId);
+      }
     },
   );
 

@@ -245,6 +245,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
         EmailAlreadyExists,
         Api.RateLimited,
         HookPoint.HookAborted,
+        // ADR-EA-038: the first session is a cleared sign-in, so a divert tap can ask for a second factor.
+        Hooks.TwoFactorRequired,
         Api.InvalidTokenDelivery,
       ],
     }),

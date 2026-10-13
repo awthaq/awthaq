@@ -22,6 +22,7 @@ import {
   RateLimits,
   Sessions,
   SignIn,
+  SignUp,
   Tenant,
   Users,
   Verification,
@@ -354,6 +355,7 @@ export interface PasswordShape {
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
     | HookPoint.HookAborted
+    | Hooks.TwoFactorRequired
     | Errors.StoreUnavailable
   >;
   /**
@@ -1018,9 +1020,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // AOMS-006/BCR-004 (.issues/high, wayfinder ticket 03): the mechanism
       // an Auth0-Rule-style sign-up policy, and the MFA divert point a
       // future `TwoFactor` plugin taps, both attach through.
-      const beforeSignUp = yield* Hooks.BeforeSignUp;
-      const afterSignUp = yield* Hooks.AfterSignUp;
       const completion = yield* SignIn.make;
+      const creation = yield* SignUp.make;
       // ARF-005: consulted by `confirmReset` inside its transaction (the two-factor plugin taps it).
       const beforeCredentialReset = yield* Hooks.BeforeCredentialReset;
 
@@ -1129,70 +1130,46 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // AOMS-006: an Auth0-Rule-style policy (e.g. an email-domain
         // allow-list) may reject the sign-up outright, or amend the input
         // for whatever taps run after it — before the (comparatively
-        // expensive) password hash is even computed.
-        const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
-          beforeSignUp.run({ email: input.email, name, strategy: "password" }),
-        );
+        // expensive) password hash is even computed (ADR-EA-026).
+        const vetted = yield* creation.vet({
+          identity: { _tag: "Email", email: input.email },
+          name,
+          strategy: "password",
+        });
         const hash = yield* hasher.hash(input.password);
-        // The hook's `email` is optional (OAuth may have none); a password sign-up always has one.
-        return {
-          vetoedSignUp: { ...vetoedSignUp, email: vetoedSignUp.email ?? input.email },
-          hash,
-        };
+        return { vetted, hash };
+      });
+
+      /** The password account linked in the sign-up's own unit: its subject is the new user's id. */
+      const passwordLink = (hash: PasswordHasher.PhcHash) => (user: Users.UserRecord) => ({
+        providerId: Accounts.PASSWORD_PROVIDER_ID,
+        subject: user.id,
+        credentialHash: Redacted.make(hash),
       });
 
       const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
-        const { vetoedSignUp, hash } = yield* prepareSignUp(input);
+        const { vetted, hash } = yield* prepareSignUp(input);
 
-        // RRC-002/BEH-EA-113: "MUST create the user and session in one
-        // transaction" — create+link+issue previously committed
-        // independently; a crash between them could leave a real,
-        // unlinked `User` row with no credential (the same orphaned-row
-        // hazard `OAuth.ts`'s own create+link fix, ticket 16, closes for
-        // its own flow) or a linked account with no session to hand back
-        // to the caller who just paid for account creation.
-        const { user, issued } = yield* sqlTransaction
-          .withTransaction(
-            Effect.gen(function* () {
-              const user = yield* users
-                .create({
-                  identity: { _tag: "Email", email: vetoedSignUp.email },
-                  name: vetoedSignUp.name,
-                })
-                .pipe(
-                  Effect.catchTag(
-                    "Users/EmailAlreadyExists",
-                    () => new PasswordApi.EmailAlreadyExists(),
-                  ),
-                  // FAMS-002: `create` is Email-identity here, so a phone conflict is unreachable.
-                  Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
-                );
-              yield* accounts
-                .link({
-                  userId: user.id,
-                  providerId: Accounts.PASSWORD_PROVIDER_ID,
-                  subject: user.id,
-                  credentialHash: Redacted.make(hash),
-                })
-                .pipe(Effect.orDie);
-              const issued = yield* sessions
-                .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
-                .pipe(Effect.orDie);
-              return { user, issued };
-            }),
-          )
-          .pipe(Effect.catchTag("SqlError", Effect.die));
-        yield* events.publish({ _tag: "auth.user.created", userId: user.id });
-        yield* afterSignUp.run({
-          userId: user.id,
-          email: vetoedSignUp.email,
-          strategy: "password",
-        });
+        // RRC-002/BEH-EA-113: "MUST create the user and session in one transaction". ADR-EA-038:
+        // `createSignedIn` is that unit, and the first session is a cleared sign-in like any other
+        // (the sign-in veto and divert apply, `auth.user.signedIn` is published).
+        const issued = yield* creation
+          .createSignedIn(vetted, { link: passwordLink(hash), amr: ["pwd"] }, sessionRequest(input))
+          .pipe(
+            Effect.catchTag("SignUp/IdentityTaken", (taken) =>
+              taken.kind === "Email"
+                ? Effect.fail(new PasswordApi.EmailAlreadyExists())
+                : Defects.invariantViolation("PasswordSignUpConflict", taken.message),
+            ),
+          );
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
         // research/05-oauth-oidc.md Q48, a slow-vs-fast response is
         // itself an enumeration side channel.
+        const user = yield* users
+          .findById(issued.session.userId)
+          .pipe(Effect.catchTag("UserNotFound", Effect.die));
         yield* dispatchVerificationMail(user);
 
         return issued;
@@ -1200,50 +1177,19 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
       const signUpConcealed: PasswordShape["signUpConcealed"] = Effect.fnUntraced(
         function* (input) {
-          const { vetoedSignUp, hash } = yield* prepareSignUp(input);
+          const { vetted, hash } = yield* prepareSignUp(input);
           // TMS-005: the hash above is computed in both branches, so the
-          // expensive work does not depend on whether the address exists. The
-          // duplicate is caught outside the transaction (which rolls back), and
-          // no session is issued either way.
-          const created = yield* sqlTransaction
-            .withTransaction(
-              Effect.gen(function* () {
-                const user = yield* users
-                  .create({
-                    identity: { _tag: "Email", email: vetoedSignUp.email },
-                    name: vetoedSignUp.name,
-                  })
-                  .pipe(
-                    Effect.catchTag(
-                      "Users/EmailAlreadyExists",
-                      () => new PasswordApi.EmailAlreadyExists(),
-                    ),
-                    // FAMS-002: `create` is Email-identity here, so a phone conflict is unreachable.
-                    Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
-                  );
-                yield* accounts
-                  .link({
-                    userId: user.id,
-                    providerId: Accounts.PASSWORD_PROVIDER_ID,
-                    subject: user.id,
-                    credentialHash: Redacted.make(hash),
-                  })
-                  .pipe(Effect.orDie);
-                return user;
-              }),
-            )
-            .pipe(
-              Effect.map(Option.some),
-              Effect.catchTag("EmailAlreadyExists", () => Effect.succeed(Option.none())),
-              Effect.catchTag("SqlError", Effect.die),
-            );
+          // expensive work does not depend on whether the address exists. A
+          // duplicate is caught as a value, and no session is issued either way.
+          const created = yield* creation.create(vetted, { link: passwordLink(hash) }).pipe(
+            Effect.map(Option.some),
+            Effect.catchTag("SignUp/IdentityTaken", (taken) =>
+              taken.kind === "Email"
+                ? Effect.succeed(Option.none<Users.UserRecord>())
+                : Defects.invariantViolation("PasswordSignUpConflict", taken.message),
+            ),
+          );
           if (Option.isSome(created)) {
-            yield* events.publish({ _tag: "auth.user.created", userId: created.value.id });
-            yield* afterSignUp.run({
-              userId: created.value.id,
-              email: vetoedSignUp.email,
-              strategy: "password",
-            });
             yield* dispatchVerificationMail(created.value);
             return;
           }
@@ -1252,7 +1198,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           yield* mailDispatcher.dispatch(
             { template: "account-exists" },
             Effect.gen(function* () {
-              const owner = yield* users.findByEmail(vetoedSignUp.email);
+              const owner = yield* users.findByEmail(
+                vetted.identity._tag === "Email" ? vetted.identity.email : input.email,
+              );
               if (Option.isNone(owner)) return;
               const to = Users.emailOf(owner.value);
               if (Option.isNone(to)) return;

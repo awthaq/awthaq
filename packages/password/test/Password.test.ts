@@ -1783,11 +1783,18 @@ describe("Password sign-in wiring (ADR-EA-038)", () => {
       const recorded = yield* probe.recorded;
       assert.deepStrictEqual(
         recorded.beforeSessionIssue.map((input) => [input.userId, input.strategy, input.amr]),
-        [[signedUp.session.userId, "password", ["pwd"]]],
+        // The sign-up's first session is a cleared sign-in too (createSignedIn), then the sign-in.
+        [
+          [signedUp.session.userId, "password", ["pwd"]],
+          [signedUp.session.userId, "password", ["pwd"]],
+        ],
       );
       assert.deepStrictEqual(
         recorded.beforeSignIn.map((input) => [input.email, input.strategy]),
-        [["wiring@example.com", "password"]],
+        [
+          ["wiring@example.com", "password"],
+          ["wiring@example.com", "password"],
+        ],
       );
     }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(TestLayer)))),
   );

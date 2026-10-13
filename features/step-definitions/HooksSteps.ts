@@ -509,7 +509,8 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
           log.list({ eventTag: "auth.user.signedIn" }),
         ).pipe(Effect.orDie),
       );
-      assert.equal(signedIn.length, 0);
+      // (the one record is alice's own sign-up: ADR-EA-038, a sign-up's first session is a cleared sign-in)
+      assert.equal(signedIn.length, 1);
       // ...whereas the same call for a user with no second factor is an ordinary success.
       yield* attemptSignUp("bob@example.com");
       assert.equal((yield* attemptSignIn("bob@example.com"))._tag, "Success");
