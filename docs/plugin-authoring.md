@@ -12,7 +12,7 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 | ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Contract           | `TemplateApi.ts`                                      | One `HttpApiGroup` whose id is the plugin id, wrapped in `HttpApi.make("auth")`.                                             |
 | Config             | `Template.ts` (`NotesConfig`)                         | A `Context.Reference` with a default plus a `config(partial)` layer (ADR-EA-011). Policy knobs are never a required service. |
-| Persistence        | `Template.ts` (`NoteRecords`, `layerSql`)             | The plugin owns its tables; the table prefix is the plugin id.                                                               |
+| Persistence        | `Template.ts` (`NoteRecords`, `layerMemory`, `layerSql`) | The plugin owns its tables; the table prefix is the plugin id. Tenancy, sealed columns and store failures come from `@awthaq/sql` (`TenantScoped`, `SealedColumn`, `StoreFailure`), below. |
 | Migrations         | `Template.ts` (`notesMigrations`)                     | Append-only, dialect-branched with `sql.onDialectOrElse`.                                                                    |
 | Hooks              | `Template.ts` (`BeforeCreateNote`, `AfterCreateNote`) | One veto (before) and one observe (after) point per mutating operation.                                                      |
 | Service + handlers | `Template.ts` (`Notes`, `NotesHandlers`)              | `AuthPlugin.layer(Notes, { handlers, make })`.                                                                               |
@@ -25,6 +25,7 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 - Wire DTOs are plain strings and numbers (`createdAt` is an ISO string), never a domain object.
 - Behind a session, declare `.middleware(Api.Authentication)` on the group, then `.middleware(Api.CsrfProtection)` last. The last-declared middleware runs first, so a forged request is rejected before any credential work.
 - A veto hook can abort an endpoint, so list `HookPoint.HookAborted` in that endpoint's `error` array.
+- A records module never turns a database failure into a defect. Pipe each method through `StoreFailure.orStoreUnavailable("<Records>.<method>")` (or `Effect.catchTag("SqlError", StoreFailure.storeUnavailable(op))` beside a domain outcome of its own, and `StoreFailure.orConflict` for a unique violation) so it fails with the typed `StoreUnavailable`, and list `Api.StoreUnavailable` in the `error` array of any endpoint outside `Api.Authentication`'s own list (a public group). A `SchemaError`, and a statement the database refused as malformed or unauthorised, stay defects (ADR-EA-028).
 - Non-members and unknown resources must be indistinguishable: answer `404` for both, and reserve `403` for a caller who is a member but lacks the permission (BEH-EA-147).
 
 ## Dependencies: `dependsOn` versus a direct `yield*`
@@ -104,7 +105,31 @@ Events are identifiers-only (ADR-EA-029) and declared in `@awthaq/core`'s `AuthE
 - Use single-word lowercase column names, or quote consistently in **every** statement (DDL, queries, trigger bodies): Postgres folds unquoted identifiers to lowercase, so an unquoted camelCase column returns a lower-cased key that no row schema matches. All shipped plugins quote their camelCase columns; SQLite is indifferent.
 - Row codecs follow the client's dialect: `@effect/sql-pg` returns `boolean`/`Date`, `node:sqlite` returns `0 | 1`/ISO strings. Build a store's row schemas from `Models.dialectFields(yield* Models.resolveDialect(sql))` (`@awthaq/sql`) instead of `Schema.DateTimeUtcFromString`/`BooleanFromBit`.
 - Test with the real thing: `Migrations.run(Plugin.migrations)` against a database from `packages/sql/test/support/TestSql.ts` (`TestSql.layer("<suite>")`: `:memory:` SQLite by default, a real per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`/`pnpm run test:pg`), never a hand-written `CREATE TABLE`. Plugin migrations run in their own ledger table (`Migrations.pluginMigrationsTable`), separate from core's.
-- Declare each table's tenancy in `tables` (`AuthPlugin.Table.partitioned/keyed/derived/global`), filter through `TenantScoped.predicate` (SQL) and `TenantScoped.matches` (memory), make a method that must cross tenants take a `TenantScoped.CrossTenant`, and run `TestAuth.runTenantIsolationTests` over each records module: its `methods` map is keyed by `keyof Shape`, so an unclassified method does not compile (it replaces the static allowlist `organization/test/TenantScoping.test.ts` used to be).
+
+## Tenancy: declare each table, filter in the store
+
+Every table a plugin owns declares how it relates to the tenant (ADR-EA-018 decision 10), in `tables` on `AuthPlugin.Service`; a table without a declaration does not compile, and `Auth.make` validates the declarations and exposes them as `auth.tenancy`:
+
+| Kind                                  | Use it when                                                                  | The store                                                                                       |
+| ------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `AuthPlugin.Table.partitioned(col?)`  | rows belong to the tenant that wrote them (the template's `notes_note`)       | stamps the ambient tenant at insert (`TenantScoped.stamp`), confines every read and write to it |
+| `AuthPlugin.Table.keyed(col)`         | the organization id is the row's own key (`organization_*`, `saml_*`, `scim_*`) | every method takes the organization id; there is no ambient predicate                           |
+| `AuthPlugin.Table.derived(parent, via)` | the row has no tenant column and is reached through a parent                 | scoped through the parent; the method takes a parent key the caller already resolved            |
+| `AuthPlugin.Table.global(reason)`     | deliberately tenant-blind (the reason is reviewed and printed by `awthaq plugin list`) | none                                                                                 |
+
+- Filter in the store, not the service: `TenantScoped.predicate(sql, "tenantId", seen)` (`= $1` or `IS NULL`, never `IS NOT DISTINCT FROM`) in SQL and `TenantScoped.matches(row, seen)` in memory, with `seen = yield* TenantScoped.visibility()`. Both adapters share one rule, so one suite proves them.
+- A method that must see more than the ambient tenant (an erasure sweep, a platform listing, a lookup by a capability that arrives before any tenant is known) takes a `TenantScoped.CrossTenant` witness as its first argument, minted by `TenantScoped.crossTenant("<why it is sound>")` next to the call. On Postgres with RLS on, the SQL adapter runs that statement under `TenantScoped.lift(grant)` (or `liftOn(sql, grant)`), which lifts the policy for that one statement; `Tenant.withoutTenant` alone does not.
+- Prove it with `TestAuth.runTenantIsolationTests` (`@awthaq/test`): one call per records interface, over `layerMemory` and `layerSql`, with `rls: { layer }` so `pnpm run test:pg` also checks the database backstop. Its `methods` map is keyed by `keyof Shape`, so a method added without a classification (`scoped`, `crossTenant`, `keyed`, `derived`, `insert`) does not compile. `examples/plugin-template/test/Template.test.ts` is the worked call.
+- Opt-in row-level security covers the declarations when the operator asks: `TenantScope.enableRls({ plugins: auth.tenancy })` (`packages/sql/README.md`).
+
+## Sealed columns
+
+A column that must be decryptable (a client secret, a signing key, a TOTP secret) is a `SealedColumn` (ADR-EA-019 decision 6), declared once and never encrypted by hand:
+
+- Declare it: `SealedColumn.column({ table, column, key, legacyAad? })`. The AAD is `<table>:<rowKey>:<column>`; list an older spelling in `legacyAad` and it still opens and re-seals canonically. Build one `SealedColumn.codec(column, swap)` per adapter (`sqlSwap(column)` in SQL, a `Ref`-backed swap in memory), so the memory adapter seals too.
+- The records accept the plaintext as a `Redacted` and hand out a `Sealed<A>` whose `open` effect is the only place the plaintext appears; domain code never sees an envelope or an AAD. A stale key or a legacy envelope is re-sealed on read by compare-and-swap.
+- `open` fails with the typed `SealedColumn/Unreadable`; each call site picks exactly one treatment: `SealedColumn.orDie` (fail closed, for a value the operation cannot proceed without) or `SealedColumn.option` (degrade one value with a warning).
+- Prove it with `TestAuth.runSealedColumnTests` (one call per column and adapter: envelope at rest, round trip, moved ciphertext, key rotation, legacy AAD). `SealedColumn.sweep` re-seals the rows nobody reads again; running it is the operator's job.
 
 ## Multi-statement writes
 
@@ -143,9 +168,10 @@ Resolve core's two modules once, in your plugin's `make`, and let them own the s
 1. `AuthPlugin.Service` with `apiVersion`, `contract`, `tables`, `migrations` (and `dependsOn` only if needed), `rateLimitRules` when it throttles (and `RateLimits.budget(Self)` in `make`), and `ports` on `AuthPlugin.layer` for every port it requires.
 2. Errors typed and status-mapped; `HookAborted` on every vetoable endpoint.
 3. Config as a `Context.Reference` with a default.
-4. Records service with `layerMemory` and `layerSql` (the template ships only `layerSql`; production plugins ship both).
+4. Records service with `layerMemory` and `layerSql` (the template ships both), every method failing with `StoreUnavailable`, never a defect.
 5. Hook points with a `.layer` each, provided once.
 6. A test that builds through `Auth.make`, runs the real migrations, exercises an endpoint over a real handler, aborts a veto, and calls `TestAuth.runPluginContractTests` (pass `hooks: [{ point: Hooks.AfterSignUp, input }]` to run the plugin's declared taps against a stub input: an observe tap must not try to abort, a veto tap may only abort with `HookAbort`; BEH-EA-200).
 7. A package README stating what it ships (`pnpm check:readmes` enforces the status banner).
 8. A flow that signs a person in or creates a user goes through `SignIn`/`SignUp`, never `Sessions.issue`/`Users.create` (ADR-EA-038).
 9. Every event declared with `defineEvent`, its actor chosen and its free-text fields in `pii`.
+10. Every table's tenancy declared, its records filtered through `TenantScoped`, and `TestAuth.runTenantIsolationTests` (and `runSealedColumnTests` for each sealed column) run over both adapters.

@@ -177,6 +177,9 @@ importers:
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../../packages/ports
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../../packages/sql
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116

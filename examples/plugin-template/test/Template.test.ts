@@ -4,7 +4,7 @@
 // operation with a veto tap.
 import { Api } from "@awthaq/api";
 import { Auth, HookPoint, Migrations, RateLimits, Sessions, Users } from "@awthaq/core";
-import { RateLimiter } from "@awthaq/ports";
+import { RateLimiter, Tenant } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -14,6 +14,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
@@ -130,6 +131,11 @@ describe("plugin-template", () => {
       auth.manifest.plugins.map((plugin) => [plugin.id, plugin.tables]),
       [["notes", ["notes_note"]]],
     );
+    // The declaration is part of the manifest: tooling prints it and `enableRls` consumes it.
+    assert.deepStrictEqual(
+      Auth.make([Template.Notes]).tenancy.map((table) => [table.table, table.tenancy._tag]),
+      [["notes_note", "Partitioned"]],
+    );
   });
 
   it.effect("its migration creates the table it declares", () =>
@@ -225,3 +231,72 @@ TestAuth.runPluginContractTests(
   () => Template.Notes,
   { options: [{}] },
 );
+
+// Plan 05: the tenant-isolation conformance suite, over both adapters. The table is Partitioned: a note is
+// stamped with the ambient tenant at insert and seen only under it, identically in memory and SQL, and (on
+// Postgres, under `pnpm run test:pg`) the database confines an unfiltered statement too. A third-party plugin
+// runs this same suite over its own records.
+interface Written {
+  readonly id: string;
+  readonly owner: string;
+}
+let isolationCounter = 0;
+
+const MemoryRecords = Template.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
+
+TestAuth.runTenantIsolationTests<Template.NoteRecordsShape, Written, Template.NoteRecords>(
+  {
+    describe: (name, body) => describe(name, body),
+    it: (name, body) => it(name, body),
+    fail: (message) => {
+      throw new Error(message);
+    },
+  },
+  {
+    plugin: Template.Notes,
+    adapters: [
+      { name: "layerMemory", layer: MemoryRecords },
+      { name: "layerSql", layer: RecordsLive },
+    ],
+    cases: [
+      {
+        table: "notes_note",
+        insert: Effect.gen(function* () {
+          const records = yield* Template.NoteRecords;
+          isolationCounter += 1;
+          const owner = `isolation-owner-${isolationCounter}`;
+          const created = yield* records.create({ owner, text: "isolated" });
+          return { id: created.id, owner };
+        }),
+        methods: {
+          create: { insert: true },
+          listByOwner: {
+            scoped: {
+              run: (written) =>
+                Effect.flatMap(Template.NoteRecords, (records) =>
+                  Effect.map(records.listByOwner(written.owner), (rows) =>
+                    rows.some((row) => row.id === written.id),
+                  ),
+                ),
+            },
+          },
+        },
+      },
+    ],
+    rls: { layer: RecordsLive },
+  },
+);
+
+describe("plugin-template: the records stamp the ambient tenant", () => {
+  it.effect("a note carries the tenant it was written under, and none outside a tenant", () =>
+    Effect.gen(function* () {
+      const records = yield* Template.NoteRecords;
+      const inTenant = yield* records
+        .create({ owner: "o", text: "t" })
+        .pipe(Tenant.withTenant("acme"));
+      assert.deepStrictEqual(inTenant.tenantId, Option.some("acme"));
+      const outside = yield* records.create({ owner: "o", text: "u" });
+      assert.isTrue(Option.isNone(outside.tenantId));
+    }).pipe(Effect.provide(MemoryRecords)),
+  );
+});

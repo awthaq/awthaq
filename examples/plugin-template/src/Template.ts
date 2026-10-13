@@ -1,20 +1,23 @@
 // plugin-template — Template
 //
 // The smallest plugin that still shows every convention: a config
-// `Context.Reference`, one table with a dialect-branched migration, a records
-// service, a veto + an observe hook point, an `HttpApiGroup` with handlers, and
-// `AuthPlugin.Service` tying them together. `docs/plugin-authoring.md` walks
+// `Context.Reference`, one tenant-partitioned table with dialect-branched migrations, a records
+// service with a memory and a SQL adapter, a veto + an observe hook point, an `HttpApiGroup` with
+// handlers, and `AuthPlugin.Service` tying them together. `docs/plugin-authoring.md` walks
 // through this file top to bottom; `test/Template.test.ts` keeps it honest.
 
 import { Api } from "@awthaq/api";
 import { AuthPlugin, HookPoint, Migrations, RateLimits } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
+import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -57,32 +60,93 @@ export const NotesHooksLive = Layer.mergeAll(BeforeCreateNote.layer, AfterCreate
 
 // ---- persistence: a records service over one table ---------------------------------
 // The plugin owns its tables; the table prefix is the plugin id. Columns are single
-// lowercase words so the same statement decodes on SQLite and Postgres alike. A real
-// plugin also ships a `layerMemory` (see `@awthaq/admin`'s ImpersonationRecords).
+// lowercase words so the same statement decodes on SQLite and Postgres alike (the tenant
+// column is the one quoted camelCase exception, `"tenantId"`, quoted in every statement).
+//
+// Four conventions every records module follows (docs/plugin-authoring.md):
+//   - two adapters, `layerMemory` and `layerSql`, behind one shape and one conformance suite;
+//   - the table is *partitioned* by tenant: an insert is stamped with the ambient tenant
+//     (`TenantScoped.stamp`) and every read is confined to it (`TenantScoped.predicate` in SQL,
+//     `TenantScoped.matches` in memory), so isolation lives in the store, not in the service;
+//   - a store failure is the typed `StoreUnavailable` (`StoreFailure`), never a defect;
+//   - a method that must see other tenants takes a `TenantScoped.CrossTenant` witness (this
+//     template has none: the owner's notes are tenant-local).
 
 export interface NoteRecord {
   readonly id: string;
   readonly owner: string;
   readonly text: string;
   readonly created: DateTime.Utc;
+  /** The tenant the note was written under; `None` for a deployment without tenants. */
+  readonly tenantId: Option.Option<string>;
 }
 
-export class NoteRecords extends Context.Service<
+export interface NoteRecordsShape {
+  /** Stamped with the ambient tenant. */
+  readonly create: (input: {
+    readonly owner: string;
+    readonly text: string;
+  }) => Effect.Effect<NoteRecord, StoreFailure.StoreUnavailable>;
+  /** The owner's notes in the ambient tenant, oldest first. */
+  readonly listByOwner: (
+    owner: string,
+  ) => Effect.Effect<ReadonlyArray<NoteRecord>, StoreFailure.StoreUnavailable>;
+}
+
+export class NoteRecords extends Context.Service<NoteRecords, NoteRecordsShape>()(
+  "example/notes/NoteRecords",
+) {}
+
+/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
+const mintId = <E>(minted: Effect.Effect<string, E>) =>
+  Effect.catch(minted, StoreFailure.storeUnavailable("NoteRecords.create"));
+
+export const layerMemory = Layer.effect(
   NoteRecords,
-  {
-    readonly create: (input: {
-      readonly owner: string;
-      readonly text: string;
-    }) => Effect.Effect<NoteRecord>;
-    readonly listByOwner: (owner: string) => Effect.Effect<ReadonlyArray<NoteRecord>>;
-  }
->()("example/notes/NoteRecords") {}
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const state = yield* Ref.make<ReadonlyArray<NoteRecord>>([]);
+
+    const create: NoteRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+      const id = yield* mintId(crypto.randomUUIDv7);
+      const created = yield* DateTime.now;
+      const stamped = yield* TenantScoped.stamp({ tenantId: null });
+      const record: NoteRecord = {
+        id,
+        owner: input.owner,
+        text: input.text,
+        created,
+        tenantId: Option.fromNullishOr(stamped.tenantId),
+      };
+      yield* Ref.update(state, (rows) => [...rows, record]);
+      return record;
+    });
+
+    const listByOwner: NoteRecordsShape["listByOwner"] = Effect.fnUntraced(function* (owner) {
+      const seen = yield* TenantScoped.visibility();
+      return (yield* Ref.get(state)).filter(
+        (row) => row.owner === owner && TenantScoped.matches(Option.getOrNull(row.tenantId), seen),
+      );
+    });
+
+    return { create, listByOwner };
+  }),
+);
 
 const NoteRow = Schema.Struct({
   id: Schema.String,
   owner: Schema.String,
   text: Schema.String,
   created: Schema.DateTimeUtcFromString,
+  tenantId: Schema.NullOr(Schema.String),
+});
+
+const toRecord = (row: typeof NoteRow.Type): NoteRecord => ({
+  id: row.id,
+  owner: row.owner,
+  text: row.text,
+  created: row.created,
+  tenantId: Option.fromNullishOr(row.tenantId),
 });
 
 export const layerSql = Layer.effect(
@@ -95,30 +159,44 @@ export const layerSql = Layer.effect(
       Request: NoteRow,
       Result: NoteRow,
       execute: (r) =>
-        sql`INSERT INTO notes_note (id, owner, text, created) VALUES (${r.id}, ${r.owner}, ${r.text}, ${r.created}) RETURNING *`,
+        sql`INSERT INTO notes_note (id, owner, text, created, "tenantId") VALUES (${r.id}, ${r.owner}, ${r.text}, ${r.created}, ${r.tenantId}) RETURNING *`,
     });
-    const listByOwner = SqlSchema.findAll({
-      Request: Schema.String,
-      Result: NoteRow,
-      execute: (owner) => sql`SELECT * FROM notes_note WHERE owner = ${owner} ORDER BY created ASC`,
+    const decodeNotes = Schema.decodeUnknownEffect(Schema.Array(NoteRow));
+    const listByOwner = (owner: string, seen: TenantScoped.Visibility) =>
+      sql`SELECT * FROM notes_note WHERE owner = ${owner} AND ${TenantScoped.predicate(sql, "tenantId", seen)} ORDER BY created ASC`.pipe(
+        Effect.flatMap(decodeNotes),
+      );
+
+    const create: NoteRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+      const id = yield* mintId(crypto.randomUUIDv7);
+      const created = yield* DateTime.now;
+      const stamped = yield* TenantScoped.stamp({ tenantId: null });
+      return yield* insert({
+        id,
+        owner: input.owner,
+        text: input.text,
+        created,
+        tenantId: stamped.tenantId,
+      }).pipe(Effect.map(toRecord), StoreFailure.orStoreUnavailable("NoteRecords.create"));
     });
 
-    return {
-      create: Effect.fnUntraced(function* (input) {
-        const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
-        const created = yield* DateTime.now;
-        return yield* insert({ id, owner: input.owner, text: input.text, created }).pipe(
-          Effect.orDie,
-        );
-      }),
-      listByOwner: (owner) => listByOwner(owner).pipe(Effect.orDie),
-    };
+    const listByOwnerOf: NoteRecordsShape["listByOwner"] = Effect.fnUntraced(function* (owner) {
+      const tenant = yield* TenantScoped.visibility();
+      return yield* listByOwner(owner, tenant).pipe(
+        Effect.map((rows) => rows.map(toRecord)),
+        StoreFailure.orStoreUnavailable("NoteRecords.listByOwner"),
+      );
+    });
+
+    return { create, listByOwner: listByOwnerOf };
   }),
 );
 
 // ---- migrations: append-only, dialect-branched -------------------------------------
-// Never edit a shipped migration; add a new entry. `sql.onDialectOrElse` is how a
-// statement differs between Postgres and SQLite (here only the timestamp type).
+// Never edit a shipped migration; add a new entry (the tenant column below is the second
+// one: the table was created first, and a shipped plugin adds a column the same way).
+// `sql.onDialectOrElse` is how a statement differs between Postgres and SQLite (here only
+// the timestamp type).
 
 const notesMigrations: Migrations.Migrations = [
   {
@@ -144,6 +222,15 @@ const notesMigrations: Migrations.Migrations = [
       });
     }),
   },
+  {
+    // Partitioned tables carry a nullable, indexed tenant column: NULL is an untenanted row.
+    name: "add_notes_note_tenant_id",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE notes_note ADD COLUMN "tenantId" TEXT`;
+      yield* sql`CREATE INDEX notes_note_tenant_id ON notes_note ("tenantId")`;
+    }),
+  },
 ];
 
 // ---- the service shape and the plugin -----------------------------------------------
@@ -152,8 +239,16 @@ export interface NotesShape {
   readonly create: (
     caller: Api.UserPrincipal,
     text: string,
-  ) => Effect.Effect<NoteRecord, TemplateApi.NoteTooLong | HookPoint.HookAborted | Api.RateLimited>;
-  readonly list: (caller: Api.UserPrincipal) => Effect.Effect<ReadonlyArray<NoteRecord>>;
+  ) => Effect.Effect<
+    NoteRecord,
+    | TemplateApi.NoteTooLong
+    | HookPoint.HookAborted
+    | Api.RateLimited
+    | StoreFailure.StoreUnavailable
+  >;
+  readonly list: (
+    caller: Api.UserPrincipal,
+  ) => Effect.Effect<ReadonlyArray<NoteRecord>, StoreFailure.StoreUnavailable>;
 }
 
 const toDto = (record: NoteRecord) =>
@@ -216,7 +311,8 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
   contract: TemplateApi.NotesApi,
   rateLimitRules: rules,
   tables: {
-    notes_note: AuthPlugin.Table.global("template example; phase 13 partitions it"),
+    // Partitioned: the store stamps the ambient tenant at insert and confines reads to it.
+    notes_note: AuthPlugin.Table.partitioned(),
   },
   migrations: notesMigrations,
 }) {
