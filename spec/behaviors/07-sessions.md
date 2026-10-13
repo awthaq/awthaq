@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-07 |
-> | Revision | 1.6 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) <br> 1.5 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.6 (2026-10-13): BEH-EA-053 names the ownership rule for `supersedes`; RRS-003's reuse is published once; THS-003's union and TIR-008's revoke are one atomic step in both layers (plan 02 phase 0) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) <br> 1.5 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.6 (2026-10-13): BEH-EA-053 names the ownership rule for `supersedes`; RRS-003's reuse is published once; THS-003's union and TIR-008's revoke are one atomic step in both layers (plan 02 phase 0) <br> 1.7 (2026-10-13): One implementation over `SessionStore`: the supersede is one store primitive (BEH-EA-053), a rotation is a compare-and-swap that never rotates a tombstone and whose loser re-checks liveness (BEH-EA-052), the listing is bounded on every adapter (BEH-EA-054), session writes capture the causal token (plan 02 phase 6) |
 
 ---
 
@@ -92,8 +92,8 @@ REQUIREMENT: Every sign-in and every privilege-changing operation
              extending or re-validating an existing session row. The
              superseded row MUST be tombstoned (RRS-003: `supersededBy`/
              `supersededAt` set, never deleted) in the same atomic unit as
-             the successor's insertion — one SQL transaction in `layerSql`,
-             one `Ref.modify` in `layerMemory` — so no failure or interruption
+             the successor's insertion — one `SessionStore.insert` primitive
+             (one `Ref.modify`; one SQL transaction) — so no failure or interruption
              can leave a tombstoned session without its successor.
 ```
 
@@ -102,6 +102,8 @@ REQUIREMENT: Every sign-in and every privilege-changing operation
 `archive/design/usage-examples-v4.md` §5.3 states this directly: "A new session is issued at every sign-in and after password or email change; the old row is deleted." (Revised by RRS-003/ESR-002: the old row is now tombstoned, atomically with the new row's insertion, so a later presentation of the superseded token is detectable as reuse.) `better-auth/01-core-domain/01-entities-and-invariants.md` §2.3 documents the same rule for a related case — promoting a previously-unverified user on proof of mailbox ownership strips every pre-existing session and account, and a fresh session is minted only afterward by the caller, never by reusing whatever session happened to exist before the proof resolved.
 
 **Ownership and atomicity of the supersede (plan 02 phase 0, INV-EA-018).** `supersedes` names a session the issuing user owns: a foreign user's session, a session already tombstoned and an absent one are all "no ancestor", so the new session founds a fresh family, nothing is tombstoned and no `auth.session.superseded` is published. The event describes the tombstoned row (`userId` is that row's user). Reuse detection is **once-only** (RRS-003): the check that the presented row is tombstoned and not yet flagged, the `reusedAt` mark and the family revocation are one atomic step (one `Ref.modify`; one transaction whose first statement is a conditional `UPDATE ... RETURNING`), so of any number of concurrent presentations exactly one publishes `auth.session.reuse` and the family `auth.session.revoked`. A revocation is one `DELETE ... RETURNING` (TIR-008), so of two concurrent revokes of one session exactly one publishes and the other fails `SessionNotFound`; `reauthenticate`'s union into `amr` is a compare-and-swap in `layerSql` (a lost step-up is retried against the new value), so concurrent step-ups both land (THS-003).
+
+**One implementation over a store port (plan 02, ADR-EA-041, ADR-EA-014).** `Sessions` is written once, over `SessionStore` (a `Ref` adapter in `@awthaq/ports`, a SQL adapter over `@awthaq/sql`'s repository; a KV backend is an implementation of the same nine primitives), whose atomicity is part of its contract and is proven on every adapter by `StoreContract.sessions` (the `Ref`, SQLite, WAL-file and Postgres adapters, concurrency included). Three rules the twins used to disagree on are now one. **Rotation is a compare-and-swap that requires a live row** (BEH-EA-052): the swap applies only if the stored hash still equals the one read and the row is not tombstoned, so a tombstone is never rotated; the call that loses the swap re-applies liveness to the row it finds (absent or tombstoned is `SessionNotFound`, expired is `SessionExpired`, otherwise it authenticates that row and reports `rotated: none`), instead of authenticating whatever is there. **The listing is bounded** (BEH-EA-054): both adapters answer at most `LIST_LIMIT` rows and the service logs a warning when more exist, so a memory composition no longer lists without bound. **A store may drop a row only once it is past its absolute expiry** (TMS-004, the memory adapter's size bound): a pruned row is `SessionNotFound` with no `auth.session.expired`, the one visible difference. The SQL adapter's session writes (insert, revoke, family revocation, bulk removal) capture the replica causal token (ADR-EA-024), so a fiber that revokes and then lists eventually is held to the primary instead of seeing the revoked session on a lagging replica; the concurrent-session cap is exact on a serializing adapter and may sit one over for a moment on Postgres' READ COMMITTED, the next insert evicting back (SMS-003).
 
 ## BEH-EA-054: Sessions expose a device list, per-device revocation, and revoke-others
 

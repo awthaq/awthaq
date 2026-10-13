@@ -8,6 +8,7 @@ import {
   AuditLogStore,
   Encryption,
   KeyProvider,
+  SessionStore,
   SqlTransaction,
   UserStore,
   VerificationStore,
@@ -17,6 +18,7 @@ import {
   AuditLogStoreSql,
   CoreMigrations,
   Repositories,
+  SessionStoreSql,
   UserStoreSql,
   VerificationStoreSql,
 } from "@awthaq/sql";
@@ -83,6 +85,7 @@ const sqlStores = <E>(client: Layer.Layer<SqlClient.SqlClient, E>) => {
   return Layer.mergeAll(
     AccountStoreSql.layer,
     AuditLogStoreSql.layer,
+    SessionStoreSql.layer,
     UserStoreSql.layer,
     VerificationStoreSql.layer,
     SqlTransaction.layerSql,
@@ -91,6 +94,7 @@ const sqlStores = <E>(client: Layer.Layer<SqlClient.SqlClient, E>) => {
       Layer.mergeAll(
         Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
         Repositories.AuditLogRepositoryLive,
+        Repositories.SessionsRepositoryLive,
         Repositories.UsersRepositoryLive,
         Repositories.VerificationRepositoryLive,
         Repositories.VerificationReservationsRepositoryLive,
@@ -130,6 +134,11 @@ export const runOnMemory = (): void => {
     cases: StoreContract.accounts,
   });
   StoreContract.run(framework, {
+    adapter: "SessionStore (Ref)",
+    layer: SessionStore.layerMemory,
+    cases: StoreContract.sessions,
+  });
+  StoreContract.run(framework, {
     adapter: "UserStore (Ref)",
     layer: Layer.mergeAll(UserStore.layerMemory, SqlTransaction.layerNoop),
     cases: StoreContract.users,
@@ -152,6 +161,11 @@ export const runOnSql = <E>(label: string, client: Layer.Layer<SqlClient.SqlClie
     adapter: `AccountStore (${label})`,
     layer: sqlStores(client),
     cases: StoreContract.accounts,
+  });
+  StoreContract.run(framework, {
+    adapter: `SessionStore (${label})`,
+    layer: sqlStores(client),
+    cases: StoreContract.sessions,
   });
   StoreContract.run(framework, {
     adapter: `UserStore (${label})`,

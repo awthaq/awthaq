@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-OVERVIEW |
-> | Revision | 1.8 |
+> | Revision | 1.9 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) <br> 1.4 (2026-10-13): the Ports table names the `SqlTransaction` unit of work (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): Ports surface lists `Ids`, `Store` and `PruneExpired` (plan 02 phase 1) <br> 1.6 (2026-10-13): Ports surface lists `VerificationStore` (plan 02 phase 3) <br> 1.7 (2026-10-13): Ports surface lists `AccountStore` (plan 02 phase 4) <br> 1.8 (2026-10-13): Ports surface lists `UserStore` (plan 02 phase 5) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) <br> 1.4 (2026-10-13): the Ports table names the `SqlTransaction` unit of work (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): Ports surface lists `Ids`, `Store` and `PruneExpired` (plan 02 phase 1) <br> 1.6 (2026-10-13): Ports surface lists `VerificationStore` (plan 02 phase 3) <br> 1.7 (2026-10-13): Ports surface lists `AccountStore` (plan 02 phase 4) <br> 1.8 (2026-10-13): Ports surface lists `UserStore` (plan 02 phase 5) <br> 1.9 (2026-10-13): Ports surface lists `SessionStore` (plan 02 phase 6) |
 
 ---
 
@@ -111,6 +111,7 @@ PinnedHttp
 PruneExpired
 RateLimiter
 RefreshingCache
+SessionStore
 SmsSender
 SqlTransaction
 Store
@@ -143,6 +144,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `PinnedHttp` | helpers | `send(request)` connects to an address `HostResolver.pin` judged, with the URL's own name as Host and SNI, judging the address again, no redirect, a body only up to a cap (webhooks, IdP metadata import); `pinnedRequestOptions` |
 | `AccountStore` | `Context.Service` | the store port under `Accounts` (`insertIfAbsent`, the token-free identity reads, `readCredentialHash`, `readProviderTokens`, the two targeted writes, `deleteUnlessLast`, `deleteByUser`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `AccountStoreSql`; the bar is `StoreContract.accounts` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
 | `AuditLogStore` | `Context.Service` | the store port under `AuditLog` (`append`, `select`, `pageAfter`, `rewriteReferencing`, `deleteBefore`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `AuditLogStoreSql`; the bar an adapter clears is `@awthaq/test`'s `StoreContract.auditLog` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
+| `SessionStore` | `Context.Service` | the store port under `Sessions` (`insert`, `get`, `rotate`, `flagReuse`, `remove`, `removeForUser`, `listLive`, `reauthenticate`, `purgeExpired`, each atomic by contract) with the shared `isLive`, `evictionOrder` and `unionMethods`; `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `SessionStoreSql`; the bar, for a KV backend too, is `StoreContract.sessions` ([ADR-EA-014](decisions/014-session-storage-backend-neutrality.md), [ADR-EA-041](decisions/041-domain-store-ports.md)) |
 | `UserStore` | `Context.Service` | the store port under `Users` (`insertOrHolder`, `get`/`getByEmail`/`getByPhone`, `updateProfile`, `casIdentity`, `setStatus`, `delete`, `listPage`, `readFields`/`writeFields`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `UserStoreSql`; the bar is `StoreContract.users` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
 | `VerificationStore` | `Context.Service` | the store port under `Verification` (`upsertLive`, `present`, `settle`, `transaction`, `reserve`, `deleteByUser`, `purgeExpired`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `VerificationStoreSql`; the bar is `StoreContract.verification` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
 | `Ids`, `Store`, `PruneExpired` | helpers | the identifier brands of the core entities (`UserId`, `AccountId`, `SessionId`, `VerificationTokenId`, `E164`; `@awthaq/sql`'s `Models` re-exports them), what every core store port shares (`StoreUnavailable`, `Consistency`, `ReadOptions`; [ADR-EA-041](decisions/041-domain-store-ports.md)) and the in-memory eviction the `Ref` adapters use (TMS-004) |

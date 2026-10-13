@@ -59,9 +59,7 @@ export const make = (sql: SqlClient.SqlClient) => {
       Effect.flatMap(insideTransaction, (nested) => {
         const attempt = nested ? self : retryTransient()(self);
         return orStoreUnavailable(operation)(
-          options?.capture === true
-            ? Effect.provideService(ReadRouting.captureToken(attempt), SqlClient.SqlClient, sql)
-            : attempt,
+          options?.capture === true ? ReadRouting.captureTokenOn(sql)(attempt) : attempt,
         );
       });
 
@@ -71,9 +69,11 @@ export const make = (sql: SqlClient.SqlClient) => {
    * back as a miss), which is why it is exported as `once` too.
    */
   const read =
-    (operation: string) =>
+    (operation: string, options?: { readonly capture?: boolean }) =>
     <A, E, R>(self: Effect.Effect<A, E, R>) =>
-      orStoreUnavailable(operation)(self);
+      orStoreUnavailable(operation)(
+        options?.capture === true ? ReadRouting.captureTokenOn(sql)(self) : self,
+      );
 
   return { write, read, once: read };
 };

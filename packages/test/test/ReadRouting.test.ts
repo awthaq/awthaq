@@ -283,6 +283,30 @@ describe("causal handoffs under replica lag (RRC-008)", () => {
     ),
   );
 
+  // ADR-EA-024 section 3 (plan 02): the session store's writes capture the causal token, so a fiber that
+  // just revoked and then asks for an *eventual* device list is read-your-writes: it is held to the
+  // primary instead of seeing the revoked session on a lagging replica.
+  it.effect("an eventual device list right after a revoke does not show the revoked session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { lag, sessions } = yield* sessionsUnderLag;
+        const { session } = yield* sessions.issue({ userId });
+        yield* lag.catchUp; // the replica holds the live session
+        const listed = yield* sessions.revoke(session.id, "userRevoked").pipe(
+          Effect.andThen(sessions.list(userId, undefined, { consistency: "eventual" })),
+          // The token is set on the fiber's own context; scope it to this case, and give the fiber the
+          // replica configuration the way an application provides it at the top of a request.
+          Effect.provideService(ReadRouting.CurrentCausalToken, Option.none()),
+          Effect.provide(lag.layer),
+        );
+        assert.strictEqual(listed.length, 0);
+        // A fiber that wrote nothing still sees the stale replica until it catches up.
+        const stale = yield* sessions.list(userId, undefined, { consistency: "eventual" });
+        assert.strictEqual(stale.length, 1);
+      }).pipe(Effect.provide(MigratedSqlite)),
+    ),
+  );
+
   it.effect("a rotated session's new token verifies on the very next read under lag", () =>
     Effect.scoped(
       Effect.gen(function* () {

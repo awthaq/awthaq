@@ -139,23 +139,35 @@ export const ReplicationPosition = Context.Reference<ReplicationPositionShape>(
  * primary instead of failing the write.
  */
 export const captureToken = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.tap(effect, () =>
-    Effect.gen(function* () {
-      const replicaClient = yield* ReplicaSqlClient;
-      if (Option.isNone(replicaClient)) return;
-      const primary = yield* SqlClient.SqlClient;
-      const position = yield* ReplicationPosition;
-      const token = yield* position
-        .current(primary)
-        .pipe(Effect.orElseSucceed(() => Option.some(UNKNOWN_POSITION)));
-      if (Option.isNone(token)) return;
-      yield* Effect.withFiber((fiber) =>
-        Effect.sync(() => {
-          fiber.setContext(Context.add(fiber.context, CurrentCausalToken, token));
-        }),
-      );
-    }),
-  );
+  Effect.tap(effect, () => captureFrom(Effect.service(SqlClient.SqlClient)));
+
+/**
+ * `captureToken` over a primary client the caller already holds (a store adapter built over one
+ * `SqlClient`), so the wrapped effect's requirements stay empty. It must not be implemented by providing
+ * the client to `captureToken`: a `provideService` region restores the fiber's context on exit, which
+ * would discard the very token this sets.
+ */
+export const captureTokenOn =
+  (primary: SqlClient.SqlClient) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.tap(effect, () => captureFrom(Effect.succeed(primary)));
+
+const captureFrom = <R>(primaryClient: Effect.Effect<SqlClient.SqlClient, never, R>) =>
+  Effect.gen(function* () {
+    const replicaClient = yield* ReplicaSqlClient;
+    if (Option.isNone(replicaClient)) return;
+    const primary = yield* primaryClient;
+    const position = yield* ReplicationPosition;
+    const token = yield* position
+      .current(primary)
+      .pipe(Effect.orElseSucceed(() => Option.some(UNKNOWN_POSITION)));
+    if (Option.isNone(token)) return;
+    yield* Effect.withFiber((fiber) =>
+      Effect.sync(() => {
+        fiber.setContext(Context.add(fiber.context, CurrentCausalToken, token));
+      }),
+    );
+  });
 
 /** Seeds `CurrentCausalToken` for `effect` — what a middleware carrying a token across requests would call. */
 export const withCausalToken =

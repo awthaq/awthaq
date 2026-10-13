@@ -1,15 +1,15 @@
 // spec/behaviors/07-sessions.md, BEH-EA-049 through BEH-EA-056.
 //
-// The same contract suite runs against both `Layer`s — `layerMemory` (a
-// `Ref`) and `layerSql` (a real, in-memory SQLite database via
-// `@effect/sql-sqlite-node`) — since `TestClock` (auto-provided by
-// `it.effect`) is the ambient `Clock` both `DateTime.now` and the SQL
-// model's own constructor defaults read from, so `TestClock.adjust`
-// controls simulated time identically for either backend.
+// Plan 02 (ADR-EA-041, ADR-EA-014): `Sessions` is one implementation over `SessionStore`, so its domain
+// suites run once, over the `Ref` adapter (`TestClock` controls simulated time, which the service reads
+// once per operation and hands to the store). What a store must do on every backend (the atomic
+// supersede, the compare-and-swap rotation, the once-only reuse flag, the single-delete revoke, the
+// amr union, the live listing) is `StoreContract.sessions`, run on the `Ref`, SQLite, WAL-file and
+// (`pnpm test:pg`) Postgres adapters; the SQL adapter's own retry and failure mapping are
+// `packages/sql/test/SessionStoreSql.test.ts`.
 import { Api } from "@awthaq/api";
-import { Repositories } from "@awthaq/sql";
+import { SessionStore } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as LayerMap from "effect/LayerMap";
 import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
@@ -26,10 +27,9 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { LockTimeoutError, SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import { StoreUnavailable } from "../src/Errors.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as Tenant from "../src/Tenant.ts";
 import * as Users from "../src/Users.ts";
@@ -49,58 +49,6 @@ const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
 const ShortLivedMemoryLayer = Sessions.layerMemory.pipe(
   Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, AuthEvents.layer)),
   Layer.provide(AuditLog.layerMemory),
-);
-
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
-
-// RRS-003: `familyId`/`supersededBy`/`supersededAt`/`reusedAt` —
-// `@awthaq/sql`'s own `CoreMigrations.ts` migration 10 is the production
-// equivalent of this ad hoc test-only schema.
-const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE sessions (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        secretHash TEXT NOT NULL,
-        ipAddress TEXT,
-        userAgent TEXT,
-        absoluteExpiresAt TEXT NOT NULL,
-        idleExpiresAt TEXT NOT NULL,
-        createdAt TEXT NOT NULL,
-        authenticatedAt TEXT NOT NULL,
-        lastActiveAt TEXT NOT NULL,
-        actingAsType TEXT,
-        actingAsId TEXT,
-        familyId TEXT NOT NULL,
-        supersededBy TEXT,
-        supersededAt TEXT,
-        reusedAt TEXT,
-        amr TEXT NOT NULL DEFAULT '[]',
-        tenantId TEXT,
-        previousSecretHash TEXT,
-        previousSecretExpiresAt TEXT
-      )
-    `;
-  }),
-).pipe(Layer.provide(SqlLive));
-
-const SqlLayer = Sessions.layerSql.pipe(
-  Layer.provide(Repositories.SessionsRepositoryLive),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(AuthEvents.layer),
-  Layer.provide(AuditLog.layerMemory),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
-
-const ShortLivedSqlLayer = Sessions.layerSql.pipe(
-  Layer.provide(Repositories.SessionsRepositoryLive),
-  Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, AuthEvents.layer)),
-  Layer.provide(AuditLog.layerMemory),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
 );
 
 /** EP-007: the application's own map, tenant id -> that tenant's `SessionConfig` layer. */
@@ -906,8 +854,7 @@ const suite = (
   });
 };
 
-suite("Sessions (layerMemory)", MemoryLayer, ShortLivedMemoryLayer);
-suite("Sessions (layerSql)", SqlLayer, ShortLivedSqlLayer);
+suite("Sessions", MemoryLayer, ShortLivedMemoryLayer);
 
 // RRS-003 — .scratch/resolve-ready-for-human-findings/issues/
 // 11-token-lifecycle-store.md: the `supersedes` rotation path tombstones
@@ -920,15 +867,6 @@ const MemoryLayerWithEvents = Sessions.layerMemory.pipe(
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
-);
-
-const SqlLayerWithEvents = Sessions.layerSql.pipe(
-  Layer.provide(Repositories.SessionsRepositoryLive),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
 );
 
 const reuseSuite = (
@@ -1450,15 +1388,6 @@ const CappedMemoryLayer = Sessions.layerMemory.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
 );
 
-const CappedSqlLayer = Sessions.layerSql.pipe(
-  Layer.provide(Repositories.SessionsRepositoryLive),
-  Layer.provide(Layer.mergeAll(NodeCrypto.layer, cappedConfig)),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
-
 const capSuite = (
   name: string,
   cappedLayer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
@@ -1538,14 +1467,11 @@ const capSuite = (
   });
 };
 
-capSuite("Sessions concurrent cap (layerMemory)", CappedMemoryLayer, MemoryLayerWithEvents);
-capSuite("Sessions concurrent cap (layerSql)", CappedSqlLayer, SqlLayerWithEvents);
+capSuite("Sessions concurrent cap", CappedMemoryLayer, MemoryLayerWithEvents);
 
-eventsSuite("Sessions lifecycle events (layerMemory)", MemoryLayerWithEvents);
-eventsSuite("Sessions lifecycle events (layerSql)", SqlLayerWithEvents);
+eventsSuite("Sessions lifecycle events", MemoryLayerWithEvents);
 
-reuseSuite("Sessions reuse detection (layerMemory)", MemoryLayerWithEvents);
-reuseSuite("Sessions reuse detection (layerSql)", SqlLayerWithEvents);
+reuseSuite("Sessions reuse detection", MemoryLayerWithEvents);
 
 // RRS-005/RRC-006: a bounded rotation grace window. The throttled touch moves the outgoing secret's
 // hash aside for `rotationGrace`; presenting it inside that window is accepted (and re-delivers a
@@ -1564,16 +1490,6 @@ const graceMemoryLayer = (rotationGrace?: Duration.Duration) =>
     Layer.provide(Layer.mergeAll(NodeCrypto.layer, graceConfig(rotationGrace))),
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layerMemory),
-  );
-
-const graceSqlLayer = (rotationGrace?: Duration.Duration) =>
-  Sessions.layerSql.pipe(
-    Layer.provide(Repositories.SessionsRepositoryLive),
-    Layer.provide(Layer.mergeAll(NodeCrypto.layer, graceConfig(rotationGrace))),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
   );
 
 const graceSuite = (
@@ -1756,8 +1672,7 @@ const graceSuite = (
   });
 };
 
-graceSuite("Sessions rotation grace (layerMemory)", graceMemoryLayer);
-graceSuite("Sessions rotation grace (layerSql)", graceSqlLayer);
+graceSuite("Sessions rotation grace", graceMemoryLayer);
 
 describe("Sessions", () => {
   it("BEH-EA-055: the default session cookie name is fixed", () => {
@@ -1787,140 +1702,71 @@ describe("Sessions", () => {
   });
 });
 
-// ESR-002/RRS-004: a failing successor insert must roll the tombstone back.
-const failNextInsert = Effect.runSync(Ref.make(false));
-
-const FlakyInsertRepository = Layer.effect(
-  Repositories.SessionsRepository,
-  Effect.gen(function* () {
-    const real = yield* Repositories.SessionsRepository;
-    return {
-      ...real,
-      insert: (input: Parameters<typeof real.insert>[0]) =>
-        Ref.get(failNextInsert).pipe(
-          Effect.flatMap((fail) =>
-            fail
-              ? Effect.fail(
-                  new SqlError({
-                    reason: new UnknownError({ cause: new Error("simulated insert failure") }),
-                  }),
-                )
-              : real.insert(input),
-          ),
-        ),
-    };
-  }),
-).pipe(Layer.provide(Repositories.SessionsRepositoryLive));
-
-const FlakySqlLayer = Sessions.layerSql.pipe(
-  Layer.provide(FlakyInsertRepository),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
-
-// MA-004: an infrastructure failure is one typed, retryable `StoreUnavailable` in the Shape's `E`,
-// for both layers — never a defect and never the raw `SqlError`/`PlatformError`.
+// MA-004: an infrastructure failure is one typed, retryable `StoreUnavailable` in the Shape's `E`, never a
+// defect and never the raw `SqlError`/`PlatformError`. The store double names its own primitive, as an
+// adapter does; the service relabels it to the operation the caller ran, so the wire label does not change.
 describe("Sessions infrastructure failures (MA-004)", () => {
-  it.effect(
-    "layerSql: a SqlError from the repository surfaces as StoreUnavailable, not a defect",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        yield* Ref.set(failNextInsert, true);
-        const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
-        yield* Ref.set(failNextInsert, false);
-        assert.strictEqual(failure._tag, "StoreUnavailable");
-        assert.strictEqual(failure.operation, "Sessions.issue");
-        // The cause is logged where it happened; it is not a field a response could carry.
-        assert.notProperty(failure, "cause");
-      }).pipe(Effect.provide(FlakySqlLayer)),
-  );
-
-  // SEA-002: a `SQLITE_BUSY`-class failure (a retryable `SqlError`) is retried a bounded number of
-  // times before it becomes `StoreUnavailable`; anything else is not retried at all.
-  const insertAttempts = Effect.runSync(Ref.make(0));
-  const failFirstInserts = Effect.runSync(Ref.make(0));
-  const failWith = Effect.runSync(Ref.make<"busy" | "unknown">("busy"));
-
-  const BusyInsertRepository = Layer.effect(
-    Repositories.SessionsRepository,
-    Effect.gen(function* () {
-      const real = yield* Repositories.SessionsRepository;
-      return {
-        ...real,
-        insert: (input: Parameters<typeof real.insert>[0]) =>
-          Effect.gen(function* () {
-            yield* Ref.update(insertAttempts, (n) => n + 1);
-            const remaining = yield* Ref.get(failFirstInserts);
-            if (remaining <= 0) return yield* real.insert(input);
-            yield* Ref.set(failFirstInserts, remaining - 1);
-            const kind = yield* Ref.get(failWith);
-            return yield* Effect.fail(
-              new SqlError({
-                reason:
-                  kind === "busy"
-                    ? new LockTimeoutError({ cause: new Error("SQLITE_BUSY: database is locked") })
-                    : new UnknownError({ cause: new Error("boom") }),
-              }),
-            );
-          }),
-      };
-    }),
-  ).pipe(Layer.provide(Repositories.SessionsRepositoryLive));
-
-  const BusySqlLayer = Sessions.layerSql.pipe(
-    Layer.provide(BusyInsertRepository),
+  const down = (primitive: string) => Effect.fail(new StoreUnavailable({ operation: primitive }));
+  const DownStore = Layer.mock(SessionStore.SessionStore, {
+    insert: () => down("SessionStore.insert"),
+    get: () => down("SessionStore.get"),
+    rotate: () => down("SessionStore.rotate"),
+    flagReuse: () => down("SessionStore.flagReuse"),
+    remove: () => down("SessionStore.remove"),
+    removeForUser: () => down("SessionStore.removeForUser"),
+    listLive: () => down("SessionStore.listLive"),
+    reauthenticate: () => down("SessionStore.reauthenticate"),
+    purgeExpired: () => down("SessionStore.purgeExpired"),
+  });
+  const DownLayer = Sessions.layer.pipe(
+    Layer.provide(DownStore),
     Layer.provide(NodeCrypto.layer),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layerMemory),
   );
 
-  const reset = (failures: number, kind: "busy" | "unknown") =>
-    Ref.set(insertAttempts, 0).pipe(
-      Effect.andThen(Ref.set(failFirstInserts, failures)),
-      Effect.andThen(Ref.set(failWith, kind)),
-    );
-
-  it.effect("SEA-002: issue retries a busy write and succeeds once the lock frees", () =>
+  it.effect("a store outage surfaces as StoreUnavailable named for the service operation", () =>
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
-      yield* reset(2, "busy");
-      const fiber = yield* Effect.forkChild(sessions.issue({ userId }));
-      yield* TestClock.adjust(Duration.seconds(5));
-      const issued = yield* Fiber.join(fiber);
-      assert.strictEqual(issued.session.userId, userId);
-      assert.strictEqual(yield* Ref.get(insertAttempts), 3);
-    }).pipe(Effect.provide(BusySqlLayer)),
-  );
-
-  it.effect(
-    "SEA-002: the retry is bounded — a write that stays busy becomes StoreUnavailable",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        yield* reset(1000, "busy");
-        const fiber = yield* Effect.forkChild(sessions.issue({ userId }).pipe(Effect.flip));
-        yield* TestClock.adjust(Duration.seconds(5));
-        const failure = yield* Fiber.join(fiber);
-        assert.strictEqual(failure._tag, "StoreUnavailable");
-        // The first try plus three retries, and no more.
-        assert.strictEqual(yield* Ref.get(insertAttempts), 4);
-      }).pipe(Effect.provide(BusySqlLayer)),
-  );
-
-  it.effect("SEA-002: a non-retryable failure is not retried", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Sessions.Sessions;
-      yield* reset(1000, "unknown");
-      const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "StoreUnavailable");
-      assert.strictEqual(yield* Ref.get(insertAttempts), 1);
-    }).pipe(Effect.provide(BusySqlLayer)),
+      const operationOf = <A>(effect: Effect.Effect<A, { readonly _tag: string }>) =>
+        effect.pipe(
+          Effect.flip,
+          Effect.map((failure) =>
+            failure._tag === "StoreUnavailable" && "operation" in failure
+              ? failure.operation
+              : failure._tag,
+          ),
+        );
+      const id = Sessions.SessionId("some-id");
+      assert.strictEqual(yield* operationOf(sessions.issue({ userId })), "Sessions.issue");
+      assert.strictEqual(
+        yield* operationOf(sessions.verify(Redacted.make("some-id.some-secret"))),
+        "Sessions.verify",
+      );
+      assert.strictEqual(yield* operationOf(sessions.revoke(id, "admin")), "Sessions.revoke");
+      assert.strictEqual(
+        yield* operationOf(sessions.revokeOwned(userId, id, "admin")),
+        "Sessions.revokeOwned",
+      );
+      assert.strictEqual(
+        yield* operationOf(sessions.revokeOthers(userId, id, "admin")),
+        "Sessions.revokeOthers",
+      );
+      assert.strictEqual(
+        yield* operationOf(sessions.revokeAll(userId, "admin")),
+        "Sessions.revokeAll",
+      );
+      assert.strictEqual(yield* operationOf(sessions.list(userId)), "Sessions.list");
+      assert.strictEqual(yield* operationOf(sessions.findOwned(userId, id)), "Sessions.findOwned");
+      assert.strictEqual(
+        yield* operationOf(sessions.reauthenticate(userId, id)),
+        "Sessions.reauthenticate",
+      );
+      assert.strictEqual(
+        yield* operationOf(sessions.purgeExpired(DateTime.makeUnsafe(0))),
+        "Sessions.purgeExpired",
+      );
+    }).pipe(Effect.provide(DownLayer)),
   );
 
   const BrokenCrypto = Layer.succeed(
@@ -1944,7 +1790,7 @@ describe("Sessions infrastructure failures (MA-004)", () => {
     Layer.provide(AuditLog.layerMemory),
   );
 
-  it.effect("layerMemory: a crypto PlatformError surfaces as StoreUnavailable", () =>
+  it.effect("a crypto PlatformError surfaces as StoreUnavailable", () =>
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
       const issueFailure = yield* sessions.issue({ userId }).pipe(Effect.flip);
@@ -1957,56 +1803,108 @@ describe("Sessions infrastructure failures (MA-004)", () => {
   );
 });
 
-describe("Sessions atomic supersede (layerSql)", () => {
-  it.effect(
-    "BEH-EA-053: a failing insert during issue(supersedes) leaves the superseded session live and untombstoned",
-    () =>
+// S-6/S-7 (plan 02): a rotation that loses its compare-and-swap re-applies liveness to the row it finds,
+// instead of authenticating whatever is there. Driven with a store double whose `rotate` always loses.
+describe("Sessions rotation loser (S-6)", () => {
+  const losing = (
+    current: (record: SessionStore.SessionRecord) => Option.Option<SessionStore.SessionRecord>,
+  ) =>
+    Layer.effect(
+      SessionStore.SessionStore,
       Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const events = yield* AuthEvents.AuthEvents;
-        const reuse = yield* Ref.make(0);
-        yield* Effect.forkChild(
-          events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.session.reuse"),
-            Stream.runForEach(() => Ref.update(reuse, (n) => n + 1)),
+        const real = yield* SessionStore.SessionStore;
+        return {
+          ...real,
+          rotate: (input: Parameters<typeof real.rotate>[0]) =>
+            Effect.map(real.get(input.id), (row) => ({
+              _tag: "Lost" as const,
+              current: Option.flatMap(row, current),
+            })),
+        };
+      }),
+    ).pipe(Layer.provide(SessionStore.layerMemory));
+
+  const layerOver = (store: ReturnType<typeof losing>) =>
+    Sessions.layer.pipe(
+      Layer.provide(store),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provide(AuthEvents.layer),
+      Layer.provide(AuditLog.layerMemory),
+    );
+
+  const dueForTouch = Effect.gen(function* () {
+    const sessions = yield* Sessions.Sessions;
+    const issued = yield* sessions.issue({ userId });
+    // Past `touchEvery`, so `verify` tries to rotate.
+    yield* TestClock.adjust(Duration.hours(2));
+    return { sessions, issued };
+  });
+
+  it.effect("authenticates the row the winner left behind, without a rotation of its own", () =>
+    Effect.gen(function* () {
+      const { sessions, issued } = yield* dueForTouch;
+      const verified = yield* sessions.verify(issued.token);
+      assert.strictEqual(verified.session.id, issued.session.id);
+      assert.isTrue(Option.isNone(verified.rotated));
+    }).pipe(Effect.provide(layerOver(losing(Option.some)))),
+  );
+
+  it.effect("refuses a row tombstoned in the meantime", () =>
+    Effect.gen(function* () {
+      const { sessions, issued } = yield* dueForTouch;
+      const failure = yield* sessions.verify(issued.token).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "Sessions/NotFound");
+    }).pipe(
+      Effect.provide(
+        layerOver(
+          losing((record) =>
+            Option.some({ ...record, supersededAt: Option.some(DateTime.makeUnsafe(0)) }),
           ),
-          { startImmediately: true },
-        );
+        ),
+      ),
+    ),
+  );
 
-        const a = yield* sessions.issue({ userId });
-        yield* Ref.set(failNextInsert, true);
-        const exit = yield* sessions.issue({ userId, supersedes: a.session.id }).pipe(Effect.exit);
-        yield* Ref.set(failNextInsert, false);
-        assert.isTrue(Exit.isFailure(exit));
-
-        // The old token still verifies: the tombstone rolled back with the insert.
-        const verified = yield* sessions.verify(a.token);
-        assert.strictEqual(verified.session.id, a.session.id);
-        for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-        assert.strictEqual(yield* Ref.get(reuse), 0);
-      }).pipe(Effect.provide(FlakySqlLayer)),
+  it.effect("refuses a row that is gone", () =>
+    Effect.gen(function* () {
+      const { sessions, issued } = yield* dueForTouch;
+      const failure = yield* sessions.verify(issued.token).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "Sessions/NotFound");
+    }).pipe(Effect.provide(layerOver(losing(() => Option.none())))),
   );
 });
 
-// TIR-003/ESS-005: pagination past one repository page (MAX_PAGE_SIZE = 200).
-describe("Sessions.list past one page (layerSql)", () => {
-  it.effect(
-    "BEH-EA-054: list returns all 250 live sessions, findOwned resolves the newest of them",
-    () =>
-      Effect.gen(function* () {
+// S-8: a listing past `LIST_LIMIT` is bounded and says so, instead of truncating silently.
+describe("Sessions.list bound (S-8)", () => {
+  it.effect("logs a warning when the store reports the listing truncated", () =>
+    Effect.gen(function* () {
+      const warnings: Array<string> = [];
+      const TruncatingStore = Layer.effect(
+        SessionStore.SessionStore,
+        Effect.gen(function* () {
+          const real = yield* SessionStore.SessionStore;
+          return {
+            ...real,
+            listLive: (input: Parameters<typeof real.listLive>[0]) =>
+              Effect.map(real.listLive(input), (listing) => ({ ...listing, truncated: true })),
+          };
+        }),
+      ).pipe(Layer.provide(SessionStore.layerMemory));
+      const layer = Sessions.layer.pipe(
+        Layer.provide(TruncatingStore),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(AuthEvents.layer),
+        Layer.provide(AuditLog.layerMemory),
+      );
+      const logger = Logger.make<unknown, void>(({ message }) => {
+        warnings.push(Array.isArray(message) ? message.join(" ") : String(message));
+      });
+      yield* Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        let newest = yield* sessions.issue({ userId });
-        for (let i = 1; i < 250; i++) newest = yield* sessions.issue({ userId });
-        const listed = yield* sessions.list(userId, newest.session.id);
-        assert.strictEqual(listed.length, 250);
-        assert.strictEqual(new Set(listed.map((row) => row.id)).size, 250);
-        assert.strictEqual(listed.filter((row) => row.current).length, 1);
-        const found = yield* sessions.findOwned(userId, newest.session.id);
-        assert.isTrue(Option.isSome(found));
-        // GC-005: an owned session beyond the first repository page revokes fine.
-        yield* sessions.revokeOwned(userId, newest.session.id, "userRevoked");
-        assert.strictEqual((yield* sessions.list(userId)).length, 249);
-      }).pipe(Effect.provide(SqlLayer)),
-    30_000,
+        yield* sessions.issue({ userId });
+        yield* sessions.list(userId);
+      }).pipe(Effect.provide(Layer.mergeAll(layer, Logger.layer([logger]))));
+      assert.isTrue(warnings.some((warning) => warning.includes("Sessions.list stopped at")));
+    }),
   );
 });

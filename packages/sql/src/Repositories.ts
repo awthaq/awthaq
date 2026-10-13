@@ -1681,7 +1681,8 @@ export interface SessionsRepositoryShape {
    * whichever response lost the race holding a token that no longer
    * verifies. `None` means another request already won that race — not a
    * failure — so the caller reports no rotation of its own rather than
-   * clobbering the winner's write.
+   * clobbering the winner's write. Plan 02: a tombstoned row is never rotated
+   * (`"supersededAt" IS NULL`): it is the evidence of reuse.
    */
   readonly touch: (input: {
     readonly id: SessionId;
@@ -1694,17 +1695,17 @@ export interface SessionsRepositoryShape {
     readonly idleExpiresAt: DateTime.Utc;
   }) => Effect.Effect<Option.Option<Session>, RepositoryError>;
   readonly delete: (id: SessionId) => Effect.Effect<void, RepositoryError>;
-  /** BEH-EA-054: bulk-revokes every session for `userId` except `keep`. */
+  /** BEH-EA-054: bulk-revokes every session for `userId` except `keep`. Resolves to how many went. */
   readonly deleteAllForUserExcept: (
     userId: UserId,
     keep: SessionId,
-  ) => Effect.Effect<void, SqlError>;
+  ) => Effect.Effect<number, RepositoryError>;
   /**
    * Upstream-hardening map, ticket 02: bulk-revokes every session for
    * `userId`, no exceptions — `revokeAll`'s own primitive, distinct from
-   * `deleteAllForUserExcept`'s "all but one" shape.
+   * `deleteAllForUserExcept`'s "all but one" shape. Resolves to how many went.
    */
-  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<number, RepositoryError>;
   /**
    * SMS-003: the user's live (not tombstoned, past neither expiry at `now`),
    * non-impersonation sessions' ids and last activity — what a concurrent-
@@ -1715,7 +1716,7 @@ export interface SessionsRepositoryShape {
     userId: UserId,
     now: DateTime.Utc,
   ) => Effect.Effect<
-    ReadonlyArray<{ readonly id: string; readonly lastActiveAt: DateTime.Utc }>,
+    ReadonlyArray<{ readonly id: SessionId; readonly lastActiveAt: DateTime.Utc }>,
     RepositoryError
   >;
   /**
@@ -1996,6 +1997,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
               "idleExpiresAt" = ${request.idleExpiresAt}
           WHERE "id" = ${request.id}
             AND "secretHash" = ${request.expectedSecretHash}
+            AND "supersededAt" IS NULL
           RETURNING *
         `,
     });
@@ -2015,12 +2017,18 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         traced("Sessions.touch", { id: input.id }),
       );
 
+    const deleteAllForUserExceptQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ userId: UserId, keep: SessionId }),
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (r) =>
+        sql`DELETE FROM sessions WHERE "userId" = ${r.userId} AND id != ${r.keep} RETURNING id`,
+    });
     const deleteAllForUserExcept: SessionsRepositoryShape["deleteAllForUserExcept"] = (
       userId,
       keep,
     ) =>
-      sql`DELETE FROM sessions WHERE "userId" = ${userId} AND id != ${keep}`.pipe(
-        Effect.asVoid,
+      deleteAllForUserExceptQuery({ userId, keep }).pipe(
+        Effect.map((rows) => rows.length),
         traced("Sessions.deleteAllForUserExcept", { userId }),
       );
 
@@ -2030,9 +2038,14 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
     // unquoted identifier to lowercase); SQLite's own identifier
     // resolution is case-insensitive regardless of quoting, so the same
     // quoted form is correct on both dialects.
+    const deleteAllByUserQuery = SqlSchema.findAll({
+      Request: UserId,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (userId) => sql`DELETE FROM sessions WHERE "userId" = ${userId} RETURNING id`,
+    });
     const deleteAllByUser: SessionsRepositoryShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM sessions WHERE "userId" = ${userId}`.pipe(
-        Effect.asVoid,
+      deleteAllByUserQuery(userId).pipe(
+        Effect.map((rows) => rows.length),
         traced("Sessions.deleteAllByUser", { userId }),
       );
 
@@ -2058,7 +2071,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
 
     const liveIdsQuery = SqlSchema.findAll({
       Request: Schema.Struct({ userId: UserId, now: models.wire.dateTime }),
-      Result: Schema.Struct({ id: Schema.String, lastActiveAt: models.wire.dateTime }),
+      Result: Schema.Struct({ id: SessionId, lastActiveAt: models.wire.dateTime }),
       execute: (request) => sql`
           SELECT id, "lastActiveAt" FROM sessions
           WHERE "userId" = ${request.userId}
