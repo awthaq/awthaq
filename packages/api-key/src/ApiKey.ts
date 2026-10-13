@@ -535,24 +535,9 @@ export const ApiKeyHandlers = Layer.mergeAll(
     "apikey.token",
     Effect.fnUntraced(function* (handlers) {
       const apiKey = yield* ApiKey;
-      const settings = yield* ApiKeyConfig;
       const clientAddress = yield* ClientAddress.ClientAddress;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const events = yield* AuthEvents.AuthEvents;
-      const enforce = (key: string, rule: string, dimension: "ip" | "custom", limit: RateLimit) =>
-        RateLimits.enforce({
-          key,
-          limit: limit.limit,
-          window: limit.window,
-          meta: { group: "apikey.token", endpoint: "token", rule, dimension },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // The budget `ApiKey.layer`'s `make` opened (BEH-EA-107): the token endpoint spends it by name.
+      const limits = yield* RateLimits.budgetOf(ApiKey);
       return handlers.handleAll({
         token: Effect.fnUntraced(function* ({
           payload,
@@ -562,12 +547,7 @@ export const ApiKeyHandlers = Layer.mergeAll(
           request: HttpServerRequest.HttpServerRequest;
         }) {
           const address = yield* clientAddress.resolve(request);
-          yield* enforce(
-            `apikey:token:ip:${Option.getOrElse(address, () => "unknown")}`,
-            "token-ip",
-            "ip",
-            settings.tokenRateLimit.ip,
-          );
+          yield* limits.spend("tokenByIp", { ip: Option.getOrUndefined(address) });
           if (payload.grant_type !== "client_credentials") {
             return yield* new ApiKeyApi.UnsupportedGrantType();
           }
@@ -582,12 +562,7 @@ export const ApiKeyHandlers = Layer.mergeAll(
               : undefined;
           if (credentials === undefined) return yield* new ApiKeyApi.InvalidRequest();
           // Per client id: bounds secret guessing against one client from many addresses.
-          yield* enforce(
-            `apikey:token:client:${credentials.clientId}`,
-            "token-client",
-            "custom",
-            settings.tokenRateLimit.client,
-          );
+          yield* limits.spend("tokenByClient", { clientId: credentials.clientId });
           const requestedScope =
             payload.scope === undefined
               ? undefined
@@ -622,22 +597,13 @@ const CredentialContributionsLive = Layer.unwrap(
     const jwt = yield* Jwt.Jwt;
     const settings = yield* ApiKeyConfig;
     const clientAddress = yield* ClientAddress.ClientAddress;
-    const limiter = yield* RateLimiter.RateLimiter;
-    const events = yield* AuthEvents.AuthEvents;
+    const limits = yield* RateLimits.budgetOf(ApiKey);
     const registry = yield* Authentication.CredentialResolvers;
 
     const throttle = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const address = yield* clientAddress.resolve(request);
-      yield* RateLimits.enforce({
-        key: `apikey:resolve:ip:${Option.getOrElse(address, () => "unknown")}`,
-        limit: settings.resolveRateLimit.limit,
-        window: settings.resolveRateLimit.window,
-        meta: { group: "apikey", endpoint: "resolve", rule: "resolve-ip", dimension: "ip" },
-      }).pipe(
-        Effect.provideService(RateLimiter.RateLimiter, limiter),
-        Effect.provideService(AuthEvents.AuthEvents, events),
-      );
+      yield* limits.spend("resolveByIp", { ip: Option.getOrUndefined(address) });
     });
 
     const keys = Authentication.contribute("apiKey", {
@@ -746,33 +712,41 @@ export const apiKeyExport = DataExport.contribute({
   }),
 });
 
+// ---- rate limits ----------------------------------------------------------------------
+
+/**
+ * BEH-EA-105/107/111: the rules that guard a request path, declared once. The token handler spends the
+ * first two, the credential contribution the third (`RateLimits.budgetOf(ApiKey)`); the numbers are
+ * `ApiKeyConfig`'s, applied through `tune` when `ApiKey.layer` opens the budget. The per-client rule keys
+ * on `client_id` only after the credentials parsed: bounding secret guessing against one client from many
+ * addresses. `resolve` is a credential resolver, not an endpoint (D12), so its endpoint is the label.
+ */
+const rules = {
+  tokenByIp: RateLimits.rule({
+    group: "apikey.token",
+    endpoint: "token",
+    key: RateLimits.Key.ip,
+    ...defaultConfig.tokenRateLimit.ip,
+  }),
+  tokenByClient: RateLimits.rule({
+    group: "apikey.token",
+    endpoint: "token",
+    key: RateLimits.Key.client,
+    ...defaultConfig.tokenRateLimit.client,
+  }),
+  resolveByIp: RateLimits.rule({
+    group: "apikey",
+    endpoint: "resolve",
+    key: RateLimits.Key.ip,
+    ...defaultConfig.resolveRateLimit,
+  }),
+};
+
 export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", {
   apiVersion: 1,
   contract: ApiKeyApi.ApiKeyApi,
-  // PV-241: the default budgets (`ApiKeyConfig.tokenRateLimit`/`resolveRateLimit` tune them), named as `RateLimits.enforce` reports them.
-  rateLimits: [
-    {
-      group: "apikey.token",
-      endpoint: "token",
-      name: "token-ip",
-      dimension: "ip",
-      ...defaultConfig.tokenRateLimit.ip,
-    },
-    {
-      group: "apikey.token",
-      endpoint: "token",
-      name: "token-client",
-      dimension: "custom",
-      ...defaultConfig.tokenRateLimit.client,
-    },
-    {
-      group: "apikey",
-      endpoint: "resolve",
-      name: "resolve-ip",
-      dimension: "ip",
-      ...defaultConfig.resolveRateLimit,
-    },
-  ],
+  // PV-241: the typed rule table at the default numbers (`ApiKeyConfig.tokenRateLimit`/`resolveRateLimit` tune it at build).
+  rateLimitRules: rules,
   tables: ["apikey_key", "apikey_client"],
   migrations: apiKeyMigrations,
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
@@ -807,7 +781,6 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
         const crypto = yield* Crypto.Crypto;
         const events = yield* AuthEvents.AuthEvents;
         const jwt = yield* Jwt.Jwt;
-        const rateLimits = yield* RateLimits.RateLimitsRegistry;
         const users = yield* Users.Users;
 
         if (!/^[A-Za-z0-9_-]+$/.test(settings.prefix)) {
@@ -817,42 +790,14 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           );
         }
 
-        // Only the rules that guard a request path are registered here; both are enforced by
-        // the token handler and the credential contribution through `RateLimits.enforce`.
-        // The explicit type is the same narrow exception `OAuth.ts`/`Password.ts` document:
-        // passing this class to `register` (an `AuthPlugin.Any`, which requires `layer`) from
-        // inside its own `static layer` initializer is a real TS circularity.
-        const registerRateLimitRules: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =
-          rateLimits
-            .register(ApiKey, {
-              group: "apikey.token",
-              endpoint: "token",
-              key: "ip",
-              limit: settings.tokenRateLimit.ip.limit,
-              window: settings.tokenRateLimit.ip.window,
-            })
-            .pipe(
-              // PV-241: the per-client budget is enforced by the token handler, so it is listed too.
-              Effect.andThen(
-                rateLimits.register(ApiKey, {
-                  group: "apikey.token",
-                  endpoint: "token",
-                  key: (input) => `apikey:token:client:${String(input)}`,
-                  limit: settings.tokenRateLimit.client.limit,
-                  window: settings.tokenRateLimit.client.window,
-                }),
-              ),
-              Effect.andThen(
-                rateLimits.register(ApiKey, {
-                  group: "apikey",
-                  endpoint: "resolve",
-                  key: "ip",
-                  limit: settings.resolveRateLimit.limit,
-                  window: settings.resolveRateLimit.window,
-                }),
-              ),
-            );
-        yield* registerRateLimitRules.pipe(Effect.orDie);
+        // Opens the budget the token handler and the credential contribution spend (`budgetOf`).
+        yield* RateLimits.budget(ApiKey, {
+          tune: Effect.succeed({
+            tokenByIp: settings.tokenRateLimit.ip,
+            tokenByClient: settings.tokenRateLimit.client,
+            resolveByIp: settings.resolveRateLimit,
+          }),
+        });
 
         const randomHex = (bytes: number) =>
           crypto.randomBytes(bytes).pipe(Effect.map(Hmac.toHex), Effect.orDie);
