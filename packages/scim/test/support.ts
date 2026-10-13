@@ -96,8 +96,6 @@ export const ScimLive = (
 ) =>
   Scim.Scim.layer.pipe(
     Layer.provide(Scim.config(scimConfig)),
-    Layer.provide(ScimConnections.ScimAuthenticationLive),
-    Layer.provideMerge(ScimConnections.layerStore),
     Layer.provideMerge(OrganizationLive(organizationConfig)),
     Layer.provideMerge(ScimRecords.layerMemory),
     Layer.provideMerge(OrganizationMemory.layer),

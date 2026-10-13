@@ -45,6 +45,7 @@ import {
   Organization,
   OrganizationActor,
   OrganizationDeletion,
+  OrganizationDirectory,
   OrganizationMembers,
   OrganizationTeams,
 } from "@awthaq/organization";
@@ -58,6 +59,7 @@ import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ScimApi from "./ScimApi.ts";
+import * as ScimConnections from "./ScimConnections.ts";
 import * as ScimRecords from "./ScimRecords.ts";
 
 // ---- config ---------------------------------------------------------------------------------
@@ -490,6 +492,9 @@ export const scimExport = DataExport.contribute({
   }),
 });
 
+/** Named so the class's inferred `layer` type can be emitted (TS2883 needs the namespace of the absorbed connection store's requirement in scope). */
+export type ConnectionStoreRequirement = OrganizationDirectory.OrganizationDirectory;
+
 export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
   apiVersion: 1,
   contract: ScimApi.ScimApi,
@@ -498,6 +503,8 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
     scim_resource: AuthPlugin.Table.derived("scim_connection", "scimConnectionId"),
   },
   migrations: scimMigrations,
+  // Plan 08 (BEH-EA-T4): the connection and resource-link store, memory and SQL, matched.
+  records: ScimRecords.records,
 }) {
   static readonly layer = AuthPlugin.layer(Scim, {
     ports: [SqlTransaction.SqlTransaction],
@@ -1440,7 +1447,14 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         deleteGroup,
       });
     }),
-  });
+  }).pipe(
+    // Plan 08 (Q1): the bearer authentication the plugin's group declares (`ScimAuthentication`, plugin-owned
+    // middleware) and the connection store it reads are always required and built over `ScimRecords`, so they
+    // ship with the plugin instead of in every host's graph. Both stay in the output.
+    Layer.provideMerge(
+      ScimConnections.ScimAuthenticationLive.pipe(Layer.provideMerge(ScimConnections.layerStore)),
+    ),
+  );
 }
 
 // ---- discovery documents -----------------------------------------------------------------------

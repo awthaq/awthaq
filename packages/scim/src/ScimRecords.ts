@@ -159,7 +159,7 @@ export interface ScimRecordsShape {
 }
 
 export class ScimRecords extends Context.Service<ScimRecords, ScimRecordsShape>()(
-  "awthaq/scim/ScimRecords",
+  "awthaq/scim/records/ScimRecords",
 ) {}
 
 const notFound = (id: string): ScimRecordNotFound => new ScimRecordNotFound({ id });
@@ -800,3 +800,6 @@ export const layerSql = Layer.effect(
     };
   }),
 );
+
+/** Plan 08 (BEH-EA-T4): the plugin's record store as two matched layers, `Scim.records`. */
+export const records = { memory: layerMemory, sql: layerSql };

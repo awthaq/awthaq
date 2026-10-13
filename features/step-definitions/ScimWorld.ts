@@ -147,8 +147,6 @@ const buildLive = (options: AppOptions) => {
   // the plugin.
   return Scim.Scim.layer.pipe(
     Layer.provide(Scim.config(options.scim ?? {})),
-    Layer.provide(ScimConnections.ScimAuthenticationLive),
-    Layer.provideMerge(ScimConnections.layerStore),
     Layer.provideMerge(OrganizationLive),
     Layer.provideMerge(ScimRecords.layerMemory),
     Layer.provideMerge(Erasure.layer),
