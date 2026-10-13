@@ -68,6 +68,30 @@ describe("WebhookPayload.toBody: identifiers only", () => {
       }),
   );
 
+  it.effect("drops the operator's note on a ban and on an organization suspension", () =>
+    Effect.gen(function* () {
+      const banned = yield* published({
+        _tag: "auth.admin.userBanned",
+        adminUserId: Users.UserId("admin-1"),
+        userId: Users.UserId("user-2"),
+        reason: "harassed jane.doe@example.com",
+        until: null,
+      });
+      const bannedText = JSON.stringify(WebhookPayload.toBody(banned, withContext));
+      assert.notInclude(bannedText, "harassed");
+      assert.include(bannedText, "user-2");
+      const suspended = yield* published({
+        _tag: "auth.admin.organizationSuspended",
+        adminUserId: Users.UserId("admin-1"),
+        organizationId: "org-1",
+        reason: "unpaid invoice for Jane Doe",
+      });
+      const suspendedText = JSON.stringify(WebhookPayload.toBody(suspended, withContext));
+      assert.notInclude(suspendedText, "Jane Doe");
+      assert.include(suspendedText, "org-1");
+    }),
+  );
+
   it.effect(
     "drops any field named like a credential or contact detail, whatever an event schema says",
     () =>

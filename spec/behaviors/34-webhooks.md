@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-34 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release, the first-party opt-in `@awthaq/webhooks` plugin over the event relay (CWM-004, MAPS-010; [ADR-EA-030](../decisions/030-event-delivery-outbox-relay.md) Decision 7) <br> 1.1 (2026-09-29): per-tenant endpoints and the tenant on the event envelope (BEH-EA-308, 300), the test ping (301), audit events for administrative mutations (302) connection pinning against DNS rebinding (303) and per-endpoint custom headers (304) <br> 1.2 (2026-10-13): The admin rate-limit rule is declared, registered and tunable with `RateLimits.overrides` (plan 06) <br> 1.3 (2026-10-13): BEH-EA-277 reads the personal-data fields each event declares instead of `PII_FIELDS` (plan 09) |
+> | Change History | 1.0 (2026-09-29): Initial release, the first-party opt-in `@awthaq/webhooks` plugin over the event relay (CWM-004, MAPS-010; [ADR-EA-030](../decisions/030-event-delivery-outbox-relay.md) Decision 7) <br> 1.1 (2026-09-29): per-tenant endpoints and the tenant on the event envelope (BEH-EA-308, 300), the test ping (301), audit events for administrative mutations (302) connection pinning against DNS rebinding (303) and per-endpoint custom headers (304) <br> 1.2 (2026-10-13): The admin rate-limit rule is declared, registered and tunable with `RateLimits.overrides` (plan 06) <br> 1.3 (2026-10-13): BEH-EA-277 reads the personal-data fields each event declares instead of `PII_FIELDS` (plan 09) <br> 1.4 (2026-10-13): the ban note and the organization suspension note are no longer in `data` (plan 09 phase 4) |
 ---
 
 > `@awthaq/webhooks` composes as `Auth.make([..., Webhooks])` for the administrator's API and `Webhooks.background()` for the delivery machinery. It is a consumer of the event relay ([BEH-EA-100](13-events.md)): it never widens the in-process bus, and it puts no network call on any operation's path. Everything below is what a receiver (a billing service, a CRM sync, a migrated Clerk webhook handler) relies on, and the safety rules that keep an administrator-supplied URL from becoming a way into the network.

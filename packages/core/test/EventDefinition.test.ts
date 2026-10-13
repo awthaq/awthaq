@@ -140,9 +140,6 @@ describe("the event registry (T3)", () => {
   const NOT_PERSONAL: ReadonlySet<string> = new Set([
     // qadi's denial sentence names attributes, never their values.
     "auth.authz.denied.reason",
-    // Pending Q2 (plan 09 phase 4): operator notes about an account.
-    "auth.admin.userBanned.reason",
-    "auth.admin.organizationSuspended.reason",
   ]);
 
   const isFreeTextSchema = (field: unknown): boolean => {

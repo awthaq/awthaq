@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-029 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (ESA-005, ALF-009, CSG-001) <br> 1.1 (2026-10-13): Decision 2's mechanism: the fields are declared with the event, not in a separate table (architecture plan 09) |
+> | Change History | 1.0 (2026-09-29): Initial release (ESA-005, ALF-009, CSG-001) <br> 1.1 (2026-10-13): Decision 2's mechanism: the fields are declared with the event, not in a separate table (architecture plan 09) <br> 1.2 (2026-10-13): the ban note and the organization suspension note join the declared fields (architecture plan 09 phase 4) |
 
 ---
 
@@ -21,7 +21,7 @@
 ## Decision
 
 1. **Payloads carry opaque identifiers (user ids, session ids, event tags), never an email, a name or free text.** Where an event must correlate an attempt with an identifier the caller typed (`auth.user.signInFailed`), it carries a keyed digest (`identifierDigest`, HMAC under `identifierDigestKey`, random per process unless configured) and the request's `clientIp`, never the identifier itself. `auth.user.invitationCreated` no longer carries the invitee's address; `auth.user.deleted` carries none either.
-2. **Fields that can still hold personal data are declared with the event, not discovered.** Each event's definition names them (`defineEvent(..., { pii })`); the type system refuses a name the event does not carry or a field erasure could not blank; `AuditLog.pseudonymizeActor` blanks exactly those, on the rows that name the erased user, and `RedactionGuard` (in `@awthaq/test`) fails a test that lets a registered canary reach a span, a log line or an event.
+2. **Fields that can still hold personal data are declared with the event, not discovered.** Each event's definition names them (`defineEvent(..., { pii })`); the type system refuses a name the event does not carry or a field erasure could not blank; `AuditLog.pseudonymizeActor` blanks exactly those, on the rows that name the erased user (the impersonation justification, the ban note and the organization suspension note), and `RedactionGuard` (in `@awthaq/test`) fails a test that lets a registered canary reach a span, a log line or an event.
 3. **Erasure pseudonymizes; it does not delete.** `AuditLog.pseudonymizeActor(userId)` rewrites every row naming the user (actor column and anywhere in the payload) to one fresh random alias, so "one actor did these things" survives while the alias is unlinkable to the person; row id, tag, timestamp and correlation id are kept. It runs last inside `AccountErasure`'s transaction (ADR-EA-031). A deployment that must keep the rows verbatim under an Art. 17(3)(b)/(e) obligation sets `ErasureConfig.auditLog: "retain"`.
 4. **The erasure receipt is the one row that keeps the id.** `auth.user.deleted` is published after the commit with the (now orphan) opaque user id and no email: subscribers and an outbox relay need the id to remove their own copies, and the row is the proof that an erasure happened.
 5. **The impersonation ledger is out of scope.** `admin_impersonation` and its hash chain are retained under a legal-obligation basis (who accessed whose account is itself an audit duty, ALF-005) and are protected by database triggers on purpose; their chain payloads embed the ids a pseudonymization would rewrite. A ledger designed to survive erasure (identifiers replaced by per-user keyed digests) is a follow-up, recorded in ADR-EA-031.

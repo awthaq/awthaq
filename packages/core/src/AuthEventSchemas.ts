@@ -512,7 +512,9 @@ export type AdminSessionRevokedEvent = typeof AdminSessionRevokedEvent.Type;
 /**
  * BAM-005/SCP-001: published by `@awthaq/admin`'s `banUser`, after `Users.setStatus("suspended")`
  * and `Sessions.revokeAll(userId, "suspended")` both completed. `reason`/`until` are the
- * operator's note and the optional expiry (ISO instant), `null` when not given.
+ * operator's note and the optional expiry (ISO instant), `null` when not given. The note is
+ * free text about the banned person, so it is declared `pii`: erasure blanks it and a webhook
+ * body omits it.
  */
 export const AdminUserBannedEvent = defineEvent(
   "auth.admin.userBanned",
@@ -524,7 +526,7 @@ export const AdminUserBannedEvent = defineEvent(
   },
   {
     actor: Actor.field("adminUserId"),
-    pii: [],
+    pii: ["reason"],
   },
 );
 export type AdminUserBannedEvent = typeof AdminUserBannedEvent.Type;
@@ -599,7 +601,7 @@ export type AdminUserPasswordSetEvent = typeof AdminUserPasswordSetEvent.Type;
 /**
  * EP-003 (ADR-EA-018): published by `@awthaq/admin`'s `AdminTenants.suspendOrganization`,
  * after the organization is marked suspended. `reason` is the operator's note, `null`
- * when none was given.
+ * when none was given; operators write free text there, so it is declared `pii`.
  */
 export const AdminOrganizationSuspendedEvent = defineEvent(
   "auth.admin.organizationSuspended",
@@ -610,7 +612,7 @@ export const AdminOrganizationSuspendedEvent = defineEvent(
   },
   {
     actor: Actor.field("adminUserId"),
-    pii: [],
+    pii: ["reason"],
   },
 );
 export type AdminOrganizationSuspendedEvent = typeof AdminOrganizationSuspendedEvent.Type;

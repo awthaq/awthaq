@@ -237,17 +237,22 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
             stamped({ _tag: "auth.token.replay", identifier: `verify-email:${userId}` }, 4),
           );
           yield* auditLog.record(stamped({ _tag: "auth.user.created", userId: otherUserId }, 5));
+          // The ban note is operator free text about the banned person (plan 09 phase 4).
+          yield* auditLog.record(
+            stamped({ ...samples["auth.admin.userBanned"], reason: "spamming the forum" }, 6),
+          );
 
           const rewritten = yield* auditLog.pseudonymizeActor(userId);
-          assert.strictEqual(rewritten, 4);
+          assert.strictEqual(rewritten, 5);
           // Idempotent: a second pass finds nothing left to rewrite.
           assert.strictEqual(yield* auditLog.pseudonymizeActor(userId), 0);
 
           const rows = yield* auditLog.list();
-          assert.strictEqual(rows.length, 5);
+          assert.strictEqual(rows.length, 6);
           const text = JSON.stringify(rows.map((row) => row.payload));
           assert.notInclude(text, userId);
           assert.notInclude(text, "billing bug");
+          assert.notInclude(text, "spamming the forum");
           // Tag, id and timestamp survive; the alias stands in consistently...
           const created = rows.find((row) => row.id.endsWith("000000000001"));
           assert.strictEqual(created?.eventTag, "auth.user.created");
@@ -266,7 +271,7 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
           );
           // ...another user's rows are untouched, and nothing lists the erased id any more.
           assert.strictEqual((yield* auditLog.list({ actorUserId: userId })).length, 0);
-          assert.strictEqual((yield* auditLog.list({ actorUserId: otherUserId })).length, 2);
+          assert.strictEqual((yield* auditLog.list({ actorUserId: otherUserId })).length, 3);
         }).pipe(Effect.provide(layer)),
     );
 
