@@ -48,7 +48,7 @@ export interface DeviceClientRecordsShape {
 export class DeviceClientRecords extends Context.Service<
   DeviceClientRecords,
   DeviceClientRecordsShape
->()("awthaq/device-authorization/DeviceClientRecords") {}
+>()("awthaq/device-authorization/records/DeviceClientRecords") {}
 
 // ---- layerMemory ------------------------------------------------------------
 

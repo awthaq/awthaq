@@ -723,6 +723,11 @@ export class DeviceAuthorization extends AuthPlugin.Service<
   migrations: deviceAuthorizationMigrations,
   // Plan 08: the two hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.
   hookPoints: DeviceAuthorizationHooksLive,
+  // Plan 08 (BEH-EA-T4): the grant and client stores, memory and SQL, matched.
+  records: {
+    memory: Layer.mergeAll(DeviceGrantRecords.layerMemory, DeviceClientRecords.layerMemory),
+    sql: Layer.mergeAll(DeviceGrantRecords.layerSql, DeviceClientRecords.layerSql),
+  },
   // PV-241: the typed rule table at the default configuration (`DeviceAuthorizationConfig` tunes it at build).
   rateLimitRules: rules,
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.

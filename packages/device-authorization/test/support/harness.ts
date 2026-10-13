@@ -32,8 +32,6 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { TestSql } from "@awthaq/test";
 import * as DeviceAuthorization from "../../src/DeviceAuthorization.ts";
 import * as DeviceAuthorizationApi from "../../src/DeviceAuthorizationApi.ts";
-import * as DeviceClientRecords from "../../src/DeviceClientRecords.ts";
-import * as DeviceGrantRecords from "../../src/DeviceGrantRecords.ts";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -108,13 +106,13 @@ export interface HarnessOptions {
 /** The grant and client records, in memory or over a real database migrated with the plugin's own migrations. */
 const recordsLayer = (options: HarnessOptions) => {
   if (options.store === "memory") {
-    return Layer.mergeAll(DeviceGrantRecords.layerMemory, DeviceClientRecords.layerMemory);
+    return DeviceAuthorization.DeviceAuthorization.records.memory;
   }
   const SqlLive = TestSql.layer(options.suite ?? "device_authorization");
   const Migrated = Layer.effectDiscard(
     Migrations.run(DeviceAuthorization.DeviceAuthorization.migrations),
   ).pipe(Layer.provide(SqlLive));
-  return Layer.mergeAll(DeviceGrantRecords.layerSql, DeviceClientRecords.layerSql).pipe(
+  return DeviceAuthorization.DeviceAuthorization.records.sql.pipe(
     Layer.provideMerge(SqlLive),
     Layer.provideMerge(Migrated),
   );

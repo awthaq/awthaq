@@ -116,7 +116,7 @@ export interface DeviceGrantRecordsShape {
 export class DeviceGrantRecords extends Context.Service<
   DeviceGrantRecords,
   DeviceGrantRecordsShape
->()("awthaq/device-authorization/DeviceGrantRecords") {}
+>()("awthaq/device-authorization/records/DeviceGrantRecords") {}
 
 // ---- layerMemory ------------------------------------------------------------
 
