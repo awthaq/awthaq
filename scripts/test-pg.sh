@@ -28,6 +28,7 @@ suites=(
   packages/core/test/Users.test.ts
   packages/core/test/UserFields.test.ts
   packages/core/test/UserImport.test.ts
+  packages/core/test/Verification.test.ts
   packages/device-authorization/test/DeviceAuthorization.test.ts
   packages/device-authorization/test/AuthHttp.test.ts
   packages/jwt/test/KeyRing.test.ts

@@ -7,11 +7,13 @@
 import { SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -24,6 +26,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";
 
@@ -33,7 +36,8 @@ const MemoryLayer = Verification.layerMemory.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
 );
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+// PV-010: `:memory:` SQLite by default, a real Postgres schema under `pnpm run test:pg`.
+const SqlLive = TestSql.layer("core_Verification");
 
 // BCR-003 (.issues/high): run against the real framework `Migrator` over
 // `CoreMigrations.coreMigrations` — the same `packages/sql/test/
@@ -482,6 +486,308 @@ const suite = (
         assert.strictEqual(failure._tag, "Verification/TokenConsumed");
       }).pipe(Effect.provide(layer)),
     );
+
+    // ---- ADR-EA-039: redeem, the same contract over both adapters ----
+    const issueOne = (identifier: string, extra?: { readonly maxAttempts: number }) =>
+      Effect.flatMap(Verification.Verification, (verification) =>
+        verification.issue(
+          extra === undefined
+            ? { identifier, ttl: Duration.minutes(10), payload: { carried: identifier } }
+            : {
+                identifier,
+                ttl: Duration.minutes(5),
+                format: { _tag: "Numeric", digits: 6 },
+                maxAttempts: extra.maxAttempts,
+              },
+        ),
+      );
+
+    const collectReplays = (take: number) =>
+      Effect.flatMap(AuthEvents.AuthEvents, (events) =>
+        Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.token.replay"),
+            Stream.take(take),
+            Stream.runCollect,
+          ),
+          { startImmediately: true },
+        ),
+      );
+
+    it.effect(
+      "ADR-EA-039: redeem runs use with the claimed token and spends it; a second redeem misses with TokenConsumed",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const identifier = "reset-password:redeem-1";
+          const { value } = yield* issueOne(identifier);
+          const seen = yield* verification.redeem({
+            identifier,
+            value,
+            use: (token) => Effect.succeed(token.payload),
+          });
+          assert.deepStrictEqual(seen, { carried: identifier });
+          const replay = yield* verification
+            .redeem({ identifier, value, use: () => Effect.void })
+            .pipe(Effect.flip);
+          assert.strictEqual(replay._tag, "Verification/TokenConsumed");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "ADR-EA-039: a use that fails (rollback) gives the token back: the same value redeems on the next call",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const identifier = "reset-password:redeem-2";
+          const { value } = yield* issueOne(identifier);
+          const refused = yield* verification
+            .redeem({ identifier, value, use: () => Effect.fail("refused" as const) })
+            .pipe(Effect.flip);
+          assert.strictEqual(refused, "refused");
+          const again = yield* verification.redeem({
+            identifier,
+            value,
+            use: (token) => Effect.succeed(token.identifier),
+          });
+          assert.strictEqual(again, identifier);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("ADR-EA-039: a use that dies gives the token back", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "reset-password:redeem-3";
+        const { value } = yield* issueOne(identifier);
+        const exit = yield* verification
+          .redeem({ identifier, value, use: () => Effect.die("boom") })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(exit));
+        const again = yield* verification.redeem({
+          identifier,
+          value,
+          use: (token) => Effect.succeed(token.identifier),
+        });
+        assert.strictEqual(again, identifier);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("ADR-EA-039: an interrupted use gives the token back", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "reset-password:redeem-4";
+        const { value } = yield* issueOne(identifier);
+        const entered = yield* Deferred.make<void>();
+        const fiber = yield* Effect.forkChild(
+          verification.redeem({
+            identifier,
+            value,
+            use: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+          }),
+        );
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(fiber);
+        const again = yield* verification.redeem({
+          identifier,
+          value,
+          use: (token) => Effect.succeed(token.identifier),
+        });
+        assert.strictEqual(again, identifier);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "ADR-EA-039: a refusal settled as commit spends the token and still fails with use's own error",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const identifier = "magic-link:redeem-5";
+          const { value } = yield* issueOne(identifier);
+          const refused = yield* verification
+            .redeem({
+              identifier,
+              value,
+              use: () => Effect.fail("vetoed" as const),
+              onFailure: () => "commit",
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(refused, "vetoed");
+          const replay = yield* verification
+            .redeem({ identifier, value, use: () => Effect.void })
+            .pipe(Effect.flip);
+          assert.strictEqual(replay._tag, "Verification/TokenConsumed");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("ADR-EA-039: commitUnlessUnavailable gives an outage back and spends a refusal", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const outage = { _tag: "StoreUnavailable" } as const;
+        assert.strictEqual(Verification.commitUnlessUnavailable(outage), "rollback");
+        assert.strictEqual(Verification.commitUnlessUnavailable({ _tag: "Vetoed" }), "commit");
+        const identifier = "magic-link:redeem-5b";
+        const { value } = yield* issueOne(identifier);
+        yield* verification
+          .redeem({
+            identifier,
+            value,
+            use: () => Effect.fail(outage),
+            onFailure: Verification.commitUnlessUnavailable,
+          })
+          .pipe(Effect.flip);
+        const again = yield* verification.redeem({
+          identifier,
+          value,
+          use: (token) => Effect.succeed(token.identifier),
+        });
+        assert.strictEqual(again, identifier);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "ADR-EA-039/BEH-EA-059: a miss never runs use, fails TokenConsumed and publishes exactly one auth.token.replay",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const replays = yield* collectReplays(1);
+          let ran = false;
+          const failure = yield* verification
+            .redeem({
+              identifier: "verify-email:redeem-6",
+              value: Redacted.make("nope"),
+              use: () =>
+                Effect.sync(() => {
+                  ran = true;
+                }),
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Verification/TokenConsumed");
+          assert.isFalse(ran);
+          const published = yield* Fiber.join(replays);
+          assert.strictEqual(published.length, 1);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("ADR-EA-039/BEH-EA-059: a rolled-back use publishes no auth.token.replay", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const events = yield* AuthEvents.AuthEvents;
+        const identifier = "reset-password:redeem-7";
+        const { value } = yield* issueOne(identifier);
+        const replays = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.token.replay"),
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+          { startImmediately: true },
+        );
+        yield* verification
+          .redeem({ identifier, value, use: () => Effect.fail("refused" as const) })
+          .pipe(Effect.flip);
+        yield* verification.redeem({ identifier, value, use: () => Effect.void });
+        // The one replay is the one we cause now, so the rollback published none before it.
+        yield* verification.redeem({ identifier, value, use: () => Effect.void }).pipe(Effect.flip);
+        const published = yield* Fiber.join(replays);
+        assert.strictEqual(published.length, 1);
+        const [event] = published;
+        assert.strictEqual(event?._tag, "auth.token.replay");
+        assert.strictEqual(event?._tag === "auth.token.replay" ? event.identifier : "", identifier);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "SOS-004: a wrong value through redeem spends one attempt, and maxAttempts misses burn the token",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const identifier = "email-otp:redeem-8@example.com";
+          const { value } = yield* issueOne(identifier, { maxAttempts: 3 });
+          const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
+          for (let i = 0; i < 3; i += 1) {
+            const failure = yield* verification
+              .redeem({ identifier, value: wrong, use: () => Effect.void })
+              .pipe(Effect.flip);
+            assert.strictEqual(failure._tag, "Verification/TokenConsumed");
+          }
+          const late = yield* verification
+            .redeem({ identifier, value, use: () => Effect.void })
+            .pipe(Effect.flip);
+          assert.strictEqual(late._tag, "Verification/TokenConsumed");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("SOS-004: a rolled-back use leaves a budgeted token's spent attempts unchanged", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "email-otp:redeem-9@example.com";
+        const { value } = yield* issueOne(identifier, { maxAttempts: 3 });
+        const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
+        yield* verification
+          .redeem({ identifier, value: wrong, use: () => Effect.void })
+          .pipe(Effect.flip);
+        yield* verification
+          .redeem({ identifier, value, use: () => Effect.fail("refused" as const) })
+          .pipe(Effect.flip);
+        // One miss spent, the rollback spent none: two more misses are still survivable, a third burns.
+        yield* verification
+          .redeem({ identifier, value: wrong, use: () => Effect.void })
+          .pipe(Effect.flip);
+        const survivor = yield* verification.redeem({
+          identifier,
+          value,
+          use: (token) => Effect.succeed(token.identifier),
+        });
+        assert.strictEqual(survivor, identifier);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "BEH-EA-062: two concurrent redeems of one token run use to success at most once",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const identifier = "reset-password:redeem-10";
+          const { value } = yield* issueOne(identifier);
+          const outcomes = yield* Effect.all(
+            [
+              verification.redeem({ identifier, value, use: () => Effect.void }).pipe(Effect.exit),
+              verification.redeem({ identifier, value, use: () => Effect.void }).pipe(Effect.exit),
+            ],
+            { concurrency: "unbounded" },
+          );
+          assert.strictEqual(outcomes.filter((exit) => Exit.isSuccess(exit)).length, 1);
+          assert.strictEqual(outcomes.filter((exit) => Exit.isFailure(exit)).length, 1);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "ADR-EA-039: consume and redeem share one claim: a token spent by one misses through the other",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const first = yield* issueOne("reset-password:redeem-11a");
+          yield* verification.consume("reset-password:redeem-11a", first.value);
+          const viaRedeem = yield* verification
+            .redeem({
+              identifier: "reset-password:redeem-11a",
+              value: first.value,
+              use: () => Effect.void,
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(viaRedeem._tag, "Verification/TokenConsumed");
+          const second = yield* issueOne("reset-password:redeem-11b");
+          yield* verification.redeem({
+            identifier: "reset-password:redeem-11b",
+            value: second.value,
+            use: () => Effect.void,
+          });
+          const viaConsume = yield* verification
+            .consume("reset-password:redeem-11b", second.value)
+            .pipe(Effect.flip);
+          assert.strictEqual(viaConsume._tag, "Verification/TokenConsumed");
+        }).pipe(Effect.provide(layer)),
+    );
   });
 };
 
@@ -645,6 +951,356 @@ describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () =
       const identifier = "verify-email:pv220-memory";
       yield* verification.consume(identifier, Redacted.make("nope")).pipe(Effect.flip);
       assert.strictEqual((yield* replayRows).length, 1);
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+});
+
+// ADR-EA-039: what only a real transaction can prove, on SQLite and (under `pnpm test:pg`) Postgres.
+describe("Verification.redeem over a real transaction", () => {
+  const SqlAuditLayer = Verification.layerSql.pipe(
+    Layer.provide(Repositories.VerificationRepositoryLive),
+    Layer.provide(Repositories.VerificationReservationsRepositoryLive),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  const replayRows = Effect.flatMap(AuditLog.AuditLog, (log) =>
+    log.list({ eventTag: "auth.token.replay" }),
+  );
+
+  const issueOne = (identifier: string, maxAttempts?: number) =>
+    Effect.flatMap(Verification.Verification, (verification) =>
+      verification.issue(
+        maxAttempts === undefined
+          ? { identifier, ttl: Duration.minutes(10) }
+          : {
+              identifier,
+              ttl: Duration.minutes(5),
+              format: { _tag: "Numeric", digits: 6 },
+              maxAttempts,
+            },
+      ),
+    );
+
+  it.effect("layerSql: use's own writes and the claim commit or roll back together", () =>
+    Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const ttl = Duration.minutes(10);
+      const identifier = "reset-password:tx-1";
+      const { value } = yield* issueOne(identifier);
+      // The witness is a write made inside `use`: a reservation, which commits or rolls back with it.
+      const rolledBack = yield* verification
+        .redeem({
+          identifier,
+          value,
+          use: () =>
+            verification
+              .reserve({ identifier: "witness:rollback", ttl })
+              .pipe(Effect.andThen(Effect.fail("refused" as const))),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(rolledBack, "refused");
+      assert.isTrue(yield* verification.reserve({ identifier: "witness:rollback", ttl }));
+      yield* verification.redeem({
+        identifier,
+        value,
+        use: () => verification.reserve({ identifier: "witness:commit", ttl }),
+      });
+      assert.isFalse(yield* verification.reserve({ identifier: "witness:commit", ttl }));
+      const replay = yield* verification
+        .redeem({ identifier, value, use: () => Effect.void })
+        .pipe(Effect.flip);
+      assert.strictEqual(replay._tag, "Verification/TokenConsumed");
+    }).pipe(Effect.provide(SqlAuditLayer)),
+  );
+
+  it.effect(
+    "layerSql + AuditLog.layerSql: a miss through redeem leaves exactly one durable auth.token.replay row",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "verify-email:tx-2";
+        const failed = yield* verification
+          .redeem({ identifier, value: Redacted.make("nope"), use: () => Effect.void })
+          .pipe(Effect.flip);
+        assert.strictEqual(failed._tag, "Verification/TokenConsumed");
+        const rows = yield* replayRows;
+        assert.strictEqual(rows.length, 1);
+        assert.deepStrictEqual(rows[0]?.payload, { _tag: "auth.token.replay", identifier });
+      }).pipe(Effect.provide(SqlAuditLayer)),
+  );
+
+  it.effect(
+    "layerSql: misses through redeem burn a budgeted token (the spent attempt commits)",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "email-otp:tx-3@example.com";
+        const { value } = yield* issueOne(identifier, 2);
+        const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
+        for (let i = 0; i < 2; i += 1) {
+          yield* verification
+            .redeem({ identifier, value: wrong, use: () => Effect.void })
+            .pipe(Effect.flip);
+        }
+        const late = yield* verification
+          .redeem({ identifier, value, use: () => Effect.void })
+          .pipe(Effect.flip);
+        assert.strictEqual(late._tag, "Verification/TokenConsumed");
+      }).pipe(Effect.provide(SqlAuditLayer)),
+  );
+
+  it.effect(
+    "layerSql: a use that fails on a real SQL statement rolls back and the token redeems afterwards",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const sql = yield* SqlClient.SqlClient;
+        const ttl = Duration.minutes(10);
+        const identifier = "reset-password:tx-4";
+        const { value } = yield* issueOne(identifier);
+        yield* TestSql.injectFailure({
+          name: "verification_redeem_fail_insert",
+          table: "verification_reservations",
+          event: "INSERT",
+        });
+        const failed = yield* verification
+          .redeem({
+            identifier,
+            value,
+            use: () => verification.reserve({ identifier: "witness:injected", ttl }),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failed._tag, "StoreUnavailable");
+        yield* sql.onDialectOrElse({
+          pg: () =>
+            sql.unsafe("DROP TRIGGER verification_redeem_fail_insert ON verification_reservations"),
+          orElse: () => sql.unsafe("DROP TRIGGER verification_redeem_fail_insert"),
+        });
+        const again = yield* verification.redeem({
+          identifier,
+          value,
+          use: (token) => Effect.succeed(token.identifier),
+        });
+        assert.strictEqual(again, identifier);
+      }).pipe(Effect.provide(SqlAuditLayer)),
+  );
+
+  it.effect(
+    "layerSql: a redeem nested in an outer transaction is a savepoint: a rollback inside keeps the outer transaction usable, and a miss inside commits with it",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const sql = yield* SqlClient.SqlClient;
+        const ttl = Duration.minutes(10);
+        const identifier = "reset-password:tx-5";
+        const { value } = yield* issueOne(identifier);
+        yield* SqlTransaction.transactional(sql)(
+          Effect.gen(function* () {
+            yield* verification.reserve({ identifier: "witness:outer", ttl });
+            const inner = yield* verification
+              .redeem({
+                identifier,
+                value,
+                use: () =>
+                  verification
+                    .reserve({ identifier: "witness:inner", ttl })
+                    .pipe(Effect.andThen(Effect.fail("refused" as const))),
+              })
+              .pipe(Effect.flip);
+            assert.strictEqual(inner, "refused");
+            const miss = yield* verification
+              .redeem({ identifier: "verify-email:tx-5", value, use: () => Effect.void })
+              .pipe(Effect.flip);
+            assert.strictEqual(miss._tag, "Verification/TokenConsumed");
+          }),
+        );
+        // The outer transaction committed its own write; the savepoint's write went with the rollback.
+        assert.isFalse(yield* verification.reserve({ identifier: "witness:outer", ttl }));
+        assert.isTrue(yield* verification.reserve({ identifier: "witness:inner", ttl }));
+        const again = yield* verification.redeem({
+          identifier,
+          value,
+          use: (token) => Effect.succeed(token.identifier),
+        });
+        assert.strictEqual(again, identifier);
+        assert.strictEqual((yield* replayRows).length, 1);
+      }).pipe(Effect.provide(SqlAuditLayer)),
+  );
+
+  it.effect("layerSql: a SqlError from the claim surfaces as StoreUnavailable", () => {
+    const DownVerification = Layer.effect(
+      Repositories.VerificationRepository,
+      Effect.gen(function* () {
+        const real = yield* Repositories.VerificationRepository;
+        return {
+          ...real,
+          tryConsume: () =>
+            Effect.fail(
+              new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
+            ),
+        };
+      }),
+    ).pipe(Layer.provide(Repositories.VerificationRepositoryLive));
+    const DownLayer = Verification.layerSql.pipe(
+      Layer.provide(DownVerification),
+      Layer.provide(Repositories.VerificationReservationsRepositoryLive),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provideMerge(AuthEvents.layer),
+      Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(SqlLive),
+      Layer.provideMerge(Migrated),
+    );
+    return Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const failure = yield* verification
+        .redeem({ identifier: "x", value: Redacted.make("y"), use: () => Effect.void })
+        .pipe(Effect.flip);
+      if (failure._tag !== "StoreUnavailable") return assert.fail(failure._tag);
+      assert.strictEqual(failure.operation, "Verification.redeem");
+    }).pipe(Effect.provide(DownLayer));
+  });
+});
+
+// ADR-EA-039: the compensation that gives a memory token back, and the drift it documents (TRBS-005).
+describe("Verification (layerMemory) redeem compensation", () => {
+  const issueOne = (identifier: string, extra?: { readonly userId: Users.UserId }) =>
+    Effect.flatMap(Verification.Verification, (verification) =>
+      verification.issue({
+        identifier,
+        ttl: Duration.minutes(10),
+        ...(extra === undefined ? {} : { userId: extra.userId }),
+      }),
+    );
+
+  it.effect(
+    "a fresh issue while use runs supersedes; a rollback does not resurrect the older token",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "reset-password:mem-1";
+        const older = yield* issueOne(identifier);
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const fiber = yield* Effect.forkChild(
+          verification
+            .redeem({
+              identifier,
+              value: older.value,
+              use: () =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(Effect.fail("refused" as const)),
+                ),
+            })
+            .pipe(Effect.flip),
+        );
+        yield* Deferred.await(entered);
+        const newer = yield* issueOne(identifier);
+        yield* Deferred.succeed(release, undefined);
+        assert.strictEqual(yield* Fiber.join(fiber), "refused");
+        const stale = yield* verification
+          .redeem({ identifier, value: older.value, use: () => Effect.void })
+          .pipe(Effect.flip);
+        assert.strictEqual(stale._tag, "Verification/TokenConsumed");
+        yield* verification.redeem({ identifier, value: newer.value, use: () => Effect.void });
+      }).pipe(Effect.provide(MemoryLayer)),
+  );
+
+  it.effect("deleteAllByUser while use runs; a rollback does not resurrect the swept token", () =>
+    Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const identifier = "reset-password:mem-2";
+      const userId = Users.UserId("mem-2-user");
+      const { value } = yield* issueOne(identifier, { userId });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const fiber = yield* Effect.forkChild(
+        verification
+          .redeem({
+            identifier,
+            value,
+            use: () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(Effect.fail("refused" as const)),
+              ),
+          })
+          .pipe(Effect.flip),
+      );
+      yield* Deferred.await(entered);
+      yield* verification.deleteAllByUser(userId);
+      yield* Deferred.succeed(release, undefined);
+      assert.strictEqual(yield* Fiber.join(fiber), "refused");
+      const gone = yield* verification
+        .redeem({ identifier, value, use: () => Effect.void })
+        .pipe(Effect.flip);
+      assert.strictEqual(gone._tag, "Verification/TokenConsumed");
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+
+  it.effect(
+    "a concurrent redeem of a held token misses at once (documented drift from SQL, which waits)",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "reset-password:mem-3";
+        const { value } = yield* issueOne(identifier);
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const holder = yield* Effect.forkChild(
+          verification.redeem({
+            identifier,
+            value,
+            use: () =>
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          }),
+        );
+        yield* Deferred.await(entered);
+        const second = yield* verification
+          .redeem({ identifier, value, use: () => Effect.void })
+          .pipe(Effect.flip);
+        assert.strictEqual(second._tag, "Verification/TokenConsumed");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(holder);
+      }).pipe(Effect.provide(MemoryLayer)),
+  );
+
+  it.effect("purgeExpired never removes a held claim", () =>
+    Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const identifier = "reset-password:mem-4";
+      const { value } = yield* issueOne(identifier);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const fiber = yield* Effect.forkChild(
+        verification
+          .redeem({
+            identifier,
+            value,
+            use: () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(Effect.fail("refused" as const)),
+              ),
+          })
+          .pipe(Effect.flip),
+      );
+      yield* Deferred.await(entered);
+      // A cutoff past the token's expiry would purge it if it were still live; the hold is not.
+      const cutoff = DateTime.addDuration(yield* DateTime.now, Duration.hours(1));
+      yield* verification.purgeExpired(cutoff);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(fiber);
+      const again = yield* verification.redeem({
+        identifier,
+        value,
+        use: (token) => Effect.succeed(token.identifier),
+      });
+      assert.strictEqual(again, identifier);
     }).pipe(Effect.provide(MemoryLayer)),
   );
 });
