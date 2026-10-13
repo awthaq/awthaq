@@ -18,7 +18,7 @@
 //
 // Three types, in order — each producible only by the step before it:
 //
-// - `ConsumedChallenge`: `consumeChallenge` proved the caller holds a live challenge and spent it.
+// - `ConsumedChallenge`: `redeemChallenge` proved the caller holds a live challenge and spent it.
 // - `FactorProof`: `SecondFactor.check` checked a code against the user's factor and it passed.
 // - `VerifiedChallenge`: the two together, for the *same* user. It is a brand whose constructor is
 //   private to this module, and `finalizeSignIn` — the one place this plugin calls `Sessions.issue`
@@ -37,7 +37,7 @@ export const CHALLENGE_PURPOSE = "two-factor-challenge";
 export type TwoFactorChallengeId = string & Brand.Brand<"TwoFactorChallengeId">;
 export const TwoFactorChallengeId = Brand.nominal<TwoFactorChallengeId>();
 
-/** What `issueChallenge` stores with the row and `consumeChallenge` hands back. */
+/** What `issueChallenge` stores with the row and `redeemChallenge` hands back. */
 export const ChallengePayload = Schema.Struct({
   strategy: Schema.String,
   amr: Schema.Array(Schema.String),

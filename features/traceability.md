@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1278 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1285; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1279 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1286; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1296,3 +1296,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1283 | [BEH-EA-269](../spec/behaviors/32-magic-link.md#beh-ea-269-presenting-a-link-proves-the-mailbox-and-signs-in-through-the-shared-gate-and-the-mfa-divert) | [14-mfa-passwordless/32-magic-link.feature](features/14-mfa-passwordless/32-magic-link.feature) | An outage while completing the sign-in leaves the link usable |
 | REQ-EA-1284 | [BEH-EA-269](../spec/behaviors/32-magic-link.md#beh-ea-269-presenting-a-link-proves-the-mailbox-and-signs-in-through-the-shared-gate-and-the-mfa-divert) | [14-mfa-passwordless/32-magic-link.feature](features/14-mfa-passwordless/32-magic-link.feature) | A sign-in diverted to the second factor spends the link |
 | REQ-EA-1285 | [BEH-EA-273](../spec/behaviors/33-email-otp.md#beh-ea-273-a-correct-code-signs-in-once-and-every-failure-is-the-one-invalidemailotp) | [14-mfa-passwordless/33-email-otp.feature](features/14-mfa-passwordless/33-email-otp.feature) | An outage while completing the sign-in leaves the code usable |
+| REQ-EA-1286 | [BEH-EA-262](../spec/behaviors/31-two-factor.md#beh-ea-262-the-challenge-is-a-single-use-verification-row-consumed-before-the-code-is-checked) | [14-mfa-passwordless/31-two-factor.feature](features/14-mfa-passwordless/31-two-factor.feature) | An outage while finishing a second-factor sign-in leaves the challenge usable |

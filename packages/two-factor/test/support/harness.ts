@@ -7,6 +7,7 @@ import {
   Accounts,
   AuditLog,
   AuthEvents,
+  Errors,
   Hooks,
   RateLimits,
   Sessions,
@@ -32,6 +33,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -78,12 +80,33 @@ export const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-);
+/** Fails `Sessions.issue` with the typed outage while the flag is set (ADR-EA-039: a challenge must survive it). */
+const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
+  Layer.effect(
+    Sessions.Sessions,
+    Effect.gen(function* () {
+      const real = yield* Sessions.Sessions;
+      return Sessions.Sessions.of({
+        ...real,
+        issue: (input) =>
+          Ref.get(outage).pipe(
+            Effect.flatMap((down) =>
+              down
+                ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
+                : real.issue(input),
+            ),
+          ),
+      });
+    }),
+  ).pipe(Layer.provide(Sessions.layerMemory));
+
+const coreLive = (outage: Ref.Ref<boolean> | undefined) =>
+  Layer.mergeAll(
+    Users.layerMemory,
+    Accounts.layerMemory,
+    outage === undefined ? Sessions.layerMemory : sessionsWithOutage(outage),
+    Verification.layerMemory,
+  );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -113,18 +136,21 @@ export const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.laye
 export interface BuildOptions {
   readonly config?: Partial<TwoFactorConfig.TwoFactorConfigShape>;
   readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
+  /** While set, `Sessions.issue` fails with the typed `StoreUnavailable`. */
+  readonly failSessionIssue?: Ref.Ref<boolean>;
 }
 
 /** The plugins over the shared stores, gates and in-memory domain services (the foundation is added by the caller). */
-const plugins = Layer.mergeAll(Password.Password.layer, TwoFactor.TwoFactor.layer).pipe(
-  Layer.provideMerge(Gates),
-  Layer.provideMerge(SecondFactor.layer),
-  Layer.provideMerge(Stores),
-  Layer.provideMerge(EncryptionLive),
-  Layer.provideMerge(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-  Layer.provideMerge(CoreLive),
-);
+const plugins = (outage: Ref.Ref<boolean> | undefined) =>
+  Layer.mergeAll(Password.Password.layer, TwoFactor.TwoFactor.layer).pipe(
+    Layer.provideMerge(Gates),
+    Layer.provideMerge(SecondFactor.layer),
+    Layer.provideMerge(Stores),
+    Layer.provideMerge(EncryptionLive),
+    Layer.provideMerge(AuthenticationLive),
+    Layer.provide(CsrfProtectionLive),
+    Layer.provideMerge(coreLive(outage)),
+  );
 
 /** Everything beneath the foundation: ports, rate limits, the transaction port and the plugin's configuration. */
 const beneath =
@@ -146,13 +172,8 @@ const beneath =
       Layer.provideMerge(TwoFactorConfig.config(options?.config ?? {})),
     );
 
-export interface BuildOptions {
-  readonly config?: Partial<TwoFactorConfig.TwoFactorConfigShape>;
-  readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
-}
-
 export const buildLayer = (options?: BuildOptions) =>
-  plugins.pipe(
+  plugins(options?.failSessionIssue).pipe(
     Layer.provideMerge(TestAuth.memoryFoundation),
     beneath(options)(SqlTransaction.layerNoop),
   );
@@ -176,7 +197,7 @@ export const buildDurableAuditLayer = (options?: BuildOptions) => {
       ),
     ),
   );
-  return plugins.pipe(
+  return plugins(options?.failSessionIssue).pipe(
     Layer.provideMerge(durableFoundation),
     beneath(options)(SqlTransaction.layerSql.pipe(Layer.provide(SqlLive))),
   );

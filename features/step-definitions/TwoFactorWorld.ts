@@ -16,6 +16,7 @@ import {
   AuthEvents,
   DataExport,
   Erasure,
+  Errors,
   Hooks,
   Migrations,
   RateLimits,
@@ -90,12 +91,33 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+/** ADR-EA-039: while the flag is set, `Sessions.issue` fails with the typed outage, as a down session store would. */
+const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
+  Layer.effect(
+    Sessions.Sessions,
+    Effect.gen(function* () {
+      const real = yield* Sessions.Sessions;
+      return Sessions.Sessions.of({
+        ...real,
+        issue: (input) =>
+          Ref.get(outage).pipe(
+            Effect.flatMap((down) =>
+              down
+                ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
+                : real.issue(input),
+            ),
+          ),
+      });
+    }),
+  ).pipe(Layer.provide(Sessions.layerMemory));
+
+const coreLive = (outage: Ref.Ref<boolean>) =>
+  Layer.mergeAll(
+    Users.layerMemory,
+    Accounts.layerMemory,
+    sessionsWithOutage(outage),
+    Verification.layerMemory,
+  ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -127,7 +149,7 @@ export interface AppOptions {
   readonly enforceRateLimits?: boolean;
 }
 
-const buildAppLayer = (options: AppOptions, hashes: Ref.Ref<number>) =>
+const buildAppLayer = (options: AppOptions, hashes: Ref.Ref<number>, outage: Ref.Ref<boolean>) =>
   Layer.mergeAll(
     Password.Password.layer,
     TwoFactor.TwoFactor.layer,
@@ -143,7 +165,7 @@ const buildAppLayer = (options: AppOptions, hashes: Ref.Ref<number>) =>
     Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
+    Layer.provideMerge(coreLive(outage)),
     Layer.provideMerge(
       Layer.mergeAll(
         countingHasher(hashes),
@@ -174,7 +196,9 @@ export const inTwoFactorApp = <A, E>(
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const context = yield* Layer.build(buildAppLayer(options, Ref.makeUnsafe(0)));
+      const context = yield* Layer.build(
+        buildAppLayer(options, Ref.makeUnsafe(0), Ref.makeUnsafe(false)),
+      );
       return yield* Effect.provide(effect, context);
     }),
   );
@@ -217,6 +241,8 @@ export interface WorldShape {
   readonly scope: Scope.Closeable;
   /** How many hash/verify calls the composition's `PasswordHasher` has served (REQ-EA-1065). */
   readonly hashes: Ref.Ref<number>;
+  /** While set, the composition's `Sessions.issue` fails with the typed `StoreUnavailable` (ADR-EA-039). */
+  readonly sessionOutage: Ref.Ref<boolean>;
   readonly people: NamedRegistry<Person>;
   /** Outcomes of direct service calls, by the name a step chose. */
   readonly exits: NamedRegistry<Exit.Exit<unknown, unknown>>;
@@ -243,6 +269,7 @@ export const WorldLive = Layer.effect(
       running: yield* Ref.make<Option.Option<Context.Context<TwoFactorServices>>>(Option.none()),
       scope,
       hashes: yield* Ref.make(0),
+      sessionOutage: yield* Ref.make(false),
       people: makeNamedRegistry<Person>("person"),
       exits: makeNamedRegistry<Exit.Exit<unknown, unknown>>("outcome"),
       strings: makeNamedRegistry<string>("text"),
@@ -278,7 +305,7 @@ const running = Effect.gen(function* () {
   const context = yield* Effect.promise(() =>
     Effect.runPromise(
       Layer.buildWithMemoMap(
-        buildAppLayer(options, world.hashes),
+        buildAppLayer(options, world.hashes, world.sessionOutage),
         Layer.makeMemoMapUnsafe(),
         world.scope,
       ),

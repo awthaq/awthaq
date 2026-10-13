@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-31 |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) <br> 1.3 (2026-10-13): BEH-EA-263 names `Sessions.requireFresh` as the gate (BEH-EA-320) <br> 1.4 (2026-10-13): BEH-EA-266: every failure is audited through `Password.confirmReset` too, because `auth.twoFactor.challengeFailed`/`locked` are attempt events (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): BEH-EA-261/262: `finalizeSignIn` is `SignIn.resume` plus `issue`; the challenge stores the divert's handoff (ADR-EA-038, architecture plan 01) |
+> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) <br> 1.3 (2026-10-13): BEH-EA-263 names `Sessions.requireFresh` as the gate (BEH-EA-320) <br> 1.4 (2026-10-13): BEH-EA-266: every failure is audited through `Password.confirmReset` too, because `auth.twoFactor.challengeFailed`/`locked` are attempt events (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): BEH-EA-261/262: `finalizeSignIn` is `SignIn.resume` plus `issue`; the challenge stores the divert's handoff (ADR-EA-038, architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-262: the challenge is redeemed (`SecondFactor.redeemChallenge`) in one transaction with the check and the session; an outage gives it back (ADR-EA-039, plan 07) |
 ---
 
 > Status: the `@awthaq/two-factor` plugin is implemented and tested (`packages/two-factor/test/`). The decisions behind it are [ADR-EA-020](../decisions/020-two-factor-state.md); the credential-reset veto it taps is [BEH-EA-259](15-password.md#beh-ea-259-a-credential-reset-consults-beforecredentialreset-before-anything-is-rewritten). SMS is deliberately not part of it ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -85,10 +85,14 @@ REQUIREMENT: The challenge MUST be a `Verification` row under the identifier
              spent, after which the answer carries no challenge and the
              client restarts the sign-in. Every failure — malformed, unknown,
              expired, replayed, foreign, wrong code, factor disabled since —
-             MUST be the one `InvalidTwoFactorCode`.
+             MUST be the one `InvalidTwoFactorCode`. The challenge MUST be
+             spent in the same transaction as the code check and the session
+             (`SecondFactor.redeemChallenge`, ADR-EA-039): a wrong code spends
+             it (and re-issues), while an outage or a defect while finishing
+             the sign-in gives it back.
 ```
 
-The type system carries the state machine (TTE-008): `consumeChallenge` yields a `ConsumedChallenge`, `SecondFactor.check*` a branded `FactorProof`, and `Challenge.verified` joins the two — for the *same* user, else a defect — into the `VerifiedChallenge` that `finalizeSignIn`, the one place the plugin mints a session, accepts. `finalizeSignIn` is core's `SignIn.resume` then `SignIn.issue` (ADR-EA-038): `resume` re-runs the sign-in gate (a user suspended in the minutes since the first factor gets no session, and the refusal is announced as `signInFailed{suspended}`; an erased user is the one `InvalidTwoFactorCode`) and restores the first factor's tenant and continuation from the handoff the challenge stored; `issue` records `amr = [...first factor, "otp", "mfa"]` (AOMS-003), runs the continuation (a SAML session's Single Logout record and role mapping), publishes `auth.user.signedIn` for the first factor's strategy and runs `AfterSignIn`. The challenge stores the divert's `handoff` and a wrong-code re-issue carries it forward. `/verify` is rate limited per source (`verifyByIp`).
+The type system carries the state machine (TTE-008): `redeemChallenge` hands `use` a `ConsumedChallenge`, a `ConsumedChallenge`, `SecondFactor.check*` a branded `FactorProof`, and `Challenge.verified` joins the two — for the *same* user, else a defect — into the `VerifiedChallenge` that `finalizeSignIn`, the one place the plugin mints a session, accepts. `finalizeSignIn` is core's `SignIn.resume` then `SignIn.issue` (ADR-EA-038): `resume` re-runs the sign-in gate (a user suspended in the minutes since the first factor gets no session, and the refusal is announced as `signInFailed{suspended}`; an erased user is the one `InvalidTwoFactorCode`) and restores the first factor's tenant and continuation from the handoff the challenge stored; `issue` records `amr = [...first factor, "otp", "mfa"]` (AOMS-003), runs the continuation (a SAML session's Single Logout record and role mapping), publishes `auth.user.signedIn` for the first factor's strategy and runs `AfterSignIn`. The challenge stores the divert's `handoff` and a wrong-code re-issue carries it forward. `/verify` is rate limited per source (`verifyByIp`).
 
 _Previous: [BEH-EA-261](31-two-factor.md#beh-ea-261-a-sign-in-with-a-confirmed-second-factor-is-diverted-and-no-session-exists-until-it-passes) | Next: [BEH-EA-263](31-two-factor.md#beh-ea-263-enrolling-disabling-and-regenerating-need-a-fresh-session-and-the-secret-is-encrypted-at-rest)_
 

@@ -11,6 +11,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -71,6 +72,8 @@ const freshChallenge = (userId: Users.UserId) =>
     const factor = yield* SecondFactor.SecondFactor;
     return yield* factor.issueChallenge({ userId, strategy: "password", amr: ["pwd"], attempt: 0 });
   });
+
+const sessionOutage = Ref.makeUnsafe(false);
 
 /** The next TOTP step (a code is single-use, and the enrolment code spent the current step). */
 const nextStep = TestClock.adjust(Duration.seconds(30));
@@ -226,6 +229,34 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
+  // ADR-EA-039: the challenge, the code check and the session share one transaction.
+  it.effect(
+    "an outage while issuing the session leaves the challenge usable: the same challenge signs in on retry",
+    () =>
+      Effect.gen(function* () {
+        const twoFactor = yield* TwoFactor.TwoFactor;
+        const user = yield* enrolledUser("outage@example.com");
+        const divert = yield* divertedSignIn(user.email);
+        yield* nextStep;
+        yield* Ref.set(sessionOutage, true);
+        const down = yield* twoFactor
+          .verify({
+            challengeId: Redacted.make(divert.challengeId),
+            code: secret(yield* codeFor(user.secret)),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(down._tag, "StoreUnavailable");
+        yield* Ref.set(sessionOutage, false);
+        // The TOTP store is not part of the transaction, so the spent step needs the next code.
+        yield* nextStep;
+        const issued = yield* twoFactor.verify({
+          challengeId: Redacted.make(divert.challengeId),
+          code: secret(yield* codeFor(user.secret)),
+        });
+        assert.strictEqual(issued.session.userId, user.userId);
+      }).pipe(Effect.provide(buildLayer({ failSessionIssue: sessionOutage }))),
+  );
+
   it.effect(
     "a wrong code re-issues a fresh challenge until the attempts are spent, then requires a restart",
     () =>
@@ -293,10 +324,12 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
       // Rewrite the claimed user to B, keeping A's secret value.
       const value = challengeA.slice(challengeA.lastIndexOf(".") + 1);
       const forged = `${VerificationLink.identifierOf(CHALLENGE_PURPOSE, b.userId)}.${value}`;
-      const failure = yield* factor.consumeChallenge(Redacted.make(forged)).pipe(Effect.flip);
+      const failure = yield* factor
+        .redeemChallenge(Redacted.make(forged), Effect.succeed)
+        .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvalidTwoFactorCode");
       // A's own challenge is still intact (the forgery consumed nothing of A's).
-      const consumed = yield* factor.consumeChallenge(Redacted.make(challengeA));
+      const consumed = yield* factor.redeemChallenge(Redacted.make(challengeA), Effect.succeed);
       assert.strictEqual(consumed.userId, a.userId);
     }).pipe(Effect.provide(buildLayer())),
   );
@@ -313,10 +346,12 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
       };
       const first = yield* factor.issueChallenge(input);
       const second = yield* factor.issueChallenge(input);
-      const stale = yield* factor.consumeChallenge(Redacted.make(first)).pipe(Effect.flip);
+      const stale = yield* factor
+        .redeemChallenge(Redacted.make(first), Effect.succeed)
+        .pipe(Effect.flip);
       assert.strictEqual(stale._tag, "InvalidTwoFactorCode");
       assert.strictEqual(
-        (yield* factor.consumeChallenge(Redacted.make(second))).userId,
+        (yield* factor.redeemChallenge(Redacted.make(second), Effect.succeed)).userId,
         user.userId,
       );
     }).pipe(Effect.provide(buildLayer())),

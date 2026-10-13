@@ -543,7 +543,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
 
       /**
        * BEH-EA-262 (ticket 05 §1, plus the retry UX the plan adds): consume the challenge BEFORE
-       * checking the code, so `auth.token.replay` fires on every bad, expired or reused challenge. A
+       * checking the code (`redeemChallenge`, ADR-EA-039: one transaction with the check and the session), so `auth.token.replay` fires on every bad, expired or reused challenge. A
        * wrong code re-issues a fresh challenge carrying `attempt + 1` — a consumed challenge is never
        * re-used — until `maxAttemptsPerChallenge` are spent, after which the client restarts the sign-in.
        */
@@ -557,32 +557,38 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         context: { readonly userAgent?: string | undefined } | undefined,
       ) {
         yield* limits.spend("verifyByIp", { ip: input.ip });
-        const consumed = yield* factor.consumeChallenge(input.challengeId);
-        const check = method === "totp" ? factor.verifyTotp : factor.verifyRecoveryCode;
-        const proof = yield* check(consumed.userId, input.code, "signIn").pipe(
-          Effect.catchTag("InvalidTwoFactorCode", () =>
-            consumed.attempt + 1 < config.maxAttemptsPerChallenge
-              ? factor
-                  .issueChallenge({
-                    userId: consumed.userId,
-                    strategy: consumed.strategy,
-                    amr: consumed.amr,
-                    attempt: consumed.attempt + 1,
-                    handoff: consumed.handoff,
-                  })
-                  .pipe(
-                    Effect.flatMap((next) =>
-                      Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({ challengeId: next })),
-                    ),
-                  )
-              : Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({})),
-          ),
+        // ADR-EA-039: the challenge, the code check and the session share one transaction. Every
+        // refusal (a wrong code and its re-issued challenge, a lockout, a suspension) commits; an
+        // outage while finishing the sign-in gives the challenge back.
+        return yield* factor.redeemChallenge(input.challengeId, (consumed) =>
+          Effect.gen(function* () {
+            const check = method === "totp" ? factor.verifyTotp : factor.verifyRecoveryCode;
+            const proof = yield* check(consumed.userId, input.code, "signIn").pipe(
+              Effect.catchTag("InvalidTwoFactorCode", () =>
+                consumed.attempt + 1 < config.maxAttemptsPerChallenge
+                  ? factor
+                      .issueChallenge({
+                        userId: consumed.userId,
+                        strategy: consumed.strategy,
+                        amr: consumed.amr,
+                        attempt: consumed.attempt + 1,
+                        handoff: consumed.handoff,
+                      })
+                      .pipe(
+                        Effect.flatMap((next) =>
+                          Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({ challengeId: next })),
+                        ),
+                      )
+                  : Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({})),
+              ),
+            );
+            const verifiedChallenge = yield* verified(consumed, proof);
+            return yield* finalizeSignIn(verifiedChallenge, {
+              ip: input.ip,
+              userAgent: context?.userAgent,
+            });
+          }),
         );
-        const verifiedChallenge = yield* verified(consumed, proof);
-        return yield* finalizeSignIn(verifiedChallenge, {
-          ip: input.ip,
-          userAgent: context?.userAgent,
-        });
       });
 
       const enable: TwoFactorShape["enable"] = Effect.fnUntraced(function* (userId, sessionId) {

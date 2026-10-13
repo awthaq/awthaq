@@ -238,7 +238,10 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
 
         // The challenge records that the first factor was the mailbox: the finished session says so.
         const factor = yield* SecondFactor.SecondFactor;
-        const consumed = yield* factor.consumeChallenge(Redacted.make(failure.challengeId));
+        const consumed = yield* factor.redeemChallenge(
+          Redacted.make(failure.challengeId),
+          Effect.succeed,
+        );
         assert.deepStrictEqual(consumed.amr, ["email"]);
         assert.strictEqual(consumed.strategy, "magicLink");
       }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
@@ -293,7 +296,10 @@ describe("MagicLink.verify redeems the link (ADR-EA-039)", () => {
         const again = yield* magicLink.verify({ token }).pipe(Effect.flip);
         assert.strictEqual(again._tag, "MagicLinkConsumed");
         const factor = yield* SecondFactor.SecondFactor;
-        const challenge = yield* factor.consumeChallenge(Redacted.make(diverted.challengeId));
+        const challenge = yield* factor.redeemChallenge(
+          Redacted.make(diverted.challengeId),
+          Effect.succeed,
+        );
         assert.strictEqual(challenge.strategy, "magicLink");
       }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
   );
