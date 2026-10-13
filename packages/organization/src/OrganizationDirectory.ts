@@ -262,11 +262,13 @@ export class OrganizationDirectory extends Context.Service<
             .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({
             _tag: "auth.organization.created",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId: record.id,
             creatorUserId: owner,
           });
           yield* events.publish({
             _tag: "auth.organization.memberAdded",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId: record.id,
             userId: owner,
             role: membership.role,
@@ -310,7 +312,11 @@ export class OrganizationDirectory extends Context.Service<
                 Effect.fail(new OrganizationErrors.OrganizationSlugTaken()),
               ),
             );
-          yield* events.publish({ _tag: "auth.organization.updated", organizationId });
+          yield* events.publish({
+            _tag: "auth.organization.updated",
+            actorUserId: OrganizationActor.userIdOf(actor),
+            organizationId,
+          });
           yield* afterUpdate.run({ actor, organizationId, name: vetoed.name, slug: vetoed.slug });
           return record;
         },
@@ -355,7 +361,11 @@ export class OrganizationDirectory extends Context.Service<
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({ _tag: "auth.organization.deleted", organizationId });
+          yield* events.publish({
+            _tag: "auth.organization.deleted",
+            actorUserId: OrganizationActor.userIdOf(actor),
+            organizationId,
+          });
           for (const contribution of contributions) {
             if (contribution.handler.afterCommit !== undefined) {
               yield* contribution.handler.afterCommit(organizationId);

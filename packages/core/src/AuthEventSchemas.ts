@@ -952,9 +952,10 @@ export const OrganizationCreatedEvent = defineEvent(
   {
     organizationId: Schema.String,
     creatorUserId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.field("creatorUserId"),
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -965,9 +966,10 @@ export const OrganizationUpdatedEvent = defineEvent(
   "auth.organization.updated",
   {
     organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -978,9 +980,10 @@ export const OrganizationDeletedEvent = defineEvent(
   "auth.organization.deleted",
   {
     organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -993,9 +996,10 @@ export const OrganizationMemberAddedEvent = defineEvent(
     organizationId: Schema.String,
     userId: UserIdSchema,
     role: RoleNames,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.field("userId"),
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1004,9 +1008,13 @@ export type OrganizationMemberAddedEvent = typeof OrganizationMemberAddedEvent.T
 /** Published by `@awthaq/organization`'s `removeMember`/`leave`. */
 export const OrganizationMemberRemovedEvent = defineEvent(
   "auth.organization.memberRemoved",
-  { organizationId: Schema.String, userId: UserIdSchema },
   {
-    actor: Actor.field("userId"),
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1015,9 +1023,14 @@ export type OrganizationMemberRemovedEvent = typeof OrganizationMemberRemovedEve
 /** Published by `@awthaq/organization`'s `updateMemberRole`. */
 export const OrganizationMemberRoleUpdatedEvent = defineEvent(
   "auth.organization.memberRoleUpdated",
-  { organizationId: Schema.String, userId: UserIdSchema, role: RoleNames },
   {
-    actor: Actor.field("userId"),
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+    role: RoleNames,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1031,9 +1044,13 @@ export type OrganizationMemberRoleUpdatedEvent = typeof OrganizationMemberRoleUp
  */
 export const OrganizationInvitationCreatedEvent = defineEvent(
   "auth.organization.invitationCreated",
-  { invitationId: Schema.String, organizationId: Schema.String },
   {
-    actor: Actor.none,
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1042,9 +1059,14 @@ export type OrganizationInvitationCreatedEvent = typeof OrganizationInvitationCr
 /** Published by `@awthaq/organization`'s `accept`. */
 export const OrganizationInvitationAcceptedEvent = defineEvent(
   "auth.organization.invitationAccepted",
-  { invitationId: Schema.String, organizationId: Schema.String, userId: UserIdSchema },
   {
-    actor: Actor.field("userId"),
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1053,9 +1075,13 @@ export type OrganizationInvitationAcceptedEvent = typeof OrganizationInvitationA
 /** Published by `@awthaq/organization`'s `reject`. */
 export const OrganizationInvitationRejectedEvent = defineEvent(
   "auth.organization.invitationRejected",
-  { invitationId: Schema.String, organizationId: Schema.String },
   {
-    actor: Actor.none,
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1064,9 +1090,13 @@ export type OrganizationInvitationRejectedEvent = typeof OrganizationInvitationR
 /** Published by `@awthaq/organization`'s `cancel`. */
 export const OrganizationInvitationCanceledEvent = defineEvent(
   "auth.organization.invitationCanceled",
-  { invitationId: Schema.String, organizationId: Schema.String },
   {
-    actor: Actor.none,
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1078,9 +1108,13 @@ export type OrganizationInvitationCanceledEvent = typeof OrganizationInvitationC
  */
 export const OrganizationInvitationExpiredEvent = defineEvent(
   "auth.organization.invitationExpired",
-  { invitationId: Schema.String, organizationId: Schema.String },
   {
-    actor: Actor.none,
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1092,9 +1126,10 @@ export const OrganizationRoleCreatedEvent = defineEvent(
   {
     organizationId: Schema.String,
     role: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1106,9 +1141,10 @@ export const OrganizationRoleUpdatedEvent = defineEvent(
   {
     organizationId: Schema.String,
     role: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1120,9 +1156,10 @@ export const OrganizationRoleDeletedEvent = defineEvent(
   {
     organizationId: Schema.String,
     role: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1183,9 +1220,10 @@ export const OrganizationTeamCreatedEvent = defineEvent(
   {
     organizationId: Schema.String,
     teamId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1197,9 +1235,10 @@ export const OrganizationTeamUpdatedEvent = defineEvent(
   {
     organizationId: Schema.String,
     teamId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1212,9 +1251,10 @@ export const OrganizationTeamMovedEvent = defineEvent(
     organizationId: Schema.String,
     teamId: Schema.String,
     parentId: Schema.NullOr(Schema.String),
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1226,9 +1266,10 @@ export const OrganizationTeamDeletedEvent = defineEvent(
   {
     organizationId: Schema.String,
     teamId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.none,
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1237,9 +1278,14 @@ export type OrganizationTeamDeletedEvent = typeof OrganizationTeamDeletedEvent.T
 /** Published by `@awthaq/organization`'s `addTeamMember` (and `acceptInvitation` for a team-targeted invitation). */
 export const OrganizationTeamMemberAddedEvent = defineEvent(
   "auth.organization.teamMemberAdded",
-  { organizationId: Schema.String, teamId: Schema.String, userId: UserIdSchema },
   {
-    actor: Actor.field("userId"),
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    userId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1253,9 +1299,10 @@ export const OrganizationTeamMemberRoleUpdatedEvent = defineEvent(
     teamId: Schema.String,
     userId: UserIdSchema,
     role: RoleNames,
+    actorUserId: Schema.optional(UserIdSchema),
   },
   {
-    actor: Actor.field("userId"),
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );
@@ -1265,9 +1312,14 @@ export type OrganizationTeamMemberRoleUpdatedEvent =
 /** Published by `@awthaq/organization`'s `removeTeamMember`. */
 export const OrganizationTeamMemberRemovedEvent = defineEvent(
   "auth.organization.teamMemberRemoved",
-  { organizationId: Schema.String, teamId: Schema.String, userId: UserIdSchema },
   {
-    actor: Actor.field("userId"),
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    userId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
     pii: [],
   },
 );

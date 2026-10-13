@@ -239,12 +239,13 @@ export class OrganizationInvitations extends Context.Service<
         );
 
       /** Cancels a pending invitation and says so (D8): every cancellation is an event. */
-      const cancelAndAnnounce = (record: Invitation) =>
+      const cancelAndAnnounce = (actor: OrganizationActor.Actor, record: Invitation) =>
         invitations.updateStatus(record.organizationId, record.id, "canceled").pipe(
           Effect.catchTag("InvitationRecordNotFound", Effect.die),
           Effect.andThen(
             events.publish({
               _tag: "auth.organization.invitationCanceled",
+              actorUserId: OrganizationActor.userIdOf(actor),
               invitationId: record.id,
               organizationId: record.organizationId,
             }),
@@ -347,7 +348,7 @@ export class OrganizationInvitations extends Context.Service<
           // OHS-006: an existing member is never invited again (an invitation could otherwise overwrite
           // or duplicate the membership on accept); any pending invitation for them is stale, so cancel it.
           if (Option.isSome(alreadyMember)) {
-            if (Option.isSome(existing)) yield* cancelAndAnnounce(existing.value);
+            if (Option.isSome(existing)) yield* cancelAndAnnounce(actor, existing.value);
             return yield* new OrganizationErrors.AlreadyMember();
           }
 
@@ -384,7 +385,7 @@ export class OrganizationInvitations extends Context.Service<
 
           if (Option.isSome(existing)) {
             if (orgConfig.cancelPendingInvitationsOnReInvite) {
-              yield* cancelAndAnnounce(existing.value);
+              yield* cancelAndAnnounce(actor, existing.value);
             } else if (input.resend) {
               // A resend mints a new token (only the hash is kept, so the old mail cannot be re-sent)
               // and retires the previous one.
@@ -394,6 +395,7 @@ export class OrganizationInvitations extends Context.Service<
                 .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
               yield* events.publish({
                 _tag: "auth.organization.invitationCreated",
+                actorUserId: OrganizationActor.userIdOf(actor),
                 invitationId: rotated.id,
                 organizationId,
               });
@@ -425,6 +427,7 @@ export class OrganizationInvitations extends Context.Service<
           // delivery failure leaves a pending invitation, not a phantom one.
           yield* events.publish({
             _tag: "auth.organization.invitationCreated",
+            actorUserId: OrganizationActor.userIdOf(actor),
             invitationId: record.id,
             organizationId,
           });
@@ -460,6 +463,7 @@ export class OrganizationInvitations extends Context.Service<
           // D8: an invitation that lapsed is announced.
           yield* events.publish({
             _tag: "auth.organization.invitationExpired",
+            actorUserId: OrganizationActor.userIdOf(actor),
             invitationId,
             organizationId: record.organizationId,
           });
@@ -478,7 +482,7 @@ export class OrganizationInvitations extends Context.Service<
         // (the user was admitted another way), so it is cancelled and the existing roles stay untouched.
         const alreadyMember = yield* members.findByUserAndOrg(userId, record.organizationId);
         if (Option.isSome(alreadyMember)) {
-          yield* cancelAndAnnounce(record);
+          yield* cancelAndAnnounce(actor, record);
           return yield* new OrganizationErrors.AlreadyMember();
         }
 
@@ -558,12 +562,14 @@ export class OrganizationInvitations extends Context.Service<
 
         yield* events.publish({
           _tag: "auth.organization.invitationAccepted",
+          actorUserId: OrganizationActor.userIdOf(actor),
           invitationId,
           organizationId: record.organizationId,
           userId,
         });
         yield* events.publish({
           _tag: "auth.organization.memberAdded",
+          actorUserId: OrganizationActor.userIdOf(actor),
           organizationId: record.organizationId,
           userId,
           role: membership.role,
@@ -571,6 +577,7 @@ export class OrganizationInvitations extends Context.Service<
         if (joinedTeam && Option.isSome(record.teamId)) {
           yield* events.publish({
             _tag: "auth.organization.teamMemberAdded",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId: record.organizationId,
             teamId: record.teamId.value,
             userId,
@@ -617,6 +624,7 @@ export class OrganizationInvitations extends Context.Service<
           .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
         yield* events.publish({
           _tag: "auth.organization.invitationRejected",
+          actorUserId: OrganizationActor.userIdOf(actor),
           invitationId,
           organizationId: record.organizationId,
         });
@@ -634,7 +642,7 @@ export class OrganizationInvitations extends Context.Service<
           yield* HookPoint.aborted(OrganizationHooks.BeforeCancelInvitation)(
             beforeCancel.run({ actor, invitationId }),
           );
-          yield* cancelAndAnnounce(record);
+          yield* cancelAndAnnounce(actor, record);
           yield* afterCancel.run({ actor, invitationId });
         },
       );

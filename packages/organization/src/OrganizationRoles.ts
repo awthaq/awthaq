@@ -168,6 +168,7 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
           );
         yield* events.publish({
           _tag: "auth.organization.roleCreated",
+          actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           role: record.role,
         });
@@ -195,6 +196,7 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
           );
         yield* events.publish({
           _tag: "auth.organization.roleUpdated",
+          actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           role: updated.role,
         });
@@ -221,6 +223,7 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
           );
         yield* events.publish({
           _tag: "auth.organization.roleDeleted",
+          actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           role: existing.role,
         });

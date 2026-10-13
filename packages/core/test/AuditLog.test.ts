@@ -82,10 +82,21 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
             samples["auth.admin.userUpdated"],
             Option.some(samples["auth.admin.userUpdated"].adminUserId),
           ],
-          // Actor.field("creatorUserId")
+          // Actor.field("actorUserId") on an organization event (plan 04, F11): who acted, not who it was about;
+          // absent when the actor names no user (a directory, the application)
+          [samples["auth.organization.created"], Option.some(otherUserId)],
           [
-            samples["auth.organization.created"],
-            Option.some(samples["auth.organization.created"].creatorUserId),
+            {
+              _tag: "auth.organization.memberRemoved",
+              organizationId: "org-1",
+              userId,
+              actorUserId: otherUserId,
+            },
+            Option.some(otherUserId),
+          ],
+          [
+            { _tag: "auth.organization.memberRemoved", organizationId: "org-1", userId },
+            Option.none(),
           ],
           // optional actor fields: present, then absent
           [

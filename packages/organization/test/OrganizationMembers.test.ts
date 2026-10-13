@@ -2,7 +2,7 @@
 // owner invariant, the membership limit, role names, the `Bound`, the veto, the removal cascade and
 // the hook order are proved here; the SAML role mapping's cases (BEH-EA-316) live here too, since
 // `setRoles` is its one implementation. `Organization.test.ts` keeps only the authorization half.
-import { HookPoint, Users } from "@awthaq/core";
+import { AuditLog, HookPoint, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
@@ -494,5 +494,33 @@ describe("OrganizationMembers.remove", () => {
         ),
       ),
     ),
+  );
+
+  it.effect("the audit trail names the acting user, and no user when a directory acted (F11)", () =>
+    Effect.gen(function* () {
+      const { org, members } = yield* arrange;
+      for (const id of ["u1", "u2"]) {
+        yield* members.add(application, {
+          organizationId: org.id,
+          userId: userId(id),
+          role: ["member"],
+          bound: unbounded,
+        });
+      }
+      const admin = OrganizationActor.ActorSchema.cases.User.make({ userId: "admin-1" });
+      yield* members.remove(admin, { organizationId: org.id, userId: userId("u1") });
+      yield* members.remove(OrganizationActor.directory("conn-1"), {
+        organizationId: org.id,
+        userId: userId("u2"),
+      });
+      const rows = yield* (yield* AuditLog.AuditLog).list({
+        eventTag: "auth.organization.memberRemoved",
+      });
+      // The subject was removed; the actor is who did it (newest first: the directory, then the admin).
+      assert.deepStrictEqual(
+        rows.map((row) => row.actorUserId),
+        [Option.none(), Option.some("admin-1")],
+      );
+    }).pipe(Effect.provide(buildLayer())),
   );
 });

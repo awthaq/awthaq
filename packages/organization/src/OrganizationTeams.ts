@@ -430,12 +430,14 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({
             _tag: "auth.organization.teamCreated",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId: team.id,
           });
           for (const userId of initial) {
             yield* events.publish({
               _tag: "auth.organization.teamMemberAdded",
+              actorUserId: OrganizationActor.userIdOf(actor),
               organizationId,
               teamId: team.id,
               userId,
@@ -471,7 +473,12 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
         const updated = yield* teams
           .updateTeam(organizationId, teamId, vetoed.name)
           .pipe(Effect.catchTag("TeamRecordNotFound", () => vanished("team")));
-        yield* events.publish({ _tag: "auth.organization.teamUpdated", organizationId, teamId });
+        yield* events.publish({
+          _tag: "auth.organization.teamUpdated",
+          actorUserId: OrganizationActor.userIdOf(actor),
+          organizationId,
+          teamId,
+        });
         yield* afterUpdateTeam.run({ actor, organizationId, teamId, name: vetoed.name });
         return updated;
       });
@@ -500,6 +507,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
           );
         yield* events.publish({
           _tag: "auth.organization.teamMoved",
+          actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           teamId,
           parentId: vetoed.parentId,
@@ -539,7 +547,12 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({ _tag: "auth.organization.teamDeleted", organizationId, teamId });
+          yield* events.publish({
+            _tag: "auth.organization.teamDeleted",
+            actorUserId: OrganizationActor.userIdOf(actor),
+            organizationId,
+            teamId,
+          });
           yield* afterDeleteTeam.run({ actor, organizationId, teamId });
         },
       );
@@ -572,6 +585,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             );
           yield* events.publish({
             _tag: "auth.organization.teamMemberAdded",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId,
             userId,
@@ -601,6 +615,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             );
           yield* events.publish({
             _tag: "auth.organization.teamMemberRoleUpdated",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId,
             userId,
@@ -628,6 +643,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             );
           yield* events.publish({
             _tag: "auth.organization.teamMemberRemoved",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId,
             userId,
@@ -701,6 +717,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
           for (const userId of toRemove) {
             yield* events.publish({
               _tag: "auth.organization.teamMemberRemoved",
+              actorUserId: OrganizationActor.userIdOf(actor),
               organizationId,
               teamId,
               userId,
@@ -710,6 +727,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
           for (const userId of toAdd) {
             yield* events.publish({
               _tag: "auth.organization.teamMemberAdded",
+              actorUserId: OrganizationActor.userIdOf(actor),
               organizationId,
               teamId,
               userId,

@@ -224,6 +224,7 @@ export class OrganizationMembers extends Context.Service<
           );
         yield* events.publish({
           _tag: "auth.organization.memberAdded",
+          actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           userId,
           role: vetoed.role,
@@ -287,6 +288,7 @@ export class OrganizationMembers extends Context.Service<
             );
           yield* events.publish({
             _tag: "auth.organization.memberRoleUpdated",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             userId,
             role: vetoed.role,
@@ -334,12 +336,14 @@ export class OrganizationMembers extends Context.Service<
             .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({
             _tag: "auth.organization.memberRemoved",
+            actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             userId,
           });
           for (const teamId of leftTeams) {
             yield* events.publish({
               _tag: "auth.organization.teamMemberRemoved",
+              actorUserId: OrganizationActor.userIdOf(actor),
               organizationId,
               teamId,
               userId,
