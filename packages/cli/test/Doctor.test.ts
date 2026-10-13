@@ -74,6 +74,7 @@ describe("doctor: graph", () => {
         hooks: {},
         rateLimits: [],
         ports: [],
+        exposes: [],
         config: [],
         userFields: [],
       };

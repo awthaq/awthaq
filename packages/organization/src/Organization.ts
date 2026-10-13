@@ -20,9 +20,7 @@ import {
   ConfigDescriptor,
   DataExport,
   Erasure,
-  Errors,
   HookPoint,
-  Migrations,
   Users,
 } from "@awthaq/core";
 import { Defects, Hmac, Mailer, SqlTransaction } from "@awthaq/ports";
@@ -30,17 +28,20 @@ import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ActiveContextRecords from "./ActiveContextRecords.ts";
 import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationApi from "./OrganizationApi.ts";
+import { OrganizationConfig, type OrganizationLimits } from "./OrganizationConfig.ts";
+import * as OrganizationHandlers from "./OrganizationHandlers.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
+import { organizationMigrations } from "./OrganizationMigrations.ts";
+import { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
+import type { OrganizationShape } from "./OrganizationShape.ts";
+import { hexOf, NO_INVITATION_TOKEN_HASH } from "./internal/tokens.ts";
 import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
@@ -56,14 +57,6 @@ import * as TeamRecords from "./TeamRecords.ts";
 /** A caller's own memberships, whichever organizations they are in. */
 const ownMembershipsGrant = TenantScoped.crossTenant(
   "organization: a user's own memberships across organizations, keyed by the caller's identity",
-);
-/** The erasure cascade removes a user everywhere. */
-const erasureGrant = TenantScoped.crossTenant(
-  "organization erasure (CSG-001/DRS-002/DRS-008): deleting a user removes them from every organization",
-);
-/** The data-subject export reads a user's rows everywhere. */
-const exportGrant = TenantScoped.crossTenant(
-  "organization data-subject export (CSG-005): a user's memberships, teams and invitations across organizations",
 );
 /** The invitation id alone is the capability. */
 const invitationIdGrant = TenantScoped.crossTenant(
@@ -82,1717 +75,11 @@ const inviterQuotaGrant = TenantScoped.crossTenant(
   "organization: per-inviter invitation quota, deployment-wide by design (invitationLimit)",
 );
 
-// ---- config -------------------------------------------------------------------
-
-/**
- * EP-006: per-organization quota overrides, merged over the static
- * `OrganizationConfigShape` values at decision time by `limitsFor`.
- */
-export interface OrganizationLimits {
-  readonly membershipLimit?: number;
-  readonly invitationLimit?: number;
-  readonly maximumTeams?: number;
-  readonly maximumMembersPerTeam?: number;
-  readonly maximumRolesPerOrganization?: number;
-}
-
-export interface OrganizationConfigShape {
-  /** spec.md: role assigned to the creating user. */
-  readonly creatorRole: "owner" | "admin";
-  /** spec.md: fail-open by default — every caller may create an organization unless configured otherwise. */
-  readonly allowUserToCreateOrganization: (userId: Users.UserId) => Effect.Effect<boolean>;
-  /**
-   * Max organizations a single user may own (own = holds `owner` on it).
-   * EP-006: finite by default (10) so an open sign-up cannot mint unbounded
-   * tenants; `Infinity` opts out.
-   */
-  readonly organizationLimit: number;
-  /** Max memberships per organization. */
-  readonly membershipLimit: number;
-  /**
-   * EP-006 (ADR-EA-018): quota overrides for one organization, consulted at
-   * decision time and merged over the static limits (`membershipLimit`,
-   * `invitationLimit`, `teams.maximumTeams`, `teams.maximumMembersPerTeam`,
-   * `dynamicAccessControl.maximumRolesPerOrganization`) — so a plan tier or a
-   * negotiated quota changes without redeploying or reconfiguring the plugin
-   * tuple. Unset means every organization uses the static values.
-   */
-  readonly limitsFor?: (organizationId: string) => Effect.Effect<OrganizationLimits>;
-  /**
-   * DRS-007: the residency vocabulary an organization's `homeRegion` must come
-   * from (`["eu-west", "us-east"]`). Empty by default, which refuses any
-   * `homeRegion` — a deployment that pins tenants opts in by listing regions.
-   */
-  readonly regions: ReadonlyArray<string>;
-  readonly disableOrganizationDeletion: boolean;
-  /** Custom static roles an application layers on top of `PermissionEngine.defaultStatements`. */
-  readonly permissionStatements: Readonly<Record<string, PermissionEngine.Statements>>;
-  readonly dynamicAccessControl: {
-    readonly enabled: boolean;
-    readonly maximumRolesPerOrganization: number;
-  };
-  readonly teams: {
-    readonly enabled: boolean;
-    readonly maximumTeams: number;
-    readonly maximumMembersPerTeam: number;
-    readonly allowRemovingAllTeams: boolean;
-  };
-  /**
-   * OHS-004: team-scoped roles a `TeamMembershipRecord` can hold, each mapped to
-   * the `team` statements it confers on *that team and its descendants*, on top of
-   * whatever the caller's organization roles already grant. `team:create` lets a
-   * holder create child teams under the team, `team:update` rename/move it and
-   * manage its roster and roles, `team:delete` remove it. `member` (no
-   * statements) is always defined and is the default; the default `lead` may
-   * update its team.
-   */
-  readonly teamStatements: Readonly<Record<string, PermissionEngine.Statements>>;
-  readonly invitationExpiresIn: Duration.Duration;
-  readonly invitationLimit: number;
-  readonly cancelPendingInvitationsOnReInvite: boolean;
-  readonly requireEmailVerificationOnInvitation: boolean;
-}
-
-const defaultOrganizationConfig: OrganizationConfigShape = {
-  creatorRole: "owner",
-  allowUserToCreateOrganization: () => Effect.succeed(true),
-  organizationLimit: 10,
-  membershipLimit: 100,
-  regions: [],
-  disableOrganizationDeletion: false,
-  permissionStatements: {},
-  dynamicAccessControl: { enabled: false, maximumRolesPerOrganization: Number.POSITIVE_INFINITY },
-  teams: {
-    enabled: false,
-    maximumTeams: Number.POSITIVE_INFINITY,
-    maximumMembersPerTeam: Number.POSITIVE_INFINITY,
-    allowRemovingAllTeams: false,
-  },
-  teamStatements: { lead: { team: ["update"] } },
-  invitationExpiresIn: Duration.hours(48),
-  invitationLimit: 100,
-  cancelPendingInvitationsOnReInvite: false,
-  // EP-010: an invitation is addressed to an email, so membership is conferred
-  // only on a verified owner of that address; `false` restores the old behavior.
-  requireEmailVerificationOnInvitation: true,
-};
-
-/**
- * DRS-007: the pure routing helper — an application maps an organization to its
- * shard or database with this, never by reading the record's storage shape.
- */
-export const homeRegionOf = (
-  record: OrganizationRecords.OrganizationRecord,
-): Option.Option<string> => record.homeRegion;
-
-export const OrganizationConfig: Context.Reference<OrganizationConfigShape> = Context.Reference(
-  "awthaq/organization/Config",
-  { defaultValue: () => defaultOrganizationConfig },
-);
-
-export const config = (partial: Partial<OrganizationConfigShape>) => {
-  // RZS-005/N8: a static custom role may not redefine a built-in tier — fail
-  // at layer build rather than silently ignoring (or honoring) the override.
-  const reserved = Object.keys(partial.permissionStatements ?? {}).filter(
-    PermissionEngine.isBuiltInRole,
-  );
-  return reserved.length > 0
-    ? Layer.effect(
-        OrganizationConfig,
-        Defects.invalidConfiguration(
-          "permissionStatements",
-          `awthaq: Organization.config permissionStatements may not redefine the built-in role(s): ${reserved.join(", ")}`,
-        ),
-      )
-    : Layer.succeed(OrganizationConfig, { ...defaultOrganizationConfig, ...partial });
-};
-
-// ---- shape --------------------------------------------------------------------
-
-export interface OrganizationShape {
-  readonly create: (input: {
-    readonly caller: Api.UserPrincipal;
-    readonly name: string;
-    readonly slug: string;
-    readonly logo?: string | undefined;
-    readonly metadata?: string | undefined;
-    readonly homeRegion?: string | undefined;
-  }) => Effect.Effect<
-    OrganizationRecords.OrganizationRecord,
-    | OrganizationApi.OrganizationSlugTaken
-    | OrganizationApi.OrganizationCreationNotAllowed
-    | OrganizationApi.OrganizationLimitReached
-    | OrganizationApi.UnknownRegion
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly checkSlug: (slug: string) => Effect.Effect<boolean, Errors.StoreUnavailable>;
-  readonly list: (
-    caller: Api.UserPrincipal,
-  ) => Effect.Effect<
-    ReadonlyArray<OrganizationRecords.OrganizationRecord>,
-    Errors.StoreUnavailable
-  >;
-  /** MTI-008: member-only — a non-member gets the same `OrganizationNotFound` an unknown id gets. */
-  readonly get: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-  ) => Effect.Effect<
-    OrganizationRecords.OrganizationRecord,
-    OrganizationApi.OrganizationNotFound | Errors.StoreUnavailable
-  >;
-  readonly getFull: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    input?: {
-      readonly membersLimit?: number | undefined;
-      readonly membersOffset?: number | undefined;
-    },
-  ) => Effect.Effect<
-    {
-      readonly organization: OrganizationRecords.OrganizationRecord;
-      readonly members: ReadonlyArray<MembershipRecords.MembershipRecord>;
-      readonly invitations: ReadonlyArray<InvitationRecords.InvitationRecord>;
-    },
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.OrganizationPermissionDenied
-    | Errors.StoreUnavailable
-  >;
-  readonly update: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    input: {
-      readonly name?: string | undefined;
-      readonly slug?: string | undefined;
-      readonly logo?: string | null | undefined;
-      readonly metadata?: string | null | undefined;
-      readonly homeRegion?: string | null | undefined;
-    },
-  ) => Effect.Effect<
-    OrganizationRecords.OrganizationRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.OrganizationSlugTaken
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.UnknownRegion
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly delete: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-  ) => Effect.Effect<
-    void,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.OrganizationDeletionDisabled
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly listMembers: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    input?: MembershipRecords.ListMembersInput,
-  ) => Effect.Effect<
-    ReadonlyArray<MembershipRecords.MembershipRecord>,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.OrganizationPermissionDenied
-    | Errors.StoreUnavailable
-  >;
-  readonly removeMember: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    targetUserId: Users.UserId,
-  ) => Effect.Effect<
-    void,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.MembershipNotFound
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.OwnerInvariantViolation
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly updateMemberRole: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    targetUserId: Users.UserId,
-    role: ReadonlyArray<string>,
-  ) => Effect.Effect<
-    MembershipRecords.MembershipRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.MembershipNotFound
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.OwnerInvariantViolation
-    | OrganizationApi.RolePermissionEscalation
-    | OrganizationApi.UnknownOrgRole
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly leave: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-  ) => Effect.Effect<
-    void,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.MembershipNotFound
-    | OrganizationApi.OwnerInvariantViolation
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /** Server-only: no invitation round-trip, no HTTP endpoint — a trusted, app-driven direct add. */
-  readonly addMember: (input: {
-    readonly organizationId: string;
-    readonly userId: Users.UserId;
-    readonly role: ReadonlyArray<string>;
-  }) => Effect.Effect<
-    MembershipRecords.MembershipRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.MembershipLimitReached
-    | OrganizationApi.AlreadyMember
-    | OrganizationApi.UnknownOrgRole
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /**
-   * BEH-EA-316 (the SAML role mapping's guard, RRM-001's `canGrant` rule with a role ceiling standing in for the caller): why
-   * `roles` cannot be conferred by a source whose most is `ceiling` (role names of this organization), or `None` when they
-   * can. `unknownRole`/`unknownCeiling`: a name this organization does not recognize; `exceedsCeiling`: `roles` hold a
-   * statement the ceiling does not (an `owner` mapping under a `member` ceiling).
-   */
-  readonly checkRoleCeiling: (input: {
-    readonly organizationId: string;
-    readonly roles: ReadonlyArray<string>;
-    readonly ceiling: ReadonlyArray<string>;
-  }) => Effect.Effect<
-    Option.Option<"unknownRole" | "unknownCeiling" | "exceedsCeiling">,
-    OrganizationApi.OrganizationNotFound | Errors.StoreUnavailable
-  >;
-  /**
-   * BEH-EA-316: makes `userId`'s roles in the organization exactly `roles`, on behalf of a source (an identity provider's
-   * mapping) that has no caller: adds the membership when there is none, otherwise re-roles it. `canGrant` bounds it twice:
-   * `roles` must be within `ceiling`, and so must what the member holds now (a member who out-privileges the source is
-   * never demoted or reshaped by it: `RolePermissionEscalation`). The last owner is never demoted
-   * (`OwnerInvariantViolation`); limits, hooks and events are those of `addMember` / `updateMemberRole`.
-   */
-  readonly syncMemberRoles: (input: {
-    readonly organizationId: string;
-    readonly userId: Users.UserId;
-    readonly roles: ReadonlyArray<string>;
-    readonly ceiling: ReadonlyArray<string>;
-  }) => Effect.Effect<
-    {
-      readonly membership: MembershipRecords.MembershipRecord;
-      readonly change: "added" | "updated" | "unchanged";
-    },
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.MembershipLimitReached
-    | OrganizationApi.AlreadyMember
-    | OrganizationApi.UnknownOrgRole
-    | OrganizationApi.RolePermissionEscalation
-    | OrganizationApi.OwnerInvariantViolation
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly getActiveMember: (
-    caller: Api.UserPrincipal,
-  ) => Effect.Effect<
-    MembershipRecords.MembershipRecord,
-    OrganizationApi.NoActiveOrganization | Errors.StoreUnavailable
-  >;
-  readonly getActiveMemberRole: (
-    caller: Api.UserPrincipal,
-  ) => Effect.Effect<
-    ReadonlyArray<string>,
-    OrganizationApi.NoActiveOrganization | Errors.StoreUnavailable
-  >;
-  /** Upserts the caller's own session's active organization; `organizationId: null` unsets it. Rejects if the caller isn't a member of the named organization. */
-  readonly setActive: (
-    caller: Api.UserPrincipal,
-    organizationId: string | null,
-  ) => Effect.Effect<
-    ActiveContextRecords.ActiveContextRecord,
-    OrganizationApi.MembershipNotFound | Errors.StoreUnavailable
-  >;
-  readonly getActive: (
-    caller: Api.UserPrincipal,
-  ) => Effect.Effect<ActiveContextRecords.ActiveContextRecord, Errors.StoreUnavailable>;
-  readonly invite: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    input: {
-      readonly email: string;
-      readonly role: ReadonlyArray<string>;
-      readonly teamId?: string | undefined;
-      readonly resend?: boolean | undefined;
-    },
-  ) => Effect.Effect<
-    InvitationRecords.InvitationRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.InvitationLimitReached
-    | OrganizationApi.InvitationDeliveryFailed
-    | OrganizationApi.MembershipLimitReached
-    | OrganizationApi.AlreadyMember
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.TeamNotFound
-    | OrganizationApi.RolePermissionEscalation
-    | OrganizationApi.UnknownOrgRole
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /** MTI-010: `token` is the emailed capability; the invitation id alone accepts nothing. */
-  readonly acceptInvitation: (
-    caller: Api.UserPrincipal,
-    invitationId: string,
-    token: string,
-  ) => Effect.Effect<
-    MembershipRecords.MembershipRecord,
-    | OrganizationApi.InvitationNotFound
-    | OrganizationApi.InvitationNotPending
-    | OrganizationApi.InvitationExpired
-    | OrganizationApi.InvitationEmailMismatch
-    | OrganizationApi.MembershipLimitReached
-    | OrganizationApi.AlreadyMember
-    | OrganizationApi.EmailVerificationRequired
-    | OrganizationApi.TeamMemberLimitReached
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly rejectInvitation: (
-    caller: Api.UserPrincipal,
-    invitationId: string,
-    token: string,
-  ) => Effect.Effect<
-    void,
-    | OrganizationApi.InvitationNotFound
-    | OrganizationApi.InvitationNotPending
-    | OrganizationApi.InvitationEmailMismatch
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly cancelInvitation: (
-    caller: Api.UserPrincipal,
-    invitationId: string,
-  ) => Effect.Effect<
-    void,
-    | OrganizationApi.InvitationNotFound
-    | OrganizationApi.InvitationNotPending
-    | OrganizationApi.OrganizationPermissionDenied
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /**
-   * MTI-010: readable only by the invitee (email match) or a member holding
-   * `invitation:create`; anyone else gets the same `InvitationNotFound` an unknown id gets.
-   */
-  readonly getInvitation: (
-    caller: Api.UserPrincipal,
-    invitationId: string,
-  ) => Effect.Effect<
-    InvitationRecords.InvitationRecord,
-    OrganizationApi.InvitationNotFound | Errors.StoreUnavailable
-  >;
-  /** MTI-010: the landing-page lookup — resolves the emailed token, for the invitee only. */
-  readonly getInvitationByToken: (
-    caller: Api.UserPrincipal,
-    token: string,
-  ) => Effect.Effect<
-    InvitationRecords.InvitationRecord,
-    OrganizationApi.InvitationNotFound | Errors.StoreUnavailable
-  >;
-  readonly listInvitationsForOrganization: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-  ) => Effect.Effect<
-    ReadonlyArray<InvitationRecords.InvitationRecord>,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.OrganizationPermissionDenied
-    | Errors.StoreUnavailable
-  >;
-  readonly listInvitationsForUser: (
-    caller: Api.UserPrincipal,
-  ) => Effect.Effect<ReadonlyArray<InvitationRecords.InvitationRecord>, Errors.StoreUnavailable>;
-  readonly createRole: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    input: { readonly role: string; readonly permission: PermissionEngine.Statements },
-  ) => Effect.Effect<
-    OrgRoleRecords.OrgRoleRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.DynamicAccessControlDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.OrgRoleNameTaken
-    | OrganizationApi.ReservedOrgRoleName
-    | OrganizationApi.RolePermissionEscalation
-    | OrganizationApi.RoleLimitReached
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly listRoles: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-  ) => Effect.Effect<
-    ReadonlyArray<OrgRoleRecords.OrgRoleRecord>,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.DynamicAccessControlDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | Errors.StoreUnavailable
-  >;
-  readonly getRole: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    roleId: string,
-  ) => Effect.Effect<
-    OrgRoleRecords.OrgRoleRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.DynamicAccessControlDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.OrgRoleNotFound
-    | Errors.StoreUnavailable
-  >;
-  readonly updateRole: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    roleId: string,
-    permission: PermissionEngine.Statements,
-  ) => Effect.Effect<
-    OrgRoleRecords.OrgRoleRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.DynamicAccessControlDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.OrgRoleNotFound
-    | OrganizationApi.RolePermissionEscalation
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly deleteRole: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    roleId: string,
-  ) => Effect.Effect<
-    void,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.DynamicAccessControlDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.OrgRoleNotFound
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /** OHS-001: with a `parentId`, the team is created under that parent (`TeamNotFound` when it is not in this organization). */
-  readonly createTeam: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    name: string,
-    parentId?: string | undefined,
-  ) => Effect.Effect<
-    TeamRecords.TeamRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | OrganizationApi.TeamLimitReached
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /** OHS-001: re-parents a team with its whole subtree; `None` moves it to the root. Needs `team:update`. */
-  readonly moveTeam: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-    parentId: Option.Option<string>,
-  ) => Effect.Effect<
-    TeamRecords.TeamRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | OrganizationApi.TeamHierarchyCycle
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /** OHS-001: member-only, nearest first. */
-  readonly listTeamAncestors: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-  ) => Effect.Effect<
-    ReadonlyArray<TeamRecords.TeamRecord>,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | Errors.StoreUnavailable
-  >;
-  /** OHS-001: member-only, nearest first. */
-  readonly listTeamDescendants: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-  ) => Effect.Effect<
-    ReadonlyArray<TeamRecords.TeamRecord>,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | Errors.StoreUnavailable
-  >;
-  /** MTI-002: member-only — a full team roster/directory is confidential to the organization, not deployment-public. */
-  readonly listTeams: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-  ) => Effect.Effect<
-    ReadonlyArray<TeamRecords.TeamRecord>,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | Errors.StoreUnavailable
-  >;
-  readonly listUserTeams: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-  ) => Effect.Effect<
-    ReadonlyArray<TeamRecords.TeamRecord>,
-    OrganizationApi.OrganizationNotFound | OrganizationApi.TeamsDisabled | Errors.StoreUnavailable
-  >;
-  readonly updateTeam: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-    name: string,
-  ) => Effect.Effect<
-    TeamRecords.TeamRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly removeTeam: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-  ) => Effect.Effect<
-    void,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | OrganizationApi.LastTeamCannotBeRemoved
-    | OrganizationApi.TeamHasChildren
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /** MTI-002: member-only — a team roster is personal data about the organization's own staff, not deployment-public. */
-  readonly listTeamMembers: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-  ) => Effect.Effect<
-    ReadonlyArray<TeamRecords.TeamMembershipRecord>,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.TeamNotFound
-    | OrganizationApi.OrganizationPermissionDenied
-    | Errors.StoreUnavailable
-  >;
-  readonly addTeamMember: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-    targetUserId: Users.UserId,
-    role?: ReadonlyArray<string> | undefined,
-  ) => Effect.Effect<
-    TeamRecords.TeamMembershipRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | OrganizationApi.MembershipNotFound
-    | OrganizationApi.TeamMemberLimitReached
-    | OrganizationApi.AlreadyTeamMember
-    | OrganizationApi.RolePermissionEscalation
-    | OrganizationApi.UnknownTeamRole
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /** OHS-004: needs `team:update` on the team (org-level, or a team role held on it or an ancestor); `canGrant`-guarded like org roles. */
-  readonly updateTeamMemberRole: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-    targetUserId: Users.UserId,
-    role: ReadonlyArray<string>,
-  ) => Effect.Effect<
-    TeamRecords.TeamMembershipRecord,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | OrganizationApi.TeamMembershipNotFound
-    | OrganizationApi.RolePermissionEscalation
-    | OrganizationApi.UnknownTeamRole
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  readonly removeTeamMember: (
-    caller: Api.UserPrincipal,
-    organizationId: string,
-    teamId: string,
-    targetUserId: Users.UserId,
-  ) => Effect.Effect<
-    void,
-    | OrganizationApi.OrganizationNotFound
-    | OrganizationApi.TeamsDisabled
-    | OrganizationApi.OrganizationPermissionDenied
-    | OrganizationApi.TeamNotFound
-    | OrganizationApi.TeamMembershipNotFound
-    | HookPoint.HookAborted
-    | Errors.StoreUnavailable
-  >;
-  /** Upserts the caller's own session's active team; `teamId: null` unsets it. Rejects if the caller isn't a member of the named team. */
-  readonly setActiveTeam: (
-    caller: Api.UserPrincipal,
-    teamId: string | null,
-  ) => Effect.Effect<
-    ActiveContextRecords.ActiveContextRecord,
-    OrganizationApi.TeamMembershipNotFound | Errors.StoreUnavailable
-  >;
-  /**
-   * A user's role(s) and effective permission set within an organization —
-   * `Option.none` if they aren't a member. Not exposed over HTTP; exists so
-   * `Organization.attributes` (this plugin's `AttributeResolver` contribution,
-   * ticket 18) can answer from the same computation `requirePermission`
-   * itself uses, rather than duplicating `statementsByRole`/
-   * `effectivePermissionsOf`'s logic in a second place.
-   */
-  readonly attributesFor: (
-    organizationId: string,
-    userId: Users.UserId,
-  ) => Effect.Effect<
-    Option.Option<{
-      readonly role: ReadonlyArray<string>;
-      readonly permissions: PermissionEngine.Statements;
-    }>,
-    Errors.StoreUnavailable
-  >;
-}
-
-// ---- invitation token helpers ---------------------------------------------------
-
-const hexOf = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
-/**
- * What a presented token's hash is compared against when no invitation (or no
- * stored hash) exists, so a miss does the same hash + compare work as a wrong
- * token for a real invitation. Never equals a real SHA-256 hex digest.
- */
-const NO_INVITATION_TOKEN_HASH = "0".repeat(64);
-
-// ---- dto mapping ----------------------------------------------------------------
-
-/** FAMS-002: an invitation names an email address; only an Email-identity user can own one (`emailOf` is already lower-cased, as invitation emails are stored). */
-const ownsEmail = (user: Users.UserRecord, email: string): boolean =>
-  Option.exists(Users.emailOf(user), (own) => own === email);
-
-const toOrganizationDto = (
-  record: OrganizationRecords.OrganizationRecord,
-): OrganizationApi.OrganizationDto =>
-  new OrganizationApi.OrganizationDto({
-    id: record.id,
-    name: record.name,
-    slug: record.slug,
-    logo: Option.getOrNull(record.logo),
-    metadata: Option.getOrNull(record.metadata),
-    homeRegion: Option.getOrNull(record.homeRegion),
-    suspended: Option.isSome(record.suspendedAt),
-    createdAt: DateTime.formatIso(record.createdAt),
-  });
-
-const toMembershipDto = (
-  record: MembershipRecords.MembershipRecord,
-): OrganizationApi.MembershipDto =>
-  new OrganizationApi.MembershipDto({
-    id: record.id,
-    userId: record.userId,
-    organizationId: record.organizationId,
-    role: record.role,
-    createdAt: DateTime.formatIso(record.createdAt),
-  });
-
-const toActiveContextDto = (
-  record: ActiveContextRecords.ActiveContextRecord,
-): OrganizationApi.ActiveContextDto =>
-  new OrganizationApi.ActiveContextDto({
-    activeOrganizationId: Option.getOrNull(record.activeOrganizationId),
-    activeTeamId: Option.getOrNull(record.activeTeamId),
-  });
-
-const toInvitationDto = (
-  record: InvitationRecords.InvitationRecord,
-): OrganizationApi.InvitationDto =>
-  new OrganizationApi.InvitationDto({
-    id: record.id,
-    email: record.email,
-    inviterId: record.inviterId,
-    organizationId: record.organizationId,
-    teamId: Option.getOrNull(record.teamId),
-    role: record.role,
-    status: record.status,
-    createdAt: DateTime.formatIso(record.createdAt),
-    expiresAt: DateTime.formatIso(record.expiresAt),
-  });
-
-const toOrgRoleDto = (record: OrgRoleRecords.OrgRoleRecord): OrganizationApi.OrgRoleDto =>
-  new OrganizationApi.OrgRoleDto({
-    id: record.id,
-    organizationId: record.organizationId,
-    role: record.role,
-    permission: record.permission,
-    createdAt: DateTime.formatIso(record.createdAt),
-    updatedAt: DateTime.formatIso(record.updatedAt),
-  });
-
-const toTeamDto = (record: TeamRecords.TeamRecord): OrganizationApi.TeamDto =>
-  new OrganizationApi.TeamDto({
-    id: record.id,
-    name: record.name,
-    organizationId: record.organizationId,
-    memberCount: record.memberCount,
-    parentId: Option.getOrNull(record.parentId),
-    createdAt: DateTime.formatIso(record.createdAt),
-    updatedAt: DateTime.formatIso(record.updatedAt),
-  });
-
-const toTeamMembershipDto = (
-  record: TeamRecords.TeamMembershipRecord,
-): OrganizationApi.TeamMembershipDto =>
-  new OrganizationApi.TeamMembershipDto({
-    id: record.id,
-    teamId: record.teamId,
-    userId: record.userId,
-    role: record.role,
-    createdAt: DateTime.formatIso(record.createdAt),
-  });
-
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: organization group reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
-
-const parseIntQuery = (value: string | undefined): number | undefined =>
-  value === undefined ? undefined : Number.parseInt(value, 10);
-
-// ---- handlers -------------------------------------------------------------------
-
-export const OrganizationHandlers = HttpApiBuilder.group(
-  OrganizationApi.OrganizationApi,
-  "organization",
-  Effect.fnUntraced(function* (handlers) {
-    const organization = yield* Organization;
-    return handlers.handleAll({
-      create: Effect.fnUntraced(function* ({
-        payload,
-      }: {
-        payload: OrganizationApi.CreateOrganizationPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.create({ caller, ...payload });
-        return toOrganizationDto(record);
-      }),
-      checkSlug: Effect.fnUntraced(function* ({
-        query,
-      }: {
-        query: OrganizationApi.CheckSlugQuery;
-      }) {
-        const available = yield* organization.checkSlug(query.slug);
-        return new OrganizationApi.CheckSlugResult({ available });
-      }),
-      list: Effect.fnUntraced(function* () {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.list(caller);
-        return records.map(toOrganizationDto);
-      }),
-      setActive: Effect.fnUntraced(function* ({
-        payload,
-      }: {
-        payload: OrganizationApi.SetActivePayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.setActive(caller, payload.organizationId);
-        return toActiveContextDto(record);
-      }),
-      getActive: Effect.fnUntraced(function* () {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.getActive(caller);
-        return toActiveContextDto(record);
-      }),
-      setActiveTeam: Effect.fnUntraced(function* ({
-        payload,
-      }: {
-        payload: OrganizationApi.SetActiveTeamPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.setActiveTeam(caller, payload.teamId);
-        return toActiveContextDto(record);
-      }),
-      getActiveMember: Effect.fnUntraced(function* () {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.getActiveMember(caller);
-        return toMembershipDto(record);
-      }),
-      getActiveMemberRole: Effect.fnUntraced(function* () {
-        const caller = yield* currentUserPrincipal;
-        const role = yield* organization.getActiveMemberRole(caller);
-        return new OrganizationApi.MemberRoleResult({ role });
-      }),
-      get: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.get(caller, params.organizationId);
-        return toOrganizationDto(record);
-      }),
-      getFull: Effect.fnUntraced(function* ({
-        params,
-        query,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-        query: OrganizationApi.GetFullQuery;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const result = yield* organization.getFull(caller, params.organizationId, {
-          membersLimit: parseIntQuery(query.membersLimit),
-          membersOffset: parseIntQuery(query.membersOffset),
-        });
-        return new OrganizationApi.GetFullResult({
-          organization: toOrganizationDto(result.organization),
-          members: result.members.map(toMembershipDto),
-          invitations: result.invitations.map(toInvitationDto),
-        });
-      }),
-      update: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-        payload: OrganizationApi.UpdateOrganizationPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.update(caller, params.organizationId, payload);
-        return toOrganizationDto(record);
-      }),
-      delete: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        yield* organization.delete(caller, params.organizationId);
-      }),
-      listMembers: Effect.fnUntraced(function* ({
-        params,
-        query,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-        query: OrganizationApi.ListMembersQuery;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listMembers(caller, params.organizationId, {
-          limit: parseIntQuery(query.limit),
-          offset: parseIntQuery(query.offset),
-          sortDirection: query.sortDirection,
-        });
-        return records.map(toMembershipDto);
-      }),
-      removeMember: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.MemberParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        yield* organization.removeMember(
-          caller,
-          params.organizationId,
-          Users.UserId(params.userId),
-        );
-      }),
-      updateMemberRole: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.MemberParams;
-        payload: OrganizationApi.UpdateMemberRolePayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.updateMemberRole(
-          caller,
-          params.organizationId,
-          Users.UserId(params.userId),
-          payload.role,
-        );
-        return toMembershipDto(record);
-      }),
-      leave: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        yield* organization.leave(caller, params.organizationId);
-      }),
-      invite: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-        payload: OrganizationApi.InvitePayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.invite(caller, params.organizationId, payload);
-        return toInvitationDto(record);
-      }),
-      listInvitationsForOrganization: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listInvitationsForOrganization(
-          caller,
-          params.organizationId,
-        );
-        return records.map(toInvitationDto);
-      }),
-      listInvitationsForUser: Effect.fnUntraced(function* () {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listInvitationsForUser(caller);
-        return records.map(toInvitationDto);
-      }),
-      getInvitation: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.InvitationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.getInvitation(caller, params.invitationId);
-        return toInvitationDto(record);
-      }),
-      getInvitationByToken: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.InvitationTokenParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.getInvitationByToken(caller, params.token);
-        return toInvitationDto(record);
-      }),
-      acceptInvitation: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.InvitationIdParams;
-        payload: OrganizationApi.InvitationTokenPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.acceptInvitation(
-          caller,
-          params.invitationId,
-          payload.token,
-        );
-        return toMembershipDto(record);
-      }),
-      rejectInvitation: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.InvitationIdParams;
-        payload: OrganizationApi.InvitationTokenPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        yield* organization.rejectInvitation(caller, params.invitationId, payload.token);
-      }),
-      cancelInvitation: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.InvitationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        yield* organization.cancelInvitation(caller, params.invitationId);
-      }),
-      createRole: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-        payload: OrganizationApi.CreateOrgRolePayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.createRole(caller, params.organizationId, payload);
-        return toOrgRoleDto(record);
-      }),
-      listRoles: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listRoles(caller, params.organizationId);
-        return records.map(toOrgRoleDto);
-      }),
-      getRole: Effect.fnUntraced(function* ({ params }: { params: OrganizationApi.OrgRoleParams }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.getRole(caller, params.organizationId, params.roleId);
-        return toOrgRoleDto(record);
-      }),
-      updateRole: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.OrgRoleParams;
-        payload: OrganizationApi.UpdateOrgRolePayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.updateRole(
-          caller,
-          params.organizationId,
-          params.roleId,
-          payload.permission,
-        );
-        return toOrgRoleDto(record);
-      }),
-      deleteRole: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.OrgRoleParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        yield* organization.deleteRole(caller, params.organizationId, params.roleId);
-      }),
-      createTeam: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-        payload: OrganizationApi.CreateTeamPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.createTeam(
-          caller,
-          params.organizationId,
-          payload.name,
-          payload.parentId,
-        );
-        return toTeamDto(record);
-      }),
-      moveTeam: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.TeamIdParams;
-        payload: OrganizationApi.MoveTeamPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.moveTeam(
-          caller,
-          params.organizationId,
-          params.teamId,
-          Option.fromNullOr(payload.parentId),
-        );
-        return toTeamDto(record);
-      }),
-      listTeamAncestors: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.TeamIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listTeamAncestors(
-          caller,
-          params.organizationId,
-          params.teamId,
-        );
-        return records.map(toTeamDto);
-      }),
-      listTeamDescendants: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.TeamIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listTeamDescendants(
-          caller,
-          params.organizationId,
-          params.teamId,
-        );
-        return records.map(toTeamDto);
-      }),
-      listTeams: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listTeams(caller, params.organizationId);
-        return records.map(toTeamDto);
-      }),
-      listUserTeams: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.OrganizationIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listUserTeams(caller, params.organizationId);
-        return records.map(toTeamDto);
-      }),
-      updateTeam: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.TeamIdParams;
-        payload: OrganizationApi.UpdateTeamPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.updateTeam(
-          caller,
-          params.organizationId,
-          params.teamId,
-          payload.name,
-        );
-        return toTeamDto(record);
-      }),
-      removeTeam: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.TeamIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        yield* organization.removeTeam(caller, params.organizationId, params.teamId);
-      }),
-      listTeamMembers: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.TeamIdParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const records = yield* organization.listTeamMembers(
-          caller,
-          params.organizationId,
-          params.teamId,
-        );
-        return records.map(toTeamMembershipDto);
-      }),
-      addTeamMember: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.TeamIdParams;
-        payload: OrganizationApi.AddTeamMemberPayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.addTeamMember(
-          caller,
-          params.organizationId,
-          params.teamId,
-          Users.UserId(payload.userId),
-          payload.role,
-        );
-        return toTeamMembershipDto(record);
-      }),
-      updateTeamMemberRole: Effect.fnUntraced(function* ({
-        params,
-        payload,
-      }: {
-        params: OrganizationApi.TeamMemberParams;
-        payload: OrganizationApi.UpdateTeamMemberRolePayload;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        const record = yield* organization.updateTeamMemberRole(
-          caller,
-          params.organizationId,
-          params.teamId,
-          Users.UserId(params.userId),
-          payload.role,
-        );
-        return toTeamMembershipDto(record);
-      }),
-      removeTeamMember: Effect.fnUntraced(function* ({
-        params,
-      }: {
-        params: OrganizationApi.TeamMemberParams;
-      }) {
-        const caller = yield* currentUserPrincipal;
-        yield* organization.removeTeamMember(
-          caller,
-          params.organizationId,
-          params.teamId,
-          Users.UserId(params.userId),
-        );
-      }),
-    });
-  }),
-);
-
-// ---- migrations -------------------------------------------------------------------
-
-/**
- * BAM-002 (.issues/high): no plugin populated `migrations` before AOMS-006's
- * cluster resolution added `@awthaq/jwt`'s own — this plugin's 7 tables are
- * the largest remaining gap the finding named. Ported verbatim from each
- * `*Records.test.ts`'s own inline `CREATE TABLE` (every table's canonical,
- * already-working shape — `OrganizationRecords.test.ts`,
- * `MembershipRecords.test.ts`, `InvitationRecords.test.ts`,
- * `TeamRecords.test.ts`, `ActiveContextRecords.test.ts`,
- * `OrgRoleRecords.test.ts`), dialect-branched via `sql.onDialectOrElse`
- * like `@awthaq/sql`'s own `CoreMigrations.ts`. Columns left unquoted under
- * `pg` (unlike `CoreMigrations.ts`'s own `users`/`sessions` tables, like
- * `@awthaq/jwt`'s own `jwtMigrations`): every one of this plugin's own
- * queries already references every column unquoted, so Postgres's
- * automatic lowercase-folding is what keeps migration and query consistent
- * here. `organization_role`'s `UNIQUE(organizationId, role)` and
- * `organization_org.slug UNIQUE` are ported as-is from their own test
- * fixtures. The first eleven migrations are exactly that DDL parity
- * (BAM-002's own ask, not a fresh constraint audit); everything after them
- * is an incremental, never-edited-after-shipping change — MTI-003/OHS-003's
- * `(userId, organizationId)` and `(teamId, userId)` UNIQUE indexes (each
- * collapsing pre-existing duplicates first) and the later column additions.
- * `organizationId`/`userId`/`teamId`/`email`/`inviterId` indexes mirror
- * `CoreMigrations.ts`'s own `accounts_user_id`/`sessions_user_id`
- * precedent: added only where a column is a real, independent filter key
- * in this plugin's own queries (grep for `WHERE <col> =` across
- * `*Records.ts`) and not already covered by a composite UNIQUE's leftmost
- * column (`organization_role`'s own `UNIQUE(organizationId, role)` already
- * serves `WHERE organizationId = ...` lookups, so it gets no separate
- * index; `organization_active_context`'s own `sessionId` primary key
- * likewise needs none).
- */
-const organizationMigrations: Migrations.Migrations = [
-  {
-    name: "create_organization_org",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE organization_org (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            slug TEXT NOT NULL UNIQUE,
-            logo TEXT,
-            metadata TEXT,
-            "createdAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE organization_org (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            slug TEXT NOT NULL UNIQUE,
-            logo TEXT,
-            metadata TEXT,
-            "createdAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_membership",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE organization_membership (
-            id TEXT PRIMARY KEY,
-            "userId" TEXT NOT NULL,
-            "organizationId" TEXT NOT NULL,
-            role TEXT NOT NULL,
-            "createdAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE organization_membership (
-            id TEXT PRIMARY KEY,
-            "userId" TEXT NOT NULL,
-            "organizationId" TEXT NOT NULL,
-            role TEXT NOT NULL,
-            "createdAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_membership_indexes",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () =>
-          sql`CREATE INDEX organization_membership_organization_id ON organization_membership("organizationId")`.pipe(
-            Effect.andThen(
-              sql`CREATE INDEX organization_membership_user_id ON organization_membership("userId")`,
-            ),
-          ),
-        sqlite: () =>
-          sql`CREATE INDEX organization_membership_organization_id ON organization_membership("organizationId")`.pipe(
-            Effect.andThen(
-              sql`CREATE INDEX organization_membership_user_id ON organization_membership("userId")`,
-            ),
-          ),
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_invitation",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE organization_invitation (
-            id TEXT PRIMARY KEY,
-            email TEXT NOT NULL,
-            "inviterId" TEXT NOT NULL,
-            "organizationId" TEXT NOT NULL,
-            "teamId" TEXT,
-            role TEXT NOT NULL,
-            status TEXT NOT NULL,
-            "createdAt" TIMESTAMPTZ NOT NULL,
-            "expiresAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE organization_invitation (
-            id TEXT PRIMARY KEY,
-            email TEXT NOT NULL,
-            "inviterId" TEXT NOT NULL,
-            "organizationId" TEXT NOT NULL,
-            "teamId" TEXT,
-            role TEXT NOT NULL,
-            status TEXT NOT NULL,
-            "createdAt" TEXT NOT NULL,
-            "expiresAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_invitation_indexes",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () =>
-          sql`CREATE INDEX organization_invitation_organization_id ON organization_invitation("organizationId")`.pipe(
-            Effect.andThen(
-              sql`CREATE INDEX organization_invitation_email ON organization_invitation(email)`,
-            ),
-            Effect.andThen(
-              sql`CREATE INDEX organization_invitation_inviter_id ON organization_invitation("inviterId")`,
-            ),
-          ),
-        sqlite: () =>
-          sql`CREATE INDEX organization_invitation_organization_id ON organization_invitation("organizationId")`.pipe(
-            Effect.andThen(
-              sql`CREATE INDEX organization_invitation_email ON organization_invitation(email)`,
-            ),
-            Effect.andThen(
-              sql`CREATE INDEX organization_invitation_inviter_id ON organization_invitation("inviterId")`,
-            ),
-          ),
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_team",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE organization_team (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            "organizationId" TEXT NOT NULL,
-            "memberCount" INTEGER NOT NULL,
-            "createdAt" TIMESTAMPTZ NOT NULL,
-            "updatedAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE organization_team (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            "organizationId" TEXT NOT NULL,
-            "memberCount" INTEGER NOT NULL,
-            "createdAt" TEXT NOT NULL,
-            "updatedAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_team_organization_id_index",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () =>
-          sql`CREATE INDEX organization_team_organization_id ON organization_team("organizationId")`,
-        sqlite: () =>
-          sql`CREATE INDEX organization_team_organization_id ON organization_team("organizationId")`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_team_membership",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE organization_team_membership (
-            id TEXT PRIMARY KEY,
-            "teamId" TEXT NOT NULL,
-            "userId" TEXT NOT NULL,
-            "createdAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE organization_team_membership (
-            id TEXT PRIMARY KEY,
-            "teamId" TEXT NOT NULL,
-            "userId" TEXT NOT NULL,
-            "createdAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_team_membership_team_id_index",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () =>
-          sql`CREATE INDEX organization_team_membership_team_id ON organization_team_membership("teamId")`,
-        sqlite: () =>
-          sql`CREATE INDEX organization_team_membership_team_id ON organization_team_membership("teamId")`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_role",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE organization_role (
-            id TEXT PRIMARY KEY,
-            "organizationId" TEXT NOT NULL,
-            role TEXT NOT NULL,
-            permission TEXT NOT NULL,
-            "createdAt" TIMESTAMPTZ NOT NULL,
-            "updatedAt" TIMESTAMPTZ NOT NULL,
-            UNIQUE("organizationId", role)
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE organization_role (
-            id TEXT PRIMARY KEY,
-            "organizationId" TEXT NOT NULL,
-            role TEXT NOT NULL,
-            permission TEXT NOT NULL,
-            "createdAt" TEXT NOT NULL,
-            "updatedAt" TEXT NOT NULL,
-            UNIQUE("organizationId", role)
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_organization_active_context",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE organization_active_context (
-            "sessionId" TEXT PRIMARY KEY,
-            "activeOrganizationId" TEXT,
-            "activeTeamId" TEXT,
-            "updatedAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE organization_active_context (
-            "sessionId" TEXT PRIMARY KEY,
-            "activeOrganizationId" TEXT,
-            "activeTeamId" TEXT,
-            "updatedAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  // MTI-003: one membership per (user, organization). The statements are plain
-  // SQL both dialects share, so no `onDialectOrElse`. Duplicates that already
-  // exist are collapsed first (keeping the earliest row — uuidv7 ids sort by
-  // creation time) so the index can be created on live data.
-  {
-    name: "organization_membership_unique_user_org",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`DELETE FROM organization_membership WHERE id NOT IN (SELECT MIN(id) FROM organization_membership GROUP BY "userId", "organizationId")`;
-      yield* sql`CREATE UNIQUE INDEX organization_membership_user_org ON organization_membership("userId", "organizationId")`;
-    }),
-  },
-  // DRS-008: the active-context row is keyed by session but must be findable by
-  // user (erasure, membership revocation). Nullable: rows that predate it stay
-  // valid and are re-validated on read.
-  {
-    name: "organization_active_context_user_id",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`ALTER TABLE organization_active_context ADD COLUMN "userId" TEXT`;
-      yield* sql`CREATE INDEX organization_active_context_user_id ON organization_active_context("userId")`;
-    }),
-  },
-  // MTI-010: the emailed invitation capability is a random token, stored only as
-  // its SHA-256; the invitation's own id is no longer the secret. Nullable so
-  // rows written before this column stay readable (they cannot be accepted).
-  {
-    name: "organization_invitation_token_hash",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`ALTER TABLE organization_invitation ADD COLUMN "tokenHash" TEXT`;
-      yield* sql`CREATE UNIQUE INDEX organization_invitation_token_hash ON organization_invitation("tokenHash")`;
-    }),
-  },
-  // OHS-003: one membership per (team, user), and `memberCount` recomputed from
-  // the surviving rows so a previously over-counted team is repaired.
-  {
-    name: "organization_team_membership_unique_team_user",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`DELETE FROM organization_team_membership WHERE id NOT IN (SELECT MIN(id) FROM organization_team_membership GROUP BY "teamId", "userId")`;
-      yield* sql`UPDATE organization_team SET "memberCount" = (SELECT COUNT(*) FROM organization_team_membership WHERE organization_team_membership."teamId" = organization_team.id)`;
-      yield* sql`CREATE UNIQUE INDEX organization_team_membership_team_user ON organization_team_membership("teamId", "userId")`;
-    }),
-  },
-  // OHS-004: a team membership carries team-scoped role names (JSON array, like
-  // `organization_membership.role`); every existing row is a plain `member`.
-  {
-    name: "organization_team_membership_role",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`ALTER TABLE organization_team_membership ADD COLUMN role TEXT NOT NULL DEFAULT '["member"]'`;
-    }),
-  },
-  // OHS-001 (wayfinder ticket 34): a team may sit under one parent. `parentId` is
-  // the write-side adjacency; `organization_team_closure` is the read model — one
-  // row per (ancestor, descendant) pair, self rows at depth 0 — so ancestors and
-  // descendants are single indexed lookups on both dialects with no recursive CTE.
-  // No foreign keys, like every other table here: TeamRecords maintains both in
-  // one transaction. Every existing team gets its self row.
-  {
-    name: "organization_team_hierarchy",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`ALTER TABLE organization_team ADD COLUMN "parentId" TEXT`;
-      yield* sql`CREATE INDEX organization_team_parent_id ON organization_team("parentId")`;
-      yield* sql`
-        CREATE TABLE organization_team_closure (
-          "ancestorId" TEXT NOT NULL,
-          "descendantId" TEXT NOT NULL,
-          depth INTEGER NOT NULL,
-          PRIMARY KEY ("ancestorId", "descendantId")
-        )`;
-      yield* sql`CREATE INDEX organization_team_closure_descendant_id ON organization_team_closure("descendantId")`;
-      yield* sql`INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth) SELECT id, id, 0 FROM organization_team`;
-    }),
-  },
-  // DRS-007: the residency region, from `OrganizationConfig.regions`. Nullable
-  // — every existing organization simply has none.
-  {
-    name: "organization_org_home_region",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`ALTER TABLE organization_org ADD COLUMN "homeRegion" TEXT`;
-    }),
-  },
-  // EP-004 (ADR-EA-018): an organization's own OIDC/OAuth2 identity provider. No
-  // foreign keys, like every table here; the client secret is an `Encryption`
-  // envelope. Email domains get their own table so a domain routes to exactly one
-  // connection across all organizations (`domain` is `UNIQUE`, not the primary key:
-  // SQLite reports a primary-key clash as a generic constraint error, not a unique violation).
-  {
-    name: "organization_oauth_connection",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE organization_oauth_connection (
-            id TEXT PRIMARY KEY,
-            "organizationId" TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            name TEXT NOT NULL,
-            issuer TEXT,
-            "discoveryUrl" TEXT,
-            "authorizationEndpoint" TEXT,
-            "tokenEndpoint" TEXT,
-            "jwksUri" TEXT,
-            "userinfoEndpoint" TEXT,
-            "clientId" TEXT NOT NULL,
-            "clientSecret" TEXT,
-            scopes TEXT NOT NULL,
-            "createdAt" TIMESTAMPTZ NOT NULL,
-            "updatedAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE organization_oauth_connection (
-            id TEXT PRIMARY KEY,
-            "organizationId" TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            name TEXT NOT NULL,
-            issuer TEXT,
-            "discoveryUrl" TEXT,
-            "authorizationEndpoint" TEXT,
-            "tokenEndpoint" TEXT,
-            "jwksUri" TEXT,
-            "userinfoEndpoint" TEXT,
-            "clientId" TEXT NOT NULL,
-            "clientSecret" TEXT,
-            scopes TEXT NOT NULL,
-            "createdAt" TEXT NOT NULL,
-            "updatedAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-      yield* sql`CREATE INDEX organization_oauth_connection_organization_id ON organization_oauth_connection("organizationId")`;
-      yield* sql`
-        CREATE TABLE organization_oauth_connection_domain (
-          domain TEXT NOT NULL UNIQUE,
-          "connectionId" TEXT NOT NULL,
-          "organizationId" TEXT NOT NULL
-        )`;
-      yield* sql`CREATE INDEX organization_oauth_connection_domain_connection_id ON organization_oauth_connection_domain("connectionId")`;
-    }),
-  },
-  // EP-003: platform suspension. `NULL` = active; a timestamp = suspended since.
-  {
-    name: "organization_org_suspended_at",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`ALTER TABLE organization_org ADD COLUMN "suspendedAt" TIMESTAMPTZ`,
-        sqlite: () => sql`ALTER TABLE organization_org ADD COLUMN "suspendedAt" TEXT`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-];
+// The plugin's configuration, its authorized interface, its handlers and its personal-data parts
+// live in their own files; re-exported so `Organization.<name>` keeps resolving.
+export * from "./OrganizationConfig.ts";
+export type { OrganizationShape } from "./OrganizationShape.ts";
+export { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
 
 // EP-001 (ADR-EA-018): the opt-in tenant middleware, reachable as `Organization.tenantMiddleware`.
 export {
@@ -1802,84 +89,18 @@ export {
   layerWithRls as tenantMiddlewareWithRls,
 } from "./TenantMiddleware.ts";
 
-// ---- erasure --------------------------------------------------------------------
-
 /**
- * CSG-001/DRS-002 (.issues/high), wayfinder ticket 30: this plugin's part of
- * `AccountErasure.eraseAccount`, part of `Organization.layer` itself (it requires
- * `Erasure.ErasureRegistry`, so a composition without one does not compile). It
- * removes every row that names the erased user: their memberships, their team
- * memberships (`memberCount`s decremented), the invitations they sent or that
- * were addressed to their email (the row holds it in plaintext), and their
- * active-context rows (DRS-008). It runs inside `eraseAccount`'s transaction.
+ * What `contributes` requires beyond the plugin's own records: the erasure and export registries
+ * (a composition without them does not compile). Named here so the layer's inferred type can be
+ * emitted, which needs both namespaces in scope.
  */
-export const organizationErasure = Erasure.contribute({
-  id: "organization",
-  make: Effect.gen(function* () {
-    const members = yield* MembershipRecords.MembershipRecords;
-    const teams = yield* TeamRecords.TeamRecords;
-    const invitations = yield* InvitationRecords.InvitationRecords;
-    const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
-    return (subject: Erasure.ErasureSubject) =>
-      Effect.all(
-        [
-          teams.removeUserFromAllTeams(erasureGrant, subject.userId),
-          members.deleteAllByUser(erasureGrant, subject.userId),
-          activeContext.deleteAllByUser(erasureGrant, subject.userId),
-          invitations.removeAllForUser(erasureGrant, subject.userId, subject.email),
-        ],
-        { discard: true },
-      );
-  }),
-});
+export type PersonalDataRegistries = Erasure.ErasureRegistry | DataExport.DataExportRegistry;
 
-/**
- * CSG-005: this plugin's section of the data-subject export — the organizations the person
- * belongs to and their role in each, the teams they are on, and the invitations they sent
- * or received. An invitation carries no third party's address (the invitee's email is
- * their data, not the subject's), and a role is a name, never a permission secret.
- */
-export const organizationExport = DataExport.contribute({
-  id: "organization",
-  make: Effect.gen(function* () {
-    const members = yield* MembershipRecords.MembershipRecords;
-    const teams = yield* TeamRecords.TeamRecords;
-    const invitations = yield* InvitationRecords.InvitationRecords;
-    const invitationView = (row: InvitationRecords.InvitationRecord) => ({
-      organizationId: row.organizationId,
-      role: [...row.role],
-      status: row.status,
-      createdAt: DateTime.formatIso(row.createdAt),
-      expiresAt: DateTime.formatIso(row.expiresAt),
-    });
-    return (subject: DataExport.DataExportSubject) =>
-      Effect.gen(function* () {
-        const memberships = yield* members.listByUser(exportGrant, subject.userId);
-        const teamRows = yield* Effect.forEach(memberships, (membership) =>
-          teams.listTeamsByUser(membership.organizationId, subject.userId),
-        );
-        return {
-          memberships: memberships.map((membership) => ({
-            organizationId: membership.organizationId,
-            role: [...membership.role],
-            createdAt: DateTime.formatIso(membership.createdAt),
-          })),
-          teams: teamRows.flat().map((team) => ({
-            id: team.id,
-            organizationId: team.organizationId,
-            name: team.name,
-          })),
-          invitationsSent: (yield* invitations.listByInviter(exportGrant, subject.userId)).map(
-            invitationView,
-          ),
-          invitationsReceived: (subject.email === undefined
-            ? []
-            : yield* invitations.listByEmail(exportGrant, subject.email)
-          ).map(invitationView),
-        };
-      });
-  }),
-});
+// ---- invitee identity ------------------------------------------------------------
+
+/** FAMS-002: an invitation names an email address; only an Email-identity user can own one (`emailOf` is already lower-cased, as invitation emails are stored). */
+const ownsEmail = (user: Users.UserRecord, email: string): boolean =>
+  Option.exists(Users.emailOf(user), (own) => own === email);
 
 // ---- plugin ---------------------------------------------------------------------
 
@@ -1906,7 +127,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 ) {
   static readonly layer = AuthPlugin.layer(Organization, {
     ports: [Mailer.Mailer, SqlTransaction.SqlTransaction],
-    handlers: OrganizationHandlers,
+    handlers: OrganizationHandlers.make(Organization),
     contributes: Layer.mergeAll(organizationErasure, organizationExport),
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
@@ -1971,28 +192,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const afterUpdateTeamMemberRole = yield* OrganizationHooks.AfterUpdateTeamMemberRole;
       const beforeRemoveTeamMember = yield* OrganizationHooks.BeforeRemoveTeamMember;
       const afterRemoveTeamMember = yield* OrganizationHooks.AfterRemoveTeamMember;
-
-      /**
-       * JH-001/PERS-001: BEH-EA-090 requires a veto abort to reach the
-       * caller as a typed error naming its `code`, not the bare defect
-       * `Effect.orDie` previously turned every `before*.run(...)` failure
-       * into. Translates `HookPoint.HookAbort` into the shared, wire-shaped
-       * `HookPoint.HookAborted` right where each veto point is run, naming
-       * that point's own id — every other call site's `.pipe(Effect.orDie)`
-       * in this file (a DB-layer invariant violation, never a policy
-       * denial) is unaffected.
-       */
-      const veto = <A>(
-        point: string,
-        effect: Effect.Effect<A, HookPoint.HookAbort>,
-      ): Effect.Effect<A, HookPoint.HookAborted> =>
-        effect.pipe(
-          Effect.catchTag(
-            "HookAbort",
-            (abort) =>
-              new HookPoint.HookAborted({ point, code: abort.code, message: abort.message }),
-          ),
-        );
 
       /** Static statements plus, when dynamic access control is enabled, every custom role this organization has defined. */
       const statementsByRole = (organizationId: string) =>
@@ -2262,8 +461,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           return yield* Effect.fail(new OrganizationApi.OrganizationLimitReached());
         }
 
-        const vetoed = yield* veto(
-          "organization.create.before",
+        const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateOrganization)(
           beforeCreate.run({ callerId, name, slug }),
         );
 
@@ -2348,8 +546,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "update",
           );
           yield* requireKnownRegion(input.homeRegion);
-          const vetoed = yield* veto(
-            "organization.update.before",
+          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateOrganization)(
             beforeUpdate.run({ organizationId, name: input.name, slug: input.slug }),
           );
           const record = yield* orgs
@@ -2383,7 +580,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization",
             "delete",
           );
-          yield* veto("organization.delete.before", beforeDelete.run({ organizationId }));
+          yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteOrganization)(
+            beforeDelete.run({ organizationId }),
+          );
           // OHS-002: the five-table cascade is one transaction — a failure at any
           // step leaves every organization_* row untouched. Hooks and events stay
           // outside it: they only run once the delete has committed.
@@ -2502,8 +701,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (violates) return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
 
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "member", "delete");
-          yield* veto(
-            "organization.member.remove.before",
+          yield* HookPoint.aborted(OrganizationHooks.BeforeRemoveMember)(
             beforeRemove.run({ organizationId, userId: targetUserId }),
           );
           const leftTeams = yield* dropMembership(organizationId, targetUserId);
@@ -2543,8 +741,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "member",
             "update",
           );
-          const vetoed = yield* veto(
-            "organization.member.updateRole.before",
+          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateMemberRole)(
             beforeUpdateRole.run({ organizationId, userId: targetUserId, role }),
           );
           // RRM-001: after the veto hook (a tap may rewrite the role), the
@@ -2596,8 +793,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // PCS-002: `leave` removes a membership like `removeMember` does, so it
           // runs the same remove-member hooks — `DecisionCacheInvalidationLive`
           // (and any other observer) must see a member leaving.
-          yield* veto(
-            "organization.member.remove.before",
+          yield* HookPoint.aborted(OrganizationHooks.BeforeRemoveMember)(
             beforeRemove.run({ organizationId, userId: callerId }),
           );
           const leftTeams = yield* dropMembership(organizationId, callerId);
@@ -2621,8 +817,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         if (count >= (yield* limitsOf(organizationId)).membershipLimit) {
           return yield* Effect.fail(new OrganizationApi.MembershipLimitReached());
         }
-        const vetoed = yield* veto(
-          "organization.member.add.before",
+        const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeAddMember)(
           beforeAdd.run({ organizationId, userId, role }),
         );
         // RRM-001: a trusted, caller-less server-side primitive (SCIM/import) —
@@ -2713,8 +908,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         ) {
           return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
         }
-        const vetoed = yield* veto(
-          "organization.member.updateRole.before",
+        const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateMemberRole)(
           beforeUpdateRole.run({ organizationId, userId, role: roles }),
         );
         const updated = yield* members
@@ -2867,8 +1061,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             yield* requireTeam(organizationId, input.teamId);
           }
 
-          const vetoed = yield* veto(
-            "organization.invitation.create.before",
+          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateInvitation)(
             beforeCreateInvitation.run({ organizationId, email: input.email, role: input.role }),
           );
           // RRM-002: an invitation can only confer statements the inviter holds.
@@ -3027,7 +1220,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const acceptInvitation: OrganizationShape["acceptInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId, token) {
-          yield* veto("organization.invitation.accept.before", beforeAccept.run({ invitationId }));
+          yield* HookPoint.aborted(OrganizationHooks.BeforeAcceptInvitation)(
+            beforeAccept.run({ invitationId }),
+          );
 
           const record = yield* requirePendingInvitation(invitationId, token);
 
@@ -3141,7 +1336,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const rejectInvitation: OrganizationShape["rejectInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId, token) {
-          yield* veto("organization.invitation.reject.before", beforeReject.run({ invitationId }));
+          yield* HookPoint.aborted(OrganizationHooks.BeforeRejectInvitation)(
+            beforeReject.run({ invitationId }),
+          );
 
           const record = yield* requirePendingInvitation(invitationId, token);
           const callerId = Users.UserId(caller.ref.id);
@@ -3163,7 +1360,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const cancelInvitation: OrganizationShape["cancelInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId) {
-          yield* veto("organization.invitation.cancel.before", beforeCancel.run({ invitationId }));
+          yield* HookPoint.aborted(OrganizationHooks.BeforeCancelInvitation)(
+            beforeCancel.run({ invitationId }),
+          );
 
           // MTI-009: a non-member must not be able to tell an existing invitation
           // (or its status) from an unknown one, so membership is checked before
@@ -3307,8 +1506,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             return yield* Effect.fail(new OrganizationApi.RoleLimitReached());
           }
 
-          const vetoed = yield* veto(
-            "organization.role.create.before",
+          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateRole)(
             beforeCreateRole.run({ organizationId, role: input.role }),
           );
 
@@ -3374,8 +1572,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
           }
 
-          yield* veto(
-            "organization.role.update.before",
+          yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateRole)(
             beforeUpdateRoleHook.run({ organizationId, roleId }),
           );
 
@@ -3405,8 +1602,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           yield* requireDynamicAccessControlEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "delete");
           const existing = yield* requireOrgRole(organizationId, roleId);
-          yield* veto(
-            "organization.role.delete.before",
+          yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteRole)(
             beforeDeleteRole.run({ organizationId, roleId }),
           );
           yield* orgRoles
@@ -3471,8 +1667,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (count >= (yield* limitsOf(organizationId)).maximumTeams) {
             return yield* Effect.fail(new OrganizationApi.TeamLimitReached());
           }
-          const vetoed = yield* veto(
-            "organization.team.create.before",
+          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateTeam)(
             beforeCreateTeam.run({ organizationId, name, parentId }),
           );
           const record = yield* teams
@@ -3515,8 +1710,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           yield* requireTeam(organizationId, teamId);
           if (Option.isSome(parentId)) yield* requireTeam(organizationId, parentId.value);
-          const vetoed = yield* veto(
-            "organization.team.move.before",
+          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeMoveTeam)(
             beforeMoveTeam.run({ organizationId, teamId, parentId: Option.getOrNull(parentId) }),
           );
           const moved = yield* teams
@@ -3592,8 +1786,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             teamId,
           );
           yield* requireTeam(organizationId, teamId);
-          const vetoed = yield* veto(
-            "organization.team.update.before",
+          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateTeam)(
             beforeUpdateTeam.run({ organizationId, teamId, name }),
           );
           const updated = yield* teams
@@ -3631,8 +1824,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // OHS-001: refuse before the veto hook runs; the records layer re-checks atomically.
           const below = yield* teams.getDescendants(organizationId, teamId);
           if (below.length > 0) return yield* Effect.fail(new OrganizationApi.TeamHasChildren());
-          yield* veto(
-            "organization.team.delete.before",
+          yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteTeam)(
             beforeDeleteTeam.run({ organizationId, teamId }),
           );
           yield* sqlTransaction
@@ -3692,8 +1884,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         if (team.memberCount >= (yield* limitsOf(organizationId)).maximumMembersPerTeam) {
           return yield* Effect.fail(new OrganizationApi.TeamMemberLimitReached());
         }
-        yield* veto(
-          "organization.team.member.add.before",
+        yield* HookPoint.aborted(OrganizationHooks.BeforeAddTeamMember)(
           beforeAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role }),
         );
         // OHS-003: a second add is refused — it would over-count `memberCount`.
@@ -3736,8 +1927,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             role,
             target.value.role,
           );
-          yield* veto(
-            "organization.team.member.updateRole.before",
+          yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateTeamMemberRole)(
             beforeUpdateTeamMemberRole.run({ organizationId, teamId, userId: targetUserId, role }),
           );
           const updated = yield* teams
@@ -3776,8 +1966,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             teamId,
           );
           yield* requireTeam(organizationId, teamId);
-          yield* veto(
-            "organization.team.member.remove.before",
+          yield* HookPoint.aborted(OrganizationHooks.BeforeRemoveTeamMember)(
             beforeRemoveTeamMember.run({ organizationId, teamId, userId: targetUserId }),
           );
           yield* teams

@@ -32,6 +32,22 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 
 Core domain services (`Sessions`, `Users`, `AuthEvents`, `AuditLog`) and the plugin's own records are simply `yield*`ed inside `make`; nothing is declared. Declare `dependsOn: [OtherPlugin]` only when your plugin needs _another plugin's_ contribution to be composed first (it also orders migrations and makes `Auth.make` refuse cycles, BEH-EA-016). `admin/src/Admin.ts` explains why it needs no `dependsOn` despite using three core services. If your plugin also reads a table another plugin owns, list it in `readsTables` on `AuthPlugin.Service`; `Auth.make` then refuses the composition unless that plugin is in `dependsOn` (JH-007). Order the plugin tuple dependencies-first (`Auth.make([Password, TwoFactor])`): a dependent listed before its dependency does not type-check (JH-006). A plugin's layer may only _require_ ports (`PasswordHasher`, `Mailer`, ...), never provide one (JH-008), and two plugins overriding one slot fail the composed layer with `SlotConflict` (MA-005).
 
+## Exposing a system interface (ADR-EA-040)
+
+When a plugin has trusted callers (another plugin, a job, application code), it does not let them write its tables. It exposes a **system interface** beside its own service: a `Context.Service` keyed `awthaq/plugin/<id>/<Name>` whose methods take an explicit actor (who acted, for audit and hook taps) and never an `Api.UserPrincipal`. The interface owns its invariants, its veto and observe points, its events and its transaction, so every caller gets them. The plugin's own service then shrinks to the authorized layer: who may call what.
+
+```ts
+static readonly layer = AuthPlugin.layer(Notes, {
+  exposes: { services: [NoteVault], layer: NoteVaultLive }, // keys must be awthaq/plugin/notes/...
+  make: Effect.gen(function* () {
+    const vault = yield* NoteVault; // `make` may require what the plugin exposes
+    // ...
+  }),
+});
+```
+
+The compiler checks that every exposed key is in the plugin's own namespace and listed in `services` (so two plugins can never expose one tag). A dependent plugin requires the service with a plain `yield*` and lists the exposer in `dependsOn`; `Auth.make` discharges the requirement through its fold and refuses a dependent that omits `dependsOn`. Bind the exposed layer to a `const` (or build it with `Layer.mergeAll`): an inline single `Layer.succeed(Tag, ...)` does not infer. `awthaq plugin list --graph` prints each plugin's `exposes:`. A plugin still never provides a port.
+
 ## Ports are required, never provided (ADR-EA-010)
 
 A plugin that needs a mailer, a crypto source, a rate limiter or a transaction boundary declares it in its layer's requirements and never builds one. The application provides the implementation. The template requires `Crypto` and `SqlClient` and provides neither. Inside a records service, do not reach into another plugin's tables.

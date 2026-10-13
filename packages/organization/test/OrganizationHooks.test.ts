@@ -17,6 +17,9 @@ import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as Fs from "node:fs";
+import * as Path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -97,7 +100,7 @@ describe("OrganizationHooks (BEH-EA-089-096, ticket 19)", () => {
               error._tag === "HookAborted" ? Effect.succeed(error) : Effect.die(error),
             ),
           );
-        assert.strictEqual(aborted.point, "organization.create.before");
+        assert.strictEqual(aborted.point, OrganizationHooks.BeforeCreateOrganization.id);
         assert.strictEqual(aborted.code, "SLUG_FORBIDDEN");
 
         const record = yield* organization.create({
@@ -143,7 +146,7 @@ describe("OrganizationHooks (BEH-EA-089-096, ticket 19)", () => {
             error._tag === "HookAborted" ? Effect.succeed(error) : Effect.die(error),
           ),
         );
-        assert.strictEqual(aborted.point, "organization.team.create.before");
+        assert.strictEqual(aborted.point, OrganizationHooks.BeforeCreateTeam.id);
         assert.strictEqual(aborted.code, "TEAM_NAME_FORBIDDEN");
 
         const teams = yield* organization.listTeams(owner, record.id);
@@ -160,4 +163,21 @@ describe("OrganizationHooks (BEH-EA-089-096, ticket 19)", () => {
         ),
       ),
   );
+});
+
+// Plan 04, G5: a veto point is named by its class (`HookPoint.aborted(BeforeX)`), never by a string id
+// a hand-typed literal could misspell. The ids are written in exactly one file.
+describe("organization hook point ids", () => {
+  it("no `organization.*.before` string literal exists outside OrganizationHooks.ts", () => {
+    const sourceDir = Path.join(Path.dirname(fileURLToPath(import.meta.url)), "..", "src");
+    const files = Fs.readdirSync(sourceDir, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith(".ts") && file !== "OrganizationHooks.ts")
+      .sort();
+    const offenders = files.filter((file) =>
+      /"organization\.[a-zA-Z.]+\.before"/.test(
+        Fs.readFileSync(Path.join(sourceDir, file), "utf8"),
+      ),
+    );
+    assert.deepStrictEqual(offenders, []);
+  });
 });

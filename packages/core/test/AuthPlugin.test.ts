@@ -357,6 +357,7 @@ describe("Auth.make", () => {
         hooks: {},
         rateLimits: [],
         ports: [],
+        exposes: [],
         config: [],
         userFields: [],
       });

@@ -1532,3 +1532,32 @@ Other organization suites:
 9. **Q9. qadi for the authorized layer.** The original design keeps `PermissionEngine` for the organization's own endpoints. Do you want a later plan that gates the authorized interface through qadi policies (`requiresPermission` / Path A), with `PermissionEngine` reduced to a resolver?
 10. **Q10. Slice A timing.** Land P0-P2 (the SCIM fix) right after Wave A, ahead of plan 05 (recommended), or keep the strict wave order?
 11. **Q11. RFC 7644 PATCH atomicity.** `applyRoster` makes the member part of one PATCH atomic, but a PATCH that renames *and* changes members is still two module calls. Is a fully atomic multi-operation PATCH required? Check the exact §3.5.2 wording before citing it in the spec. If it is required, `OrganizationTeams` needs a combined `applyGroupChange`.
+
+---
+
+## 11. Decisions taken (implementation, 2026-10-13)
+
+Every open question took the recommended default (the one the plan or `.planning/README.md` names), recorded here and in the final report.
+
+| Q | Decision |
+|---|---|
+| Q1 | Enforce: SCIM Groups answer `403` while `teams.enabled` is `false`; the SCIM README and the changeset say to enable teams. |
+| Q2 | Enforce: deleting the last team is `409` under `allowRemovingAllTeams: false`; directory-driven deployments set it to `true`. The invariant is not actor-dependent. |
+| Q3 | `403` with a SCIM error body for `maximumTeams` and `maximumMembersPerTeam`; no separate directory quota. |
+| Q4 | Accepted: D4 (permission before the owner invariant), so a member without `member:delete` gets `403`, not `409`. |
+| Q5 | Accepted: D7, `AfterAddMember` / `AfterAddTeamMember` fire for every membership created, invitation acceptance and organization creation included. |
+| Q6 | Keep publishing `auth.admin.organizationSuspended` / `Unsuspended` from the Directory module; `suspend` / `reinstate` take a `PlatformAdminActor` only, so `adminUserId` stays required. |
+| Q7 | `Actor` lives in `@awthaq/organization` (`OrganizationActor.ts`); phase 9 adds the structurally identical schema to core for event payloads and `OrganizationActor` re-exports it. Unifying it with `ErasureInitiator` (plan 03) is not done: no caller needs it. |
+| Q8 | `auth.organization.connectionCreated/Updated/Deleted` with an actor are added with the OIDC connection store (phase 5). |
+| Q9 | No: the authorized layer keeps `PermissionEngine`; no later qadi-gated plan is started here. |
+| Q10 | Slice A (phases 0 to 2) landed first, as the first three commits, ahead of phase 3. |
+| Q11 | `applyRoster` makes the member part of one PATCH atomic; a PATCH that renames and changes members stays two module calls. No `applyGroupChange`: no caller needs a combined operation. |
+
+### Plan errors found while implementing
+
+- **Phase 0, `OrganizationHandlers.ts` cannot import `Organization.ts`**: `pnpm circular` counts type-only cycles, and the plugin class imports its handlers. The authorized interface moved to a leaf, `OrganizationShape.ts`, and the handlers are a factory over the service tag (`OrganizationHandlers.make(Organization)`).
+- **Phase 0, declaration emit**: after `organizationErasure` / `organizationExport` left `Organization.ts`, `Organization.layer`'s inferred type could not name `Erasure.ErasureRegistry` (TS2883) unless both namespaces stay imported there; `Organization.PersonalDataRegistries` is the type that keeps them in scope.
+- **Phase 0, docs and template**: `docs/plugin-authoring.md` and `examples/plugin-template` already used `HookPoint.aborted` (plan 05 phase 13), so that step was a no-op.
+- **Line numbers**: `Organization.ts` was 3,879 lines, not 3,766, at the start (plan 05 added witnesses and `StoreFailure`); every range in §2.1 was re-derived.
+- **Next free BEH id** is 329 (plan 05 took 324 to 328), not "319+".
+- **Phase 0, inference**: an inline `Layer.succeed(Tag, ...)` as the only `exposes.layer` infers `XOut` as `never`; bind it to a `const` (ADR-EA-040 records this).

@@ -171,6 +171,15 @@ type PluginDeps<X extends AuthPlugin.Any> = Extract<
 >;
 
 /**
+ * ADR-EA-040: the exposed domain services a plugin's layer requires: keyed
+ * `awthaq/plugin/<id>/<name>`, as opposed to a plugin's own service (`awthaq/plugin/<id>`).
+ */
+type ExposedDeps<X extends AuthPlugin.Any> = Extract<
+  Layer.Services<X["layer"]>,
+  { readonly key: `awthaq/plugin/${string}/${string}` }
+>;
+
+/**
  * `PluginDeps` extracts the *service instance* type (`Ping`, what `yield*
  * Ping` requires — `Context.ServiceClass` makes the class itself
  * `Effect<Shape, never, Self>`, so `RIn` carries `Self`, not `typeof Ping`),
@@ -178,7 +187,30 @@ type PluginDeps<X extends AuthPlugin.Any> = Extract<
  * (BEH-EA-002: `` `awthaq/plugin/${id}` ``) still names the id, in the
  * string itself.
  */
-type IdOf<Dep> = Dep extends { readonly key: `awthaq/plugin/${infer Id}` } ? Id : never;
+type IdOf<Dep> = Dep extends { readonly key: `awthaq/plugin/${infer Rest}` }
+  ? // ADR-EA-040: an exposed service (`awthaq/plugin/<id>/<name>`) belongs to the plugin `<id>`.
+    Rest extends `${infer Id}/${string}`
+    ? Id
+    : Rest
+  : never;
+
+/** ADR-EA-040: a plugin's own services among a requirement union (an exposed service is not a `dependsOn` entry). */
+type OwnDeps<X extends AuthPlugin.Any> = Exclude<PluginDeps<X>, ExposedDeps<X>>;
+
+/**
+ * ADR-EA-040: the first `[exposerId, requiringPluginId]` where a plugin's layer requires a service
+ * the exposer provides but does not list the exposer in `dependsOn` (which is what puts the
+ * exposer's own service in `RIn`), or `never`.
+ */
+type ExposerNotDependedOn<P extends ReadonlyArray<AuthPlugin.Any>> = P[number] extends infer Plugin
+  ? Plugin extends AuthPlugin.Any
+    ? Exclude<IdOf<ExposedDeps<Plugin>>, IdOf<OwnDeps<Plugin>>> extends infer Exposer
+      ? [Exposer] extends [never]
+        ? never
+        : readonly [Exposer, Plugin["id"]]
+      : never
+    : never
+  : never;
 
 /** BEH-EA-011: the first `[missingDepId, requiringPluginId]` pair not present in the tuple, or `never`. */
 type MissingDep<
@@ -240,18 +272,27 @@ type PortProvidedByPlugin<P extends ReadonlyArray<AuthPlugin.Any>> = P[number] e
     : never
   : never;
 
-/** The one problem `Validate<P>` reports for `P`, in a fixed order (duplicate id, missing dependency, order, port), or `never`. */
+/** The one problem `Validate<P>` reports for `P`, in a fixed order (duplicate id, missing dependency, order, exposed service without `dependsOn`, port), or `never`. */
 type FirstProblem<P extends ReadonlyArray<AuthPlugin.Any>> = [DuplicateId<P>] extends [never]
   ? [MissingDep<P>] extends [never]
     ? [OutOfOrderDep<P>] extends [never]
-      ? [PortProvidedByPlugin<P>] extends [never]
-        ? never
-        : PortProvidedByPlugin<P> extends readonly [
-              infer Port extends string,
+      ? [ExposerNotDependedOn<P>] extends [never]
+        ? [PortProvidedByPlugin<P>] extends [never]
+          ? never
+          : PortProvidedByPlugin<P> extends readonly [
+                infer Port extends string,
+                infer By extends string,
+              ]
+            ? {
+                readonly awthaq: `plugin "${By}" provides port "${Port}" — a plugin may only require ports, never provide them`;
+              }
+            : never
+        : ExposerNotDependedOn<P> extends readonly [
+              infer Exposer extends string,
               infer By extends string,
             ]
           ? {
-              readonly awthaq: `plugin "${By}" provides port "${Port}" — a plugin may only require ports, never provide them`;
+              readonly awthaq: `plugin "${By}" requires a service exposed by "${Exposer}" — add ${Exposer} to dependsOn`;
             }
           : never
       : OutOfOrderDep<P> extends readonly [infer Dep extends string, infer By extends string]
@@ -299,6 +340,12 @@ export interface ManifestPort {
   readonly key: string;
 }
 
+/** ADR-EA-040: one namespaced domain service a plugin exposes beside its own service, by service key, declared statically. */
+export interface ManifestExposed {
+  readonly plugin: string;
+  readonly key: string;
+}
+
 /** PV-241/BEH-EA-111: one statically declared rate-limit rule, tagged with the plugin that declared it. */
 export interface ManifestRateLimit extends AuthPlugin.RateLimitDeclaration {
   readonly plugin: string;
@@ -335,6 +382,8 @@ export interface Manifest {
   readonly rateLimits: ReadonlyArray<ManifestRateLimit>;
   /** PV-241/BEH-EA-202: every plugin's declared required ports, in link order and each plugin's own declaration order — static, no Layer evaluated. */
   readonly ports: ReadonlyArray<ManifestPort>;
+  /** ADR-EA-040: every plugin's exposed domain services, in link order and each plugin's own declaration order — static, no Layer evaluated. */
+  readonly exposes: ReadonlyArray<ManifestExposed>;
   /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
   readonly config: ReadonlyArray<ManifestConfig>;
   /** SAM-004: every plugin-declared user field the linker adds a column for, in link order. */
@@ -787,6 +836,9 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
   })),
   hooks: buildHooks(order),
   ports: order.flatMap((plugin) => (plugin.ports ?? []).map((key) => ({ plugin: plugin.id, key }))),
+  exposes: order.flatMap((plugin) =>
+    (plugin.exposes ?? []).map((key) => ({ plugin: plugin.id, key })),
+  ),
   rateLimits: order.flatMap((plugin) =>
     (plugin.rateLimits ?? []).map((rule) => ({ plugin: plugin.id, ...rule })),
   ),

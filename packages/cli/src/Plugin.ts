@@ -38,6 +38,8 @@ export interface GraphNode {
   readonly tenancy: Readonly<Record<string, string>>;
   /** PV-241: the ports the plugin's layer requires (service keys), as it declares them. */
   readonly ports: ReadonlyArray<string>;
+  /** ADR-EA-040: the namespaced domain services the plugin's layer exposes beside its own service (service keys). */
+  readonly exposes: ReadonlyArray<string>;
   /** PV-241: where the plugin's declared taps sit in each point's resolved chain. */
   readonly hooks: ReadonlyArray<{
     readonly point: string;
@@ -82,6 +84,9 @@ export const graph = (auth: LoadedAuth): ReadonlyArray<GraphNode> =>
       ]),
     ),
     ports: auth.manifest.ports.filter((port) => port.plugin === plugin.id).map((port) => port.key),
+    exposes: auth.manifest.exposes
+      .filter((exposed) => exposed.plugin === plugin.id)
+      .map((exposed) => exposed.key),
     hooks: Object.entries(auth.manifest.hooks).flatMap(([key, taps]) =>
       taps.flatMap((tap, position) =>
         tap.plugin === plugin.id
@@ -134,6 +139,7 @@ export const renderText = (nodes: ReadonlyArray<GraphNode>) => [
     `     groups:     ${list(node.groups)}`,
     `     tables:     ${list(node.tables.map((table) => (node.tenancy[table] === undefined ? table : `${table} (${node.tenancy[table]})`)))}`,
     `     ports:      ${list(node.ports)}`,
+    `     exposes:    ${list(node.exposes)}`,
     `     hook taps:  ${list(node.hooks.map((tap) => `${tap.point} #${tap.position} (order ${tap.order})`))}`,
   ]),
   "(ports and taps are the plugins' static declarations; application taps registered in the host run after every declared tap)",

@@ -169,6 +169,7 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
       hooks: {},
       rateLimits: [],
       ports: [],
+      exposes: [],
       config: [],
       userFields: [],
     };

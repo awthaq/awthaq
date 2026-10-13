@@ -164,11 +164,16 @@ describe("plugin list --graph: ports and hook taps", () => {
         { point: "cli.test.normalize", position: 1, order: 5 },
       ]);
       const beta = Plugin.graph(hookedApp).find((node) => node.id === "beta");
+      assert.deepStrictEqual(alpha?.exposes, ["awthaq/plugin/alpha/Lamp"]);
+      assert.deepStrictEqual(beta?.exposes, []);
       assert.deepStrictEqual(beta?.ports, []);
       assert.deepStrictEqual(beta?.hooks, [{ point: "cli.test.normalize", position: 2, order: 0 }]);
       const text = yield* captureStdout(Plugin.show(hookedApp, { graph: true, format: "text" }));
       assert.isTrue(
         text.some((line) => line.includes("ports:") && line.includes("awthaq/ports/Mailer")),
+      );
+      assert.isTrue(
+        text.some((line) => line.includes("exposes:") && line.includes("awthaq/plugin/alpha/Lamp")),
       );
       assert.isTrue(
         text.some((line) => line.includes("hook taps:") && line.includes("cli.test.normalize #1")),

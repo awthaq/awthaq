@@ -105,6 +105,8 @@ export interface Class<
   readonly rateLimitRules: RateLimitModel.Table;
   /** PV-241/BEH-EA-202: the keys of the ports this plugin's layer requires (`AuthPlugin.layer`'s `ports` option), readable without building any layer. */
   readonly ports: ReadonlyArray<string>;
+  /** ADR-EA-040: the keys of the namespaced domain services this plugin's layer exposes beside its own service (`AuthPlugin.layer`'s `exposes` option), readable without building any layer. */
+  readonly exposes: ReadonlyArray<string>;
   /** ECS-008/BEH-EA-229: the configuration inputs this plugin reads, declared statically (none when it has no policy knobs). */
   readonly config: ReadonlyArray<ConfigDescriptor>;
   /**
@@ -199,6 +201,8 @@ export interface Any {
   readonly rateLimitRules?: RateLimitModel.Table;
   /** PV-241: optional so a hand-built plugin value need not declare any. */
   readonly ports?: ReadonlyArray<string>;
+  /** ADR-EA-040: optional so a hand-built plugin value need not declare any. */
+  readonly exposes?: ReadonlyArray<string>;
   /** Optional here (a hand-built `Any` may have none); every plugin made with `Service` carries the list. */
   readonly config?: ReadonlyArray<ConfigDescriptor>;
   /** SAM-004: optional so a hand-built plugin value need not declare any; every plugin made with `Service` carries the record. */
@@ -238,6 +242,11 @@ const noTaps: ReadonlyArray<DeclaredTap> = [];
 const portsByPlugin = new WeakMap<object, ReadonlyArray<string>>();
 
 const noPorts: ReadonlyArray<string> = [];
+
+/** ADR-EA-040: the exposed service keys, kept the same way (known only once `AuthPlugin.layer` runs). */
+const exposesByPlugin = new WeakMap<object, ReadonlyArray<string>>();
+
+const noExposes: ReadonlyArray<string> = [];
 
 /**
  * ELC-006: `AuthPlugin.layer` was called a second time for one plugin class with a
@@ -333,6 +342,7 @@ export const Service =
       dependsOn: noDependencies,
       taps: noTaps,
       ports: noPorts,
+      exposes: noExposes,
     });
     // A regular (not arrow) function, so `this` is whatever the getter is
     // actually read off — `Pong`, say, when a subclass reads `Pong.dependsOn` —
@@ -354,11 +364,18 @@ export const Service =
         return tapsByPlugin.get(this) ?? noTaps;
       },
     });
-    return Object.defineProperty(withLiveTaps, "ports", {
+    const withLivePorts = Object.defineProperty(withLiveTaps, "ports", {
       enumerable: true,
       configurable: true,
       get(this: object): ReadonlyArray<string> {
         return portsByPlugin.get(this) ?? noPorts;
+      },
+    });
+    return Object.defineProperty(withLivePorts, "exposes", {
+      enumerable: true,
+      configurable: true,
+      get(this: object): ReadonlyArray<string> {
+        return exposesByPlugin.get(this) ?? noExposes;
       },
     });
   };
@@ -403,6 +420,57 @@ export type PortsComplete<R, Ports extends ReadonlyArray<PortClass>> = [
 ] extends [never]
   ? unknown
   : { readonly ports: { readonly "declare these required ports": MissingPorts<R, Ports> } };
+
+/** ADR-EA-040: the service keys of a requirement/provision union. */
+export type ServiceKeysOf<S> = S extends { readonly key: infer K extends string } ? K : never;
+
+/**
+ * ADR-EA-040: completeness and namespacing of an `exposes` declaration, checked where
+ * `AuthPlugin.layer` is called. Nothing when every service the exposing layer provides is keyed
+ * `awthaq/plugin/<id>/<name>` and is listed in `services` (and nothing listed is missing from the
+ * layer); otherwise `exposes` becomes a required property whose type names the offending keys. The
+ * namespace rule means two plugins can never expose the same tag, so no implicit slot appears.
+ */
+export type ExposesComplete<Id extends string, XOut, Exposed extends ReadonlyArray<PortClass>> = [
+  Exclude<ServiceKeysOf<XOut> | Exposed[number]["key"], `awthaq/plugin/${Id}/${string}`>,
+] extends [never]
+  ? [Exclude<ServiceKeysOf<XOut>, Exposed[number]["key"]>] extends [never]
+    ? [Exclude<Exposed[number]["key"], ServiceKeysOf<XOut>>] extends [never]
+      ? unknown
+      : {
+          readonly exposes: {
+            readonly "listed in services but not provided by layer": Exclude<
+              Exposed[number]["key"],
+              ServiceKeysOf<XOut>
+            >;
+          };
+        }
+    : {
+        readonly exposes: {
+          readonly "list these exposed services in services": Exclude<
+            ServiceKeysOf<XOut>,
+            Exposed[number]["key"]
+          >;
+        };
+      }
+  : {
+      readonly exposes: {
+        readonly "an exposed service must be keyed awthaq/plugin/<id>/<name>": Exclude<
+          ServiceKeysOf<XOut> | Exposed[number]["key"],
+          `awthaq/plugin/${Id}/${string}`
+        >;
+      };
+    };
+
+/**
+ * ADR-EA-040: the namespaced domain services a plugin exposes beside its own service. `services`
+ * lists the tags (static: the manifest prints them without building a layer); `layer` builds them,
+ * once, beneath `make`, so `make` may require them.
+ */
+export interface Exposes<Exposed, XOut, XE, XR> {
+  readonly services: Exposed;
+  readonly layer: Layer.Layer<XOut, XE, XR>;
+}
 
 /**
  * BEH-EA-008: `dependsOn` declares both migration ordering and a typed
@@ -453,6 +521,10 @@ export function layer<
   Ports extends ReadonlyArray<PortClass> = readonly [],
   CE = never,
   CR = never,
+  Exposed extends ReadonlyArray<PortClass> = readonly [],
+  XOut = never,
+  XE = never,
+  XR = never,
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
@@ -460,18 +532,21 @@ export function layer<
     readonly taps?: Taps;
     readonly ports?: Ports;
     readonly contributes?: Layer.Layer<never, CE, CR>;
+    readonly exposes?: Exposes<Exposed, XOut, XE, XR>;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
-  } & PortsComplete<R | HR | CR, Ports>,
+  } & PortsComplete<R | HR | CR, Ports> &
+    ExposesComplete<Id, XOut, Exposed>,
 ): Layer.Layer<
-  Self | HttpApiGroup.ToService<"auth", Groups>,
-  E | HE | CE,
-  | Exclude<R, Scope.Scope>
-  | Exclude<HR, Self>
+  Self | HttpApiGroup.ToService<"auth", Groups> | XOut,
+  E | HE | CE | XE,
+  | Exclude<R, Scope.Scope | XOut>
+  | Exclude<HR, Self | XOut>
   | InstanceOf<Deps[number]>
   | InstanceOf<Ports[number]>
   | TapPoints<Taps>
-  | Exclude<CR, Self | HttpApiGroup.ToService<"auth", Groups>>
+  | Exclude<CR, Self | XOut | HttpApiGroup.ToService<"auth", Groups>>
+  | XR
 >;
 export function layer<
   Self,
@@ -485,6 +560,10 @@ export function layer<
   Ports extends ReadonlyArray<PortClass> = readonly [],
   CE = never,
   CR = never,
+  Exposed extends ReadonlyArray<PortClass> = readonly [],
+  XOut = never,
+  XE = never,
+  XR = never,
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
@@ -492,16 +571,19 @@ export function layer<
     readonly taps?: Taps;
     readonly ports?: Ports;
     readonly contributes?: Layer.Layer<never, CE, CR>;
+    readonly exposes?: Exposes<Exposed, XOut, XE, XR>;
     readonly make: Effect.Effect<Shape, E, R>;
-  } & PortsComplete<R | CR, Ports>,
+  } & PortsComplete<R | CR, Ports> &
+    ExposesComplete<Id, XOut, Exposed>,
 ): Layer.Layer<
-  Self,
-  E | CE,
-  | Exclude<R, Scope.Scope>
+  Self | XOut,
+  E | CE | XE,
+  | Exclude<R, Scope.Scope | XOut>
   | InstanceOf<Deps[number]>
   | InstanceOf<Ports[number]>
   | TapPoints<Taps>
-  | Exclude<CR, Self>
+  | Exclude<CR, Self | XOut>
+  | XR
 >;
 export function layer<
   Self,
@@ -517,6 +599,10 @@ export function layer<
   Ports extends ReadonlyArray<PortClass> = readonly [],
   CE = never,
   CR = never,
+  Exposed extends ReadonlyArray<PortClass> = readonly [],
+  XOut = never,
+  XE = never,
+  XR = never,
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
@@ -524,6 +610,7 @@ export function layer<
     readonly taps?: Taps;
     readonly ports?: Ports;
     readonly contributes?: Layer.Layer<never, CE, CR>;
+    readonly exposes?: Exposes<Exposed, XOut, XE, XR>;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers?: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
   },
@@ -556,7 +643,16 @@ export function layer<
       options.ports.map((port) => port.key),
     );
   }
-  const own = Layer.effect<Self, Shape, E, R>(plugin, options.make);
+  if (options.exposes !== undefined) {
+    exposesByPlugin.set(
+      plugin,
+      options.exposes.services.map((service) => service.key),
+    );
+  }
+  const ownOnly = Layer.effect<Self, Shape, E, R>(plugin, options.make);
+  // ADR-EA-040: the exposed services are built once, beneath `make`, so `make` may require them and
+  // a dependent plugin's requirement on them is discharged by `Auth.make`'s fold.
+  const own = Layer.provideMerge(ownOnly, options.exposes?.layer ?? Layer.empty);
   const withHandlers = options.handlers ? Layer.provideMerge(options.handlers, own) : own;
   // A plugin's other registry contributions (its erasure/export sections, rate-limit
   // rules, ...): built over the plugin's own service, and what else they require joins
