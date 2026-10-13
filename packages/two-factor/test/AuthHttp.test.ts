@@ -12,18 +12,13 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
-import { Gates, Stores, codeFor, letForkedFibersRun, tokenOf } from "./support/harness.ts";
+import { Gates, codeFor, letForkedFibersRun, tokenOf } from "./support/harness.ts";
 
 const built = Auth.make([Password.Password, TwoFactor.TwoFactor]);
 
 const AppLayer = TestAuth.layer(built, {
-  services: Gates.pipe(
-    Layer.provideMerge(SecondFactor.layer),
-    Layer.provideMerge(Stores),
-    Layer.merge(TestAuth.httpClient.noBreach),
-  ),
+  services: Layer.merge(Gates, TestAuth.httpClient.noBreach),
 });
 
 // One running app, shared by the handler and by the test's own reads of its `Mailer`.

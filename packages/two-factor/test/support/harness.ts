@@ -1,80 +1,34 @@
-// The shared domain-level composition for this plugin's own tests: real in-memory `Users`,
-// `Accounts`, `Sessions`, `Verification`, `AuthEvents` and `AuditLog`, the real `Password` plugin
-// (the first factor), the real `TwoFactor` plugin with both of its gates, the real `Encryption`
-// port over a fixed test key, and argon2id at its smallest legal cost. Only the rate limiter and the
-// plugin's configuration vary per suite.
-import { TestEncryption } from "@awthaq/test";
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Errors,
-  Hooks,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  PasswordHasher,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
+// The shared composition for this plugin's own tests: `Auth.make([Password, TwoFactor])` through `TestAuth.layer`
+// (plan 08): real in-memory `Users`, `Accounts`, `Sessions`, `Verification`, `AuthEvents` and `AuditLog`, the real
+// `Password` plugin (the first factor), the real `TwoFactor` plugin with both of its gates, the real `Encryption`
+// port over a fixed test key, and argon2id at its smallest legal cost. Only the rate limiter and the plugin's
+// configuration vary per suite.
+import { Auth, Errors, Sessions } from "@awthaq/core";
+import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { Authentication, Csrf } from "@awthaq/server";
-import { CoreMigrations } from "@awthaq/sql";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SecondFactor from "../../src/SecondFactor.ts";
 import * as Totp from "../../src/Totp.ts";
 import * as TwoFactor from "../../src/TwoFactor.ts";
 import * as TwoFactorConfig from "../../src/TwoFactorConfig.ts";
-import * as TwoFactorStore from "../../src/TwoFactorStore.ts";
-import { TestAuth } from "@awthaq/test";
-import { TestSql } from "@awthaq/test";
 
-/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
-const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
+/** A fixed test key (what every `TestAuth` composition carries), for a store suite that builds `Persistence.sql()` alone. */
+export const EncryptionLive = TestAuth.encryption;
 
-/** A real hasher (real algorithm, salt and PHC format) at the smallest legal cost, so recovery-code suites stay fast. */
-const TestHasher = PasswordHasher.layerArgon2id.pipe(
-  Layer.provide(
-    ConfigProvider.layer(
-      ConfigProvider.fromEnv({
-        env: { AUTH_ARGON2_MEMORY_KIB: "1024", AUTH_ARGON2_ITERATIONS: "1" },
-      }),
-    ),
-  ),
-  Layer.orDie,
+/** Both gates, provided to the plugin: what `TwoFactor.layer` demands and what a real composition adds. */
+export const Gates = Layer.mergeAll(TwoFactor.sessionGate, TwoFactor.credentialResetGate).pipe(
+  Layer.provideMerge(SecondFactor.layer),
 );
 
-/** A fixed test key, read through `ConfigProvider.fromEnv` so the real process environment is never consulted. */
-export const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+/** A real limiter over the in-memory store (lockout tests need real budgets), or the permissive one. */
+export const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 
 /** Fails `Sessions.issue` with the typed outage while the flag is set (ADR-EA-039: a challenge must survive it). */
 const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
@@ -94,42 +48,7 @@ const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
           ),
       });
     }),
-  ).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
-
-const coreLive = (outage: Ref.Ref<boolean> | undefined) =>
-  Layer.mergeAll(
-    Users.layer.pipe(Layer.provide(Persistence.memory)),
-    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-    outage === undefined
-      ? Sessions.layer.pipe(Layer.provide(Persistence.memory))
-      : sessionsWithOutage(outage),
-    Verification.layer.pipe(Layer.provide(Persistence.memory)),
   );
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("two-factor-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-export const Stores = Layer.mergeAll(
-  TwoFactorStore.layerSecretsMemory,
-  TwoFactorStore.layerRecoveryCodesMemory,
-);
-
-/** Both gates, provided to the plugin: what `TwoFactor.layer` demands and what a real composition adds. */
-export const Gates = Layer.mergeAll(TwoFactor.sessionGate, TwoFactor.credentialResetGate);
-
-/** A real limiter over the in-memory store (lockout tests need real budgets), or the permissive one. */
-export const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 
 export interface BuildOptions {
   readonly config?: Partial<TwoFactorConfig.TwoFactorConfigShape>;
@@ -138,68 +57,30 @@ export interface BuildOptions {
   readonly failSessionIssue?: Ref.Ref<boolean>;
 }
 
-/** The plugins over the shared stores, gates and in-memory domain services (the foundation is added by the caller). */
-const plugins = (outage: Ref.Ref<boolean> | undefined) =>
-  Layer.mergeAll(Password.Password.layer, TwoFactor.TwoFactor.layer).pipe(
-    Layer.provideMerge(Gates),
-    Layer.provideMerge(SecondFactor.layer),
-    Layer.provideMerge(Stores),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(coreLive(outage)),
-  );
+const built = Auth.make([Password.Password, TwoFactor.TwoFactor]);
 
-/** Everything beneath the foundation: ports, rate limits, the transaction port and the plugin's configuration. */
-const beneath =
-  (options: BuildOptions | undefined) =>
-  <TransactionError>(transaction: Layer.Layer<SqlTransaction.SqlTransaction, TransactionError>) =>
-  <A, E, R>(layer: Layer.Layer<A, E, R>) =>
-    layer.pipe(
-      Layer.provideMerge(
-        Layer.mergeAll(
-          TestHasher,
-          Mailer.layerMemory,
-          options?.limiter ?? RateLimiter.layerPermissive,
-        ).pipe(Layer.provideMerge(NodeCrypto.layer)),
-      ),
-      Layer.provideMerge(RateLimits.layer),
-      Layer.provide(TestAuth.httpClient.noBreach),
-      Layer.provide(transaction),
-      Layer.provide(ClientAddress.layerDirect),
-      Layer.provideMerge(TwoFactorConfig.config(options?.config ?? {})),
-    );
+const compose = (options: BuildOptions | undefined) => ({
+  // The configuration and the suite's limiter sit beneath the gates (`sessionGate` reads the config when it is built,
+  // `SecondFactor` spends the failure budget through the limiter) and are merged into the output, so the plugins and
+  // the test read the very instances the gates use.
+  services: Layer.mergeAll(Gates, TestAuth.httpClient.noBreach).pipe(
+    Layer.provideMerge(TwoFactorConfig.config(options?.config ?? {})),
+    Layer.provideMerge(options?.limiter ?? RateLimiter.layerPermissive),
+  ),
+  ...(options?.failSessionIssue === undefined
+    ? {}
+    : { decorate: sessionsWithOutage(options.failSessionIssue) }),
+});
 
-export const buildLayer = (options?: BuildOptions) =>
-  plugins(options?.failSessionIssue).pipe(
-    Layer.provideMerge(TestAuth.memoryFoundation),
-    beneath(options)(SqlTransaction.layerNoop),
-  );
-
-const SqlLive = TestSql.layer("two_factor_harness");
+export const buildLayer = (options?: BuildOptions) => TestAuth.layer(built, compose(options));
 
 /**
- * The same composition with a real database under the audit log and the transaction port
- * (SQLite in memory, the real core migrations), so a rolled-back transaction really erases what
- * was written inside it. Users, sessions and tokens stay in memory.
+ * The same composition over a real database (SQLite in memory, the real core migrations, `records: "sql"`), so a
+ * rolled-back transaction really erases what was written inside it: the audit log, the stores and the tokens are
+ * rows, not `Ref`s.
  */
-export const buildDurableAuditLayer = (options?: BuildOptions) => {
-  const durableFoundation = AuthEvents.layer.pipe(
-    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(
-      Layer.effectDiscard(Migrator.make({})({ loader: CoreMigrations.coreMigrations })).pipe(
-        Layer.provide(SqlLive),
-      ),
-    ),
-  );
-  return plugins(options?.failSessionIssue).pipe(
-    Layer.provideMerge(durableFoundation),
-    beneath(options)(SqlTransaction.layerSql.pipe(Layer.provide(SqlLive))),
-  );
-};
+export const buildDurableAuditLayer = (options?: BuildOptions) =>
+  TestAuth.layer(built, { ...compose(options), records: "sql", suite: "two_factor_harness" });
 
 /** Lets fibers the plugins fork (mail dispatch) run before a test reads their result. */
 export const letForkedFibersRun = Effect.gen(function* () {
