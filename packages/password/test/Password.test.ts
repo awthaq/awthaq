@@ -1336,6 +1336,27 @@ describe("Password", () => {
   );
 
   it.effect(
+    "BEH-EA-319: reauthenticate on a session that ended mid-request is Unauthenticated, not a defect",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const sessions = yield* Sessions.Sessions;
+        const issued = yield* password.signUp({ email, password: strongPassword });
+        // The middleware verified the session; then it was revoked before the write.
+        yield* sessions.revoke(issued.session.id, "signOut");
+
+        const failure = yield* password
+          .reauthenticate({
+            userId: issued.session.userId,
+            currentSessionId: issued.session.id,
+            currentPassword: strongPassword,
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Unauthenticated");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
     "shipping-gaps/12: signIn is actually throttled once its own rule's limit is exceeded",
     () =>
       Effect.gen(function* () {

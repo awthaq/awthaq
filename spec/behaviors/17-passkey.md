@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-17 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Amended BEH-EA-130/131's requirements with the user-presence and config-gated user-verification policy; added BEH-EA-255 (registration requires a fresh session), BEH-EA-256 (Conditional Create) and BEH-EA-257 (one stable random user handle), which the shipped code already enforced; banner replaced with implementation pointers (BPAS-007, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Amended BEH-EA-130/131's requirements with the user-presence and config-gated user-verification policy; added BEH-EA-255 (registration requires a fresh session), BEH-EA-256 (Conditional Create) and BEH-EA-257 (one stable random user handle), which the shipped code already enforced; banner replaced with implementation pointers (BPAS-007, CCR-EA-006) <br> 1.2 (2026-10-13): `POST /passkey/reauthenticate/verify` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) |
 ---
 
 > Status: implemented in `packages/passkey` (`Passkey.ts`, `ChallengeStore.ts`, `PasskeyApi.ts`, `PasskeyCredentials.ts`, `PasskeyUserHandles.ts`; tests `packages/passkey/test`, `packages/ports/test/WebAuthn.test.ts`; the Gherkin scenarios are wired). The `@awthaq/passkey` plugin, the `WebAuthn` port (`@awthaq/ports`, `layerSimpleWebAuthn` over `@simplewebauthn/server`) and the browser layer (`@awthaq/client`'s `passkeyClient`) are implemented and tested against every behavior below; the requirements state what the shipped code enforces. Known remaining gaps are listed in `packages/passkey/README.md` ("Limits").
@@ -217,6 +217,8 @@ REQUIREMENT: `registerOptions`, `registerOptionsConditional` and `registerVerify
 ```
 
 A passkey is a new way to sign in to the account, so enrolling one is as sensitive as changing the password: a session hijacked an hour ago must not be able to plant a credential that outlives it. The check is the same freshness rule the `reauth` obligation (BEH-EA-165) applies, read from the session's `authenticatedAt` (`Sessions.isStale`), and it runs on both the options call and the verify call so a challenge obtained while fresh cannot be redeemed after the window closes. `PasskeyReauthRequired` carries the window so a client can drive the step-up ceremony (`passkey.reauthenticate`) and retry.
+
+**Step-up ends mid-request (BEH-EA-319).** `POST /passkey/reauthenticate/verify` advances the caller's own session through `Sessions.reauthenticate(userId, sessionId, amr)`; if that session ended between the middleware's check and the write, the answer is `Unauthenticated` (401), not a defect.
 
 _Previous: [BEH-EA-136](17-passkey.md#beh-ea-136-typed-errors-are-enumeration-safe) | Next: [BEH-EA-256](17-passkey.md#beh-ea-256-conditional-create-is-a-separate-config-gated-ceremony-with-its-own-challenge-scope)_
 

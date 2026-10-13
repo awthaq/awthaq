@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-15 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): `POST /password/reauthenticate` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) |
 ---
 
 > Implemented in `@awthaq/password` (`packages/password/src`; tests `packages/password/test`, wired scenarios in `features/`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -29,6 +29,8 @@ REQUIREMENT: `password.signUp` MUST create the user and session in one
 MNA-001/WPS-004: `signUp`, `signIn` and `changePassword` deliver the session through `@awthaq/server`'s shared `SessionDelivery` — the session cookie by default, or, when the request carries `X-Awthaq-Token-Delivery: bearer`, the raw token in the response's optional `token` field with no cookie (an unrecognised value answers `400 InvalidTokenDelivery` before anything is minted; BEH-EA-066).
 
 CSD-003: every session the password plugin mints (`signUp`, `signIn`, and the rotated one `changePassword` returns) records the request's resolved client address (through the `ClientAddress` port) and its `User-Agent`, bounded to 512 characters, so the session device list (BEH-EA-054) has data; `@awthaq/oauth`'s callback and `@awthaq/passkey`'s `authenticateVerify` do the same.
+
+**Step-up (BEH-EA-319).** `POST /password/reauthenticate` re-verifies the current password and then advances the caller's own session through `Sessions.reauthenticate(userId, sessionId, ["pwd"])`. If that session ended (revoked, superseded, expired) between the middleware's check and the write, the answer is `Unauthenticated` (401), not a defect.
 
 ERS-002/EEM-002: the dispatch is owned, not fire-and-forget: `@awthaq/core`'s `MailDispatch` runs each mail in a `FiberSet` in the plugin's scope, retries a `retryable` `MailDeliveryFailed` (`Mailer.send`'s typed failure) with jittered exponential backoff, bounds concurrent sends, publishes `auth.mail.failed` (template and user id, never the recipient or token) when a mail is lost, and on shutdown waits up to `drainTimeout` for in-flight mail before interrupting the rest. The three background mails (sign-up verification, reset, resend) share it; an authenticated flow such as an organization invitation surfaces `MailDeliveryFailed` to its caller instead.
 

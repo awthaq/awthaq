@@ -1331,7 +1331,10 @@ export interface SessionsRepositoryShape {
    */
   readonly reauthenticate: (
     id: SessionId,
-    authenticatedAt: DateTime.Utc,
+    /** BEH-EA-319: the row must belong to this user. */
+    userId: UserId,
+    /** The new `authenticatedAt`, and the instant liveness is judged at: a tombstoned or expired row is `NoSuchElementError`. */
+    now: DateTime.Utc,
     /** THS-003: the already-unioned `amr` JSON to store; `undefined` leaves it untouched. */
     amr?: string,
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
@@ -1670,21 +1673,26 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
     const reauthenticateQuery = SqlSchema.findOne({
       Request: Schema.Struct({
         id: SessionId,
-        authenticatedAt: models.wire.dateTime,
+        userId: UserId,
+        now: models.wire.dateTime,
         amr: Schema.NullOr(Schema.String),
       }),
       Result: models.Session,
       execute: (request) => sql`
           UPDATE sessions
-          SET "authenticatedAt" = ${request.authenticatedAt},
+          SET "authenticatedAt" = ${request.now},
               "amr" = COALESCE(${request.amr}, "amr")
           WHERE "id" = ${request.id}
+            AND "userId" = ${request.userId}
+            AND "supersededAt" IS NULL
+            AND "absoluteExpiresAt" > ${request.now}
+            AND "idleExpiresAt" > ${request.now}
           RETURNING *
         `,
     });
 
-    const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, authenticatedAt, amr) =>
-      reauthenticateQuery({ id, authenticatedAt, amr: amr ?? null }).pipe(
+    const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, userId, now, amr) =>
+      reauthenticateQuery({ id, userId, now, amr: amr ?? null }).pipe(
         Effect.flatMap(revealSession),
         traced("Sessions.reauthenticate", { id }),
       );

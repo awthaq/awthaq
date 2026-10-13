@@ -737,6 +737,38 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
       }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect(
+    "BEH-EA-319: reauthenticateVerify on a session that ended mid-request is Unauthenticated",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const sessions = yield* Sessions.Sessions;
+        const { userId, sessionId } = yield* registerNewUser("ended@example.com");
+        const options = yield* passkey.reauthenticateOptions(userId, sessionId);
+        yield* sessions.revoke(Sessions.SessionId(sessionId), "signOut");
+
+        const failure = yield* passkey
+          .reauthenticateVerify(userId, sessionId, {
+            credential: {
+              id: "cred-mock-1",
+              rawId: "cred-mock-1",
+              type: "public-key",
+              response: {
+                clientDataJSON: buildClientDataJSON({
+                  type: "webauthn.get",
+                  challenge: extractChallenge(options),
+                  origin: ORIGIN,
+                }),
+                authenticatorData: "",
+                signature: "",
+              },
+            },
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Unauthenticated");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("reauthenticateVerify requires user verification unconditionally", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;

@@ -525,8 +525,13 @@ export interface SessionsShape {
    * proving event a caller invokes directly (e.g.
    * `@awthaq/password`/`@awthaq/passkey`'s own `reauthenticate` endpoints),
    * not a passive idle refresh, so it gets its own always-available method.
+   *
+   * BEH-EA-319: advances only a live session owned by `userId` (the same
+   * rule as `findOwned`); a tombstoned, expired, foreign or absent row is
+   * `SessionNotFound` and is left untouched.
    */
   readonly reauthenticate: (
+    userId: UserId,
     id: SessionId,
     /** THS-003: methods this step-up just proved; unioned into the session's `amr` (monotone — never removed). */
     amr?: ReadonlyArray<AuthMethod>,
@@ -1183,12 +1188,15 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         findOwned(userId, id).pipe(Effect.map(Option.isSome));
 
       const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(
-        function* (id, amr) {
+        function* (userId, id, amr) {
           const now = yield* DateTime.now;
           const updated = yield* Ref.modify(
             state,
             (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
-              const current = HashMap.get(s, id);
+              const current = Option.filter(
+                HashMap.get(s, id),
+                (r) => r.userId === userId && isLiveAt(now, r),
+              );
               if (Option.isNone(current)) return [Option.none(), s] as const;
               const refreshed: SessionRow = {
                 ...current.value,
@@ -1720,11 +1728,14 @@ export const layerSql: Layer.Layer<
       findOwned(userId, id).pipe(Effect.map(Option.isSome));
 
     const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(
-      function* (id, amr) {
+      function* (userId, id, amr) {
         const now = yield* DateTime.now;
         const notFound = () =>
           Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id }));
         // THS-003: union the newly proven methods into the stored `amr` (monotone).
+        // BEH-EA-319: a dead or foreign row is `notFound` here already; the UPDATE's own
+        // WHERE repeats the guard, so a row that dies between the read and the write is
+        // still refused.
         const unioned =
           amr === undefined || amr.length === 0
             ? undefined
@@ -1734,7 +1745,7 @@ export const layerSql: Layer.Layer<
                   NoSuchElementError: notFound,
                 }),
               );
-        const row = yield* repo.reauthenticate(id, now, unioned).pipe(
+        const row = yield* repo.reauthenticate(id, userId, now, unioned).pipe(
           Effect.catchTags({
             NoSuchElementError: notFound,
           }),

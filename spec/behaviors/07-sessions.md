@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-07 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) |
 
 ---
 
@@ -202,3 +202,26 @@ REQUIREMENT: How a session was authenticated MUST reach an authorization
 ```
 
 The mapping (NIST SP 800-63B): knowledge (`pwd`) and possession (`hwk`, `swk`, `otp`, `sms`, `email`) are different classes; a key method with user verification (`user`) is a multi-factor authenticator; `mfa` states multiple factors outright; `fed` counts for nothing (a federated sign-in is as strong as the identity provider says, which awthaq cannot see). aal3 needs a hardware-bound key with user verification (`hwk` + `user`). A passkey session records `hwk` for a device-bound credential and `swk` for a synced one, plus `user` when the authenticator verified the user (HSK-005), so a policy can require `amr contains "hwk"`. A password plus SMS reaches aal2 nominally but `Assurance.satisfies` ignores a restricted factor unless the caller opts in. A policy states `hasAttribute("aal", oneOf("aal2", "aal3"))` instead of enumerating method combinations.
+
+## BEH-EA-319: `reauthenticate` advances only a live session the caller owns
+
+> **See:** [BEH-EA-051](07-sessions.md#beh-ea-051-a-session-carries-independent-absolute-and-idle-expiries-idle-refresh-never-extends-the-absolute-deadline), [BEH-EA-053](07-sessions.md#beh-ea-053-a-new-session-is-issued--never-reused--at-sign-in-and-at-privilege-change-the-superseded-row-is-tombstoned-atomically-with-the-new-rows-insertion)
+
+```ts
+yield* sessions.reauthenticate(userId, sessionId, ["pwd"])
+// fails Sessions/NotFound for an absent, foreign, tombstoned or expired session
+```
+
+```text
+REQUIREMENT: `Sessions.reauthenticate(userId, id, amr?)` MUST set
+             `authenticatedAt` (and union `amr`) only on a session that is
+             owned by `userId` and live: not tombstoned (BEH-EA-053) and past
+             neither the absolute nor the idle expiry (BEH-EA-051) -- the
+             same rule as `findOwned`. For an absent, foreign, tombstoned or
+             expired session it MUST fail `SessionNotFound` and MUST leave
+             the row unchanged. The check and the write MUST be one atomic
+             step in each layer (the SQL `UPDATE`'s own `WHERE` carries the
+             owner and liveness predicates).
+```
+
+A dead or foreign session is "absent", the answer `findOwned` and `isLive` already give, and not `SessionExpired`: that error answers a *presented credential* and carries a cookie-clearing meaning `reauthenticate` has no use for. The tombstoned row of a rotated session is kept for reuse detection (BEH-EA-053), so it must never receive a fresh `authenticatedAt`. `POST /password/reauthenticate` and `POST /passkey/reauthenticate/verify` turn `SessionNotFound` into `Unauthenticated` (401): the session the middleware verified ended between that check and the write (the password path holds a full hash verification in between), which is "no longer authenticated", not an invariant violation.

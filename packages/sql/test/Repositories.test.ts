@@ -230,7 +230,8 @@ describe("Repositories (SQLite specifics)", () => {
         const next = yield* insertSession(user.id, "h3", now);
         yield* sessions.tombstone({ id: session.id, supersededBy: next.id, supersededAt: now });
         yield* sessions.markReused(session.id, now);
-        yield* sessions.reauthenticate(next.id, now);
+        // `next` expires at `now`; reauthenticate judges liveness at its instant, so use one second earlier.
+        yield* sessions.reauthenticate(next.id, user.id, DateTime.subtract(now, { seconds: 1 }));
         yield* accounts.insert(
           yield* M.Account.insert.makeEffect({
             userId: user.id,

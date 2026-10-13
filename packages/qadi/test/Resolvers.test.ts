@@ -142,7 +142,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         });
 
         yield* TestClock.adjust(Duration.seconds(301));
-        yield* sessions.reauthenticate(session.id);
+        yield* sessions.reauthenticate(user.id, session.id);
 
         yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
           Effect.provideService(Api.CurrentPrincipal, principal),

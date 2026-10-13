@@ -504,7 +504,7 @@ export interface PasswordShape {
   /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
    * (AAPS-001): re-verifies `currentPassword` and, on success, calls
-   * `Sessions.reauthenticate(currentSessionId)` — refreshes the session's
+   * `Sessions.reauthenticate(userId, currentSessionId)` — refreshes the session's
    * own `authenticatedAt` without superseding it (distinct from
    * `changePassword`, which mints a fresh session because the credential
    * itself changed).
@@ -513,7 +513,10 @@ export interface PasswordShape {
     readonly userId: Users.UserId;
     readonly currentSessionId: Sessions.SessionId;
     readonly currentPassword: Redacted.Redacted<string>;
-  }) => Effect.Effect<void, PasswordApi.WrongPassword | Api.RateLimited | Errors.StoreUnavailable>;
+  }) => Effect.Effect<
+    void,
+    PasswordApi.WrongPassword | Api.RateLimited | Api.Unauthenticated | Errors.StoreUnavailable
+  >;
 }
 
 const { toHex } = Hmac;
@@ -1828,19 +1831,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
           return yield* Effect.fail(new PasswordApi.WrongPassword());
         }
-        yield* sessions.reauthenticate(input.currentSessionId, ["pwd"]).pipe(
-          Effect.catchTag("Sessions/NotFound", () =>
-            // `changePassword`'s own `Authentication` middleware already
-            // proved this exact session live moments ago — a
-            // `SessionNotFound` here would mean it was revoked in the
-            // narrow window since, a race this endpoint has no
-            // request-level recovery for.
-            Defects.invariantViolation(
-              "RowVanished",
-              "awthaq: reauthenticate's own current session vanished",
-            ),
-          ),
-        );
+        // BEH-EA-319: the middleware proved this session live before the password
+        // hash ran; if it ended since (revoked, superseded, expired), the caller
+        // is no longer authenticated: 401, the same answer a session revoked
+        // between verify and read gets elsewhere (EHA-009).
+        yield* sessions
+          .reauthenticate(input.userId, input.currentSessionId, ["pwd"])
+          .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.fail(new Api.Unauthenticated())));
       });
 
       return Password.of({

@@ -34,7 +34,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
 | [spec/decisions/](decisions/) | `ADR-EA-001`–`034` | Thirty-two architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
-| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`318` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
+| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`319` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -110,7 +110,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `04-contract-stratum.md` | 025–032 | The Contract Stratum |
 | `05-persistence-stratum.md` | 033–040 | The Persistence Stratum |
 | `06-domain-users-accounts.md` | 041–048, 254 | Users and Accounts |
-| `07-sessions.md` | 049–056 | Sessions |
+| `07-sessions.md` | 049–056, 319 | Sessions |
 | `08-verification-tokens.md` | 057–064 | Verification Tokens |
 | `09-authentication-middleware.md` | 065–072 | Authentication Middleware |
 | `10-csrf.md` | 073–080 | CSRF Protection |

@@ -875,6 +875,8 @@ export const contractCases = (
             yield* M.User.insert.makeEffect({ email: "rotation@example.com", name: "R" }),
           );
           const now = yield* DateTime.now;
+          // Live for an hour: `reauthenticate` refuses a dead row (BEH-EA-319).
+          const expires = DateTime.addDuration(now, Duration.hours(1));
           const make = (hash: string) =>
             sessions.insert(
               M.Session.insert.make({
@@ -882,8 +884,8 @@ export const contractCases = (
                 secretHash: hash,
                 ipAddress: null,
                 userAgent: null,
-                absoluteExpiresAt: now,
-                idleExpiresAt: Model.Override(now),
+                absoluteExpiresAt: expires,
+                idleExpiresAt: Model.Override(expires),
                 actingAsType: null,
                 actingAsId: null,
                 familyId: Schema.decodeUnknownSync(Models.SessionId)("family-1"),
@@ -909,11 +911,26 @@ export const contractCases = (
           assert.isNotNull(reread.reusedAt);
 
           const later = DateTime.addDuration(now, Duration.minutes(5));
-          const reauthenticated = yield* sessions.reauthenticate(fresh.id, later);
+          const reauthenticated = yield* sessions.reauthenticate(fresh.id, user.id, later);
           assert.strictEqual(
             DateTime.toEpochMillis(reauthenticated.authenticatedAt),
             DateTime.toEpochMillis(later),
           );
+          // BEH-EA-319: the UPDATE's own WHERE refuses a foreign owner, a tombstoned row and an
+          // expired instant (the 'old' row is tombstoned; 'fresh' expires an hour out).
+          const other = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "rotation-other@example.com", name: "O" }),
+          );
+          const foreign = yield* sessions
+            .reauthenticate(fresh.id, other.id, later)
+            .pipe(Effect.flip);
+          assert.strictEqual(foreign._tag, "NoSuchElementError");
+          const dead = yield* sessions.reauthenticate(old.id, user.id, later).pipe(Effect.flip);
+          assert.strictEqual(dead._tag, "NoSuchElementError");
+          const past = yield* sessions
+            .reauthenticate(fresh.id, user.id, DateTime.addDuration(now, Duration.hours(2)))
+            .pipe(Effect.flip);
+          assert.strictEqual(past._tag, "NoSuchElementError");
 
           yield* sessions.revokeFamily(Schema.decodeUnknownSync(Models.SessionId)("family-1"));
           // The tombstoned row survives (its lineage is evidence); the live row is gone.

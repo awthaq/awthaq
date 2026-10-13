@@ -550,6 +550,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCredentialNotFound
     | PasskeyApi.PasskeyCounterAnomaly
+    | Api.Unauthenticated
     | Errors.StoreUnavailable
   >;
   readonly authenticateOptions: (input: {
@@ -1750,17 +1751,13 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
             .pipe(Effect.orDie);
 
-          yield* sessions.reauthenticate(Sessions.SessionId(sessionId), passkeyAmr(verified)).pipe(
-            Effect.catchTag("Sessions/NotFound", () =>
-              // `passkey.reauthenticate`'s own `Authentication` middleware
-              // already proved this exact session live moments ago — see
-              // `Password.ts`'s own identical `reauthenticate` comment.
-              Defects.invariantViolation(
-                "RowVanished",
-                "awthaq: reauthenticate's own current session vanished",
-              ),
-            ),
-          );
+          // BEH-EA-319: ended since the middleware's verify (revoked, superseded,
+          // expired) is "no longer authenticated": 401, not a defect.
+          yield* sessions
+            .reauthenticate(userId, Sessions.SessionId(sessionId), passkeyAmr(verified))
+            .pipe(
+              Effect.catchTag("Sessions/NotFound", () => Effect.fail(new Api.Unauthenticated())),
+            );
         },
       );
 

@@ -334,7 +334,7 @@ const suite = (
           const sessions = yield* Sessions.Sessions;
           const { session, token } = yield* sessions.issue({ userId });
           yield* TestClock.adjust(Duration.seconds(30));
-          const reauthenticated = yield* sessions.reauthenticate(session.id);
+          const reauthenticated = yield* sessions.reauthenticate(userId, session.id);
           assert.isAbove(
             DateTime.toEpochMillis(reauthenticated.authenticatedAt),
             DateTime.toEpochMillis(session.authenticatedAt),
@@ -358,10 +358,57 @@ const suite = (
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const failure = yield* sessions
-          .reauthenticate(Sessions.SessionId("does-not-exist"))
+          .reauthenticate(userId, Sessions.SessionId("does-not-exist"))
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
+    );
+
+    // BEH-EA-319: reauthenticate advances only a live session the caller owns.
+    it.effect("BEH-EA-319: reauthenticate refuses a superseded (tombstoned) session", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        yield* sessions.issue({ userId, supersedes: a.session.id });
+        yield* TestClock.adjust(Duration.seconds(30));
+        const failure = yield* sessions.reauthenticate(userId, a.session.id).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BEH-EA-319: reauthenticate refuses an expired session", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        // idle is 500ms: past idle only.
+        yield* TestClock.adjust(Duration.millis(600));
+        const failure = yield* sessions.reauthenticate(userId, session.id).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect(
+      "BEH-EA-319: reauthenticate refuses another user's session and leaves it unchanged",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const other = Users.UserId("22222222-2222-2222-2222-222222222222");
+          const { session } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.seconds(30));
+          const failure = yield* sessions
+            .reauthenticate(other, session.id, ["otp"])
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
+          const owned = yield* sessions.findOwned(userId, session.id);
+          assert.isTrue(Option.isSome(owned));
+          if (Option.isSome(owned)) {
+            assert.strictEqual(
+              DateTime.toEpochMillis(owned.value.authenticatedAt),
+              DateTime.toEpochMillis(session.authenticatedAt),
+            );
+            assert.deepStrictEqual(owned.value.amr, []);
+          }
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("BEH-EA-052: idle refresh is throttled to at most one write per touchEvery", () =>
@@ -647,9 +694,9 @@ const suite = (
         Effect.gen(function* () {
           const sessions = yield* Sessions.Sessions;
           const { session } = yield* sessions.issue({ userId, amr: ["pwd"] });
-          const stepped = yield* sessions.reauthenticate(session.id, ["otp", "pwd", "mfa"]);
+          const stepped = yield* sessions.reauthenticate(userId, session.id, ["otp", "pwd", "mfa"]);
           assert.deepStrictEqual(stepped.amr, ["pwd", "otp", "mfa"]);
-          const plain = yield* sessions.reauthenticate(session.id);
+          const plain = yield* sessions.reauthenticate(userId, session.id);
           assert.deepStrictEqual(plain.amr, ["pwd", "otp", "mfa"]);
         }).pipe(Effect.provide(layer)),
     );

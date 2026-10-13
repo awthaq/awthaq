@@ -3,7 +3,7 @@
 // hardcodes an actor — pronoun steps resolve the current actor from the World's registry.
 import { defineSteps } from "@effect-cucumber/vitest";
 import { Hmac } from "@awthaq/ports";
-import { SecretHash } from "@awthaq/core";
+import { SecretHash, Sessions, Users } from "@awthaq/core";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,7 @@ import {
   countSessionRows,
   gateAdmitted,
   getSession,
+  inApp,
   mailedTo,
   nowMillis,
   pinSessionSecret,
@@ -681,6 +682,49 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
         (yield* getSession("/session", (yield* actors.get(sessionName)).cookie)).status,
         401,
       );
+    },
+  );
+
+  // ---- REQ-EA-1276 (BEH-EA-319): reauthenticate advances only a live session ----
+
+  When(
+    "{string} reauthenticates the superseded session {string} a minute later",
+    function* (name: string, sessionName: string) {
+      const { snapshots, texts } = yield* World;
+      const original = yield* snapshots.get(`session:${sessionName}`);
+      yield* advance(Duration.minutes(1));
+      const outcome = yield* inApp(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const userId = Users.UserId(column(original, "userId"));
+          const id = Sessions.SessionId(column(original, "id"));
+          return yield* sessions.reauthenticate(userId, id).pipe(
+            Effect.match({
+              onFailure: (failure) => failure._tag,
+              onSuccess: () => "reauthenticated",
+            }),
+          );
+        }),
+      );
+      yield* texts.set(`reauthenticate:${name}`, outcome);
+    },
+  );
+
+  Then(
+    "the reauthentication of {string} is refused as a missing session",
+    function* (name: string) {
+      const { texts } = yield* World;
+      assert.equal(yield* texts.get(`reauthenticate:${name}`), "Sessions/NotFound");
+    },
+  );
+
+  Then(
+    "session {string}'s row keeps its original authentication time",
+    function* (sessionName: string) {
+      const { snapshots } = yield* World;
+      const original = yield* snapshots.get(`session:${sessionName}`);
+      const row = yield* readSessionRow(column(original, "id"));
+      assert.equal(column(row, "authenticatedAt"), column(original, "authenticatedAt"));
     },
   );
 
