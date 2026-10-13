@@ -33,7 +33,8 @@ import {
   Verification,
   VerificationLink,
 } from "@awthaq/core";
-import { Defects, Encryption, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Defects, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { SealedColumn } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -79,13 +80,15 @@ export interface SecondFactorStatus {
 
 export interface SecondFactorShape {
   /** Whether the user has a *confirmed* second factor (a pending, unconfirmed secret does not count). */
-  readonly isEnrolled: (userId: Users.UserId) => Effect.Effect<boolean>;
-  readonly status: (userId: Users.UserId) => Effect.Effect<SecondFactorStatus>;
+  readonly isEnrolled: (userId: Users.UserId) => Effect.Effect<boolean, Errors.StoreUnavailable>;
+  readonly status: (
+    userId: Users.UserId,
+  ) => Effect.Effect<SecondFactorStatus, Errors.StoreUnavailable>;
   /** Stores a fresh pending secret (replacing an earlier unconfirmed one) and returns it once. */
   readonly beginEnrolment: (
     userId: Users.UserId,
     accountName: string,
-  ) => Effect.Effect<EnrolmentSecret, TwoFactorAlreadyEnabled>;
+  ) => Effect.Effect<EnrolmentSecret, TwoFactorAlreadyEnabled | Errors.StoreUnavailable>;
   /**
    * Confirms the pending secret with its first valid code, activates the factor and mints the
    * recovery codes (returned, formatted for display, once). A wrong code spends the failure budget.
@@ -95,30 +98,45 @@ export interface SecondFactorShape {
     code: Redacted.Redacted<string>,
   ) => Effect.Effect<
     ReadonlyArray<string>,
-    InvalidTwoFactorCode | TwoFactorNotEnabled | TwoFactorAlreadyEnabled | SecondFactorLocked
+    | InvalidTwoFactorCode
+    | TwoFactorNotEnabled
+    | TwoFactorAlreadyEnabled
+    | SecondFactorLocked
+    | Errors.StoreUnavailable
   >;
   /** A TOTP code, checked against the confirmed secret and spent (its step can never verify again). */
   readonly verifyTotp: (
     userId: Users.UserId,
     code: Redacted.Redacted<string>,
     purpose: Purpose,
-  ) => Effect.Effect<FactorProof, InvalidTwoFactorCode | SecondFactorLocked>;
+  ) => Effect.Effect<
+    FactorProof,
+    InvalidTwoFactorCode | SecondFactorLocked | Errors.StoreUnavailable
+  >;
   /** A recovery code, checked against every unused hash and spent. */
   readonly verifyRecoveryCode: (
     userId: Users.UserId,
     code: Redacted.Redacted<string>,
     purpose: Purpose,
-  ) => Effect.Effect<FactorProof, InvalidTwoFactorCode | SecondFactorLocked>;
+  ) => Effect.Effect<
+    FactorProof,
+    InvalidTwoFactorCode | SecondFactorLocked | Errors.StoreUnavailable
+  >;
   /** Either: a code shaped like a TOTP is checked as one, anything else as a recovery code. For the endpoints that accept both. */
   readonly check: (
     userId: Users.UserId,
     code: Redacted.Redacted<string>,
     purpose: Purpose,
-  ) => Effect.Effect<FactorProof, InvalidTwoFactorCode | SecondFactorLocked>;
+  ) => Effect.Effect<
+    FactorProof,
+    InvalidTwoFactorCode | SecondFactorLocked | Errors.StoreUnavailable
+  >;
   /** BCR-002: replaces the whole recovery-code set in one transaction; the caller has already verified the user. */
-  readonly regenerateRecoveryCodes: (userId: Users.UserId) => Effect.Effect<ReadonlyArray<string>>;
+  readonly regenerateRecoveryCodes: (
+    userId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<string>, Errors.StoreUnavailable>;
   /** Removes the secret and every recovery code. The caller has already verified the user. */
-  readonly disable: (userId: Users.UserId) => Effect.Effect<void>;
+  readonly disable: (userId: Users.UserId) => Effect.Effect<void, Errors.StoreUnavailable>;
   /** Mints the challenge a divert hands the client (superseding any live one for the account). */
   readonly issueChallenge: (input: {
     readonly userId: Users.UserId;
@@ -146,9 +164,6 @@ export class SecondFactor extends Context.Service<SecondFactor, SecondFactorShap
   "awthaq/two-factor/SecondFactor",
 ) {}
 
-/** AAD binding a secret's envelope to its owner (ADR-EA-020). */
-const secretAad = (userId: Users.UserId): string => `two_factor_secret:${userId}`;
-
 /**
  * BCR-006 (ADR-EA-020): the shared per-account failure budget, declared beside the code that charges
  * it. One bucket across every method and challenge. `TwoFactor`'s rule table lists it (so the registry,
@@ -175,7 +190,6 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const secrets = yield* TwoFactorSecrets;
     const codes = yield* TwoFactorRecoveryCodes;
-    const encryption = yield* Encryption.Encryption;
     const hasher = yield* PasswordHasher.PasswordHasher;
     const verification = yield* Verification.Verification;
     const crypto = yield* Crypto.Crypto;
@@ -231,27 +245,14 @@ export const layer = Layer.effect(
 
     // ---- the secret ---------------------------------------------------------------------------
 
-    /** Decrypts the stored secret (re-encrypting it under the current key when it was written under a retired one). */
+    /**
+     * Opens the stored secret (the substrate re-seals it under the current key, and the canonical AAD, by
+     * compare-and-swap when it was written under a retired one). A secret that does not open, or is not
+     * base32, is a deployment fault, not a wrong code: fail closed as a defect (`SealedColumn.orDie`).
+     */
     const readSecret = Effect.fnUntraced(function* (record: SecretRecord) {
-      const decrypted = yield* encryption.decrypt(record.envelope, secretAad(record.userId)).pipe(
-        Effect.catchTags({
-          DecryptionFailed: () =>
-            Defects.invariantViolation(
-              "TwoFactorSecretUnreadable",
-              "awthaq: a stored two-factor secret failed authentication (wrong key or a moved row)",
-            ),
-          UnknownKeyId: () =>
-            Defects.invariantViolation(
-              "TwoFactorSecretUnreadable",
-              "awthaq: a stored two-factor secret was written under a key the KeyProvider no longer knows",
-            ),
-        }),
-      );
-      if (Option.isSome(decrypted.staleKid)) {
-        const fresh = yield* encryption.encrypt(decrypted.plaintext, secretAad(record.userId));
-        yield* secrets.reencrypt(record.userId, record.envelope, fresh);
-      }
-      return yield* Option.match(Totp.base32Decode(Redacted.value(decrypted.plaintext)), {
+      const opened = yield* SealedColumn.orDie(record.secret.open);
+      return yield* Option.match(Totp.base32Decode(Redacted.value(opened)), {
         onNone: () =>
           Defects.invariantViolation(
             "TwoFactorSecretUnreadable",
@@ -313,9 +314,8 @@ export const layer = Layer.effect(
         // 160 bits (RFC 4226 §4 R6: at least 128, 160 recommended).
         const bytes = yield* crypto.randomBytes(20).pipe(Effect.orDie);
         const secret = Totp.base32Encode(bytes);
-        const envelope = yield* encryption.encrypt(Redacted.make(secret), secretAad(userId));
         // False = a confirmed row appeared meanwhile: still "already enabled", nothing was written.
-        if (!(yield* secrets.upsertPending(userId, envelope))) {
+        if (!(yield* secrets.upsertPending(userId, Redacted.make(secret)))) {
           return yield* Effect.fail(new TwoFactorAlreadyEnabled());
         }
         return {

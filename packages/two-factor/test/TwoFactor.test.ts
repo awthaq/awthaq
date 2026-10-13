@@ -2,7 +2,8 @@
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
 import { AuditLog, AuthEvents, Hooks, SignIn, Users, VerificationLink } from "@awthaq/core";
-import { Encryption, Mailer } from "@awthaq/ports";
+import { Mailer } from "@awthaq/ports";
+import { SealedColumn } from "@awthaq/sql";
 import { Password } from "@awthaq/password";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -182,29 +183,17 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
 });
 
 describe("TwoFactor: secret at rest (THS-004, ADR-EA-020)", () => {
-  it.effect(
-    "the stored secret is an Encryption envelope bound to its user, never the base32 secret",
-    () =>
-      Effect.gen(function* () {
-        const encryption = yield* Encryption.Encryption;
-        const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        const user = yield* enrolledUser("cipher@example.com");
-        const other = yield* enrolledUser("cipher2@example.com");
-        const row = yield* secrets.find(user.userId);
-        if (Option.isNone(row)) return assert.fail("no secret row");
-        assert.notInclude(row.value.envelope, user.secret);
-        // The plaintext is recoverable only with the row's own AAD...
-        const ok = yield* encryption.decrypt(
-          row.value.envelope,
-          `two_factor_secret:${user.userId}`,
-        );
-        assert.strictEqual(Redacted.value(ok.plaintext), user.secret);
-        // ...an envelope moved to another user's row does not authenticate.
-        const moved = yield* encryption
-          .decrypt(row.value.envelope, `two_factor_secret:${other.userId}`)
-          .pipe(Effect.flip);
-        assert.strictEqual(moved._tag, "DecryptionFailed");
-      }).pipe(Effect.provide(buildLayer())),
+  // That the stored secret is an envelope bound to its row (never the base32 secret), moves nowhere, re-seals
+  // after a key rotation and still opens under the legacy AAD is `runSealedColumnTests`' (TwoFactorStore.test.ts).
+  it.effect("the stored secret opens to the base32 secret the user was shown", () =>
+    Effect.gen(function* () {
+      const secrets = yield* TwoFactorStore.TwoFactorSecrets;
+      const user = yield* enrolledUser("cipher@example.com");
+      const row = yield* secrets.find(user.userId);
+      if (Option.isNone(row)) return assert.fail("no secret row");
+      const opened = yield* SealedColumn.orDie(row.value.secret.open);
+      assert.strictEqual(Redacted.value(opened), user.secret);
+    }).pipe(Effect.provide(buildLayer())),
   );
 });
 

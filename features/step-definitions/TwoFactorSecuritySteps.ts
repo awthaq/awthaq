@@ -37,33 +37,34 @@ const CODE_SHAPE = /^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}$/;
 export const twoFactorSecuritySteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-263: the secret at rest -------------------------------------------------------
 
+  /** What is at rest in the secret column of `name`'s row: the stored envelope, through the memory adapter's test seam. */
   const envelopeOf = (name: string) =>
     Effect.gen(function* () {
       const person = yield* getPerson(name);
-      const row = yield* direct(
-        Effect.flatMap(TwoFactorStore.TwoFactorSecrets, (secrets) => secrets.find(person.userId)),
+      const envelope = yield* direct(
+        Effect.flatMap(TwoFactorStore.MemoryEnvelopes, (rows) => rows.stored(person.userId)),
       );
-      assert.ok(Option.isSome(row), `no secret row for "${name}"`);
-      return row.value;
+      assert.ok(envelope !== "", `no secret row for "${name}"`);
+      return envelope;
     });
 
   Then(
     "the stored secret row of {string} does not contain her base32 secret",
     function* (name: string) {
-      const row = yield* envelopeOf(name);
-      assert.ok(!textOf(row).includes(requireSecret(yield* getPerson(name))));
+      const envelope = yield* envelopeOf(name);
+      assert.ok(!envelope.includes(requireSecret(yield* getPerson(name))));
     },
   );
 
   Then(
-    "{string}'s envelope decrypts to her secret under the additional data {string} followed by her user id",
-    function* (name: string, aadPrefix: string) {
+    "{string}'s envelope decrypts to her secret under the additional data {string} followed by her user id and {string}",
+    function* (name: string, aadPrefix: string, aadSuffix: string) {
       const person = yield* getPerson(name);
-      const row = yield* envelopeOf(name);
+      const envelope = yield* envelopeOf(name);
       const decrypted = successValue(
         yield* directExit(
           Effect.flatMap(Encryption.Encryption, (encryption) =>
-            encryption.decrypt(row.envelope, `${aadPrefix}${person.userId}`),
+            encryption.decrypt(envelope, `${aadPrefix}${person.userId}${aadSuffix}`),
           ),
         ),
       );
@@ -77,10 +78,10 @@ export const twoFactorSecuritySteps = defineSteps<World>(({ Given, When, Then })
     "{string}'s envelope moved to {string}'s row fails authentication",
     function* (name: string, other: string) {
       const otherPerson = yield* getPerson(other);
-      const row = yield* envelopeOf(name);
+      const envelope = yield* envelopeOf(name);
       const exit = yield* directExit(
         Effect.flatMap(Encryption.Encryption, (encryption) =>
-          encryption.decrypt(row.envelope, `two_factor_secret:${otherPerson.userId}`),
+          encryption.decrypt(envelope, `two_factor_secret:${otherPerson.userId}:secret`),
         ),
       );
       assert.equal(failureTag(exit), "DecryptionFailed");
@@ -452,12 +453,12 @@ export const twoFactorSecuritySteps = defineSteps<World>(({ Given, When, Then })
     function* (name: string) {
       const person = yield* getPerson(name);
       const { strings, exits } = yield* World;
-      yield* strings.set("envelopeBefore", (yield* envelopeOf(name)).envelope);
+      yield* strings.set("envelopeBefore", yield* envelopeOf(name));
       yield* exits.set(
         "upsert",
         yield* directExit(
           Effect.flatMap(TwoFactorStore.TwoFactorSecrets, (secrets) =>
-            secrets.upsertPending(person.userId, "another-envelope"),
+            secrets.upsertPending(person.userId, Redacted.make("another-secret")),
           ),
         ),
       );
@@ -469,7 +470,7 @@ export const twoFactorSecuritySteps = defineSteps<World>(({ Given, When, Then })
     function* (name: string) {
       const { strings, exits } = yield* World;
       assert.equal(successValue(yield* exits.get("upsert")), false);
-      assert.equal((yield* envelopeOf(name)).envelope, yield* strings.get("envelopeBefore"));
+      assert.equal(yield* envelopeOf(name), yield* strings.get("envelopeBefore"));
     },
   );
 

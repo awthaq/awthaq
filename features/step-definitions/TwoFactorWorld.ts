@@ -209,6 +209,7 @@ export type TwoFactorServices =
   | TwoFactor.TwoFactor
   | SecondFactor.SecondFactor
   | TwoFactorStore.TwoFactorSecrets
+  | TwoFactorStore.MemoryEnvelopes
   | TwoFactorStore.TwoFactorRecoveryCodes
   | Encryption.Encryption
   | Users.Users

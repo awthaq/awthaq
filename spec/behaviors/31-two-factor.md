@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-31 |
-> | Revision | 1.6 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) <br> 1.3 (2026-10-13): BEH-EA-263 names `Sessions.requireFresh` as the gate (BEH-EA-320) <br> 1.4 (2026-10-13): BEH-EA-266: every failure is audited through `Password.confirmReset` too, because `auth.twoFactor.challengeFailed`/`locked` are attempt events (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): BEH-EA-261/262: `finalizeSignIn` is `SignIn.resume` plus `issue`; the challenge stores the divert's handoff (ADR-EA-038, architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-262: the challenge is redeemed (`SecondFactor.redeemChallenge`) in one transaction with the check and the session; an outage gives it back (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) <br> 1.3 (2026-10-13): BEH-EA-263 names `Sessions.requireFresh` as the gate (BEH-EA-320) <br> 1.4 (2026-10-13): BEH-EA-266: every failure is audited through `Password.confirmReset` too, because `auth.twoFactor.challengeFailed`/`locked` are attempt events (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): BEH-EA-261/262: `finalizeSignIn` is `SignIn.resume` plus `issue`; the challenge stores the divert's handoff (ADR-EA-038, architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-262: the challenge is redeemed (`SecondFactor.redeemChallenge`) in one transaction with the check and the session; an outage gives it back (ADR-EA-039, plan 07) <br> 1.7 (2026-10-13): BEH-EA-263: the secret is a sealed column (AAD `two_factor_secret:<userId>:secret`, re-sealed on read by the substrate; `reencrypt` is gone) and the stores fail with StoreUnavailable (plan 05 phase 10) |
 ---
 
 > Status: the `@awthaq/two-factor` plugin is implemented and tested (`packages/two-factor/test/`). The decisions behind it are [ADR-EA-020](../decisions/020-two-factor-state.md); the credential-reset veto it taps is [BEH-EA-259](15-password.md#beh-ea-259-a-credential-reset-consults-beforecredentialreset-before-anything-is-rewritten). SMS is deliberately not part of it ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -115,7 +115,9 @@ REQUIREMENT: `enable`, `disable` and `regenerate` MUST require a session
              proves it with a valid code; enabling an already-confirmed
              account MUST fail `TwoFactorAlreadyEnabled`. The secret MUST be
              stored only as an `Encryption` port envelope with AAD
-             `two_factor_secret:<userId>` — an envelope moved to another
+             `two_factor_secret:<userId>:secret` (a sealed column; the earlier
+             `two_factor_secret:<userId>` still opens and is re-sealed on read)
+             — an envelope moved to another
              user's row MUST fail authentication — and MUST NOT appear in
              any column, log, event or export in the clear. `disable` and
              `regenerate` MUST require a valid TOTP or recovery code.
@@ -160,7 +162,7 @@ _Previous: [BEH-EA-263](31-two-factor.md#beh-ea-263-enrolling-disabling-and-rege
 interface TwoFactorSecretsShape {
   advanceLastUsedStep(userId, step): Effect<boolean>   // UPDATE ... WHERE lastUsedStep IS NULL OR lastUsedStep < step
   confirm(userId, step): Effect<boolean>
-  upsertPending(userId, envelope): Effect<boolean>     // false once confirmed
+  upsertPending(userId, secret: Redacted<string>): Effect<boolean, StoreUnavailable>  // sealed here; false once confirmed
   ...
 }
 ```

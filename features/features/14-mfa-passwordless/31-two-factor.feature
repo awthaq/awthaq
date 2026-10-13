@@ -330,7 +330,7 @@ Feature: Two-Factor Authentication
       And a registered user "bob" with a verified mailbox
       And "bob" has enrolled a second factor
       Then the stored secret row of "alice" does not contain her base32 secret
-      And "alice"'s envelope decrypts to her secret under the additional data "two_factor_secret:" followed by her user id
+      And "alice"'s envelope decrypts to her secret under the additional data "two_factor_secret:" followed by her user id and ":secret"
       And "alice"'s envelope moved to "bob"'s row fails authentication
 
     @REQ-EA-1053

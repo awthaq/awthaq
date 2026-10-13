@@ -109,6 +109,7 @@ export interface TwoFactorShape {
     | TwoFactorApi.TwoFactorAlreadyEnabled
     | TwoFactorApi.SecondFactorLocked
     | Api.RateLimited
+    | Errors.StoreUnavailable
   >;
   /** BEH-EA-262: completes a diverted sign-in with a TOTP code and mints the session. */
   readonly verify: (
@@ -118,7 +119,7 @@ export interface TwoFactorShape {
       readonly ip?: string;
     },
     context?: { readonly userAgent?: string },
-  ) => Effect.Effect<IssuedSession, VerifyError>;
+  ) => Effect.Effect<IssuedSession, VerifyError | Errors.StoreUnavailable>;
   /** BEH-EA-264: completes a diverted sign-in with a recovery code (spent). */
   readonly verifyRecovery: (
     input: {
@@ -127,23 +128,26 @@ export interface TwoFactorShape {
       readonly ip?: string;
     },
     context?: { readonly userAgent?: string },
-  ) => Effect.Effect<IssuedSession, VerifyError>;
+  ) => Effect.Effect<IssuedSession, VerifyError | Errors.StoreUnavailable>;
   /** BEH-EA-263: needs a fresh session and a valid TOTP or recovery code; removes the factor. */
   readonly disable: (
     userId: Users.UserId,
     sessionId: string,
     code: Redacted.Redacted<string>,
-  ) => Effect.Effect<void, ManageError>;
+  ) => Effect.Effect<void, ManageError | Errors.StoreUnavailable>;
   /** BEH-EA-264/BCR-002: replaces the recovery-code set atomically; needs a fresh session and a valid code. */
   readonly regenerateRecoveryCodes: (
     userId: Users.UserId,
     sessionId: string,
     code: Redacted.Redacted<string>,
-  ) => Effect.Effect<ReadonlyArray<string>, ManageError>;
-  readonly status: (userId: Users.UserId) => Effect.Effect<{
-    readonly enabled: boolean;
-    readonly remainingRecoveryCodes: number;
-  }>;
+  ) => Effect.Effect<ReadonlyArray<string>, ManageError | Errors.StoreUnavailable>;
+  readonly status: (userId: Users.UserId) => Effect.Effect<
+    {
+      readonly enabled: boolean;
+      readonly remainingRecoveryCodes: number;
+    },
+    Errors.StoreUnavailable
+  >;
 }
 
 type VerifyError =
@@ -214,7 +218,10 @@ export const credentialResetGate = Layer.unwrap(
       (input) =>
         Effect.gen(function* () {
           const userId = Users.UserId(input.userId);
-          if (!(yield* factor.isEnrolled(userId))) return input;
+          const enrolled = yield* factor
+            .isEnrolled(userId)
+            .pipe(Effect.catchTag("StoreUnavailable", Effect.die));
+          if (!enrolled) return input;
           if (input.secondFactorCode === undefined) {
             return yield* Effect.fail(new HookPoint.HookAbort({ code: "TWO_FACTOR_REQUIRED" }));
           }
@@ -225,6 +232,9 @@ export const credentialResetGate = Layer.unwrap(
             Effect.catchTag("SecondFactorLocked", () =>
               Effect.fail(new HookPoint.HookAbort({ code: "SECOND_FACTOR_LOCKED" })),
             ),
+            // A hook point can only abort (`HookAbort`); an outage inside the reset's transaction is a defect
+            // of this tap, which rolls the reset back, exactly as before.
+            Effect.catchTag("StoreUnavailable", Effect.die),
           );
           return input;
         }),
