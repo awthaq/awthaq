@@ -124,7 +124,10 @@ export const composeInvite = (group: string) =>
     if (Exit.isSuccess(exit)) {
       const composed: Composition = {
         _tag: "Composed",
-        rules: exit.value.map((rule) => ({ plugin: rule.plugin, group: rule.group })),
+        // Plugin-owned rules only: core's own `account` owner registers the export rule beside them.
+        rules: exit.value
+          .filter((rule) => rule.plugin !== "account")
+          .map((rule) => ({ plugin: rule.plugin, group: rule.group })),
       };
       return composed;
     }
@@ -468,10 +471,11 @@ export const tagOf = (body: unknown): string | undefined => {
   return typeof value === "string" ? value : undefined;
 };
 
-/** The rules the Password plugin registered, for introspection (BEH-EA-110/111). */
+/** The rules the plugins registered, for introspection (BEH-EA-110/111); core's own `account` owner is left out. */
 export const registeredRules = Effect.gen(function* () {
   const { host } = yield* World;
-  return yield* host.run(
+  const rules = yield* host.run(
     Effect.flatMap(RateLimits.RateLimitsRegistry, (registry) => registry.registered),
   );
+  return rules.filter((rule) => rule.plugin !== "account");
 });

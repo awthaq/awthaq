@@ -1,7 +1,7 @@
 // Shared composition for the webhooks plugin's tests: the real in-memory core, a real `Encryption`
 // over a fixed test key, and a programmable `HttpClient` that records every request it is asked to send.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, RateLimits, Sessions, Users } from "@awthaq/core";
 import { Encryption, HostResolver, KeyProvider, RateLimiter } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -124,6 +124,7 @@ export const deliveryLayer = (options: DeliveryOptions = {}) => {
     options.limiter ?? RateLimiter.layerPermissive,
     options.resolver ?? PublicResolver,
     Webhooks.config(options.config ?? {}),
+    RateLimits.layer,
   ).pipe(Layer.provideMerge(CoreLive));
 };
 

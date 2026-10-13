@@ -2,7 +2,7 @@
 // secret shown once and stored sealed, the SSRF floor and filter validation at registration, rotation,
 // the delivery log and manual redrive, and the per-administrator rate limit.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Auth, Erasure, DataExport, Users } from "@awthaq/core";
+import { AuthEvents, Auth, Erasure, DataExport, RateLimits, Users } from "@awthaq/core";
 import { Encryption, RateLimiter } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
@@ -382,6 +382,35 @@ describe("rate limits", () => {
           { canManageWebhooks: allow, adminRate: { limit: 2, window: Duration.minutes(1) } },
           RateLimiter.layerMemory,
         ),
+      ),
+    ),
+  );
+});
+
+describe("the admin rate limit is declared and registered (plan 06)", () => {
+  it.effect("the registry carries the configured number; the manifest lists the rule", () =>
+    Effect.gen(function* () {
+      const registry = yield* RateLimits.RateLimitsRegistry;
+      const mine = (yield* registry.registered).filter((rule) => rule.plugin === "webhooks");
+      assert.deepStrictEqual(
+        mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.strategy, rule.limit]),
+        [["admin", "webhooks.admin", "*", "user", 2]],
+      );
+      assert.deepStrictEqual(
+        Auth.make([Webhooks.Webhooks]).manifest.rateLimits.map((rule) => [
+          rule.plugin,
+          rule.name,
+          rule.key,
+          rule.limit,
+        ]),
+        [["webhooks", "admin", "user", 60]],
+      );
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          canManageWebhooks: allow,
+          adminRate: { limit: 2, window: Duration.minutes(1) },
+        }),
       ),
     ),
   );

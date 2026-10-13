@@ -6,10 +6,11 @@ import { Api, AuthCore } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  AuthEvents,
   DataExport,
   Erasure,
-  AuthEvents,
   Hooks,
+  RateLimits,
   Sessions,
   Users,
   Verification,
@@ -60,6 +61,7 @@ const appLayer = (allowedOrigins: ReadonlyArray<string>) =>
     Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
     // CSG-005: the export endpoint rate-limits per account.
     Layer.provide(RateLimiter.layerPermissive),
+    Layer.provide(RateLimits.layer),
     Layer.provide(SqlTransaction.layerNoop),
     Layer.provideMerge(Sessions.layerMemory),
     Layer.provideMerge(Users.layerMemory),

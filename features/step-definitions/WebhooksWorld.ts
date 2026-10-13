@@ -14,6 +14,7 @@ import {
   DataExport,
   Erasure,
   EventRelay,
+  RateLimits,
   Sessions,
   Users,
 } from "@awthaq/core";
@@ -250,6 +251,7 @@ const baseLayer = (
     resolver.layer,
     Webhooks.config({ canManageWebhooks: gateFor(options.gate), ...options.config }),
     EventRelay.layerCursorMemory,
+    RateLimits.layer,
   ).pipe(Layer.provideMerge(CoreLive));
 
 /** What the steps may ask of the built app. */

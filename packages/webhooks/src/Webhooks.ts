@@ -329,9 +329,28 @@ const currentUserPrincipal = Effect.gen(function* () {
   return principal;
 });
 
+/**
+ * BEH-EA-105/107/111: the administrator's own rate limit on the admin group, past the gate, declared once
+ * (it used to be enforced without being declared or registered). A group-wide rule: the breach event reports
+ * the admin action as its endpoint. The static `rateLimits` listing is derived from this table at the default
+ * number; `WebhooksConfig.adminRate` tunes it per operation (EP-007) through the budget's `tune`. (Delivery
+ * pacing, `webhooks:deliver:<endpointId>`, is outbound shaping, not a request throttle: it stays a raw
+ * `RateLimiter.consume` in `WebhookDelivery`.)
+ */
+const rules = {
+  admin: RateLimits.rule({
+    group: "webhooks.admin",
+    endpoint: "*",
+    key: RateLimits.Key.user,
+    ...WebhooksConfig.WebhooksConfig.defaultValue().adminRate,
+  }),
+};
+
 export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("webhooks", {
   apiVersion: 1,
   contract: WebhooksApi.WebhooksApi,
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
   tables: ["webhooks_endpoint", "webhooks_delivery"],
   migrations: webhooksMigrations,
   config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
@@ -424,13 +443,15 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       const encryption = yield* Encryption.Encryption;
       const crypto = yield* Crypto.Crypto;
       const events = yield* AuthEvents.AuthEvents;
-      const limiter = yield* RateLimiter.RateLimiter;
       const resolver = yield* HostResolver.HostResolver;
       // EP-007: the knobs are decided per operation, so a tenant's `Webhooks.config(...)` in the calling
       // fiber applies; with none, the build-time value does. (The background worker is deployment-wide
       // and reads the build-time value.)
       const builtSettings = yield* WebhooksConfig.WebhooksConfig;
       const configNow = Tenant.configInForce(WebhooksConfig.WebhooksConfig, builtSettings);
+      const limits = yield* RateLimits.budget(Webhooks, {
+        tune: Effect.map(configNow, (settings) => ({ admin: settings.adminRate })),
+      });
 
       /**
        * Gate first (fail-closed), then the administrator's own rate limit: a caller who fails the
@@ -450,24 +471,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           });
           return yield* Effect.fail(new WebhooksApi.WebhooksActionDenied());
         }
-        yield* RateLimits.enforce({
-          key: `webhooks:admin:${caller.ref.id}`,
-          limit: settings.adminRate.limit,
-          window: settings.adminRate.window,
-          meta: {
-            group: "webhooks.admin",
-            endpoint: action,
-            rule: "admin",
-            dimension: "principal",
-          },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("admin", { userId: caller.ref.id }, { endpoint: action });
         return settings;
       });
 

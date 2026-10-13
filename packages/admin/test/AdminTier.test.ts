@@ -7,6 +7,7 @@ import {
   Auth,
   DataExport,
   Erasure,
+  RateLimits,
   Sessions,
   Users,
   Verification,
@@ -112,7 +113,12 @@ describe("AR-003: the admin tier", () => {
           Layer.provide(AuthHttp.coreHandlers),
           // CSG-001/CSG-005: the account handlers call core's erasure and export, and rate limit the export.
           Layer.provide(
-            Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive),
+            Layer.mergeAll(
+              Erasure.layer,
+              DataExport.layer,
+              RateLimiter.layerPermissive,
+              RateLimits.layer,
+            ),
           ),
           Layer.provide(AuthenticationLive),
           Layer.provide(CsrfProtectionLive),

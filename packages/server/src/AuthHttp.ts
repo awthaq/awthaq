@@ -24,6 +24,7 @@ import type {
   AuthEvents,
   DataExport,
   Erasure,
+  RateLimits,
   Sessions,
   Users,
   Verification,
@@ -74,6 +75,7 @@ export type CoreHandlerServices =
   | DataExport.AccountExport
   | Erasure.AccountErasure
   | RateLimiter.RateLimiter
+  | RateLimits.RateLimitsRegistry
   | SqlTransaction.SqlTransaction;
 
 /**

@@ -9,10 +9,11 @@ import { AuthCore } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  AuthEvents,
   DataExport,
   Erasure,
   Hooks,
-  AuthEvents,
+  RateLimits,
   Sessions,
   Users,
   Verification,
@@ -363,7 +364,14 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
       Layer.provide(CsrfProtectionLive),
       // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
       // CSG-005: the export endpoint rate-limits per account.
-      Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive)),
+      Layer.provide(
+        Layer.mergeAll(
+          Erasure.layer,
+          DataExport.layer,
+          RateLimiter.layerPermissive,
+          RateLimits.layer,
+        ),
+      ),
       // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
       // `SqlTransaction` — a no-op wrapper for this in-memory composition.
       Layer.provide(SqlTransaction.layerNoop),

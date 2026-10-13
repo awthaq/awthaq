@@ -68,6 +68,8 @@ export * from "./RateLimitModel.ts";
  * the `RateLimits` namespace it already imports, without importing `AuthEvents` for nothing.
  */
 export { AuthEvents as Events } from "./AuthEvents.ts";
+/** The port `budget` consumes through, re-exported for the same reason as `Events` (`RateLimits.Limiter.RateLimiter`). */
+export { RateLimiter as Limiter };
 export * as Key from "./RateLimitKey.ts";
 
 type Table = RateLimitModel.Table;

@@ -10,10 +10,11 @@ import { AccountContract, Api, AuthCore, SessionContract } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  AuthEvents,
   DataExport,
   Erasure,
   Hooks,
-  AuthEvents,
+  RateLimits,
   Sessions,
   UserFields,
   Users,
@@ -109,6 +110,7 @@ const makeAppLayer = (
     Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
     // CSG-005: the export endpoint rate-limits per account.
     Layer.provide(limiterLayer),
+    Layer.provideMerge(RateLimits.layer),
     // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
     // `SqlTransaction` — a no-op wrapper for this in-memory composition.
     Layer.provide(SqlTransaction.layerNoop),
@@ -502,6 +504,18 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
 
 // CSG-005: GDPR Art. 15/20 self-service export.
 describe("GET /user/export (CSG-005)", () => {
+  // Plan 06: the export rule is declared and registered like a plugin's, under core's own owner.
+  it.effect("the account export rule is registered under the core `account` owner", () =>
+    Effect.gen(function* () {
+      const registry = yield* RateLimits.RateLimitsRegistry;
+      const rules = yield* registry.registered;
+      assert.deepStrictEqual(
+        rules.map((rule) => [rule.plugin, rule.group, rule.endpoint, rule.name, rule.strategy]),
+        [["account", "account", "exportData", "exportData", "user"]],
+      );
+    }).pipe(Effect.provide(AppLayer)),
+  );
+
   it.effect(
     "returns the caller's user, accounts (no secrets), sessions and activity as an attachment, and audits it",
     () =>
