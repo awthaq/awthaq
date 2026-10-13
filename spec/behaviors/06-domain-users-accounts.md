@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-06 |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-046 names `@awthaq/api-key` among the paths the sign-in gate covers (architecture plan 10 item 0) <br> 1.4 (2026-10-13): deleting a user is `AccountErasure`'s job and only its: `Users` has no `delete`, the row store primitive takes an `ErasureClearance`, and `createWith` abandons a half-made user (architecture plan 03) <br> 1.5 (2026-10-13): BEH-EA-322, every sign-in completes through `SignIn` (architecture plan 01) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-046 names `@awthaq/api-key` among the paths the sign-in gate covers (architecture plan 10 item 0) <br> 1.4 (2026-10-13): deleting a user is `AccountErasure`'s job and only its: `Users` has no `delete`, the row store primitive takes an `ErasureClearance`, and `createWith` abandons a half-made user (architecture plan 03) <br> 1.5 (2026-10-13): BEH-EA-322, every sign-in completes through `SignIn` (architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-323, every sign-up creates through `SignUp` (architecture plan 01) |
 
 ---
 
@@ -230,3 +230,32 @@ REQUIREMENT: Every flow that turns a proven credential into a session MUST
 ```
 
 **As shipped (ADR-EA-038).** `clear` fails `SignIn/UserGone`, `UserSuspended`, `HookAborted` (the veto), `TwoFactorRequired` (the divert) or `StoreUnavailable`; the `Clearance` is a brand whose constructor is package-private, so `issue` accepts nothing else and no plugin can forge one (`SignIn.types.test.ts`). A suspended or gone user never reaches the veto. The divert context is `{ userId, strategy, amr, handoff }` with `amr` required; the handoff is `{ tenantId?, continuation? }`. `resume` re-runs the gate only (the veto and the divert already ran for this sign-in), and `issue` mints under the clearance's tenant even when the minting request runs in another. A *continuation* is work a first factor owes once its session exists (SAML: the Single Logout record and role mapping, BEH-EA-315/316), registered through `SignIn.continuation` in an aggregating registry that rides `Hooks.HooksLive`; an unregistered `kind` is a defect, not a silent skip. Request facts (`ip`, `userAgent`) come from the explicit `request` argument per field, else from `AuthRequestContext`. `Sessions.issue` is called only from `SignIn.issue` and three non-sign-in mints (`changePassword` rotation, admin impersonation, `TestAuth`), which `SignInSeams.test.ts` pins by count. Tests: `packages/core/test/SignIn.test.ts`, `SignIn.types.test.ts`, `SignInSeams.test.ts`; each plugin keeps one wiring probe (its strategy, its `amr`, its refusal for a vanished user).
+
+## BEH-EA-323: Every sign-up creates through `SignUp`, and a user is created only from a vetted application
+
+```ts
+// @awthaq/core: one implementation of "an account comes to exist" (ADR-EA-038)
+const signUp = yield* SignUp.make
+const vetted = yield* signUp.vet({ identity: { _tag: "Email", email }, name, strategy: "password" }) // BeforeSignUp
+const user = yield* signUp.create(vetted, { verified: true, link: { providerId, subject } })          // one unit
+// or: createWith(vetted, options, within) for the caller's own work in the same unit,
+//     createSignedIn(vetted, { amr, link }, request) for create + cleared sign-in + first session
+```
+
+```text
+REQUIREMENT: Every flow in which a person or a directory causes an account to
+             exist (password in both modes, OAuth first login, SAML first
+             login, magic link, email OTP, SCIM) MUST consult `BeforeSignUp`
+             before any write, create through `SignUp`, and publish
+             `auth.user.created` and run `AfterSignUp` only after the unit
+             that created the user committed. Create, mark verified, link the
+             credential and the caller's own work MUST be one unit that
+             leaves nothing behind on failure, in memory compositions too. A
+             collision on the email, the phone number or the linked credential
+             MUST be the one `SignUp/IdentityTaken`. A session minted at
+             sign-up MUST be a cleared sign-in (BEH-EA-322). Operator
+             migrations (`UserImport.importUser`, `awthaq seed admin`) are not
+             sign-ups and are exempt.
+```
+
+**As shipped (ADR-EA-038).** `vet` returns a `Vetted` brand whose constructor is module-private, and `create`, `createWith` and `createSignedIn` accept nothing else (`SignIn.types.test.ts`). The unit is `SqlTransaction` around `Users.createWith`, which abandons the half-made user (no `BeforeUserDelete` veto, no `auth.user.deleted`, because nobody was told it existed) when a composition has no real transaction, plus the credentials the call linked; a transaction's own `SqlError` is `StoreUnavailable("SignUp.create")`, never a defect. A tap can amend `name` and `email`: an email application keeps its address even if a tap drops it, an anonymous one (an OAuth profile without an email) becomes an email identity if a tap supplies an address, and a phone application is unchanged. `createSignedIn` keeps BEH-EA-113's "user and session in one transaction": a `BeforeSignIn` veto or a session-store failure rolls the account back, and a `BeforeSessionIssue` divert commits the account (and the owner's challenge) and answers `TwoFactorRequired`. SCIM provisioning consults `BeforeSignUp` under the strategy `scim:<organizationId>:<connectionId>` (BEH-EA-247). Tests: `packages/core/test/SignUp.test.ts` (memory), `SignUpSql.test.ts` (SQLite, and Postgres under `pnpm test:pg`), `SignIn.types.test.ts`, `SignInSeams.test.ts`; each plugin keeps one wiring probe.
