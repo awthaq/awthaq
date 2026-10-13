@@ -31,7 +31,7 @@ const PingApi = HttpApi.make("auth").add(
 class Ping extends AuthPlugin.Service<Ping, Record<string, never>>()("ping", {
   apiVersion: 1,
   contract: PingApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(Ping, {
     make: Effect.succeed({}),
@@ -50,8 +50,22 @@ describe("Auth.make([Roles])", () => {
   it("Roles + RolesAdmin compose: the admin plugin depends on Roles and contributes the one group (YL-009)", () => {
     const auth = Auth.make([Roles.Roles, RolesAdmin.RolesAdmin]);
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "roles", apiVersion: 1, tables: ["roles_assignments"], dependsOn: [], groups: [] },
-      { id: "rolesAdmin", apiVersion: 1, tables: [], dependsOn: ["roles"], groups: ["rolesAdmin"] },
+      {
+        id: "roles",
+        apiVersion: 1,
+        tables: ["roles_assignments"],
+        tenancy: { roles_assignments: AuthPlugin.Table.global("global roles, ADR-EA-025") },
+        dependsOn: [],
+        groups: [],
+      },
+      {
+        id: "rolesAdmin",
+        apiVersion: 1,
+        tables: [],
+        tenancy: {},
+        dependsOn: ["roles"],
+        groups: ["rolesAdmin"],
+      },
     ]);
   });
 
@@ -59,8 +73,15 @@ describe("Auth.make([Roles])", () => {
     const auth = Auth.make([Ping, Roles.Roles]);
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "ping", apiVersion: 1, tables: [], dependsOn: [], groups: ["ping"] },
-      { id: "roles", apiVersion: 1, tables: ["roles_assignments"], dependsOn: [], groups: [] },
+      { id: "ping", apiVersion: 1, tables: [], tenancy: {}, dependsOn: [], groups: ["ping"] },
+      {
+        id: "roles",
+        apiVersion: 1,
+        tables: ["roles_assignments"],
+        tenancy: { roles_assignments: AuthPlugin.Table.global("global roles, ADR-EA-025") },
+        dependsOn: [],
+        groups: [],
+      },
     ]);
   });
 });

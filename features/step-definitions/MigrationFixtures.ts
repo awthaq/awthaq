@@ -22,7 +22,7 @@ export class MigPassword extends AuthPlugin.Service<MigPassword, Record<string, 
   {
     apiVersion: 1,
     contract: NoApi,
-    tables: ["password_account"],
+    tables: { password_account: AuthPlugin.Table.global("test fixture") },
     migrations: [
       {
         name: "create_password_account",
@@ -47,7 +47,7 @@ export class MigPassword extends AuthPlugin.Service<MigPassword, Record<string, 
 export class MigOauth extends AuthPlugin.Service<MigOauth, Record<string, never>>()("oauth", {
   apiVersion: 1,
   contract: NoApi,
-  tables: ["oauth_account"],
+  tables: { oauth_account: AuthPlugin.Table.global("test fixture") },
   migrations: [
     {
       name: "create_oauth_account",
@@ -80,7 +80,7 @@ export class MigTwoFactor extends AuthPlugin.Service<MigTwoFactor, Record<string
   {
     apiVersion: 1,
     contract: NoApi,
-    tables: ["sessions2fa_secret"],
+    tables: { sessions2fa_secret: AuthPlugin.Table.global("test fixture") },
     migrations: [
       {
         name: "create_sessions2fa_secret",

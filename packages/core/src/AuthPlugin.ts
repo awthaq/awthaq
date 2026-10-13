@@ -15,6 +15,7 @@ import type * as Record from "effect/Record";
 import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import { TenantScoped } from "@awthaq/sql";
 import type * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
@@ -87,6 +88,8 @@ export interface Class<
   readonly apiVersion: 1;
   readonly contract: HttpApi.HttpApi<"auth", Groups>;
   readonly tables: ReadonlyArray<`${Id}_${string}`>;
+  /** Plan 05 (ADR-EA-018 decision 10): how each table in `tables` relates to the tenant, keyed by table name. */
+  readonly tenancy: Readonly<Record<string, TenantScoped.TableDeclaration>>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
   /** PERS-003: the taps this plugin declared statically (`AuthPlugin.layer`'s `taps` option), readable without building any layer. */
@@ -155,11 +158,35 @@ export interface ContractData {
   readonly groups: Record.ReadonlyRecord<string, HttpApiGroup.Constraint>;
 }
 
+/**
+ * Plan 05: the tenancy of one declared table, as `tables` takes it. Re-exported so a package that
+ * does not depend on `@awthaq/sql` (roles, qadi) declares its tables through core alone.
+ * `partitioned` (nullable tenant column stamped from the ambient tenant), `keyed` (the organization
+ * id is the row's own key), `derived` (scoped through a parent table) or `global` (deliberately
+ * tenant-blind; the reason is printed by `awthaq plugin list`).
+ */
+export const Table = {
+  partitioned: (column = "tenantId"): TenantScoped.TableDeclaration => ({
+    tenancy: TenantScoped.partitioned(column),
+  }),
+  keyed: (column: string): TenantScoped.TableDeclaration => ({
+    tenancy: TenantScoped.keyed(column),
+  }),
+  derived: (parent: string, via: string, parentKey = "id"): TenantScoped.TableDeclaration => ({
+    tenancy: TenantScoped.derived(parent, via, parentKey),
+  }),
+  global: (reason: string): TenantScoped.TableDeclaration => ({
+    tenancy: TenantScoped.global(reason),
+  }),
+};
+
 export interface Any {
   readonly id: string;
   readonly apiVersion: 1;
   readonly contract: ContractData;
   readonly tables: ReadonlyArray<string>;
+  /** Plan 05: optional so a hand-built plugin value (a test fixture) need not declare any; an absent entry reads as Global. */
+  readonly tenancy?: Readonly<Record<string, TenantScoped.TableDeclaration>>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
   /** PERS-003: optional so a hand-built plugin value (a test fixture) need not declare any. */
@@ -247,7 +274,14 @@ export const Service =
     options: {
       readonly apiVersion: 1;
       readonly contract: HttpApi.HttpApi<"auth", Groups>;
-      readonly tables?: ReadonlyArray<`${NoInfer<Id>}_${string}`>;
+      /**
+       * BEH-EA-005/BEH-EA-328: the tables this plugin owns, keyed by name (each `<id>_...`), each with its
+       * tenancy: `{ webhooks_endpoint: AuthPlugin.Table.partitioned() }`. A table without a declaration, or
+       * with another plugin's prefix, does not compile.
+       */
+      readonly tables?: {
+        readonly [T in `${NoInfer<Id>}_${string}`]: TenantScoped.TableDeclaration;
+      };
       readonly migrations?: Migrations;
       readonly readsTables?: ReadonlyArray<string>;
       /**
@@ -270,6 +304,10 @@ export const Service =
   ): Class<Self, Id, Shape, Groups, Fields, Limits> => {
     const key: Key<Id> = `awthaq/plugin/${id}`;
     const userFields: UserFields.Declarations = options.userFields ?? {};
+    const tenancy: Readonly<Record<string, TenantScoped.TableDeclaration>> = options.tables ?? {};
+    const tables = Object.keys(tenancy).filter((name): name is `${Id}_${string}` =>
+      name.startsWith(`${id}_`),
+    );
     UserFields.describePlugin(id, userFields);
     const serviceKey = Context.Service<Self, Shape>()(key);
     // `Object.assign`'s source is a plain-valued `dependsOn` (not a getter): a
@@ -284,7 +322,8 @@ export const Service =
       id,
       apiVersion: options.apiVersion,
       contract: options.contract,
-      tables: options.tables ?? [],
+      tables,
+      tenancy,
       migrations: options.migrations ?? [],
       readsTables: options.readsTables ?? [],
       rateLimits: RateLimitModel.declare(options.rateLimitRules ?? {}),

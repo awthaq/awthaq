@@ -548,7 +548,10 @@ const jwtMigrations: Migrations.Migrations = [
 export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
   apiVersion: 1,
   contract: JwtApi,
-  tables: ["jwt_signing_key", "jwt_token_revocation"],
+  tables: {
+    jwt_signing_key: AuthPlugin.Table.global("deployment-wide key ring, ADR-EA-017"),
+    jwt_token_revocation: AuthPlugin.Table.global("the revoked jti set is deployment-wide"),
+  },
   migrations: jwtMigrations,
 }) {
   static readonly layer = Layer.provideMerge(

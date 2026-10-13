@@ -878,7 +878,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
   rateLimitRules: rules,
   // BEH-EA-044: a password credential is an ordinary `accounts` row — this
   // plugin owns no table of its own, so there is nothing to declare here.
-  tables: [],
+  tables: {},
   // ECS-008/BEH-EA-229: the policy knobs `doctor` audits and `config list` prints.
   config: [
     ConfigDescriptor.make(PasswordConfig, {

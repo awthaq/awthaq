@@ -826,7 +826,12 @@ const addTenantIdMigration: Migrations.Migrations[number] = {
 export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   apiVersion: 1,
   contract: AdminApi.AdminApi,
-  tables: ["admin_impersonation", "admin_impersonation_chain"],
+  tables: {
+    admin_impersonation: AuthPlugin.Table.partitioned("tenantId"),
+    admin_impersonation_chain: AuthPlugin.Table.global(
+      "append-only hash chain over every tenant's episodes; verifyChain reads it whole",
+    ),
+  },
   migrations: [...adminMigrations, addTenantIdMigration],
   // The impersonation audit rows are hash-chained (`AuditChain`); the chain's key is this plugin's concern.
   config: [

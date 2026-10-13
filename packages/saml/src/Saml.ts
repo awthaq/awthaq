@@ -703,7 +703,12 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   contract: SamlApi.SamlApi,
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
   rateLimitRules: rules,
-  tables: ["saml_connection", "saml_connection_domain", "saml_sp_key", "saml_session"],
+  tables: {
+    saml_connection: AuthPlugin.Table.keyed("organizationId"),
+    saml_connection_domain: AuthPlugin.Table.derived("saml_connection", "connectionId"),
+    saml_sp_key: AuthPlugin.Table.derived("saml_connection", "connectionId"),
+    saml_session: AuthPlugin.Table.derived("saml_connection", "connectionId"),
+  },
   migrations: samlMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Saml, {

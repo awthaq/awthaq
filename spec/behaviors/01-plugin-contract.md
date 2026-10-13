@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-01 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-005: `tables` is a record of tenancy declarations keyed by the plugin's own prefix; `Class.tables` lists its keys (plan 05) |
 
 ---
 
@@ -94,16 +94,19 @@ REQUIREMENT: A plugin's `contract` MUST fail to type-check, at the plugin's
 ## BEH-EA-005: A plugin's table names are constrained to its own prefix by a template-literal type
 
 ```ts
-readonly tables?: ReadonlyArray<`${Id}_${string}`>
+readonly tables?: { readonly [T in `${Id}_${string}`]: TenantScoped.TableDeclaration }
 ```
 
 ```text
-REQUIREMENT: Every entry in a plugin's `tables` array MUST be a string
-             literal beginning with `<id>_`; a bare table name MUST fail to
-             type-check as an argument to `AuthPlugin.Service`.
+REQUIREMENT: Every key of a plugin's `tables` record MUST be a string
+             literal beginning with `<id>_`, and its value MUST be the
+             table's tenancy declaration (`AuthPlugin.Table.partitioned`,
+             `keyed`, `derived` or `global`, BEH-EA-328); a bare table
+             name, another plugin's prefix, or a table without a declaration
+             MUST fail to type-check as an argument to `AuthPlugin.Service`.
 ```
 
-`research/09-plugin-architecture.md` Q25 contrasts better-auth's convention-only table naming (plugins may create arbitrary table names, with only a documentation warning against colliding with core) against Medusa 2.0's strict per-module isolation. awthaq's plan follows Medusa's discipline but enforces it the same way it enforces group namespacing (BEH-EA-004): as a template-literal constraint on the plugin's own static declaration, so a bare or core-colliding table name is rejected before the plugin can be published, not merely flagged by a linter a plugin author could ignore.
+`research/09-plugin-architecture.md` Q25 contrasts better-auth's convention-only table naming (plugins may create arbitrary table names, with only a documentation warning against colliding with core) against Medusa 2.0's strict per-module isolation. awthaq's plan follows Medusa's discipline but enforces it the same way it enforces group namespacing (BEH-EA-004): as a template-literal constraint on the keys of the plugin's own static declaration, so a bare or core-colliding table name is rejected before the plugin can be published, not merely flagged by a linter a plugin author could ignore.
 
 ## BEH-EA-006: `migrations` is a static, declarative member — never computed from runtime configuration
 
@@ -111,7 +114,7 @@ REQUIREMENT: Every entry in a plugin's `tables` array MUST be a string
 export class Password extends AuthPlugin.Service<Password, PasswordShape>()("password", {
   apiVersion: 1,
   contract: PasswordApi,
-  tables: ["password_account"],
+  tables: { password_account: AuthPlugin.Table.global("per-user account; the directory is global") },
   migrations
 }) { /* … */ }
 ```

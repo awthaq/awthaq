@@ -95,7 +95,7 @@ const BillingHandlers = HttpApiBuilder.group(BillingApi, "billing", (handlers) =
 class AppPlugin extends AuthPlugin.Service<AppPlugin, Record<string, never>>()("app", {
   apiVersion: 1,
   contract: AppApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(AppPlugin, {
     make: Effect.succeed({}),
@@ -106,7 +106,7 @@ class AppPlugin extends AuthPlugin.Service<AppPlugin, Record<string, never>>()("
 class BillingPlugin extends AuthPlugin.Service<BillingPlugin, Record<string, never>>()("billing", {
   apiVersion: 1,
   contract: BillingApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(BillingPlugin, {
     make: Effect.succeed({}),

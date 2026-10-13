@@ -25,7 +25,7 @@ const PingApi = HttpApi.make("auth").add(
 class PingPlugin extends AuthPlugin.Service<PingPlugin, Record<string, never>>()("ping", {
   apiVersion: 1,
   contract: PingApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(PingPlugin, {
     make: Effect.succeed({}),

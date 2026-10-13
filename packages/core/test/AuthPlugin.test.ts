@@ -32,7 +32,7 @@ interface PingShape {
 class Ping extends AuthPlugin.Service<Ping, PingShape>()("ping", {
   apiVersion: 1,
   contract: PingApi,
-  tables: ["ping_state"],
+  tables: { ping_state: AuthPlugin.Table.global("test fixture") },
   migrations: [{ name: "create_ping_state", up: Effect.void }],
 }) {
   static readonly layer = AuthPlugin.layer(Ping, {
@@ -337,8 +337,22 @@ describe("Auth.make", () => {
 
       assert.deepStrictEqual(auth.manifest, {
         plugins: [
-          { id: "ping", apiVersion: 1, tables: ["ping_state"], dependsOn: [], groups: ["ping"] },
-          { id: "pong", apiVersion: 1, tables: [], dependsOn: ["ping"], groups: ["pong"] },
+          {
+            id: "ping",
+            apiVersion: 1,
+            tables: ["ping_state"],
+            tenancy: { ping_state: AuthPlugin.Table.global("test fixture") },
+            dependsOn: [],
+            groups: ["ping"],
+          },
+          {
+            id: "pong",
+            apiVersion: 1,
+            tables: [],
+            tenancy: {},
+            dependsOn: ["ping"],
+            groups: ["pong"],
+          },
         ],
         hooks: {},
         rateLimits: [],
@@ -602,5 +616,51 @@ describe("Auth.make", () => {
       // @ts-expect-error - Auth.make requires at least one plugin
       Auth.make([]);
     }, /awthaq: Auth.make requires at least one plugin/);
+  });
+});
+
+// BEH-EA-005 (plan 05): `tables` is a record of tenancy declarations keyed by the plugin's own prefix.
+describe("AuthPlugin.Service tables (BEH-EA-005)", () => {
+  const Api = HttpApi.make("auth").add(
+    HttpApiGroup.make("decl").add(HttpApiEndpoint.get("decl", "/decl", { success: Schema.String })),
+  );
+
+  it("lists the declared table names, in declaration order, and keeps their tenancy", () => {
+    class Decl extends AuthPlugin.Service<Decl, object>()("decl", {
+      apiVersion: 1,
+      contract: Api,
+      tables: {
+        decl_b: AuthPlugin.Table.partitioned(),
+        decl_a: AuthPlugin.Table.derived("decl_b", "bId"),
+        decl_c: AuthPlugin.Table.global("because"),
+      },
+    }) {}
+    assert.deepStrictEqual(Decl.tables, ["decl_b", "decl_a", "decl_c"]);
+    assert.deepStrictEqual(Object.keys(Decl.tenancy), ["decl_b", "decl_a", "decl_c"]);
+    assert.strictEqual(Decl.tenancy["decl_b"]?.tenancy._tag, "Partitioned");
+  });
+
+  it("refuses another plugin's prefix and an undeclared tenancy at compile time", () => {
+    class Wrong extends AuthPlugin.Service<Wrong, object>()("decl", {
+      apiVersion: 1,
+      contract: Api,
+      tables: {
+        // @ts-expect-error - "other_x" does not carry the plugin's own "decl_" prefix
+        other_x: AuthPlugin.Table.global("x"),
+      },
+    }) {}
+    class Bare extends AuthPlugin.Service<Bare, object>()("decl", {
+      apiVersion: 1,
+      contract: Api,
+      // @ts-expect-error - a table without a tenancy declaration does not compile
+      tables: { decl_x: {} },
+    }) {}
+    class Legacy extends AuthPlugin.Service<Legacy, object>()("decl", {
+      apiVersion: 1,
+      contract: Api,
+      // @ts-expect-error - the array form is gone: a table is a name and a tenancy
+      tables: ["decl_x"],
+    }) {}
+    assert.isDefined([Wrong, Bare, Legacy]);
   });
 });

@@ -1520,3 +1520,12 @@ Phase 2:
 - `listEnabledEndpoints` pushes the `"disabledAt" IS NULL` filter into SQL; `findEndpointForDelivery` is the worker's by-id lookup; `bumpDead` and `clearDead` take the witness too. One module-level witness (`relay`) serves the whole delivery module; erasure and export mint their own.
 - The plan's conformance call needs a `plugin.tenancy`; `Webhooks` has none until phase 3, so `WebhookRecords.test.ts` passes the two declarations inline and phase 3 switches it to `Webhooks.Webhooks`. Both tables share one `WebhookRecordsShape`, so each case classifies the other table's methods as `derived` ("operates on the other table").
 - Deleted tests are named in `.scratch/plugin-table-substrate/issues/03-*.md`. BEH-EA-309's file is 34-webhooks.md revision 1.5 (not 1.2); traceability revision 1.12.
+
+Phase 3:
+
+- `AuthPlugin.Table.*` are thin wrappers returning `TenantScoped.TableDeclaration` (so roles, qadi and tests need no `@awthaq/sql` import). `Class.tables` is derived from the record's keys with a prefix filter guard (no `as`). `Any.tenancy` is optional; a hand-built `Any` keeps `tables: [..]` and an absent `tenancy` reads as no declarations.
+- `Auth.make` skips the plain-identifier check on the table name of a Global table (it never reaches DDL, and fixture plugins use dotted ids such as `acme.invite`); columns, parents and the names of non-Global tables are checked. Derived parents resolve to a table of the same plugin, of a `dependsOn` plugin, or a core table.
+- `GraphNode` keeps `tables` as names and adds `tenancy` (name to a short description); the text view prints `table (partitioned "tenantId")`.
+- `examples/plugin-template` declares `notes_note` Global ("template example; phase 13 partitions it") until phase 13 adds the column.
+- Fixtures were codemodded to `AuthPlugin.Table.global("test fixture")`; the BDD type gates (`table-bare`, `table-foreign-prefix`, `table-prefixed`) were rewritten for the record form, and `Auth.make`'s key list gained `tenancy`.
+- The behavior is BEH-EA-328; `01-plugin-contract.md` is revision 1.2, `28-tenancy.md` 1.2, traceability 1.13. The webhooks isolation conformance call now passes the real `Webhooks.Webhooks` plugin.

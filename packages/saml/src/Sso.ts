@@ -148,7 +148,7 @@ export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
   contract: SsoApi,
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
   rateLimitRules: rules,
-  tables: [],
+  tables: {},
   migrations: [],
 }) {
   static readonly layer = AuthPlugin.layer(Sso, {

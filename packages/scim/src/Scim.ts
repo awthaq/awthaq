@@ -465,7 +465,10 @@ export const scimExport = DataExport.contribute({
 export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
   apiVersion: 1,
   contract: ScimApi.ScimApi,
-  tables: ["scim_connection", "scim_resource"],
+  tables: {
+    scim_connection: AuthPlugin.Table.keyed("organizationId"),
+    scim_resource: AuthPlugin.Table.derived("scim_connection", "scimConnectionId"),
+  },
   migrations: scimMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Scim, {

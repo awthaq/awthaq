@@ -157,7 +157,14 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("an installed plugin set with a missing declared dependency", function* () {
     const manifest = {
       plugins: [
-        { id: "billing", apiVersion: 1 as const, tables: [], dependsOn: ["ledger"], groups: [] },
+        {
+          id: "billing",
+          apiVersion: 1 as const,
+          tables: [],
+          tenancy: {},
+          dependsOn: ["ledger"],
+          groups: [],
+        },
       ],
       hooks: {},
       rateLimits: [],

@@ -27,7 +27,7 @@ const PingApi = HttpApi.make("auth").add(
 class Ping extends AuthPlugin.Service<Ping, Record<string, never>>()("ping", {
   apiVersion: 1,
   contract: PingApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(Ping, {
     make: Effect.succeed({}),
@@ -46,6 +46,10 @@ describe("Auth.make([Jwt])", () => {
         id: "jwt",
         apiVersion: 1,
         tables: ["jwt_signing_key", "jwt_token_revocation"],
+        tenancy: {
+          jwt_signing_key: AuthPlugin.Table.global("deployment-wide key ring, ADR-EA-017"),
+          jwt_token_revocation: AuthPlugin.Table.global("the revoked jti set is deployment-wide"),
+        },
         dependsOn: [],
         groups: ["jwt", "jwt.token"],
       },
@@ -56,11 +60,15 @@ describe("Auth.make([Jwt])", () => {
     const auth = Auth.make([Ping, Jwt.Jwt]);
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "ping", apiVersion: 1, tables: [], dependsOn: [], groups: ["ping"] },
+      { id: "ping", apiVersion: 1, tables: [], tenancy: {}, dependsOn: [], groups: ["ping"] },
       {
         id: "jwt",
         apiVersion: 1,
         tables: ["jwt_signing_key", "jwt_token_revocation"],
+        tenancy: {
+          jwt_signing_key: AuthPlugin.Table.global("deployment-wide key ring, ADR-EA-017"),
+          jwt_token_revocation: AuthPlugin.Table.global("the revoked jti set is deployment-wide"),
+        },
         dependsOn: [],
         groups: ["jwt", "jwt.token"],
       },

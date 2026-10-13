@@ -747,7 +747,12 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
   contract: ApiKeyApi.ApiKeyApi,
   // PV-241: the typed rule table at the default numbers (`ApiKeyConfig.tokenRateLimit`/`resolveRateLimit` tune it at build).
   rateLimitRules: rules,
-  tables: ["apikey_key", "apikey_client"],
+  tables: {
+    apikey_key: AuthPlugin.Table.global(
+      "owned by a user; the identity directory is global, ADR-EA-018 d4",
+    ),
+    apikey_client: AuthPlugin.Table.global("service clients are deployment-wide"),
+  },
   migrations: apiKeyMigrations,
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
   config: [

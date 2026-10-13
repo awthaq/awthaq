@@ -706,7 +706,12 @@ export class DeviceAuthorization extends AuthPlugin.Service<
 >()("device_authorization", {
   apiVersion: 1,
   contract: DeviceAuthorizationApi.DeviceAuthorizationApi,
-  tables: ["device_authorization_grant", "device_authorization_client"],
+  tables: {
+    device_authorization_grant: AuthPlugin.Table.global(
+      "a device grant starts before any tenant is known",
+    ),
+    device_authorization_client: AuthPlugin.Table.global("deployment-wide client registry"),
+  },
   migrations: deviceAuthorizationMigrations,
   // PV-241: the typed rule table at the default configuration (`DeviceAuthorizationConfig` tunes it at build).
   rateLimitRules: rules,

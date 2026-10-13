@@ -110,7 +110,7 @@ const BillingApi = HttpApi.make("auth").add(
 class Billing extends AuthPlugin.Service<Billing, Record<string, never>>()("billing", {
   apiVersion: 1,
   contract: BillingApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(Billing, {
     make: Effect.succeed({}),

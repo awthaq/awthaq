@@ -61,7 +61,7 @@ const WhoamiHandlers = HttpApiBuilder.group(WhoamiApi, "whoami", (handlers) =>
 class WhoamiPlugin extends AuthPlugin.Service<WhoamiPlugin, Record<string, never>>()("whoami", {
   apiVersion: 1,
   contract: WhoamiApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(WhoamiPlugin, {
     make: Effect.succeed({}),

@@ -678,13 +678,7 @@ const vitestFramework: TestAuth.TestFramework = {
 };
 
 TestAuth.runTenantIsolationTests(vitestFramework, {
-  plugin: {
-    id: "webhooks",
-    tenancy: {
-      webhooks_endpoint: { tenancy: TenantScoped.partitioned() },
-      webhooks_delivery: { tenancy: TenantScoped.derived("webhooks_endpoint", "endpointId") },
-    },
-  },
+  plugin: Webhooks.Webhooks,
   adapters: [
     { name: "layerMemory", layer: WebhookRecords.layerMemory },
     { name: "layerSql", layer: SqlLayer },

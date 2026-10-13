@@ -65,7 +65,7 @@ Each table lists what the package exports. "Source" is the file under the stratu
 |---|---|---|
 | `Auth.make` | function | `Auth.ts` |
 | `Auth.Validate<P>` | conditional type | `Auth.ts` |
-| `Auth.Built<P>` | interface (`api`, `publicApi`, `adminApi`, `layer`, `migrations`, `manifest`) | `Auth.ts` |
+| `Auth.Built<P>` | interface (`api`, `publicApi`, `adminApi`, `layer`, `migrations`, `manifest`, `tenancy`) | `Auth.ts` |
 
 ### Plugin contract (stratum 4, cross-cutting)
 
@@ -73,7 +73,7 @@ Each table lists what the package exports. "Source" is the file under the stratu
 |---|---|---|
 | `AuthPlugin.Service` | class factory (`Context.Service` producer) | `AuthPlugin.ts` |
 | `AuthPlugin.layer` | function | `AuthPlugin.ts` |
-| `AuthPlugin.Class` | interface (`id`, `apiVersion`, `contract`, `tables`, `migrations`, `dependsOn`, `taps`, `config`) | `AuthPlugin.ts` |
+| `AuthPlugin.Class` | interface (`id`, `apiVersion`, `contract`, `tables`, `tenancy`, `migrations`, `dependsOn`, `taps`, `config`) | `AuthPlugin.ts` |
 | `AuthPlugin.Any` | interface | `AuthPlugin.ts` |
 
 ### Contract stratum (1)

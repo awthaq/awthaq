@@ -2,7 +2,7 @@
 // secret shown once and stored sealed, the SSRF floor and filter validation at registration, rotation,
 // the delivery log and manual redrive, and the per-administrator rate limit.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Auth, Erasure, DataExport, RateLimits, Users } from "@awthaq/core";
+import { AuthEvents, Auth, AuthPlugin, Erasure, DataExport, RateLimits, Users } from "@awthaq/core";
 import { Encryption, RateLimiter } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
@@ -430,6 +430,10 @@ describe("the plugin composes on the admin tier", () => {
         id: "webhooks",
         apiVersion: 1,
         tables: ["webhooks_endpoint", "webhooks_delivery"],
+        tenancy: {
+          webhooks_endpoint: AuthPlugin.Table.partitioned("tenantId"),
+          webhooks_delivery: AuthPlugin.Table.derived("webhooks_endpoint", "endpointId"),
+        },
         dependsOn: [],
         groups: ["webhooks.admin"],
       },

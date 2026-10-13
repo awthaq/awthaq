@@ -121,7 +121,7 @@ export class AcmeInvite extends AuthPlugin.Service<AcmeInvite, Record<string, ne
   {
     apiVersion: 1,
     contract: InviteApi,
-    tables: ["acme.invite_invitation"],
+    tables: { "acme.invite_invitation": AuthPlugin.Table.global("test fixture") },
   },
 ) {
   static readonly layer = AuthPlugin.layer(AcmeInvite, {

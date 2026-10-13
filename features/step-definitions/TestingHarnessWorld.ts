@@ -80,7 +80,7 @@ export const whoamiFor = (principal: Api.Principal) =>
 
 class WhoamiPlugin extends AuthPlugin.Service<WhoamiPlugin, Record<string, never>>()(
   "harnesswhoami",
-  { apiVersion: 1, contract: WhoamiApi, tables: [] },
+  { apiVersion: 1, contract: WhoamiApi, tables: {} },
 ) {
   static readonly layer = AuthPlugin.layer(WhoamiPlugin, {
     make: Effect.succeed({}),
@@ -119,7 +119,7 @@ const GatedApi = HttpApi.make("auth").add(
 class GatedPlugin extends AuthPlugin.Service<GatedPlugin, Record<string, never>>()("harnessgated", {
   apiVersion: 1,
   contract: GatedApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(GatedPlugin, {
     make: Effect.succeed({}),

@@ -256,7 +256,9 @@ export class UserClaims extends AuthPlugin.Service<UserClaims, UserClaimsShape>(
   apiVersion: 1,
   // Like `Roles`: no HTTP contract of its own, so `Auth.make([UserClaims])` alone has zero groups.
   contract: HttpApi.make("auth"),
-  tables: ["claims_user"],
+  tables: {
+    claims_user: AuthPlugin.Table.global("per-user claims document; the directory is global"),
+  },
   migrations: userClaimsMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(UserClaims, {

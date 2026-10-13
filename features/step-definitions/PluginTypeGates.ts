@@ -62,7 +62,7 @@ export class PrefixedTablePlugin extends AuthPlugin.Service<
 >()("password", {
   apiVersion: 1,
   contract: HttpApi.make("auth"),
-  tables: ["password_account"],
+  tables: { password_account: AuthPlugin.Table.global("test fixture") },
 }) {}
 
 // type-gate: table-bare
@@ -71,8 +71,10 @@ export class BareTablePlugin extends AuthPlugin.Service<BareTablePlugin, Record<
   {
     apiVersion: 1,
     contract: HttpApi.make("auth"),
-    // @ts-expect-error - the bare table name "account" does not start with "password_" (BEH-EA-005)
-    tables: ["account"],
+    tables: {
+      // @ts-expect-error - the bare table name "account" does not start with "password_" (BEH-EA-005)
+      account: AuthPlugin.Table.global("test fixture"),
+    },
   },
 ) {}
 
@@ -85,8 +87,10 @@ export class ForeignTablePlugin extends AuthPlugin.Service<
 >()("password", {
   apiVersion: 1,
   contract: HttpApi.make("auth"),
-  // @ts-expect-error - "oauth_account" starts with another plugin's prefix, not "password_" (BEH-EA-005)
-  tables: ["oauth_account"],
+  tables: {
+    // @ts-expect-error - "oauth_account" starts with another plugin's prefix, not "password_" (BEH-EA-005)
+    oauth_account: AuthPlugin.Table.global("test fixture"),
+  },
 }) {}
 
 // type-gate: duplicate-id

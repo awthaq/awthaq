@@ -450,7 +450,9 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   // trivially, the same bottom-type reasoning `Auth.ts`'s own comments use
   // for `Layer`'s contravariant `ROut`).
   contract: HttpApi.make("auth"),
-  tables: ["roles_assignments"],
+  tables: {
+    roles_assignments: AuthPlugin.Table.global("global roles, ADR-EA-025"),
+  },
   migrations: rolesMigrations,
   // The catalog is listed by role name (each `Role` carries its whole permission tree).
   config: [

@@ -221,7 +221,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
   rateLimitRules: rules,
   // BEH-EA-270: no table — the links are `Verification` rows (`verification_tokens`, core's).
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(MagicLink, {
     ports: [

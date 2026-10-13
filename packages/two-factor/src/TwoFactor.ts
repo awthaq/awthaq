@@ -452,7 +452,10 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it at the default
   // configuration (`failureBudget` follows `failureLimit`/`failureWindow` through `tune` at build).
   rateLimitRules: rules,
-  tables: ["two_factor_secret", "two_factor_recovery_code"],
+  tables: {
+    two_factor_secret: AuthPlugin.Table.global("per-user factor; the directory is global"),
+    two_factor_recovery_code: AuthPlugin.Table.global("per-user codes; the directory is global"),
+  },
   migrations,
   // ECS-008/BEH-EA-229: the default issuer is the classic thing left in production — the label users see in their authenticator app.
   config: [

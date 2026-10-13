@@ -168,6 +168,8 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
       "manifest",
       "migrations",
       "publicApi",
+      // Plan 05: every plugin table's declared tenancy.
+      "tenancy",
       // SAM-004: the typed user-field schema and the layer that registers it.
       "userFields",
       "userFieldsLayer",
@@ -337,7 +339,7 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
     if (gate === "contract-group-in-own-namespace") {
       assertTypeGate(gate, GATES, ["InviteFixture.contract.groups"]);
     } else {
-      assertTypeGate(gate, GATES, ['tables: ["password_account"]']);
+      assertTypeGate(gate, GATES, ['password_account: AuthPlugin.Table.global("test fixture")']);
     }
   });
 
@@ -365,9 +367,15 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
       const { gate, accepted } = yield* take(claim);
       assert.equal(accepted, false);
       if (gate === "table-foreign-prefix") {
-        assertTypeGate(gate, GATES, ["@ts-expect-error", 'tables: ["oauth_account"]']);
+        assertTypeGate(gate, GATES, [
+          "@ts-expect-error",
+          'oauth_account: AuthPlugin.Table.global("test fixture")',
+        ]);
       } else {
-        assertTypeGate(gate, GATES, ["@ts-expect-error", 'tables: ["account"]']);
+        assertTypeGate(gate, GATES, [
+          "@ts-expect-error",
+          'account: AuthPlugin.Table.global("test fixture")',
+        ]);
       }
     },
   );

@@ -224,7 +224,7 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
   rateLimitRules: rules,
   // BEH-EA-274: no table — the codes are `Verification` rows (`verification_tokens`, core's).
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(EmailOtp, {
     ports: [

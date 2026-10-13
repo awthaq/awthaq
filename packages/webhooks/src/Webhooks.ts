@@ -360,7 +360,10 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
   contract: WebhooksApi.WebhooksApi,
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
   rateLimitRules: rules,
-  tables: ["webhooks_endpoint", "webhooks_delivery"],
+  tables: {
+    webhooks_endpoint: AuthPlugin.Table.partitioned("tenantId"),
+    webhooks_delivery: AuthPlugin.Table.derived("webhooks_endpoint", "endpointId"),
+  },
   migrations: webhooksMigrations,
   config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
 }) {

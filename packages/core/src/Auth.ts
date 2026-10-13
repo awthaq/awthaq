@@ -17,6 +17,7 @@ import type * as Types from "effect/Types";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import { TenantScope, type TenantScoped } from "@awthaq/sql";
 import * as AuthPlugin from "./AuthPlugin.ts";
 import * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
@@ -93,6 +94,19 @@ export class UndeclaredTableDependency extends Data.TaggedError("UndeclaredTable
   readonly pluginId: string;
   readonly ownerId: string;
   readonly table: string;
+  readonly message: string;
+}> {}
+
+/**
+ * Plan 05 (ADR-EA-018 decision 10, BEH-EA-328): a plugin's `tables` declaration is malformed: an
+ * identifier that is not a plain SQL identifier, a Derived table whose parent is not one of its own
+ * plugin's tables, a `dependsOn` plugin's, or a core table, a Derived table beneath a Global one, or a
+ * Derived chain that loops. Found at link time, never per request.
+ */
+export class TenancyDeclarationInvalid extends Data.TaggedError("Auth/TenancyDeclarationInvalid")<{
+  readonly pluginId: string;
+  readonly table: string;
+  readonly cause: "Identifier" | "UnknownParent" | "GlobalParent" | "Cycle";
   readonly message: string;
 }> {}
 
@@ -272,6 +286,8 @@ export interface ManifestPlugin {
   readonly id: string;
   readonly apiVersion: 1;
   readonly tables: ReadonlyArray<string>;
+  /** Plan 05: each table's declared tenancy, by name (`awthaq plugin list` prints it). */
+  readonly tenancy: Readonly<Record<string, TenantScoped.TableDeclaration>>;
   readonly dependsOn: ReadonlyArray<string>;
   /** BEH-EA-203: the contract groups this plugin owns, so `routes` can name the owning plugin of an endpoint. */
   readonly groups: ReadonlyArray<string>;
@@ -472,6 +488,11 @@ export interface Built<
   readonly migrations: Migrations;
   readonly manifest: Manifest;
   /**
+   * Plan 05: every plugin table with its declared tenancy, in plugin order. Pass it to
+   * `TenantScope.enableRls({ plugins: auth.tenancy })` to cover the plugin tables.
+   */
+  readonly tenancy: ReadonlyArray<TenantScope.DeclaredTable>;
+  /**
    * SAM-004 (BEH-EA-040/048): every plugin-declared user field of this composition, keyed `<plugin id>_<field>`
    * with the field's own schema. Pass it to `UserFields.layer` (so `Users` validates and gates writes) and to
    * `Users.typedFields` (typed reads and writes); `TestAuth.layer` provides the registry for you.
@@ -559,6 +580,97 @@ const checkTableDependencies = (plugins: ReadonlyArray<AuthPlugin.Any>): void =>
         table,
         message: `awthaq: plugin "${plugin.id}" reads table "${table}" owned by plugin "${owner.id}" but does not list it in dependsOn`,
       });
+    }
+  }
+};
+
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const coreTables: ReadonlyArray<string> = [
+  ...TenantScope.partitionedTables,
+  ...TenantScope.directoryTables,
+];
+
+/** Plan 05: every plugin table's declaration, in plugin order. */
+const declaredTenancy = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+): ReadonlyArray<TenantScope.DeclaredTable> =>
+  order.flatMap((plugin) =>
+    Object.entries(plugin.tenancy ?? {}).map(([table, declaration]) => ({
+      plugin: plugin.id,
+      table,
+      tenancy: declaration.tenancy,
+    })),
+  );
+
+/** BEH-EA-328: refuses a malformed tenancy declaration. */
+const checkTenancy = (order: ReadonlyArray<AuthPlugin.Any>): void => {
+  const declared = declaredTenancy(order);
+  const invalid = (
+    entry: TenantScope.DeclaredTable,
+    cause: TenancyDeclarationInvalid["cause"],
+    detail: string,
+  ) =>
+    new TenancyDeclarationInvalid({
+      pluginId: entry.plugin,
+      table: entry.table,
+      cause,
+      message: `awthaq: plugin "${entry.plugin}" table "${entry.table}": ${detail}`,
+    });
+  const identifiersOf = (entry: TenantScope.DeclaredTable): ReadonlyArray<string> => {
+    const tenancy = entry.tenancy;
+    switch (tenancy._tag) {
+      case "Partitioned":
+      case "Keyed":
+        return [entry.table, tenancy.column];
+      case "Derived":
+        return [entry.table, tenancy.parent, tenancy.via, tenancy.parentKey];
+      case "Global":
+        // Never reaches DDL (RLS skips Global tables), so a plugin id with a dot is not refused.
+        return [];
+    }
+  };
+  for (const entry of declared) {
+    const bad = identifiersOf(entry).find((name) => !IDENTIFIER.test(name));
+    if (bad !== undefined) {
+      throw invalid(entry, "Identifier", `"${bad}" is not a plain SQL identifier`);
+    }
+  }
+  for (const entry of declared) {
+    const tenancy = entry.tenancy;
+    if (tenancy._tag !== "Derived") continue;
+    const plugin = order.find((candidate) => candidate.id === entry.plugin);
+    const visible = new Set<string>([
+      entry.plugin,
+      ...(plugin?.dependsOn ?? []).map((dep) => dep.id),
+    ]);
+    const parent = declared.find(
+      (candidate) => candidate.table === tenancy.parent && visible.has(candidate.plugin),
+    );
+    if (parent === undefined) {
+      if (coreTables.includes(tenancy.parent)) continue;
+      throw invalid(
+        entry,
+        "UnknownParent",
+        `its parent "${tenancy.parent}" is not a table of this plugin, of a plugin in its dependsOn, or a core table`,
+      );
+    }
+    if (parent.tenancy._tag === "Global") {
+      throw invalid(entry, "GlobalParent", `its parent "${tenancy.parent}" is declared Global`);
+    }
+  }
+  for (const entry of declared) {
+    const seen = new Set<string>([entry.table]);
+    let current = entry.tenancy;
+    while (current._tag === "Derived") {
+      const parentName = current.parent;
+      if (seen.has(parentName)) {
+        throw invalid(entry, "Cycle", `its Derived chain loops back through "${parentName}"`);
+      }
+      seen.add(parentName);
+      const next = declared.find((candidate) => candidate.table === parentName);
+      if (next === undefined) break;
+      current = next.tenancy;
     }
   }
 };
@@ -669,6 +781,7 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
     id: plugin.id,
     apiVersion: plugin.apiVersion,
     tables: plugin.tables,
+    tenancy: plugin.tenancy ?? {},
     dependsOn: plugin.dependsOn.map((dep) => dep.id),
     groups: Object.values(plugin.contract.groups).map((group) => group.identifier),
   })),
@@ -891,6 +1004,7 @@ export function make(
 ) {
   const order = linkPlugins(plugins);
   checkTableDependencies(order);
+  checkTenancy(order);
   const extraGroups = options?.extraGroups ?? [];
   return {
     api: composeApi(order, extraGroups),
@@ -899,6 +1013,7 @@ export function make(
     layer: composeLayer(order),
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),
+    tenancy: declaredTenancy(order),
     userFields: composeUserFields(order),
     userFieldsLayer: UserFields.layer(composeUserFields(order)),
   };

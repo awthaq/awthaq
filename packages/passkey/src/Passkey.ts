@@ -1004,7 +1004,13 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   contract: PasskeyApi.PasskeyApi,
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
   rateLimitRules: rules,
-  tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
+  tables: {
+    passkey_credential: AuthPlugin.Table.global(
+      "user-attached credential; the directory is global",
+    ),
+    passkey_challenge: AuthPlugin.Table.global("a ceremony starts before any tenant is known"),
+    passkey_user_handle: AuthPlugin.Table.global("user-attached; the directory is global"),
+  },
   migrations: passkeyMigrations,
   // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
   config: [

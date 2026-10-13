@@ -19,6 +19,7 @@
 // statically (`AuthPlugin.Service`'s `rateLimits`): the defaults, which a configurable plugin may
 // tune at build.
 
+import type { TenantScoped } from "@awthaq/sql";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type { LoadedAuth } from "./Config.ts";
@@ -33,6 +34,8 @@ export interface GraphNode {
   readonly dependsOn: ReadonlyArray<string>;
   readonly groups: ReadonlyArray<string>;
   readonly tables: ReadonlyArray<string>;
+  /** Plan 05: each table's declared tenancy, as `awthaq plugin list` prints it. */
+  readonly tenancy: Readonly<Record<string, string>>;
   /** PV-241: the ports the plugin's layer requires (service keys), as it declares them. */
   readonly ports: ReadonlyArray<string>;
   /** PV-241: where the plugin's declared taps sit in each point's resolved chain. */
@@ -43,6 +46,21 @@ export interface GraphNode {
     readonly order: number;
   }>;
 }
+
+/** `partitioned "tenantId"`, `derived via "endpointId" of webhooks_endpoint`, `global: <reason>`. */
+const describeTenancy = (declaration: TenantScoped.TableDeclaration) => {
+  const tenancy = declaration.tenancy;
+  switch (tenancy._tag) {
+    case "Partitioned":
+      return `partitioned "${tenancy.column}"`;
+    case "Keyed":
+      return `keyed "${tenancy.column}"`;
+    case "Derived":
+      return `derived via "${tenancy.via}" of ${tenancy.parent}`;
+    case "Global":
+      return `global: ${tenancy.reason}`;
+  }
+};
 
 const HOOK_KEY_PREFIX = "awthaq/hook/";
 
@@ -57,6 +75,12 @@ export const graph = (auth: LoadedAuth): ReadonlyArray<GraphNode> =>
     dependsOn: plugin.dependsOn,
     groups: plugin.groups,
     tables: plugin.tables,
+    tenancy: Object.fromEntries(
+      Object.entries(plugin.tenancy).map(([table, declaration]) => [
+        table,
+        describeTenancy(declaration),
+      ]),
+    ),
     ports: auth.manifest.ports.filter((port) => port.plugin === plugin.id).map((port) => port.key),
     hooks: Object.entries(auth.manifest.hooks).flatMap(([key, taps]) =>
       taps.flatMap((tap, position) =>
@@ -108,7 +132,7 @@ export const renderText = (nodes: ReadonlyArray<GraphNode>) => [
     `${node.order}. ${node.id}`,
     `     depends on: ${list(node.dependsOn)}`,
     `     groups:     ${list(node.groups)}`,
-    `     tables:     ${list(node.tables)}`,
+    `     tables:     ${list(node.tables.map((table) => (node.tenancy[table] === undefined ? table : `${table} (${node.tenancy[table]})`)))}`,
     `     ports:      ${list(node.ports)}`,
     `     hook taps:  ${list(node.hooks.map((tap) => `${tap.point} #${tap.position} (order ${tap.order})`))}`,
   ]),

@@ -215,7 +215,9 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
   apiVersion: 1,
   contract: TemplateApi.NotesApi,
   rateLimitRules: rules,
-  tables: ["notes_note"],
+  tables: {
+    notes_note: AuthPlugin.Table.global("template example; phase 13 partitions it"),
+  },
   migrations: notesMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Notes, {

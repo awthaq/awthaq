@@ -740,7 +740,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
   // BEH-EA-125: an OAuth account is an ordinary `accounts` row (extended
   // with `issuer`, per BEH-EA-125) — this plugin owns no table of its own,
   // the same reasoning `@awthaq/password`'s own `tables: []` documents.
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(OAuth, {
     ports: [

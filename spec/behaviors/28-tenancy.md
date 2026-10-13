@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-28 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) |
 ---
 
 > A tenant is an `Organization` row ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)); everything below is opt-in and zero-cost for a single-tenant deployment.
@@ -171,3 +171,18 @@ REQUIREMENT: A records method that must see more than the ambient tenant MUST
 ```
 
 `Tenant.withoutTenant` clears the fiber reference but not the transaction-local setting the policies read, so without `lift` a cross-tenant read inside a request's RLS transaction is silently confined to the request's tenant. `lift` is a savepoint: a failing lifted effect reverts the setting by itself. Outside an RLS transaction (SQLite, no `withTenant`, the background relay) it costs nothing. The witness is recorded on the span (`awthaq.tenant.crossTenant`).
+
+## BEH-EA-328: Every plugin table declares its tenancy, and Auth.make validates the declarations
+
+```text
+REQUIREMENT: A plugin MUST declare every table it owns as Partitioned, Keyed,
+             Derived or Global (`AuthPlugin.Service`'s `tables` record). `Auth.make`
+             MUST refuse, with `Auth/TenancyDeclarationInvalid`, an identifier
+             that is not a plain SQL identifier, a Derived table whose parent
+             is not a table of the same plugin, of a plugin in its `dependsOn`
+             or a core table, a Derived table beneath a Global one, and a
+             Derived chain that loops. It MUST expose the declarations, in
+             plugin order, as `auth.tenancy` and per plugin in the manifest.
+```
+
+`auth.tenancy` is what an operator passes to `TenantScope.enableRls({ plugins: auth.tenancy })` (BEH-EA-233). `awthaq plugin list` prints each table with its tenancy, so a Global table's reason is reviewed where the plugin is installed. A Global declaration is a statement, not a default: the type system refuses a table with no declaration.

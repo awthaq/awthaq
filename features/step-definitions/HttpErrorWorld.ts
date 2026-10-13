@@ -45,7 +45,7 @@ const InviteHandlers = HttpApiBuilder.group(InviteApi, "invite", (handlers) =>
 );
 export class InvitePlugin extends AuthPlugin.Service<InvitePlugin, Record<string, never>>()(
   "invite",
-  { apiVersion: 1, contract: InviteApi, tables: [] },
+  { apiVersion: 1, contract: InviteApi, tables: {} },
 ) {
   static readonly layer = AuthPlugin.layer(InvitePlugin, {
     make: Effect.succeed({}),
@@ -86,7 +86,7 @@ const ErrorsHandlers = HttpApiBuilder.group(ErrorsApi, "errors", (handlers) =>
 );
 export class ErrorsPlugin extends AuthPlugin.Service<ErrorsPlugin, Record<string, never>>()(
   "errors",
-  { apiVersion: 1, contract: ErrorsApi, tables: [] },
+  { apiVersion: 1, contract: ErrorsApi, tables: {} },
 ) {
   static readonly layer = AuthPlugin.layer(ErrorsPlugin, {
     make: Effect.succeed({}),

@@ -78,6 +78,17 @@ describe("plugin list --graph", () => {
     }),
   );
 
+  it.effect("prints each table with its declared tenancy (plan 05)", () =>
+    Effect.gen(function* () {
+      const text = yield* captureStdout(
+        Plugin.show(passwordAndRoles, { graph: true, format: "text" }),
+      );
+      assert.isTrue(
+        text.some((line) => line.includes("roles_assignments (global: global roles, ADR-EA-025)")),
+      );
+    }),
+  );
+
   it.effect(
     "--format dot emits one edge per dependsOn and --format json the same graph as data",
     () =>

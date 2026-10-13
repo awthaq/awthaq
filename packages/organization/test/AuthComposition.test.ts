@@ -1,7 +1,7 @@
 // BEH-EA-009 (spec/behaviors/02-plugin-composition-validate.md): `Auth.make`
 // composes any real plugin satisfying `AuthPlugin.Any` — mirrors
 // `@awthaq/admin`'s own `AuthComposition.test.ts`.
-import { Auth } from "@awthaq/core";
+import { Auth, AuthPlugin } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Organization from "../src/Organization.ts";
 
@@ -25,6 +25,18 @@ describe("Auth.make([Organization])", () => {
           "organization_oauth_connection",
           "organization_oauth_connection_domain",
         ],
+        tenancy: {
+          organization_org: AuthPlugin.Table.keyed("id"),
+          organization_membership: AuthPlugin.Table.keyed("organizationId"),
+          organization_invitation: AuthPlugin.Table.keyed("organizationId"),
+          organization_team: AuthPlugin.Table.keyed("organizationId"),
+          organization_team_membership: AuthPlugin.Table.derived("organization_team", "teamId"),
+          organization_team_closure: AuthPlugin.Table.derived("organization_team", "descendantId"),
+          organization_role: AuthPlugin.Table.keyed("organizationId"),
+          organization_active_context: AuthPlugin.Table.derived("sessions", "sessionId"),
+          organization_oauth_connection: AuthPlugin.Table.keyed("organizationId"),
+          organization_oauth_connection_domain: AuthPlugin.Table.keyed("organizationId"),
+        },
         dependsOn: [],
         groups: ["organization"],
       },
