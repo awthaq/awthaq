@@ -763,3 +763,25 @@ New REQ ids are the next free ones at execution time. They are above `REQ-EA-126
 5. **ADR shape.** A new ADR-EA-039 (recommended, because it reverses ADR-EA-016's "zero interface change" decision), or only an ADR-EA-016 revision?
 6. **Hoist the password hash.** Move `hasher.hash(input.password)` (`Password.ts:1421`) before `redeem`, so argon2 no longer runs inside the SQLite write lock? The cost is one hash for a bad token, bounded by the `confirmReset` rate limit. It is behaviour-neutral otherwise.
 7. **Transient retries.** Should `redeem` ever retry its transaction on a retryable `SqlError` (`Errors.retryTransient`)? That re-runs `use` and its hooks. The recommendation is no: the caller gets `StoreUnavailable`, and the token is given back.
+
+---
+
+## Decisions taken (execution of phases 1 to 6)
+
+Open questions were answered with the plan's recommended default; where the plan gave none, the richest option with a real caller.
+
+1. **Q1 (refusals after a valid magic link / code):** spend it (`commitUnlessUnavailable`), as today. No `"burn"` settlement was added (no caller).
+2. **Q2 (two-factor challenge):** migrated (phase 5), `SecondFactor.redeemChallenge`, with the same settlement.
+3. **Q3 (dead Password tokens inside `use`):** left as `rollback` (the token stays live), matching SQL today.
+4. **Q4 (memory concurrency):** accepted drift, documented in BEH-EA-062 and ADR-EA-039, pinned by a test.
+5. **Q5:** a new ADR-EA-039 (and ADR-EA-016 rev 1.5, ADR-EA-020 rev 1.2).
+6. **Q6 (hoist the password hash):** not done; the hash still runs inside `use`.
+7. **Q7:** no retry of the redeem transaction.
+8. **The plan was stale in places, because plan 10 item 5 (ADR-EA-037) landed first:** `deferMiss`, `ConsumeOptions` and `recordMiss` were already gone and `consume` already records a miss through `SqlTransaction.afterUnit`. So phase 1 did not need the temporary deferred path, and phase 2's "delete `ConsumeOptions`/the PV-220 tests" was already done (the three ADR-EA-037 consume tests stay: they test `consume`, which is still public). `ClaimStore.claim` takes the operation name so `consume` keeps `Verification.consume` and `redeem` reports `Verification.redeem` on an outage; `layerSql`'s `transaction` is `SqlTransaction.transactional(sql)` (the unit-of-work-aware form), not a raw `sql.withTransaction`. The sixth plan test name "SqlError from the claim" asserts `Verification.redeem`.
+9. **`Password` keeps its `SqlTransaction` port declaration** (core's `SignUp` requires it), but no longer uses it directly.
+10. **`Channel.ts` needed no `createOrGet` change:** plan 01's `SignUp.create` already contains a lost address race in its own savepoint.
+11. **BDD:** the memory twin of REQ-EA-165 is REQ-EA-1281 in `15-password.feature` (the `08` feature runs on the SQL `DomainWorld`, which cannot host a memory composition); REQ-EA-1282 is the type gate; REQ-EA-1283 to 1286 are the magic link, email OTP and two-factor outage scenarios. The DomainWorld transaction probe reads the real SQL connection through `sql.transactionService`.
+12. **Two-factor retry after an outage needs the next TOTP code,** because the TOTP step store is not part of the transaction; the challenge itself is given back.
+13. **`redeemChallenge`'s `E` is constrained to tagged errors** (`{ _tag: string }`) so `commitUnlessUnavailable` type-checks.
+
+Not done: `pnpm test:pg` (no Docker daemon in this environment), so the Postgres path of `redeem` (rollback, savepoint nesting, injected statement failure) is covered only on SQLite; the §5.2 `PasswordRecovery.test.ts` memory crash unit test (the REQ-EA-1281 scenario covers the same claim end to end); OAuth/SAML behaviour (comments only, per the plan).

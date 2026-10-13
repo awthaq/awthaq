@@ -110,6 +110,8 @@ Events are identifiers-only (ADR-EA-029) and declared in `@awthaq/core`'s `AuthE
 
 An operation that is several SQL statements runs in one transaction so it is all-or-nothing, even when called directly. Open it with `SqlTransaction.transactional(sql)(effect)` (or the `SqlTransaction` port's `withTransaction`, which is the same thing); never call `sql.withTransaction` directly, `pnpm check:transactions` fails the build. Composing two records services stays the domain service's job (BEH-EA-035); take the `SqlTransaction` port there.
 
+A token a person presents: `Verification.redeem({ identifier, value, use, onFailure })` when it authorises a state change (it owns the transaction, the miss record and the give-back of a failed `use`; settle a refusal that should spend the token with `onFailure: Verification.commitUnlessUnavailable`); `Verification.consume` only when spending it is the point (OAuth/SAML request state, an exchange code). Never call `consume` for a token that authorises a state change, enforce rate limits before `redeem` rather than inside `use`, and never recover from a constraint violation inside `use` (use an `ON CONFLICT` form): on Postgres it poisons the transaction (ADR-EA-039).
+
 ## Units of work: what may happen inside a transaction (ADR-EA-037)
 
 A transaction opened through `SqlTransaction` is a **unit of work** with two lanes. `AuthEvents.publish` and `HookPoint.observe` already use them, so ordinary plugin code needs nothing: publish a state-change event inside the transaction and live subscribers hear it only if the transaction commits; publish an attempt event (declared `attempt: true`) and it is recorded either way.

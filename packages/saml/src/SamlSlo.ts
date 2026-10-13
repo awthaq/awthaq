@@ -426,6 +426,8 @@ export const makeSlo = (deps: SloDeps) => {
       if (!identifier.startsWith(LOGOUT_PREFIX) || secret === "") {
         return yield* Effect.fail(new SamlLogout.LogoutInvalid({ reason: "logoutStateMalformed" }));
       }
+      // ADR-EA-039: burn-first on purpose (BEH-EA-315: the local session ended before the request left;
+      // no state change follows this consume).
       const consumed = yield* verification
         .consume(identifier, Redacted.make(secret))
         .pipe(

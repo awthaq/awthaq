@@ -949,6 +949,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         if (Option.isNone(decoded)) return yield* CallbackFailure.callbackFailed("state-malformed");
         if (!cookieMatches) return yield* CallbackFailure.callbackFailed("state-cookie-mismatch");
         const { identifier, value } = decoded.value;
+        // ADR-EA-039: burn-first on purpose. The flow state is single-use and network I/O follows
+        // (token exchange, JWKS, userinfo), which must never run inside a write transaction.
         const consumed = yield* verification
           .consume(identifier, value)
           .pipe(
@@ -1338,6 +1340,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           return yield* CallbackFailure.callbackFailed("exchange-malformed");
         }
         const { identifier, value } = decoded.value;
+        // ADR-EA-039: burn-first on purpose. A wrong verifier is one guess gone; nothing follows to roll back.
         const consumed = yield* verification
           .consume(identifier, value)
           .pipe(

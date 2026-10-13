@@ -843,6 +843,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         if (!identifier.startsWith(REQUEST_PREFIX) || secret === "") {
           return yield* Effect.fail(new AssertionInvalid({ reason: "requestStateMalformed" }));
         }
+        // ADR-EA-039: burn-first on purpose (BEH-EA-244: the ACS consumes the request state exactly once;
+        // the assertion id is reserved separately, so giving the request back would not let a response be reused).
         const consumed = yield* verification
           .consume(identifier, Redacted.make(secret))
           .pipe(
