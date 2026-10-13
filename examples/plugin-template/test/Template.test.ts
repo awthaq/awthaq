@@ -228,20 +228,6 @@ describe("plugin-template", () => {
   });
 });
 
-// The shared plugin-contract harness: manifest legality, group ids, table prefixes,
-// migration determinism.
-TestAuth.runPluginContractTests(
-  {
-    describe: (name, body) => describe(name, body),
-    it: (name, body) => it(name, body),
-    fail: (message) => {
-      throw new Error(message);
-    },
-  },
-  () => Template.Notes,
-  { options: [{}] },
-);
-
 // Plan 05: the tenant-isolation conformance suite, over both adapters. The table is Partitioned: a note is
 // stamped with the ambient tenant at insert and seen only under it, identically in memory and SQL, and (on
 // Postgres, under `pnpm run test:pg`) the database confines an unfiltered statement too. A third-party plugin

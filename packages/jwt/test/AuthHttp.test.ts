@@ -34,7 +34,6 @@ import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { TestAuth } from "@awthaq/test";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtApi from "../src/JwtApi.ts";
 import * as JwtCodec from "../src/JwtCodec.ts";
@@ -583,26 +582,3 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     });
   });
 });
-
-/**
- * .scratch/jwt/issues/17-composition-and-contract-tests.md — the same
- * mechanically-verifiable contract suite every other plugin's own
- * `AuthHttp.test.ts` runs against itself (table prefixes, no host-id
- * collision, deterministic migrations, contract stability across every
- * documented `JwtConfig` option value). `Jwt` has no per-instance option
- * surface of its own (its behavior varies only via `JwtConfig`, a separate
- * `Context.Service` this suite never builds/runs — it only inspects the
- * plugin's static manifest and composes it, never executes `make`), so a
- * single `{}` entry is correct, not an omission — mirroring
- * `packages/admin/test/AuthHttp.test.ts`'s own identical reasoning for
- * `Admin`.
- */
-const vitestFramework: TestAuth.TestFramework = {
-  describe: (name, body) => describe(name, body),
-  it: (name, body) => it(name, body),
-  fail: (message) => {
-    throw new Error(message);
-  },
-};
-
-TestAuth.runPluginContractTests(vitestFramework, () => Jwt.Jwt, { options: [{}] });

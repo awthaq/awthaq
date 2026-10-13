@@ -50,7 +50,7 @@ export class RoleAssignments extends Context.Service<RoleAssignments, RoleAssign
 const emptyNames: ReadonlyArray<string> = [];
 
 /** Single-process, lost on restart: every assignment is a `Ref` entry. */
-export const layerMemory = Layer.effect(
+const layerMemory = Layer.effect(
   RoleAssignments,
   Effect.gen(function* () {
     const state = yield* Ref.make(HashMap.empty<Users.UserId, ReadonlyArray<string>>());
@@ -109,7 +109,7 @@ const RoleAssignmentRow = Schema.Struct({
 });
 
 /** Over the `roles_assignments` table (`UNIQUE(userId, role)` makes `add` idempotent at the database layer too). */
-export const layerSql = Layer.effect(
+const layerSql = Layer.effect(
   RoleAssignments,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

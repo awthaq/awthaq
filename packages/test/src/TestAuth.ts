@@ -65,6 +65,7 @@ import type { TestFramework } from "./TestFramework.ts";
 import { Api } from "@awthaq/api";
 import {
   Accounts,
+  AuditChain,
   AuditLog,
   Auth,
   AuthEvents,
@@ -150,6 +151,9 @@ export const memoryFoundation = AuthEvents.layer.pipe(
   // (no-tap) layer — `Users.layer` and every plugin's own `make` consult one directly. See
   // `Hooks.HooksLive`'s own doc comment.
   Layer.provideMerge(Hooks.HooksLive),
+  // Plan 08: the hash chain `Admin`'s impersonation records link their rows with (unkeyed unless a test
+  // provides `AuditChain.config`); it needs only `Crypto`, so it rides here, beside the other things stores read.
+  Layer.provideMerge(AuditChain.layer),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -160,6 +164,7 @@ const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 const sqlFoundation = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
   Layer.provideMerge(Hooks.HooksLive),
+  Layer.provideMerge(AuditChain.layer),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -318,6 +323,68 @@ type Provided<P extends ReadonlyArray<AuthPlugin.Any>, M extends "memory" | "sql
   | D;
 
 /**
+ * The one implementation behind every `layer` overload, over the widest shapes. Contract tests use it directly
+ * (`runPluginContractTests`' `build` check), where the plugin tuple is only known as `AuthPlugin.Any`.
+ */
+const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint>(
+  built: Auth.Built<P, Extra>,
+  options: CommonOptions<never, unknown, unknown, never, unknown> & (MemoryMode | SqlMode) = {},
+): Layer.Layer<never, unknown, unknown> => {
+  const sqlSuite = options.records === "sql" && "suite" in options ? options.suite : undefined;
+  const select = (plugin: AuthPlugin.Any) =>
+    sqlSuite === undefined ? plugin.records?.memory : plugin.records?.sql;
+  const records = built.plugins.reduce<Layer.Layer<never, unknown, unknown>>((acc, plugin) => {
+    const bundle = select(plugin);
+    return bundle === undefined ? acc : Layer.merge(acc, bundle);
+  }, Layer.empty);
+  const points = built.plugins.reduce<Layer.Layer<never, unknown, unknown>>(
+    (acc, plugin) => (plugin.hookPoints === undefined ? acc : Layer.merge(acc, plugin.hookPoints)),
+    Layer.empty,
+  );
+  // The one `CsrfConfig` layer: the derived `CsrfProtection` reads it, and it is also merged into the
+  // output so `TestAuth.app` can mint a token against the very secret the composition checks.
+  const csrf = Layer.succeed(Csrf.CsrfConfig, { ...TestCsrfConfig, ...options.csrf });
+  const middleware = AuthHttp.middlewareFor(built.api, {
+    csrf,
+    ...(options.principalResolver === undefined
+      ? {}
+      : { principalResolver: options.principalResolver }),
+  });
+  const base =
+    sqlSuite === undefined
+      ? memoryBase(options.rateLimiter)
+      : sqlBase(options.rateLimiter, built.migrations, sqlSuite);
+  // MW-002: `built.api` always carries core's session/account groups, so their handlers are part of every
+  // test pipeline. BEH-EA-084: the docs page (when asked for) is mounted on the same router, over the same api.
+  const docs =
+    options.docsPath === undefined
+      ? Layer.empty
+      : AuthHttp.docs(built.api, { path: options.docsPath });
+  return Layer.merge(AuthHttp.routes(built.api, { openapiPath: options.openapiPath }), docs).pipe(
+    Layer.provide(AuthHttp.coreHandlers),
+    // The plugins' own services stay in the output (`provideMerge`), so a test can
+    // `yield* Password.Password` from the same composition it serves over HTTP.
+    Layer.provideMerge(built.layer),
+    // `services` sit closest to the plugins, so they override the derived middleware and the base for the
+    // plugins, and are *merged*, so the output holds the very instances the plugins used.
+    Layer.provideMerge(options.services ?? Layer.empty),
+    Layer.provide(middleware),
+    Layer.provideMerge(csrf),
+    Layer.provideMerge((options.taps ?? Layer.empty).pipe(Layer.provideMerge(points))),
+    Layer.provideMerge(records),
+    Layer.provideMerge(options.decorate ?? Layer.empty),
+    // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) are part of every
+    // `TestAuth` composition; they only record, `assertNoLeaks` is what fails.
+    Layer.provideMerge(GuardLive),
+    Layer.provideMerge(base),
+    Layer.provideMerge(HttpServer.layerServices),
+    Layer.provideMerge(HttpRouter.layer),
+    // SAM-004: the composition's declared user fields, last so `Users` and the account handler both see it.
+    Layer.provideMerge(built.userFieldsLayer),
+  );
+};
+
+/**
  * BEH-EA-193: `TestAuth.layer(Auth.make(plugins), { services })`: the whole pipeline over memory (or, with
  * `records: "sql", suite`, over a migrated database).
  *
@@ -390,60 +457,9 @@ export function layer<
 >;
 export function layer(
   built: Auth.Built<ReadonlyArray<AuthPlugin.Any>, HttpApiGroup.Constraint>,
-  options: CommonOptions<unknown, unknown, unknown, unknown, unknown> & (MemoryMode | SqlMode) = {},
+  options: CommonOptions<never, unknown, unknown, never, unknown> & (MemoryMode | SqlMode) = {},
 ): Layer.Layer<never, unknown, unknown> {
-  const sqlSuite = options.records === "sql" && "suite" in options ? options.suite : undefined;
-  const select = (plugin: AuthPlugin.Any) =>
-    sqlSuite === undefined ? plugin.records?.memory : plugin.records?.sql;
-  const records = built.plugins.reduce<Layer.Layer<never, unknown, unknown>>((acc, plugin) => {
-    const bundle = select(plugin);
-    return bundle === undefined ? acc : Layer.merge(acc, bundle);
-  }, Layer.empty);
-  const points = built.plugins.reduce<Layer.Layer<never, unknown, unknown>>(
-    (acc, plugin) => (plugin.hookPoints === undefined ? acc : Layer.merge(acc, plugin.hookPoints)),
-    Layer.empty,
-  );
-  // The one `CsrfConfig` layer: the derived `CsrfProtection` reads it, and it is also merged into the
-  // output so `TestAuth.app` can mint a token against the very secret the composition checks.
-  const csrf = Layer.succeed(Csrf.CsrfConfig, { ...TestCsrfConfig, ...options.csrf });
-  const middleware = AuthHttp.middlewareFor(built.api, {
-    csrf,
-    ...(options.principalResolver === undefined
-      ? {}
-      : { principalResolver: options.principalResolver }),
-  });
-  const base =
-    sqlSuite === undefined
-      ? memoryBase(options.rateLimiter)
-      : sqlBase(options.rateLimiter, built.migrations, sqlSuite);
-  // MW-002: `built.api` always carries core's session/account groups, so their handlers are part of every
-  // test pipeline. BEH-EA-084: the docs page (when asked for) is mounted on the same router, over the same api.
-  const docs =
-    options.docsPath === undefined
-      ? Layer.empty
-      : AuthHttp.docs(built.api, { path: options.docsPath });
-  return Layer.merge(AuthHttp.routes(built.api, { openapiPath: options.openapiPath }), docs).pipe(
-    Layer.provide(AuthHttp.coreHandlers),
-    // The plugins' own services stay in the output (`provideMerge`), so a test can
-    // `yield* Password.Password` from the same composition it serves over HTTP.
-    Layer.provideMerge(built.layer),
-    // `services` sit closest to the plugins, so they override the derived middleware and the base for the
-    // plugins, and are *merged*, so the output holds the very instances the plugins used.
-    Layer.provideMerge(options.services ?? Layer.empty),
-    Layer.provide(middleware),
-    Layer.provideMerge(csrf),
-    Layer.provideMerge((options.taps ?? Layer.empty).pipe(Layer.provideMerge(points))),
-    Layer.provideMerge(records),
-    Layer.provideMerge(options.decorate ?? Layer.empty),
-    // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) are part of every
-    // `TestAuth` composition; they only record, `assertNoLeaks` is what fails.
-    Layer.provideMerge(GuardLive),
-    Layer.provideMerge(base),
-    Layer.provideMerge(HttpServer.layerServices),
-    Layer.provideMerge(HttpRouter.layer),
-    // SAM-004: the composition's declared user fields, last so `Users` and the account handler both see it.
-    Layer.provideMerge(built.userFieldsLayer),
-  );
+  return makeLayer(built, options);
 }
 
 export interface SignedInSession {
@@ -657,8 +673,19 @@ export const throwingFramework = (
 
 export interface ContractTestOptions<O, R = never> {
   readonly options: ReadonlyArray<O>;
-  /** Other plugins to compose alongside the plugin under test — its own declared `dependsOn`, at minimum. */
+  /**
+   * Other plugins to compose alongside the plugin under test. Defaults to the plugin's own transitive
+   * `dependsOn` closure (dependencies first), so `{ options: [{}] }` is enough for every plugin; `host: []`
+   * still exercises `E_PLUGIN_MISSING_DEP`.
+   */
   readonly host?: ReadonlyArray<AuthPlugin.Any>;
+  /**
+   * Plan 08 (BEH-EA-T6): opt in to the composition-builds check. `TestAuth.layer(Auth.make([...host, plugin]),
+   * { records, suite, services })` is built for both record modes, which catches a plugin that composes over
+   * memory but not over SQL. Opt-in because adapters such as `XmlSignature`, `WebAuthn` and `HttpClient` must
+   * come from the caller (`services`).
+   */
+  readonly build?: { readonly services: Layer.Layer<never, unknown, unknown> };
   /**
    * EOTS-002/BEH-EA-199: opt in to the mechanical redaction check. `app` is the
    * composition to drive (normally `TestAuth.layer(Auth.make([...]), services)`, which
@@ -823,6 +850,93 @@ const abortOf = (exit: Exit.Exit<unknown, unknown>): HookPoint.HookAbort | undef
     : undefined;
 };
 
+/** A plugin's transitive `dependsOn` closure, dependencies before dependents (the order `Auth.make` requires). */
+const dependencyClosure = (plugin: AuthPlugin.Any): ReadonlyArray<AuthPlugin.Any> => {
+  const ordered: Array<AuthPlugin.Any> = [];
+  const visit = (candidate: AuthPlugin.Any) => {
+    for (const dependency of candidate.dependsOn) {
+      if (!ordered.some((installed) => installed.id === dependency.id)) {
+        visit(dependency);
+        ordered.push(dependency);
+      }
+    }
+  };
+  visit(plugin);
+  return ordered;
+};
+
+/** Runs an effect whose requirements are known to be discharged but cannot be proven by the type of a widened layer. */
+const runClosed = <A, E>(effect: Effect.Effect<A, E, unknown>) =>
+  Effect.runPromiseWith(Context.makeUnsafe<unknown>(new Map()))(effect);
+
+/** The service keys a built context holds. */
+const keysOf = (context: Context.Context<never>): ReadonlyArray<string> =>
+  Array.from(context.mapUnsafe.keys()).sort();
+
+/**
+ * BEH-EA-T4/T6: the runtime half of `RecordsLegal`, for a hand-built `AuthPlugin.Any`. Builds `records.memory`
+ * over the memory foundation, and `records.sql` over a fresh SQLite migrated with core and the composition's
+ * migrations; both must build, and the two contexts must hold the same service keys. Resolves to the problems
+ * found (empty when the bundle is matched).
+ */
+const recordsParityProblems = (
+  plugin: AuthPlugin.Any,
+  migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"],
+): Promise<ReadonlyArray<string>> => {
+  const bundle = plugin.records;
+  if (bundle === undefined) return Promise.resolve([]);
+  const memory = Layer.build(
+    bundle.memory.pipe(Layer.provide(Layer.merge(memoryFoundation, TestEncryption.layer))),
+  ).pipe(Effect.map(keysOf), Effect.scoped);
+  const sql = Layer.build(
+    bundle.sql.pipe(Layer.provide(Layer.merge(memoryFoundation, TestEncryption.layer))),
+  ).pipe(
+    Effect.map(keysOf),
+    Effect.provideServiceEffect(
+      SqlClient.SqlClient,
+      Effect.gen(function* () {
+        const sqlClient = yield* SqlClient.SqlClient;
+        yield* Migrator.make({})({
+          loader: CoreMigrations.coreMigrations,
+          table: "effect_sql_migrations",
+        });
+        yield* Migrations.run(migrations);
+        return sqlClient;
+      }),
+    ),
+    Effect.provide(SqliteClient.layer({ filename: ":memory:" })),
+    Effect.scoped,
+  );
+  return runClosed(
+    Effect.gen(function* () {
+      const memoryExit = yield* Effect.exit(memory);
+      const sqlExit = yield* Effect.exit(sql);
+      const problems: Array<string> = [];
+      if (Exit.isFailure(memoryExit)) {
+        problems.push(`records.memory failed to build: ${Cause.pretty(memoryExit.cause)}`);
+      }
+      if (Exit.isFailure(sqlExit)) {
+        problems.push(`records.sql failed to build: ${Cause.pretty(sqlExit.cause)}`);
+      }
+      if (Exit.isSuccess(memoryExit) && Exit.isSuccess(sqlExit)) {
+        const onlyMemory = memoryExit.value.filter((key) => !sqlExit.value.includes(key));
+        const onlySql = sqlExit.value.filter((key) => !memoryExit.value.includes(key));
+        if (onlyMemory.length > 0) {
+          problems.push(
+            `records.memory provides stores records.sql does not: ${onlyMemory.join(", ")}`,
+          );
+        }
+        if (onlySql.length > 0) {
+          problems.push(
+            `records.sql provides stores records.memory does not: ${onlySql.join(", ")}`,
+          );
+        }
+      }
+      return problems;
+    }),
+  );
+};
+
 /**
  * BEH-EA-198/199: the mechanically-verifiable subset of the plugin contract
  * suite — see this module's own header comment for BEH-EA-199's other half
@@ -837,14 +951,13 @@ export const runPluginContractTests = <O, R = never>(
   makePlugin: (options: O) => AuthPlugin.Any,
   config: ContractTestOptions<O, R>,
 ): void => {
-  const host = config.host ?? [];
-  const hostIds = new Set(host.map((plugin) => plugin.id));
-
   framework.describe("runPluginContractTests", () => {
     let previousContract: AuthPlugin.Any["contract"] | undefined;
 
     for (const options of config.options) {
       const plugin = makePlugin(options);
+      const host = config.host ?? dependencyClosure(plugin);
+      const hostIds = new Set(host.map((installed) => installed.id));
       const label = JSON.stringify(options);
 
       framework.it(`${label}: id does not collide with a host plugin`, () => {
@@ -954,6 +1067,59 @@ export const runPluginContractTests = <O, R = never>(
           }
         },
       );
+
+      // BEH-EA-T4/T6: a plugin that declares `records` declares a *matched* pair: both build, same stores.
+      if (plugin.records !== undefined) {
+        framework.it(
+          `${label}: records.memory and records.sql provide the same stores (BEH-EA-T4)`,
+          async () => {
+            const [first, ...rest] = [...host, plugin];
+            if (first === undefined) {
+              framework.fail("runPluginContractTests: host plus plugin under test was empty");
+              return;
+            }
+            const problems = await recordsParityProblems(
+              plugin,
+              Auth.make([first, ...rest]).migrations,
+            );
+            if (problems.length > 0) {
+              framework.fail(
+                `plugin "${plugin.id}"'s records bundle is not matched: ${problems.join("; ")}`,
+              );
+            }
+          },
+        );
+      }
+
+      // BEH-EA-T6 (opt-in): the whole composition builds in both record modes, which catches a plugin that
+      // composes over memory but not over SQL.
+      const buildCheck = config.build;
+      if (buildCheck !== undefined) {
+        for (const mode of recordModes) {
+          framework.it(`${label}: the composition builds over ${mode} records`, async () => {
+            const [first, ...rest] = [...host, plugin];
+            if (first === undefined) {
+              framework.fail("runPluginContractTests: host plus plugin under test was empty");
+              return;
+            }
+            const built = Auth.make([first, ...rest]);
+            const composed =
+              mode === "sql"
+                ? makeLayer(built, {
+                    services: buildCheck.services,
+                    records: "sql",
+                    suite: `contract_${plugin.id}`,
+                  })
+                : makeLayer(built, { services: buildCheck.services });
+            const outcome = await runClosed(Effect.exit(Layer.build(composed).pipe(Effect.scoped)));
+            if (Exit.isFailure(outcome)) {
+              framework.fail(
+                `plugin "${plugin.id}" does not compose over ${mode} records: ${Cause.pretty(outcome.cause)}`,
+              );
+            }
+          });
+        }
+      }
 
       // PV-260/BEH-EA-200: the plugin's declared taps, checked as the plugin's own handlers.
       const stubs = config.hooks ?? [];

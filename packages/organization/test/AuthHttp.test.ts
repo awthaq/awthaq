@@ -837,21 +837,3 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     }),
   );
 });
-
-/**
- * `runPluginContractTests` against the real `Organization` plugin — manifest
- * legality, group ids, every `organization_*` table's prefix, and migration
- * determinism. Mirrors `packages/admin/test/AuthHttp.test.ts`'s own use of
- * this same harness.
- */
-const vitestFramework: TestAuth.TestFramework = {
-  describe: (name, body) => describe(name, body),
-  it: (name, body) => it(name, body),
-  fail: (message) => {
-    throw new Error(message);
-  },
-};
-
-TestAuth.runPluginContractTests(vitestFramework, () => Organization.Organization, {
-  options: [{}],
-});

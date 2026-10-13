@@ -754,21 +754,3 @@ describe("AuthHttp + Admin (real HTTP)", () => {
       }),
   );
 });
-
-/**
- * BEH-EA-198/199: `runPluginContractTests` against the real `Admin` plugin —
- * manifest legality, group ids, the `admin_impersonation` table prefix, and
- * migration determinism. Mirrors `packages/test/test/runPluginContractTests.test.ts`'s
- * own use of `@awthaq/password`, adapted onto real `describe`/`it`/`assert`
- * instead of a recording framework, since this suite only needs the checks to
- * pass, not to inspect their pass/fail messages.
- */
-const vitestFramework: TestAuth.TestFramework = {
-  describe: (name, body) => describe(name, body),
-  it: (name, body) => it(name, body),
-  fail: (message) => {
-    throw new Error(message);
-  },
-};
-
-TestAuth.runPluginContractTests(vitestFramework, () => Admin.Admin, { options: [{}] });

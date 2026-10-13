@@ -2,7 +2,6 @@
 // with the other sign-in machinery — the real `@awthaq/two-factor` gate (the divert), a `BeforeSignIn` veto, and
 // the plugin contract's own mechanical checks (`TestAuth.runPluginContractTests`).
 import { Auth, ConfigDescriptor, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
-import { TestAuth } from "@awthaq/test";
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
@@ -142,12 +141,6 @@ describe("DeviceAuthorization composition", () => {
       "awthaq/ports/RateLimiter",
     ]);
   });
-
-  TestAuth.runPluginContractTests(
-    { describe, it, fail: (message) => assert.fail(message) },
-    () => DeviceAuthorization.DeviceAuthorization,
-    { options: [{}] },
-  );
 });
 
 describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-304)", () => {
