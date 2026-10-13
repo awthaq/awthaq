@@ -33,20 +33,6 @@ import type * as Redacted from "effect/Redacted";
 /** The address exactly as compared and stored: trimmed and lower-cased (`Users` lower-cases too, BEH-EA-041). */
 export const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
-/**
- * TMS-006: the bucket a per-address limit counts against — lower-cased with a `+tag` stripped, so
- * `victim+1@x.com` and `victim+2@x.com` share one budget instead of mail-bombing one inbox.
- * Only the key is normalised; the address a mail is delivered to stays literal.
- */
-export const emailRateKey = (email: string): string => {
-  const lowered = normalizeEmail(email);
-  const at = lowered.lastIndexOf("@");
-  if (at === -1) return lowered;
-  const local = lowered.slice(0, at);
-  const plus = local.indexOf("+");
-  return `${plus > 0 ? local.slice(0, plus) : local}${lowered.slice(at)}`;
-};
-
 /** The consumed proof named no usable user and no address to create one for. Each plugin maps it onto its own wire error. */
 export class ChannelInvalid extends Data.TaggedError("MagicLink/ChannelInvalid")<{
   readonly reason: "noAddress" | "userMissing" | "signUpDisabled";

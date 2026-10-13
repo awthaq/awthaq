@@ -48,7 +48,6 @@ import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as MagicLinkApi from "./MagicLinkApi.ts";
-import * as RateLimitRules from "./RateLimitRules.ts";
 
 // ---- config -----------------------------------------------------------------------------------------
 
@@ -89,47 +88,41 @@ const linkBuilder = (settings: MagicLinkConfigShape): ((token: string) => string
 
 // ---- rate limits ------------------------------------------------------------------------------------
 
+// BEH-EA-105/107/111: declared once; the static `rateLimits` listing is derived from this table and the
+// layer registers it with `RateLimits.budget`. A rule's key reads only the small, secret-free input its
+// endpoint names (`{ ip }`, `{ email }`, `{ identifier }`), never a payload: a token or a code never
+// becomes a bucket key.
+const minutes15 = Duration.minutes(15);
+
 const rules = {
-  requestByIp: RateLimitRules.rule({
+  requestByIp: RateLimits.rule({
     group: "magicLink",
-    name: "requestByIp",
     endpoint: "request",
-    dimension: "ip",
-    input: RateLimitRules.IpInput,
-    keyOf: RateLimitRules.ipKey("magic-link:request"),
+    key: RateLimits.Key.ip,
     limit: 30,
-    window: RateLimitRules.minutes15,
+    window: minutes15,
   }),
-  requestByEmail: RateLimitRules.rule({
+  requestByEmail: RateLimits.rule({
     group: "magicLink",
-    name: "requestByEmail",
     endpoint: "request",
-    dimension: "identity",
-    input: RateLimitRules.EmailInput,
-    keyOf: RateLimitRules.emailKey("magic-link:request"),
+    key: RateLimits.Key.email,
     limit: 5,
-    window: RateLimitRules.minutes15,
+    window: minutes15,
   }),
-  verifyByIp: RateLimitRules.rule({
+  verifyByIp: RateLimits.rule({
     group: "magicLink",
-    name: "verifyByIp",
     endpoint: "verify",
-    dimension: "ip",
-    input: RateLimitRules.IpInput,
-    keyOf: RateLimitRules.ipKey("magic-link:verify"),
+    key: RateLimits.Key.ip,
     limit: 30,
-    window: RateLimitRules.minutes15,
+    window: minutes15,
   }),
   // Keyed on the token's decoded public id (never its secret half): a flood of guesses at one link.
-  verifyByToken: RateLimitRules.rule({
+  verifyByToken: RateLimits.rule({
     group: "magicLink",
-    name: "verifyByToken",
     endpoint: "verify",
-    dimension: "identity",
-    input: RateLimitRules.IdentifierInput,
-    keyOf: (input) => `magic-link:verify:${input.identifier}`,
+    key: RateLimits.Key.identifier,
     limit: 5,
-    window: RateLimitRules.minutes15,
+    window: minutes15,
   }),
 };
 
@@ -224,8 +217,8 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
 export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("magicLink", {
   apiVersion: 1,
   contract: MagicLinkApi.MagicLinkApi,
-  // PV-241: declared from the rule table the layer registers.
-  rateLimits: AuthPlugin.declareRateLimits(["magicLink"], Object.values(rules)),
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
   // BEH-EA-270: no table — the links are `Verification` rows (`verification_tokens`, core's).
   tables: [],
 }) {
@@ -238,50 +231,20 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       const events = yield* AuthEvents.AuthEvents;
       const mailer = yield* Mailer.Mailer;
       const crypto = yield* Crypto.Crypto;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
       const settings = yield* MagicLinkConfig;
       const channel = yield* Channel.make;
       // ERS-002: mail is dispatched in the background, owned by this plugin's scope.
       const mailDispatcher = yield* MailDispatch.make;
 
-      // RBS-006: one typed definition per rule feeds both the registry and the enforcement calls. A
-      // `RateLimitScopeViolation` is only reachable if a rule named a group outside this plugin's own
-      // contract — a coding defect here, hence `Effect.orDie`.
-      yield* Effect.all(
-        // The callback's return type is annotated to break the inference cycle through `MagicLink.layer`
-        // (its own initializer names `MagicLink`) — the narrow exception `Password`/`Passkey` document too.
-        RateLimitRules.registryEntries(rules).map(
-          (entry): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-            rateLimitsRegistry.register(MagicLink, entry),
-        ),
-      ).pipe(Effect.orDie);
-
-      const rateLimit = <I>(
-        rule: RateLimitRules.Rule<I>,
-        input: I,
-      ): Effect.Effect<void, Api.RateLimited> =>
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        RateLimits.enforce({
-          key: rule.keyOf(input),
-          limit: rule.limit,
-          window: rule.window,
-          meta: RateLimitRules.metaOf(rule),
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // RBS-006: the table above feeds both the registry and the enforcement calls. EOTS-007: a breach
+      // is published, logged and counted, and answers `Api.RateLimited`.
+      const limits = yield* RateLimits.budget(MagicLink);
 
       const link = linkBuilder(settings);
       const decodePayload = Schema.decodeUnknownOption(LinkPayload);
 
       const requestLink: MagicLinkShape["requestLink"] = Effect.fnUntraced(function* (input) {
-        yield* rateLimit(rules.requestByIp, { ip: input.ip });
-        yield* rateLimit(rules.requestByEmail, { email: input.email });
+        yield* limits.spend(["requestByIp", "requestByEmail"], input);
         // The lookup, the token and the mail are all background work: the response is the same
         // whether or not this address has an account (BEH-EA-064), in body and in timing.
         yield* mailDispatcher.dispatch(
@@ -321,7 +284,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       });
 
       const verify: MagicLinkShape["verify"] = Effect.fnUntraced(function* (input, context) {
-        yield* rateLimit(rules.verifyByIp, { ip: input.ip });
+        yield* limits.spend("verifyByIp", { ip: input.ip });
         // ARF-007-style purpose check before anything is rate limited or consumed.
         const decoded = VerificationLink.decode(Redacted.value(input.token), PURPOSE);
         const refused = Effect.gen(function* () {
@@ -334,7 +297,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
           return yield* Effect.fail(new MagicLinkApi.MagicLinkConsumed());
         });
         if (Option.isNone(decoded)) return yield* refused;
-        yield* rateLimit(rules.verifyByToken, { identifier: decoded.value.publicId });
+        yield* limits.spend("verifyByToken", { identifier: decoded.value.publicId });
         const consumed = yield* verification
           .consume(decoded.value.identifier, decoded.value.value)
           .pipe(Effect.catchTag("Verification/TokenConsumed", () => refused));
