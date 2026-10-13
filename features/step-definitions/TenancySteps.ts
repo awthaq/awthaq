@@ -4,13 +4,12 @@
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
 import { Encryption, Tenant } from "@awthaq/ports";
 import {
-  ConnectionRecords,
   Organization,
   OrganizationActor,
   OrganizationConnections,
   OrganizationMembers,
-  OrganizationRecords,
 } from "@awthaq/organization";
+import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
 import { AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
 import { Models, Repositories, TenantScope, TenantScoped } from "@awthaq/sql";

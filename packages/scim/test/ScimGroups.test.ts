@@ -2,7 +2,7 @@
 // connection only ever sees and changes the users it provisioned.
 import { AuditLog, HookPoint, Users } from "@awthaq/core";
 import { OrganizationActor, OrganizationHooks, OrganizationTeams } from "@awthaq/organization";
-import { TeamRecords } from "@awthaq/organization";
+import { TeamRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

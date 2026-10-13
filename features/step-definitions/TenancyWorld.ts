@@ -29,18 +29,17 @@ import {
   Verification,
 } from "@awthaq/core";
 import {
-  ConnectionRecords,
   Organization,
   OrganizationConnections,
   OrganizationDirectory,
   OrganizationHooks,
   OrganizationMembers,
   OrganizationQadi,
-  OrganizationRecords,
   TenantMiddleware,
   TenantResolver,
   OrganizationMemory,
 } from "@awthaq/organization";
+import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
 import { OAuth, OAuthConnections, OAuthProvider } from "@awthaq/oauth";
 import {
   ClientAddress,

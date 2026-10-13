@@ -2,12 +2,8 @@
 // to an organization's OIDC connection or its SAML connection, and the answer is the URL of the owning protocol plugin's own login
 // route; which protocol wins when both route the same hint is configured, and `discoverAll` shows the conflict instead of hiding it.
 import { AuthHttp } from "@awthaq/server";
-import {
-  ConnectionRecords,
-  Organization,
-  OrganizationActor,
-  OrganizationConnections,
-} from "@awthaq/organization";
+import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
+import { ConnectionRecords } from "@awthaq/organization/records";
 import { RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";

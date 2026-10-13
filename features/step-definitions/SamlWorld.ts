@@ -20,13 +20,12 @@ import {
   Verification,
 } from "@awthaq/core";
 import {
-  ConnectionRecords,
-  MembershipRecords,
   Organization,
   OrganizationConnections,
   OrganizationHooks,
   OrganizationMemory,
 } from "@awthaq/organization";
+import { ConnectionRecords, MembershipRecords } from "@awthaq/organization/records";
 import {
   ClientAddress,
   Encryption,

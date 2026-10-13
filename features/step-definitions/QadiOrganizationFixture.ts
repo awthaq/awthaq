@@ -6,10 +6,26 @@
 import { Sessions, Users } from "@awthaq/core";
 import {
   Organization,
+  OrganizationActiveContext,
+  OrganizationAuthority,
+  OrganizationDeletion,
+  OrganizationDirectory,
   OrganizationHooks,
+  OrganizationInvitations,
+  OrganizationMembers,
   OrganizationQadi,
   OrganizationMemory,
+  OrganizationRoles,
+  OrganizationTeams,
 } from "@awthaq/organization";
+import {
+  ActiveContextRecords,
+  InvitationRecords,
+  MembershipRecords,
+  OrganizationRecords,
+  OrgRoleRecords,
+  TeamRecords,
+} from "@awthaq/organization/records";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -85,5 +101,25 @@ export const organizationFixture = (probe: WalkProbe) => {
     Layer.provideMerge(OrganizationLive),
   );
 };
+
+/**
+ * The organization services and record stores the fixture's layer provides, named so its inferred type can
+ * be emitted (declaration emit needs each namespace in scope).
+ */
+export type OrganizationServiceNames =
+  | OrganizationActiveContext.OrganizationActiveContext
+  | OrganizationAuthority.OrganizationAuthority
+  | OrganizationDeletion.OrganizationDeletion
+  | OrganizationDirectory.OrganizationDirectory
+  | OrganizationInvitations.OrganizationInvitations
+  | OrganizationMembers.OrganizationMembers
+  | OrganizationRoles.OrganizationRoles
+  | OrganizationTeams.OrganizationTeams
+  | ActiveContextRecords.ActiveContextRecords
+  | InvitationRecords.InvitationRecords
+  | MembershipRecords.MembershipRecords
+  | OrganizationRecords.OrganizationRecords
+  | OrgRoleRecords.OrgRoleRecords
+  | TeamRecords.TeamRecords;
 
 export type OrganizationFixtureServices = Layer.Success<ReturnType<typeof organizationFixture>>;

@@ -20,17 +20,15 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
+import { Organization, OrganizationHooks, OrganizationTeams } from "@awthaq/organization";
 import {
   ActiveContextRecords,
   InvitationRecords,
   MembershipRecords,
-  Organization,
-  OrganizationHooks,
   OrganizationRecords,
-  OrganizationTeams,
   OrgRoleRecords,
   TeamRecords,
-} from "@awthaq/organization";
+} from "@awthaq/organization/records";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Scim, ScimApi, ScimConnections, ScimRecords } from "@awthaq/scim";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";

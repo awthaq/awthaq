@@ -2,7 +2,7 @@
 // Single Logout record, the role mapping and the connection's tenant on a sign-in that a second factor finishes. Policy (gate,
 // veto, divert, announcement, outages) is tested once at `SignIn`.
 import { Hooks, SignIn, Users } from "@awthaq/core";
-import { MembershipRecords } from "@awthaq/organization";
+import { MembershipRecords } from "@awthaq/organization/records";
 import { SignInProbe } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

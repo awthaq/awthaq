@@ -5,7 +5,7 @@
 //   - BEH-EA-252: `/ServiceProviderConfig` must report the `filter.maxResults` the plugin
 //     actually enforces (`ScimConfig.maxResults`), not a hard-coded 200.
 import { AuditLog, Hooks, HookPoint, Sessions, Users } from "@awthaq/core";
-import { MembershipRecords } from "@awthaq/organization";
+import { MembershipRecords } from "@awthaq/organization/records";
 import { AuthHttp } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

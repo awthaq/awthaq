@@ -4,12 +4,8 @@
 // XML-signature adapter, sealed SP keys over a real `Encryption`) and play the IdP's side of each protocol message themselves.
 import { Api } from "@awthaq/api";
 import { AuditLog, Sessions, Tenant, Users } from "@awthaq/core";
-import {
-  MembershipRecords,
-  Organization,
-  OrganizationActor,
-  OrganizationConnections,
-} from "@awthaq/organization";
+import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
+import { MembershipRecords } from "@awthaq/organization/records";
 import { Encryption } from "@awthaq/ports";
 import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import {

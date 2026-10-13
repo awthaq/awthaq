@@ -2,7 +2,8 @@
 // chain against signed responses the fixtures' IdP produces — and against every way of getting one wrong. The
 // invariant asserted throughout: every rejection is the SAME `SamlAssertionRejected`, and never a session.
 import { Auth, AuthEvents, RateLimits, Users } from "@awthaq/core";
-import { Organization, OrganizationRecords } from "@awthaq/organization";
+import { Organization } from "@awthaq/organization";
+import { OrganizationRecords } from "@awthaq/organization/records";
 import { RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";

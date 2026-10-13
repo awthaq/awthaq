@@ -23,6 +23,14 @@ import {
   OrganizationHooks,
   OrganizationMemory,
 } from "@awthaq/organization";
+import {
+  ActiveContextRecords,
+  InvitationRecords,
+  MembershipRecords,
+  OrganizationRecords,
+  OrgRoleRecords,
+  TeamRecords,
+} from "@awthaq/organization/records";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -60,6 +68,15 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
   Layer.provide(NodeCrypto.layer),
 );
+
+/** The record stores the memory layer provides, named so the inferred layer type below can be emitted. */
+export type RecordServiceNames =
+  | ActiveContextRecords.ActiveContextRecords
+  | InvitationRecords.InvitationRecords
+  | MembershipRecords.MembershipRecords
+  | OrganizationRecords.OrganizationRecords
+  | OrgRoleRecords.OrgRoleRecords
+  | TeamRecords.TeamRecords;
 
 type HookTaps = Layer.Layer<
   never,

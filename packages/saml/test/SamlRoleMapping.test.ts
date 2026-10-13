@@ -4,7 +4,8 @@
 // out-privileges the connection is never reshaped by it, the last owner is never demoted, and a mapping that cannot be applied
 // never locks the user out.
 import { AuditLog, Users } from "@awthaq/core";
-import { MembershipRecords, Organization, OrganizationHooks } from "@awthaq/organization";
+import { Organization, OrganizationHooks } from "@awthaq/organization";
+import { MembershipRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

@@ -17,19 +17,21 @@
 import { Api } from "@awthaq/api";
 import { Sessions, Users } from "@awthaq/core";
 import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
   Organization,
   OrganizationActor,
   OrganizationDirectory,
   OrganizationHooks,
   OrganizationMembers,
   OrganizationQadi,
+} from "@awthaq/organization";
+import {
+  ActiveContextRecords,
+  InvitationRecords,
+  MembershipRecords,
   OrganizationRecords,
   OrgRoleRecords,
   TeamRecords,
-} from "@awthaq/organization";
+} from "@awthaq/organization/records";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";

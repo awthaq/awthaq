@@ -5,15 +5,13 @@
 // by hand), directly against the services the handler runs on. A Then reads the response, or
 // the services, for what HTTP cannot show.
 import { Accounts, AuditLog, Erasure, Sessions, Users } from "@awthaq/core";
+import { Organization, OrganizationActor, OrganizationTeams } from "@awthaq/organization";
 import {
   InvitationRecords,
   MembershipRecords,
-  Organization,
-  OrganizationActor,
   OrganizationRecords,
-  OrganizationTeams,
   TeamRecords,
-} from "@awthaq/organization";
+} from "@awthaq/organization/records";
 import { ScimApi, ScimConnections, ScimRecords } from "@awthaq/scim";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
