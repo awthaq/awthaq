@@ -12,7 +12,10 @@
 // Runs from `pnpm check`. Exit code 1 on any problem.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { rootDir } from "./_root.mjs";
+import { rootDir as repoRoot } from "./_root.mjs";
+
+// The BDD scenario for BEH-EA-336 drives this script against a throwaway tree.
+const rootDir = process.env["AWTHAQ_CONTRACT_TESTS_ROOT"] ?? repoRoot;
 
 const read = (file) => readFileSync(file, "utf8");
 const walk = (dir) =>

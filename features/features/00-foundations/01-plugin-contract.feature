@@ -165,3 +165,26 @@ Feature: Plugin Contract
       When the linker computes migration order and a consumer composes "Password"'s "layer"
       Then the linker orders "Password"'s migrations after "Sessions" and "Users"
       And any consumer of "Password"'s "layer" must satisfy "Sessions" and "Users" as a compile-time requirement
+
+  # BEH-EA-334 — spec/behaviors/01-plugin-contract.md. The compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (the records-* gates).
+  @BEH-EA-334 @compile-time
+  Rule: A plugin declares its record stores as matched memory and SQL bundles
+
+    @REQ-EA-1301
+    Scenario: A plugin whose layer requires a record store no bundle provides fails to compile
+      Given a plugin whose layer requires a "/records/" store that its "records" bundle does not provide
+      When the plugin's "AuthPlugin.layer" is type-checked
+      Then it fails to compile, naming the missing record store
+
+    @REQ-EA-1302
+    Scenario: A bundle whose memory and sql provide different stores fails to compile
+      Given a plugin declaring a "records" bundle whose "memory" provides a store its "sql" does not
+      When the plugin class is type-checked
+      Then it fails to compile, naming the store
+
+    @REQ-EA-1303
+    Scenario: A bundle that provides a service other than a record store fails to compile
+      Given a plugin declaring a "records" bundle that also provides a port
+      When the plugin class is type-checked
+      Then it fails to compile, naming the service

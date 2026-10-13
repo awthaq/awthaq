@@ -100,6 +100,23 @@ const owner = (
 });
 
 export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
+  // ---- BEH-EA-335 (the hookpoints-complete gate in PluginTypeGates.ts) ---------------------
+
+  Given(
+    "a plugin whose layer requires a hook point that its {string} does not declare",
+    function* (_declaration: string) {
+      yield* Effect.void;
+    },
+  );
+
+  When("the plugin's {string} is type-checked", function* (_entry: string) {
+    yield* Effect.void;
+  });
+
+  Then("it fails to compile, naming the hook point", function* () {
+    yield* Effect.void;
+    assertTypeGate("hookpoints-complete", "PluginTypeGates.ts", ["@ts-expect-error", "GatePoint"]);
+  });
   // ---- BEH-EA-017: configuration is a Reference ----
 
   Given(

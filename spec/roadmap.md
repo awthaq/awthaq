@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-RMP |
-> | Revision | 1.4 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.5 |
+> | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed gate-count and M7 Bearer omission; clarified milestone-to-gate mapping (gates cluster at M0/M1/M6/M8, other milestones certified retroactively); reworded M0 to not overclaim gate 5's mechanized proof (CCR-EA-002) <br> 1.2 (2026-09-14): Replaced the stale "pre-implementation, no source exists" current-state line — implementation has since progressed through M4 and beyond; pointed readers to `README.md` and the shipping-gaps map instead of restating a milestone checklist here <br> 1.3 (2026-09-29): Reconciled with the shipped state: each milestone carries an implementation status (M0-M6 implemented; M7 partly: TwoFactor, MagicLink and EmailOtp remain; M8 not started), the gate table separates implementation status from gate status and takes gate status from `definitions-of-done.md`'s "Wired as" column, and the capabilities that shipped outside the original milestone list (tenancy, SCIM, events outbox, erasure, observability, read replicas) are recorded (DTWS-005, MM-005, CCR-EA-006) <br> 1.4 (2026-10-13): M7 lists TwoFactor, MagicLink, EmailOtp and SAML as implemented, and webhooks as shipped (plan 10 item 8) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed gate-count and M7 Bearer omission; clarified milestone-to-gate mapping (gates cluster at M0/M1/M6/M8, other milestones certified retroactively); reworded M0 to not overclaim gate 5's mechanized proof (CCR-EA-002) <br> 1.2 (2026-09-14): Replaced the stale "pre-implementation, no source exists" current-state line — implementation has since progressed through M4 and beyond; pointed readers to `README.md` and the shipping-gaps map instead of restating a milestone checklist here <br> 1.3 (2026-09-29): Reconciled with the shipped state: each milestone carries an implementation status (M0-M6 implemented; M7 partly: TwoFactor, MagicLink and EmailOtp remain; M8 not started), the gate table separates implementation status from gate status and takes gate status from `definitions-of-done.md`'s "Wired as" column, and the capabilities that shipped outside the original milestone list (tenancy, SCIM, events outbox, erasure, observability, read replicas) are recorded (DTWS-005, MM-005, CCR-EA-006) <br> 1.4 (2026-10-13): M7 lists TwoFactor, MagicLink, EmailOtp and SAML as implemented, and webhooks as shipped (plan 10 item 8) <br> 1.5 (2026-10-14): M0 gate 3 lists `check:contract-tests` (architecture plan 08) |
 
 ---
 
@@ -113,7 +113,7 @@ Gates do not attach one-per-milestone: they cluster at four checkpoints (gates 1
 
 | Milestone | Implementation | Gates that attach here | Gate status |
 |---|---|---|---|
-| M0 Architecture | Implemented | 1-3 | 1 Active; 2 Active; 3 Active-partial (`check:error-tags`, `check:readmes`) |
+| M0 Architecture | Implemented | 1-3 | 1 Active; 2 Active; 3 Active-partial (`check:error-tags`, `check:readmes`, `check:contract-tests`) |
 | M1 Core | Implemented | 4-6 | 4 Active; 5 Active-partial (`@ts-expect-error` cases inside `pnpm typecheck`, no type-testing tool); 6 Active (coverage thresholds enforced) |
 | M2 Password | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9; does not yet run `runPluginContractTests` (gate 7) |
 | M3 qadi bridge | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9 |

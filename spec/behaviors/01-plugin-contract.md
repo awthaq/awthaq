@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-01 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-005: `tables` is a record of tenancy declarations keyed by the plugin's own prefix; `Class.tables` lists its keys (plan 05) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-005: `tables` is a record of tenancy declarations keyed by the plugin's own prefix; `Class.tables` lists its keys (plan 05) <br> 1.3 (2026-10-14): BEH-EA-334: a plugin declares its record stores as matched memory and SQL bundles (architecture plan 08) |
 
 ---
 
@@ -166,4 +166,30 @@ JH-007 (as shipped): `dependsOn` is reserved for *other plugins*. Core domain se
 
 `archive/design/plugins-as-layers.md` §2.1 folds what earlier plugin systems kept as two separate declarations — a structural dependency list for ordering, and a service requirement for the type checker — into the single `dependsOn` array, because `AuthPlugin.layer`'s type signature (`DepsOf<typeof options>` joining `RIn`) makes the two facts equivalent by construction. `research/09-plugin-architecture.md` Q21 explicitly considers keeping `requiresPlugins` (structural) and `Context.Tag` requirements (service-level) as two mechanisms an author must maintain in parallel, and recommends against it for exactly this reason: Effect's own Layer graph already validates the tag-level requirement, so `dependsOn` only needs to add what the graph cannot express on its own — migration ordering.
 
-_Next: [BEH-EA-009](02-plugin-composition-validate.md#beh-ea-009-authmake-computes-three-outputs-from-one-plugin-tuple)_
+_Next: [BEH-EA-334](01-plugin-contract.md#beh-ea-334-a-plugin-declares-its-record-stores-as-matched-memory-and-sql-bundles)_
+
+## BEH-EA-334: A plugin declares its record stores as matched memory and SQL bundles
+
+```ts
+class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
+  // ...
+  records: { memory: layerMemory, sql: layerSql },
+}) {}
+```
+
+```text
+REQUIREMENT: A record store is a `Context.Service` whose key contains a
+             `/records/` segment. A plugin declares its stores as
+             `records: { memory, sql }` on `AuthPlugin.Service`, two layers
+             readable as static members of the class (`Layer.empty` when it
+             declares none). A plugin whose layer requires a `/records/` store
+             that neither its own bundle nor a `dependsOn` plugin's bundle
+             provides MUST fail to compile, naming the key. A `memory` and a
+             `sql` that provide different stores MUST fail to compile. A bundle
+             that provides anything other than record stores (a port, a
+             derived service) MUST fail to compile.
+```
+
+The key segment is the mechanism `PortKeysOf` already uses for `/ports/` (BEH-EA-202): one convention marks both, and the compiler can then ask "is every store provided?" without a brand. A plugin's static members are still frozen (BEH-EA-007): the bundle is a declaration, not a computed value. Selecting a bundle stays the host's choice; `Auth.make` does not provide records. A store only the plugin's own derived services read (`SamlConnectionStore`, `ScimConnectionStore`, `KeyRing`) is not a record store and is absorbed into the plugin layer instead. Test-only seams a record layer also provides (a `MemoryEnvelopes` tag) are projected out of the bundle.
+
+_Previous: [BEH-EA-008](01-plugin-contract.md#beh-ea-008-dependson-declares-both-ordering-and-a-typed-requirement-in-one-static-array) | Next: [BEH-EA-009](02-plugin-composition-validate.md#beh-ea-009-authmake-computes-three-outputs-from-one-plugin-tuple)_

@@ -238,3 +238,55 @@ Feature: Testing Harness
       When "runPluginContractTests" exercises the declared tap with a stub input for its point
       Then the contract test fails
       And the failure names "AfterSignUp" as an observe point whose tap tried to abort
+
+  # BEH-EA-331 — spec/behaviors/25-testing-harness.md
+  @BEH-EA-331
+  Rule: TestAuth.layer derives the host middleware from the composed contract
+
+    @REQ-EA-1295
+    Scenario: A composition declaring the admin tier is served with no hand-built middleware
+      Given a composition whose only plugin declares an admin-tier group behind "AdminAuthentication"
+      When it is served through "TestAuth.layer" with no "services"
+      Then a signed-in request to the admin endpoint is answered 200 and an anonymous one 401
+
+    @REQ-EA-1296
+    Scenario: A test's own AdminAuthentication overrides the derived one
+      Given a composition whose only plugin declares an admin-tier group behind "AdminAuthentication"
+      When the test supplies its own "AdminAuthentication" in "services"
+      Then an anonymous request is admitted as the test's operator
+
+  # BEH-EA-332 — spec/behaviors/25-testing-harness.md
+  @BEH-EA-332
+  Rule: TestAuth.layer runs the same composition over SQL
+
+    @REQ-EA-1297
+    Scenario: The same plugin composition answers identically over memory and SQL
+      Given a plugin that declares a "records" bundle
+      When the same requests run over "memory" records and over "sql" records
+      Then both answer identically and the row is in the migrated database
+
+  # BEH-EA-333 — spec/behaviors/25-testing-harness.md
+  @BEH-EA-333
+  Rule: TestAuth.app serves the composition and its context together
+
+    @REQ-EA-1298
+    Scenario: A session minted through the app's context authenticates a request through its handler
+      Given a composition served through "TestAuth.app"
+      When a session is minted through the app's context runner and used on its handler
+      Then the handler authenticates the request
+
+  # BEH-EA-336 — spec/behaviors/25-testing-harness.md
+  @BEH-EA-336
+  Rule: Every shipped plugin runs the contract suite, which checks its records
+
+    @REQ-EA-1299
+    Scenario: A plugin package without a contract-test call fails pnpm check
+      Given a plugin package whose class extends "AuthPlugin.Service" and whose tests never call "runPluginContractTests"
+      When the script "scripts/check-contract-tests.mjs" runs
+      Then it exits non-zero, naming the class
+
+    @REQ-EA-1300
+    Scenario: The same package passes once its Contract.test.ts calls the suite for the class
+      Given a plugin package whose class extends "AuthPlugin.Service" and whose tests never call "runPluginContractTests"
+      When the package's "test/Contract.test.ts" calls "runPluginContractTests" for the class
+      Then it exits zero

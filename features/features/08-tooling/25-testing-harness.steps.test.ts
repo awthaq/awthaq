@@ -1,5 +1,6 @@
 import { describeFeature, loadFeature } from "@effect-cucumber/vitest";
 import { fileURLToPath } from "node:url";
+import { testingHarnessComposeSteps } from "../../step-definitions/TestingHarnessComposeSteps.ts";
 import { testingHarnessSteps } from "../../step-definitions/TestingHarnessSteps.ts";
 import { WorldLive } from "../../step-definitions/TestingHarnessWorld.ts";
 
@@ -9,4 +10,5 @@ const feature = await loadFeature(
 
 describeFeature(feature, WorldLive, ({ use }) => {
   use(testingHarnessSteps);
+  use(testingHarnessComposeSteps);
 });

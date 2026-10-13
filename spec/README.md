@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-00 |
-> | Revision | 1.6 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.7 |
+> | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed 11 stale filenames in the behaviors table; updated models count/table for MOD-EA-014/015; added decisions-table rows for ADR-EA-013/014/015 (CCR-EA-002) <br> 1.2 (2026-09-12): Added a "`features/` is the acceptance suite" section noting the new Gherkin suite and its REQ-EA allocation (CCR-EA-003) <br> 1.3 (2026-09-29): Replaced the "planned system, no source tree, no CI" banner with the shipped state; refreshed every count and table (decisions, behaviors, models); described the wired BDD suite and the mechanical drift checks in `spec/scripts/` (DTWS-001, DTWS-006, AVS-008, CCR-EA-006) <br> 1.4 (2026-10-13): ADR-EA-038 and BEH-EA-322/323 are listed (architecture plan 01) <br> 1.5 (2026-10-13): ADR-EA-039 is listed (architecture plan 07) <br> 1.6 (2026-10-13): ADR-EA-040 and BEH-EA-329/330 are listed (architecture plan 04) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed 11 stale filenames in the behaviors table; updated models count/table for MOD-EA-014/015; added decisions-table rows for ADR-EA-013/014/015 (CCR-EA-002) <br> 1.2 (2026-09-12): Added a "`features/` is the acceptance suite" section noting the new Gherkin suite and its REQ-EA allocation (CCR-EA-003) <br> 1.3 (2026-09-29): Replaced the "planned system, no source tree, no CI" banner with the shipped state; refreshed every count and table (decisions, behaviors, models); described the wired BDD suite and the mechanical drift checks in `spec/scripts/` (DTWS-001, DTWS-006, AVS-008, CCR-EA-006) <br> 1.4 (2026-10-13): ADR-EA-038 and BEH-EA-322/323 are listed (architecture plan 01) <br> 1.5 (2026-10-13): ADR-EA-039 is listed (architecture plan 07) <br> 1.6 (2026-10-13): ADR-EA-040 and BEH-EA-329/330 are listed (architecture plan 04) <br> 1.7 (2026-10-14): BEH-EA-331..336 are listed (architecture plan 08) |
 
 ---
 
@@ -34,7 +34,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
 | [spec/decisions/](decisions/) | `ADR-EA-001`–`040` | Thirty-seven architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
-| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`330` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
+| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`336` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -108,9 +108,9 @@ The difference from a normal post-hoc specification is temporal, not structural:
 
 | File | BEH range | Subsystem |
 |---|---|---|
-| `01-plugin-contract.md` | 001–008 | Plugin Contract |
+| `01-plugin-contract.md` | 001–008, 334 | Plugin Contract |
 | `02-plugin-composition-validate.md` | 009–016, 329 | Plugin Composition and `Validate<P>` |
-| `03-ports-slots-hooks-registries.md` | 017–024 | Ports, Slots, Hook Points, and Registries |
+| `03-ports-slots-hooks-registries.md` | 017–024, 335 | Ports, Slots, Hook Points, and Registries |
 | `04-contract-stratum.md` | 025–032 | The Contract Stratum |
 | `05-persistence-stratum.md` | 033–040, 324–325 | The Persistence Stratum |
 | `06-domain-users-accounts.md` | 041–048, 254, 322–323 | Users and Accounts |
@@ -132,7 +132,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `22-client-effect.md` | 169–176 | The Effect Client |
 | `23-react.md` | 177–184 | React Bindings |
 | `24-nextjs-ssr.md` | 185–192 | Next.js Server Rendering |
-| `25-testing-harness.md` | 193–200 | Testing Harness |
+| `25-testing-harness.md` | 193–200, 331–333, 336 | Testing Harness |
 | `26-cli.md` | 201–208, 225–229, 307 | CLI |
 | `27-admin-impersonation.md` | 209–224 | Admin and Impersonation |
 | `28-tenancy.md` | 230–237, 326–328 | Tenancy |

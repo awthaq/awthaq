@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-25 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added an honest note that BEH-EA-199's redaction check is not yet mechanically verifiable (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added an honest note that BEH-EA-199's redaction check is not yet mechanically verifiable (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-14): BEH-EA-331..333 and 336: `TestAuth.layer` derives the host middleware, runs over memory or SQL, and `TestAuth.app` serves it; every plugin runs the contract suite, which checks its records bundle; BEH-EA-193 and 198 revised (architecture plan 08) |
 ---
 
 > Implemented in `@awthaq/test` (`TestAuth.layer`, `signInAs`, `runPluginContractTests`, the `RedactionGuard`; tests `packages/test/test`); BEH-EA-194 through 196 describe patterns built from Effect's and qadi's own helpers, not awthaq exports; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -17,7 +17,7 @@
 ## BEH-EA-193: `TestAuth.layer` is the whole pipeline, over memory
 
 ```ts
-const TestLive = TestAuth.layer(plugins)   // *.layerMemory, Mailer.layerMemory, permissive RateLimiter, HttpServer.layerServices
+const TestLive = TestAuth.layer(Auth.make(plugins), { services })   // Persistence.memory, Mailer.layerMemory, permissive RateLimiter, HttpServer.layerServices, derived middleware, each plugin's records.memory
 ```
 
 ```text
@@ -27,6 +27,8 @@ REQUIREMENT: `TestAuth.layer(plugins)` MUST assemble the named plugins over
              MUST NOT need a real database, a real mailer, or a real network
              listener.
 ```
+
+**As shipped (plan 08):** `TestAuth.layer(built, options)` takes the value `Auth.make` returned and an options object (`services`, `decorate`, `taps`, `csrf`, `principalResolver`, `rateLimiter`, `records`/`suite`). Beside the in-memory stores and ports it provides, from the composed value alone: the host middleware the groups declare ([BEH-EA-331](25-testing-harness.md#beh-ea-331-testauthlayer-derives-the-host-middleware-from-the-composed-contract)), every plugin's `records` bundle for the chosen mode and its declared `hookPoints` ([BEH-EA-334](01-plugin-contract.md#beh-ea-334-a-plugin-declares-its-record-stores-as-matched-memory-and-sql-bundles), [BEH-EA-335](03-ports-slots-hooks-registries.md#beh-ea-335-a-plugin-declares-the-hook-points-it-owns)), `Encryption` over a fixed test key, the credential-resolver registry and `AuditChain`. `services` is merged into the output, so a service only `services` provides is present at runtime and a capturing `Mailer` given there is the instance the plugin sends through and the test reads. `@awthaq/test` is dev-only: no library `src` imports it and no package lists it under `dependencies` (`pnpm check:contract-tests`).
 
 PRD §19 and `usage-examples-v4.md` §22.1 fix this exact composition. Running the whole pipeline over in-memory ports rather than mocking individual services is what lets a test exercise real plugin composition — the actual `Auth.make` graph the application will run — while remaining fast and hermetic; a test failure is then a fact about the plugin wiring, not an artifact of a stubbed-out shortcut that diverges from production behavior.
 
@@ -136,6 +138,8 @@ REQUIREMENT: `runPluginContractTests` MUST assert, for every option
 
 PRD §19 and `usage-examples-v4.md` §22.3 name this as the mechanism that makes plugin authorship self-certifying: a plugin author runs one function against their own plugin, across the option matrix they support, and gets the same checks every official plugin (`Password`, `OAuth`, `Passkey`, and the rest) must also pass — there is no separate, weaker bar for third-party plugins.
 
+**As shipped (plan 08):** `host` defaults to the plugin's transitive `dependsOn` closure (dependencies first), so `{ options: [{}] }` is enough for every plugin; `host: []` still reports `E_PLUGIN_MISSING_DEP`. The checks that run for a plugin that declares `records` are [BEH-EA-336](25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records).
+
 _Previous: [BEH-EA-197](25-testing-harness.md#beh-ea-197-testauthsigninas-drives-http-level-authorization-tests) | Next: [BEH-EA-199](25-testing-harness.md#beh-ea-199-redaction-and-contract-hash-stability)_
 
 ## BEH-EA-199: Redaction and contract-hash stability
@@ -171,4 +175,87 @@ PRD §19 and PRD §9.3's hook-point taxonomy ("veto (abort or amend), observe (f
 
 The check is not tautological because it runs the plugin's handlers rather than the core registry alone: the registry's isolation (`packages/core/test/HookPoint.test.ts`) guarantees that an observer's failure is contained, but only the handler tells whether it *tried* to abort.
 
-_Previous: [BEH-EA-199](25-testing-harness.md#beh-ea-199-redaction-and-contract-hash-stability) | Next: [BEH-EA-201](26-cli.md#beh-ea-201-doctor-checks-link-config-and-insecure-defaults)_
+_Previous: [BEH-EA-199](25-testing-harness.md#beh-ea-199-redaction-and-contract-hash-stability) | Next: [BEH-EA-331](25-testing-harness.md#beh-ea-331-testauthlayer-derives-the-host-middleware-from-the-composed-contract)_
+
+## BEH-EA-331: `TestAuth.layer` derives the host middleware from the composed contract
+
+```ts
+const TestLive = TestAuth.layer(Auth.make([Password.Password]), { services: TestAuth.httpClient.noBreach })
+// no AuthenticationLive, no CsrfProtectionLive, no CsrfConfig
+```
+
+```text
+REQUIREMENT: `TestAuth.layer` MUST provide every host middleware
+             (`Authentication`, `OptionalAuthentication`,
+             `MachineAuthentication`, `AdminAuthentication`, `CsrfProtection`)
+             that the groups of the composed api declare, and only those
+             (`AuthHttp.middlewareFor`). A test MUST NOT need to build
+             `Authentication`, `CsrfProtection` or their configuration.
+             `services` MUST be able to override any of them for the plugins.
+             Plugin-owned middleware (`ScimAuthentication`, qadi's
+             `AuthorizedSubject`) is never derived.
+```
+
+Every composed api carries core's `session`/`account` groups, which declare `Api.Authentication` and `Api.CsrfProtection`, so before this every caller built both by hand (105 test and feature files built `PrincipalResolverLive`). `middlewareFor` reflects the api and builds exactly what its groups declare, so the type (`DeclaredMiddleware`) and the runtime agree and a plugin layer needing host middleware for some other reason stays in `RIn` and fails to compile instead of being silently absent. The derived layers are built fresh (`Layer.fresh`): the module-level `...Live` constants are memoized by reference, so a test that also builds one over its own config would otherwise share whichever instance was built first. `options.csrf` tunes the derived `CsrfConfig`, `options.principalResolver` swaps the principal resolver (`PrincipalResolverWithUserFactsLive` opts into `emailVerified`).
+
+_Previous: [BEH-EA-200](25-testing-harness.md#beh-ea-200-veto-only-in-veto-points-and-observer-isolation) | Next: [BEH-EA-332](25-testing-harness.md#beh-ea-332-testauthlayer-runs-the-same-composition-over-sql)_
+
+## BEH-EA-332: `TestAuth.layer` runs the same composition over SQL
+
+```ts
+const SqlLive = TestAuth.layer(built, { records: "sql", suite: "notes" })   // a missing `suite` does not compile
+```
+
+```text
+REQUIREMENT: `records: "sql"` MUST serve the same services over a database
+             migrated with core's migrations and the composition's own
+             (`built.migrations`), using each composed plugin's `records.sql`
+             and `Persistence.sql()`. Under `AWTHAQ_POSTGRES_URL` it MUST use a
+             per-suite Postgres schema (`TestSql.layer(suite)`); otherwise
+             SQLite `:memory:`. Omitting `suite` MUST be a compile error.
+             The composition's `RIn` MUST be `never` in both modes exactly
+             when the composition is complete.
+```
+
+The same suite then proves a plugin over both of its adapters with one option (`for (const records of TestAuth.recordModes)`), and `pnpm test:pg` runs it on Postgres. The migrations run before anything is built over the client, because everything is provided through the one migrated layer.
+
+_Previous: [BEH-EA-331](25-testing-harness.md#beh-ea-331-testauthlayer-derives-the-host-middleware-from-the-composed-contract) | Next: [BEH-EA-333](25-testing-harness.md#beh-ea-333-testauthapp-serves-the-composition-and-its-context-together)_
+
+## BEH-EA-333: `TestAuth.app` serves the composition and its context together
+
+```ts
+const app = TestAuth.app(TestAuth.layer(built))
+const { cookieHeader } = await app.signIn("a@example.com")
+await app.request("POST", "/notes", { cookie: cookieHeader, json: { text: "hi" } })
+```
+
+```text
+REQUIREMENT: The handler and the context runner of `TestAuth.app` MUST share
+             one instance of every service (one memo map): a session minted
+             through `run` MUST authenticate a request through `handler`.
+             `request` MUST satisfy CSRF double-submit for the composition's
+             own `CsrfConfig` (read once through `run`), computed independently
+             of `Csrf.ts` (`TestAuth.csrfToken`, `node:crypto`). `dispose` MUST
+             release everything the composition built.
+```
+
+This replaces the hand-rolled memo-map handles and the per-suite CSRF token mints (22 `createHmac` copies).
+
+_Previous: [BEH-EA-332](25-testing-harness.md#beh-ea-332-testauthlayer-runs-the-same-composition-over-sql) | Next: [BEH-EA-336](25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records)_
+
+## BEH-EA-336: Every shipped plugin runs the contract suite, which checks its records
+
+```text
+REQUIREMENT: Every `AuthPlugin.Service` class in the repository MUST be
+             exercised by `runPluginContractTests` from its package's
+             `test/Contract.test.ts` (enforced by `pnpm check:contract-tests`,
+             part of `pnpm check`). For a plugin that declares `records` the
+             suite MUST check that `records.memory` and `records.sql` build and
+             provide the same stores, naming the extra or missing keys. With
+             `build: { services }` it MUST build the composition over both
+             record modes.
+```
+
+13 of the 20 plugin classes had no contract-test call in their own package. The compile-time half of the pairing is [BEH-EA-334](), the runtime half is this check, for a hand-built `AuthPlugin.Any` the type system cannot see into. The same script fails when a library `src` imports `@awthaq/test` or a package lists it under `dependencies`.
+
+_Previous: [BEH-EA-333](25-testing-harness.md#beh-ea-333-testauthapp-serves-the-composition-and-its-context-together) | Next: [BEH-EA-201](26-cli.md#beh-ea-201-doctor-checks-link-config-and-insecure-defaults)_

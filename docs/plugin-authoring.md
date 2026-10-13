@@ -12,9 +12,10 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 | ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Contract           | `TemplateApi.ts`                                      | One `HttpApiGroup` whose id is the plugin id, wrapped in `HttpApi.make("auth")`.                                             |
 | Config             | `Template.ts` (`NotesConfig`)                         | A `Context.Reference` with a default plus a `config(partial)` layer (ADR-EA-011). Policy knobs are never a required service. |
-| Persistence        | `Template.ts` (`NoteRecords`, `layerMemory`, `layerSql`) | The plugin owns its tables; the table prefix is the plugin id. Tenancy, sealed columns and store failures come from `@awthaq/sql` (`TenantScoped`, `SealedColumn`, `StoreFailure`), below. |
+| Persistence        | `Template.ts` (`NoteRecords`, `layerMemory`, `layerSql`) | The plugin owns its tables; the table prefix is the plugin id. Record stores are keyed `<pkg>/records/<Name>` and declared as `records: { memory, sql }` on `AuthPlugin.Service` (compile-checked: complete, matched, records only), below. Tenancy, sealed columns and store failures come from `@awthaq/sql` (`TenantScoped`, `SealedColumn`, `StoreFailure`). |
 | Migrations         | `Template.ts` (`notesMigrations`)                     | Append-only, dialect-branched with `sql.onDialectOrElse`.                                                                    |
 | Hooks              | `Template.ts` (`BeforeCreateNote`, `AfterCreateNote`) | One veto (before) and one observe (after) point per mutating operation.                                                      |
+| Hook points        | `Template.ts` (`NotesHooksLive`)                      | The merged default layers of the points the plugin owns, declared as `hookPoints` on `AuthPlugin.Service`.                   |
 | Service + handlers | `Template.ts` (`Notes`, `NotesHandlers`)              | `AuthPlugin.layer(Notes, { handlers, make })`.                                                                               |
 
 `Auth.make([Notes])` composes the plugin into one `api`, one `layer` and a manifest (BEH-EA-009 to 016); the template's first test shows it.
@@ -173,6 +174,47 @@ Resolve core's two modules once, in your plugin's `make`, and let them own the s
 - **Sign-up.** `const signUp = yield* SignUp.make`, then `signUp.vet({ identity, name, strategy })` (this runs `BeforeSignUp`, so call it before any expensive work) and `create`, `createWith` or `createSignedIn` with the `Vetted` it returned: they create, mark verified, link your credential and run your own `within` work as one unit, answer every collision as `SignUp/IdentityTaken` (map it to your wire answer), and publish `auth.user.created` and run `AfterSignUp` only after the unit commits. List `SqlTransaction.SqlTransaction` among your `ports`.
 - **Never** call `Sessions.issue` for a proven credential or `Users.create` for a sign-up. The compiler refuses a session or a user without a `Clearance` or a `Vetted`, and `core/test/SignInSeams.test.ts` fails on a new caller. Operator imports (`UserImport.importUser`, `awthaq seed admin`) are the named exemption.
 
+## Record stores and bundles
+
+A record store is a `Context.Service` whose key has a `/records/` segment (`example/notes/records/NoteRecords`, `awthaq/scim/records/ScimRecords`), the same convention that marks a port (`/ports/`). It is what lets the compiler ask "does the plugin provide every store its layer requires?". The plugin declares its stores once, as two matched layers, on `AuthPlugin.Service`:
+
+```ts
+export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
+  // ...
+  records: { memory: layerMemory, sql: layerSql }, // both adapters behind one shape
+  hookPoints: NotesHooksLive,                       // the points this plugin owns
+}) {}
+```
+
+`Notes.records.memory` and `Notes.records.sql` are static members: a host picks one the way it picks a database, and `TestAuth.layer` selects one per composition. Three mistakes fail to compile, each naming the offending key:
+
+- **A missing store.** `AuthPlugin.layer` refuses a layer that requires a `/records/` store neither the plugin's own bundle nor a `dependsOn` plugin's bundle provides (`declare these record stores in AuthPlugin.Service's records`). A store another plugin owns comes from its bundle through `dependsOn`.
+- **A mismatched pair.** `memory` and `sql` must provide the same stores (`sql provides stores memory does not`, and the reverse).
+- **A bundle that is not only records.** A port, a derived service or a config in a bundle is refused (`a records bundle provides only /records/ stores`). A test-only seam a layer also provides (a `MemoryEnvelopes` tag) is projected out of the bundle: `Layer.effect(Store, Effect.service(Store)).pipe(Layer.provide(layerMemory))`.
+
+A hook point the plugin's layer requires and no one declares (`hookPoints`, or core's own) fails the same way (`declare these hook points`). Declaring them does not make `Auth.make` provide them in production (the host still builds the one point instance its taps register into); it lets a harness provide them once, and `awthaq plugin list` print them. A store with only derived consumers (a service always built over the plugin's own stores, like `SamlConnectionStore`) is absorbed into the plugin layer instead: `AuthPlugin.layer(...).pipe(Layer.provideMerge(derived))` keeps it in the output.
+
+## Testing a plugin
+
+`TestAuth.layer(Auth.make([...]), options)` (`@awthaq/test`, dev-only) is the whole pipeline over memory: it derives the host middleware the composed groups declare (`Authentication`, `CsrfProtection`, ...), selects every composed plugin's `records` bundle and `hookPoints`, and provides the core services, the test ports (a cheap argon2id hasher, `Mailer.layerMemory`, a permissive `RateLimiter`, `Encryption` over a fixed key) and the redaction guard. Its `RIn` is `never` exactly when the composition is complete.
+
+```ts
+const app = TestAuth.app(
+  TestAuth.layer(Auth.make([Notes]), {
+    services: Notes.config({ maxLength: 20 }), // what is genuinely the test's own
+    taps: ForbiddenTap,                        // application taps, on the same point instances the plugins run
+  }),
+);
+const cookie = (await app.signIn("a@example.com")).cookieHeader;
+const response = await app.request("POST", "/notes", { cookie, json: { text: "hi" } }); // CSRF pair included
+```
+
+- `services` holds only plugin configuration, adapters (`XmlSignature`, `WebAuthn`, `TestAuth.httpClient.*`, a fake fetcher) and test doubles: never a core store, a record layer or host middleware. It is merged into the output, so a service only `services` provides is `yield*`-able and a capturing `Mailer` given there is the instance the plugin sends through. `decorate` wraps a base service in place (an outage, a spy) for the plugins and the test alike; `taps` takes application taps.
+- `records: "sql", suite: "<name>"` runs the same composition over a migrated database (SQLite `:memory:`; a per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`, `pnpm run test:pg`). Run a suite in both modes with `for (const records of TestAuth.recordModes)`.
+- `TestAuth.app` serves the composition and reads its context through one memo map (`run`), so the handler and the test share instances; `request` adds the double-submit CSRF pair, minted from the composition's own `CsrfConfig`.
+- Hand-wire only what is under test (the middleware's own suites, a store suite built over `TestAuth.memoryFoundation`): a header comment says so (`// Hand-wired on purpose: ...`).
+- Every plugin class has a call to `TestAuth.runPluginContractTests` in its package's `test/Contract.test.ts`; `pnpm check:contract-tests` (part of `pnpm check`) fails otherwise. `host` defaults to the plugin's `dependsOn` closure, the contract suite checks that `records.memory` and `records.sql` build and provide the same stores, and `build: { services }` additionally builds the composition over both modes.
+
 ## House rules
 
 - No type assertions in library source: no `as`, `as unknown as`, `as any`. Use `Schema` decoding, `Brand.nominal` for witnesses, or a typed helper.
@@ -184,9 +226,9 @@ Resolve core's two modules once, in your plugin's `make`, and let them own the s
 1. `AuthPlugin.Service` with `apiVersion`, `contract`, `tables`, `migrations` (and `dependsOn` only if needed), `rateLimitRules` when it throttles (and `RateLimits.budget(Self)` in `make`), and `ports` on `AuthPlugin.layer` for every port it requires.
 2. Errors typed and status-mapped; `HookAborted` on every vetoable endpoint.
 3. Config as a `Context.Reference` with a default.
-4. Records service with `layerMemory` and `layerSql` (the template ships both), every method failing with `StoreUnavailable`, never a defect.
-5. Hook points with a `.layer` each, provided once.
-6. A test that builds through `Auth.make`, runs the real migrations, exercises an endpoint over a real handler, aborts a veto, and calls `TestAuth.runPluginContractTests` (pass `hooks: [{ point: Hooks.AfterSignUp, input }]` to run the plugin's declared taps against a stub input: an observe tap must not try to abort, a veto tap may only abort with `HookAbort`; BEH-EA-200).
+4. Record stores keyed `<pkg>/records/<Name>`, each with `layerMemory` and `layerSql` (the template ships both), every method failing with `StoreUnavailable`, never a defect, declared as `records: { memory, sql }` on `AuthPlugin.Service` (the compiler rejects a missing or mismatched bundle).
+5. Hook points with a `.layer` each, merged into one layer declared as `hookPoints`.
+6. `test/Contract.test.ts` calls `TestAuth.runPluginContractTests` for every plugin class in the package (`pnpm check:contract-tests` enforces it; pass `hooks: [{ point: Hooks.AfterSignUp, input }]` to run the plugin's declared taps against a stub input: an observe tap must not try to abort, a veto tap may only abort with `HookAbort`; BEH-EA-200), plus a suite built with `TestAuth.layer` that runs the real migrations, exercises an endpoint over a real handler, aborts a veto, and runs in both `TestAuth.recordModes`.
 7. A package README stating what it ships (`pnpm check:readmes` enforces the status banner).
 8. A flow that signs a person in or creates a user goes through `SignIn`/`SignUp`, never `Sessions.issue`/`Users.create` (ADR-EA-038).
 9. Every event declared with `defineEvent`, its actor chosen and its free-text fields in `pii`.

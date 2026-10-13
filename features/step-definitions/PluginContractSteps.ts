@@ -106,6 +106,51 @@ const configLayers = new Map<string, Layer.Layer<never>>([
 ]);
 
 export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) => {
+  // ---- BEH-EA-334 (the records-* gates in PluginTypeGates.ts) ---------------------------------
+
+  Given(
+    "a plugin whose layer requires a {string} store that its {string} bundle does not provide",
+    function* (_segment: string, _bundle: string) {
+      yield* Effect.void;
+    },
+  );
+
+  Given(
+    "a plugin declaring a {string} bundle whose {string} provides a store its {string} does not",
+    function* (_bundle: string, _side: string, _other: string) {
+      yield* Effect.void;
+    },
+  );
+
+  Given(
+    "a plugin declaring a {string} bundle that also provides a port",
+    function* (_bundle: string) {
+      yield* Effect.void;
+    },
+  );
+
+  When("the plugin's {string} is type-checked", function* (_entry: string) {
+    yield* Effect.void;
+  });
+
+  When("the plugin class is type-checked", function* () {
+    yield* Effect.void;
+  });
+
+  Then("it fails to compile, naming the missing record store", function* () {
+    yield* Effect.void;
+    assertTypeGate("records-complete", GATES, ["@ts-expect-error", "GateStoreOne"]);
+  });
+
+  Then("it fails to compile, naming the store", function* () {
+    yield* Effect.void;
+    assertTypeGate("records-matched", GATES, ["@ts-expect-error", "memory", "sql"]);
+  });
+
+  Then("it fails to compile, naming the service", function* () {
+    yield* Effect.void;
+    assertTypeGate("records-only-records", GATES, ["@ts-expect-error", "GatePort"]);
+  });
   // ---- BEH-EA-001 ----
 
   Given("a plugin class {string} produced by {string}", function* (label: string, factory: string) {
