@@ -3,67 +3,32 @@
 // `MembershipRecords`, a hand-built `Api.UserPrincipal` the same way
 // `@awthaq/admin`'s own `Admin.test.ts` does.
 import { Api } from "@awthaq/api";
-import { AuditLog, Persistence, Sessions, Tenant, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { AuditLog, Auth, Tenant, Users } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as LayerMap from "effect/LayerMap";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import { TestAuth } from "@awthaq/test";
 import { grant, addMember } from "./support.ts";
 
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents` (session
-  // reuse publishes `auth.session.reuse`) — `provideMerge`, not a sibling
-  // inside `mergeAll` above, so it also satisfies that need rather than
-  // merely sitting alongside it unsatisfied.
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("organization-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+const built = Auth.make([Organization.Organization]);
 
 const buildLayer = (
   configOverrides: Partial<Organization.OrganizationConfigShape> = {},
   mailerLayer: Layer.Layer<Mailer.Mailer> = Mailer.layerMemory,
 ) =>
-  Organization.Organization.layer.pipe(
-    Layer.provide(Organization.config(configOverrides)),
-    Layer.provide(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(mailerLayer),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+  TestAuth.layer(built, {
+    services: Layer.merge(Organization.config(configOverrides), mailerLayer),
+  });
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({

@@ -12,43 +12,18 @@
 // freezes, another. A tap's `Layer` requires its point, which
 // `OrganizationHooksLive` provides last in `buildLayer`'s pipe.
 import { Api } from "@awthaq/api";
-import { HookPoint, Persistence, Sessions, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, HookPoint } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Fs from "node:fs";
 import * as Path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("organization-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+const built = Auth.make([Organization.Organization]);
 
 const buildLayer = (
   extraHooks: Layer.Layer<
@@ -57,26 +32,17 @@ const buildLayer = (
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   >,
 ) =>
-  Organization.Organization.layer.pipe(
-    Layer.provide(
-      Organization.config({
-        teams: {
-          enabled: true,
-          maximumTeams: Number.POSITIVE_INFINITY,
-          maximumMembersPerTeam: Number.POSITIVE_INFINITY,
-          allowRemovingAllTeams: false,
-        },
-      }),
-    ),
-    Layer.provide(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(extraHooks),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+  TestAuth.layer(built, {
+    services: Organization.config({
+      teams: {
+        enabled: true,
+        maximumTeams: Number.POSITIVE_INFINITY,
+        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+        allowRemovingAllTeams: false,
+      },
+    }),
+    taps: extraHooks,
+  });
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({
