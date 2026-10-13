@@ -1707,7 +1707,7 @@ describe("OAuth", () => {
         const registry = yield* RateLimits.RateLimitsRegistry;
         const mine = (yield* registry.registered).filter((rule) => rule.plugin === "oauth");
         assert.deepStrictEqual(
-          mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.strategy, rule.bucket]),
+          mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.key, rule.bucket]),
           OAuth.OAuth.rateLimits.map((rule) => [
             rule.name,
             rule.group,

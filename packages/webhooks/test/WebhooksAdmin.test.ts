@@ -393,7 +393,7 @@ describe("the admin rate limit is declared and registered (plan 06)", () => {
       const registry = yield* RateLimits.RateLimitsRegistry;
       const mine = (yield* registry.registered).filter((rule) => rule.plugin === "webhooks");
       assert.deepStrictEqual(
-        mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.strategy, rule.limit]),
+        mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.key, rule.limit]),
         [["admin", "webhooks.admin", "*", "user", 2]],
       );
       assert.deepStrictEqual(

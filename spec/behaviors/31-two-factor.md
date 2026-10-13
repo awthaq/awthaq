@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-31 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) |
+> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) |
 ---
 
 > Status: the `@awthaq/two-factor` plugin is implemented and tested (`packages/two-factor/test/`). The decisions behind it are [ADR-EA-020](../decisions/020-two-factor-state.md); the credential-reset veto it taps is [BEH-EA-259](15-password.md#beh-ea-259-a-credential-reset-consults-beforecredentialreset-before-anything-is-rewritten). SMS is deliberately not part of it ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -185,7 +185,7 @@ SecondFactorLocked { retryAfterMillis }                     // 429
 ```text
 REQUIREMENT: Failed presentations of a TOTP code or a recovery code — for any
              purpose, on any challenge — MUST be charged to one per-account
-             budget (`two_factor:fail:<userId>`, five per fifteen minutes by
+             budget (the `SecondFactor.failureRule` bucket, `ratelimit:two_factor.failures:user:<userId>`, five per fifteen minutes by
              default) through the `RateLimiter` port. The budget MUST be
              checked before a code is evaluated, so a locked attempt fails
              `SecondFactorLocked` even for the correct code; MUST be spent

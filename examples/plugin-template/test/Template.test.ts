@@ -3,7 +3,8 @@
 // endpoints over a real `HttpRouter` handler with a real session cookie, and aborts an
 // operation with a veto tap.
 import { Api } from "@awthaq/api";
-import { Auth, HookPoint, Migrations, Sessions, Users } from "@awthaq/core";
+import { Auth, HookPoint, Migrations, RateLimits, Sessions, Users } from "@awthaq/core";
+import { RateLimiter } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -29,7 +30,8 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
+// `RateLimits.layer` is the per-composition rule registry every budget registers into.
+const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory, RateLimits.layer).pipe(
   Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
@@ -74,7 +76,8 @@ const ForbiddenTap = Template.BeforeCreateNote.tap((input) =>
 
 const AppLayer = Layer.mergeAll(
   AuthHttp.routes(TemplateApi.NotesApi).pipe(
-    Layer.provide(Template.Notes.layer),
+    // A real limiter for the plugin (the shared foundation's is permissive), so the rate-limit test below can trip it.
+    Layer.provide(Template.Notes.layer.pipe(Layer.provide(RateLimiter.layerMemory))),
     Layer.provide(Template.config({ maxLength: 20 })),
     Layer.provide(AuthenticationLive),
   ),
@@ -153,6 +156,34 @@ describe("plugin-template", () => {
     const other = await issueSessionCookie("user-2");
     const theirs = await handler(new Request(`${ORIGIN}/notes`, { headers: { cookie: other } }));
     assert.deepStrictEqual(await theirs.json(), []);
+  });
+
+  it("a rate-limited rule answers 429 once the budget is spent, and only for that caller", async () => {
+    const cookie = await issueSessionCookie("user-4");
+    // `createByUser` is 5 per minute per signed-in user.
+    for (let i = 0; i < 5; i += 1) {
+      assert.strictEqual((await post("/notes", { text: `note ${i}` }, cookie)).status, 200);
+    }
+    const sixth = await post("/notes", { text: "one too many" }, cookie);
+    assert.strictEqual(sixth.status, 429);
+    assert.strictEqual(((await sixth.json()) as { _tag: string })._tag, "RateLimited");
+    const other = await issueSessionCookie("user-5");
+    assert.strictEqual((await post("/notes", { text: "mine" }, other)).status, 200);
+  });
+
+  it("declares its rule statically: the manifest lists it with its key strategy", () => {
+    assert.deepStrictEqual(
+      Auth.make([Template.Notes]).manifest.rateLimits.map((rule) => [
+        rule.plugin,
+        rule.group,
+        rule.endpoint,
+        rule.name,
+        rule.key,
+        rule.mode,
+        rule.limit,
+      ]),
+      [["notes", "notes", "create", "createByUser", "user", "attempts", 5]],
+    );
   });
 
   it("requires a session", async () => {

@@ -8,7 +8,7 @@
 //
 // The destination is a normalised E.164 number. This stratum sits below `@awthaq/core`, so it types it
 // as a plain string; `Phone.normalizePhone` (core) is what produces a well-formed one, and
-// `RateLimits.phoneKey` is the recipient-dimension rate-limit key an SMS-sending endpoint pairs with a
+// `RateLimits.Key.phone` is the recipient-dimension rate-limit key an SMS-sending endpoint pairs with a
 // per-IP rule (SOS-007) — the toll-fraud ("SMS pumping") defence is those caps, not this port.
 
 import * as Defects from "./Defects.ts";

@@ -130,6 +130,10 @@ export interface RuleRow {
   readonly endpoint: string;
   readonly name: string;
   readonly dimension: string;
+  /** The bucket-key strategy (`ip`, `email`, `user`, ...). */
+  readonly key: string;
+  /** `attempts` (every call spends one unit) or `failures` (guarded before, charged on a failure). */
+  readonly mode: string;
   readonly limit: number;
   readonly window: string;
 }
@@ -141,11 +145,13 @@ export const rules = (auth: LoadedAuth): ReadonlyArray<RuleRow> =>
     endpoint: rule.endpoint,
     name: rule.name,
     dimension: rule.dimension,
+    key: rule.key,
+    mode: rule.mode,
     limit: rule.limit,
     window: Duration.format(Duration.fromInputUnsafe(rule.window)),
   }));
 
-const RULE_HEADER = ["PLUGIN", "RULE", "ENDPOINT", "DIMENSION", "LIMIT"];
+const RULE_HEADER = ["PLUGIN", "RULE", "ENDPOINT", "DIMENSION", "KEY", "MODE", "LIMIT"];
 
 export const renderRules = (rows: ReadonlyArray<RuleRow>) => {
   if (rows.length === 0) return ["no installed plugin declares a rate-limit rule"];
@@ -154,6 +160,8 @@ export const renderRules = (rows: ReadonlyArray<RuleRow>) => {
     row.name,
     `${row.group}.${row.endpoint}`,
     row.dimension,
+    row.key,
+    row.mode,
     `${row.limit} per ${row.window}`,
   ]);
   const widths = RULE_HEADER.map((title, column) =>

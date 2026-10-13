@@ -6,11 +6,11 @@
 // - BEH-EA-193's "permissive `RateLimiter`" is wired in below
 //   (`RateLimiter.layerPermissive`, `@awthaq/ports`'s own BEH-EA-112
 //   default). `RateLimits.layer` (`@awthaq/core`'s per-plugin rule
-//   *registry* half) is provided too, as of the shipping-gap map's ticket
-//   12 — `Password` is the first real `RateLimits.rule` consumer, so
-//   building `Password.layer` (and, by extension, `TestAuth.layer(built)`
-//   for any composition that includes it) now genuinely needs a
-//   `RateLimitsRegistry` instance to register into.
+//   *registry* half) is provided too: every plugin that declares rate-limit
+//   rules opens a `RateLimits.budget` in its layer, and core's own `account`
+//   handlers do the same, so building any of them (and, by extension,
+//   `TestAuth.layer(built)`) genuinely needs a `RateLimitsRegistry` instance
+//   to register into.
 // - BEH-EA-194 (`TestClock`) and BEH-EA-195 (`Layer.mock`) are `effect`'s own
 //   exports, not awthaq's — nothing to wrap; a test simply imports them
 //   directly (`effect/testing/TestClock`, `effect/Layer`).

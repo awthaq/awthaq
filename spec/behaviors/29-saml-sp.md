@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-29 |
-> | Revision | 1.3 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-314), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) <br> 1.3 (2026-10-13): the `BeforeSessionIssue` divert context carries `amr: ["fed"]`, the same methods the session records (plan 10 item 1); a session-store outage during the ACS completion is the typed `StoreUnavailable`, not a defect (ADR-EA-028) |
+> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-314), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) <br> 1.3 (2026-10-13): the `BeforeSessionIssue` divert context carries `amr: ["fed"]`, the same methods the session records (plan 10 item 1); a session-store outage during the ACS completion is the typed `StoreUnavailable`, not a defect (ADR-EA-028) <br> 1.4 (2026-10-13): SAML and SSO rate-limit rules are declared, registered and tunable with `RateLimits.overrides` (plan 06) |
 ---
 
 > `@awthaq/saml` implements this ([MOD-EA-010](../models/10-saml.md)). It was written first on purpose — SAML's failure modes are silent signature bypasses, so the checks and their order were fixed before an implementation could drift — and every rule below has a negative test, including the XML signature-wrapping (XSW) corpus from the SAML security literature (`packages/saml/test/XmlSignatureNode.test.ts`). The signature step is the `XmlSignature` port (`@awthaq/ports`), implemented over the maintained `xml-crypto` library (Node adapter in `@awthaq/saml`); the plugin reads the assertion ONLY from the signed bytes that port returns.
@@ -276,7 +276,7 @@ REQUIREMENT: `POST /auth/sso/start { email | organizationId, callbackURL? }` MUS
              (default `saml`) MUST win and `Sso.discoverAll` MUST list every match.
              Nothing routing MUST be one uniform `SsoNotFound` whatever the reason
              (unknown domain, unknown organization, malformed or missing hint),
-             and the endpoint MUST be rate limited per source address.
+             and the endpoint MUST be rate limited per source address (`sso.start`, declared and registered like the SAML `login`, `acs` and `slo` rules and tunable with `RateLimits.overrides`; `SamlConfig.rateLimits` accepts a partial object).
 ```
 
 The dispatcher is a router, not a third protocol: the state cookie, the redirect and every check stay the owning plugin's ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md) Decision 4).
@@ -293,7 +293,7 @@ REQUIREMENT: The `saml.admin` group MUST be admin-tier (BEH-EA-071), behind
              organizationId? })`, which denies by default: a denial MUST answer
              403, publish `auth.admin.actionDenied` (`saml.<action>`) and reveal
              nothing about which ids exist; past the gate each administrator is
-             limited to `adminRate` (429). Inside a tenant only that tenant's
+             limited to `adminRate` (429; the rule is declared and registered like any plugin's and tunable with `RateLimits.overrides`, the knob names unchanged). Inside a tenant only that tenant's
              organization is in reach: another organization's connection MUST be
              answered exactly like an id that does not exist, and registering one
              for another organization like an organization that does not exist.

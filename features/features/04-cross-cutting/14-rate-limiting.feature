@@ -152,6 +152,12 @@ Feature: Rate Limiting
       When an attacker varies the email value on each request
       Then the attacker obtains a fresh bucket for every request, defeating the limit's purpose
 
+    @REQ-EA-1271
+    Scenario: Differently cased and subaddressed addresses share one per-address bucket
+      Given an application installing the official "password" plugin with a real limiter
+      When six sign-ups arrive for differently cased and subaddressed spellings of one address
+      Then the sixth is refused with a 429 because the five before it shared one per-address bucket
+
   # BEH-EA-109 — spec/behaviors/14-rate-limiting.md
   @BEH-EA-109
   Rule: Swappable stores
@@ -188,6 +194,12 @@ Feature: Rate Limiting
       Then its sign-in and password-reset-request endpoints are already rate limited by rules those plugins ship
       And the application required no additional rate-limiting code to get that protection
 
+    @REQ-EA-1272
+    Scenario: An application tunes a shipped rule's limit without changing the plugin
+      Given an application installing the official "password" plugin and tuning its "signIn" rule to a limit of 2 with "RateLimits.overrides"
+      When a user signs in with a wrong password 3 times
+      Then the first two attempts are refused as invalid credentials and the third with a 429
+
   # BEH-EA-111 — spec/behaviors/14-rate-limiting.md
   @BEH-EA-111
   Rule: Registry ordering
@@ -203,6 +215,19 @@ Feature: Rate Limiting
       Given the resolved order of hook taps and the resolved order of rate-limit rules for the same plugin tuple
       When both are computed
       Then both follow the identical three-key ordering: dependency order, then declared "order", then id
+
+    @REQ-EA-1273
+    Scenario: A plugin that declares rate-limit rules but never opens its budget is refused at composition
+      Given plugin "forgetful" declares a rate-limit rule but its layer never opens a budget
+      When the application is composed
+      Then composition is refused because "forgetful" declared a rule it never opened a budget for
+
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
+    @REQ-EA-1274
+    Scenario: A plugin cannot enforce a rule it did not declare
+      Given a plugin whose rate-limit table declares "signIn" only
+      When that plugin spends the rule "signUp"
+      Then the plugin does not compile
 
   # BEH-EA-112 — spec/behaviors/14-rate-limiting.md
   @BEH-EA-112

@@ -7,10 +7,12 @@
 // through this file top to bottom; `test/Template.test.ts` keeps it honest.
 
 import { Api } from "@awthaq/api";
-import { AuthPlugin, HookPoint, Migrations } from "@awthaq/core";
+import { AuthPlugin, HookPoint, Migrations, RateLimits } from "@awthaq/core";
+import { RateLimiter } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -150,7 +152,7 @@ export interface NotesShape {
   readonly create: (
     caller: Api.UserPrincipal,
     text: string,
-  ) => Effect.Effect<NoteRecord, TemplateApi.NoteTooLong | HookPoint.HookAborted>;
+  ) => Effect.Effect<NoteRecord, TemplateApi.NoteTooLong | HookPoint.HookAborted | Api.RateLimited>;
   readonly list: (caller: Api.UserPrincipal) => Effect.Effect<ReadonlyArray<NoteRecord>>;
 }
 
@@ -192,13 +194,33 @@ export const NotesHandlers = HttpApiBuilder.group(
   }),
 );
 
+// ---- rate limits: declared once, spent by name ---------------------------------------
+// A plugin that throttles declares a typed table of rules; `group` must be one of the plugin's own
+// contract groups (a compile error otherwise) and `key` says what a bucket counts (`Key.user`: the
+// signed-in caller; `Key.ip` for an anonymous endpoint, `Key.email`, `Key.custom`, ...). The static
+// `rateLimits` listing (`awthaq plugin list --rules`) is derived from this table, and `make` opens a
+// budget over it; `AuthPlugin.layer` refuses a plugin that declares rules and never opens one.
+
+const rules = {
+  createByUser: RateLimits.rule({
+    group: "notes",
+    endpoint: "create",
+    key: RateLimits.Key.user,
+    limit: 5,
+    window: Duration.minutes(1),
+  }),
+};
+
 export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
   apiVersion: 1,
   contract: TemplateApi.NotesApi,
+  rateLimitRules: rules,
   tables: ["notes_note"],
   migrations: notesMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Notes, {
+    // The port the budget consumes through: declared, and checked for completeness by the compiler.
+    ports: [RateLimiter.RateLimiter],
     handlers: NotesHandlers,
     make: Effect.gen(function* () {
       // Dependencies are plain `yield*`s: core services and this plugin's own records
@@ -207,6 +229,10 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
       const settings = yield* NotesConfig;
       const beforeCreate = yield* BeforeCreateNote;
       const afterCreate = yield* AfterCreateNote;
+      // One budget, opened once: `limits.spend("createByUser", { userId })` is checked against the table
+      // above (an unknown name or a missing field is a compile error), and a breach is published, logged,
+      // counted and answered with `Api.RateLimited` (429). No annotation or comment is needed here.
+      const limits = yield* RateLimits.budget(Notes);
 
       // BEH-EA-090: a veto abort reaches the caller as the typed `HookAborted`, naming
       // the point, never as a defect. Translate it where the point is run.
@@ -220,6 +246,7 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
         );
 
       const create: NotesShape["create"] = Effect.fnUntraced(function* (caller, text) {
+        yield* limits.spend("createByUser", { userId: caller.ref.id });
         if (text.length > settings.maxLength) {
           return yield* Effect.fail(new TemplateApi.NoteTooLong());
         }

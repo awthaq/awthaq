@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1263 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1270; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1267 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1274; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1281,3 +1281,7 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1268 | [BEH-EA-250](../spec/behaviors/30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | An erasing DELETE runs the whole account erasure |
 | REQ-EA-1269 | [BEH-EA-250](../spec/behaviors/30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | An erasing DELETE frees the organization seat |
 | REQ-EA-1270 | [BEH-EA-250](../spec/behaviors/30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | A user who deletes their own account loses the directory's mapping too |
+| REQ-EA-1271 | [BEH-EA-108](../spec/behaviors/14-rate-limiting.md#beh-ea-108-key-strategies) | [04-cross-cutting/14-rate-limiting.feature](features/04-cross-cutting/14-rate-limiting.feature) | Differently cased and subaddressed addresses share one per-address bucket |
+| REQ-EA-1272 | [BEH-EA-110](../spec/behaviors/14-rate-limiting.md#beh-ea-110-built-in-rules-shipped-by-core-plugins) | [04-cross-cutting/14-rate-limiting.feature](features/04-cross-cutting/14-rate-limiting.feature) | An application tunes a shipped rule's limit without changing the plugin |
+| REQ-EA-1273 | [BEH-EA-111](../spec/behaviors/14-rate-limiting.md#beh-ea-111-registry-ordering) | [04-cross-cutting/14-rate-limiting.feature](features/04-cross-cutting/14-rate-limiting.feature) | A plugin that declares rate-limit rules but never opens its budget is refused at composition |
+| REQ-EA-1274 | [BEH-EA-111](../spec/behaviors/14-rate-limiting.md#beh-ea-111-registry-ordering) | [04-cross-cutting/14-rate-limiting.feature](features/04-cross-cutting/14-rate-limiting.feature) | A plugin cannot enforce a rule it did not declare |

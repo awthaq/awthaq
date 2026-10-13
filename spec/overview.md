@@ -121,7 +121,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 |---|---|---|
 | `PasswordHasher` | `Context.Service` | `layerArgon2id`, `layerScrypt`; worker-pool variants in `PasswordHasherWorkerPool`; a verify-only `LegacyPasswordVerifiers` `Context.Reference` for imported foreign hashes (bcrypt, Firebase scrypt, better-auth scrypt) |
 | `Mailer` | `Context.Service` | `layerNoop`, `layerMemory`; `send` fails with a typed `MailDeliveryFailed` (EEM-002) |
-| `SmsSender` | `Context.Service` | `layerNoop`, `layerMemory`, `layerConsole`; `send` fails with a typed `SmsDeliveryFailed` (SOS-002); the destination is an E.164 string, its rate-limit key is `RateLimits.phoneKey` (SOS-007) |
+| `SmsSender` | `Context.Service` | `layerNoop`, `layerMemory`, `layerConsole`; `send` fails with a typed `SmsDeliveryFailed` (SOS-002); the destination is an E.164 string, its rate-limit key is `RateLimits.Key.phone` (SOS-007) |
 | `WebAuthn` | `Context.Service` | `layerSimpleWebAuthn` |
 | `Encryption` | `Context.Service` | `layer` (requires `KeyProvider` and `Crypto`); keyed envelopes, lazy re-encryption ([ADR-EA-019](decisions/019-encryption-key-rotation.md)) |
 | `KeyProvider` | `Context.Service` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS`, `AWTHAQ_ENCRYPTION_KEY_ID`); `layerEphemeral` (dev only, opt-in, never a fallback; refused under `NODE_ENV=production` without `AWTHAQ_ALLOW_EPHEMERAL_KEY=true`); implement the port for a KMS |

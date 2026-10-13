@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-03 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-024 rate-limit example uses a `rateLimitRules` table and `RateLimits.budget` (plan 06) |
 
 ---
 
@@ -170,11 +170,12 @@ REQUIREMENT: A hook point declared `kind: "observe"` MUST NOT allow a
 > **Invariant:** [INV-EA-005](../invariants.md#inv-ea-005-a-hook-tap-on-an-undefined-hook-point-keeps-the-application-from-compiling)
 
 ```ts
+// on AuthPlugin.Service: rateLimitRules: { create: RateLimits.rule({ group: "acme.invite", endpoint: "create",
+//   key: RateLimits.Key.user, limit: 10, window: "10 minutes" }) }
 static readonly layer = AuthPlugin.layer(Invite, {
-  make: /* … */,
+  make: Effect.gen(function* () { yield* RateLimits.budget(Invite) /* … */ }),
   taps: [
-    BeforeUserDelete.tap((u) => Invite.use((i) => i.purgeFor(u.id))),
-    RateLimits.rule({ group: "acme.invite", endpoint: "create", limit: 10, window: "10 minutes" })
+    BeforeUserDelete.tap((u) => Invite.use((i) => i.purgeFor(u.id)))
   ]
 })
 ```

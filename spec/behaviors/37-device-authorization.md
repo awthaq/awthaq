@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-37 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-013](../models/13-device-authorization.md) as `@awthaq/device-authorization`; DAG-004, DAG-005, DAG-007, wayfinder tickets 06 and 10) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-013](../models/13-device-authorization.md) as `@awthaq/device-authorization`; DAG-004, DAG-005, DAG-007, wayfinder tickets 06 and 10) <br> 1.1 (2026-10-13): Rate-limit rules renamed and tunable with `RateLimits.overrides` (plan 06) |
 ---
 
 > `@awthaq/device-authorization` composes as `Auth.make([DeviceAuthorization])` and serves three groups: `device_authorization` (`POST /device/code`, `POST /device/token`, the anonymous back channel a device speaks), `device_authorization.verification` (`POST /device/verify`, under `OptionalAuthentication`) and `device_authorization.decision` (`POST /device/approve`, `POST /device/deny`, behind `Api.Authentication`). It is the OAuth 2.0 Device Authorization Grant ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)): an input-constrained client shows a short code, the person approves it on a second, signed-in device, and the client's poll receives an ordinary bearer session. It is the login backend of `@awthaq/cli` ([BEH-EA-227](26-cli.md), [BEH-EA-307](26-cli.md#beh-ea-307-interactive-login-is-the-device-authorization-grant-polled-with-backoff)). The numbers and the state machine are fixed in [MOD-EA-013](../models/13-device-authorization.md) "Security parameters" and "Design constraints"; this file is where they become requirements.
@@ -149,7 +149,7 @@ REQUIREMENT: Through the `RateLimiter` port and registered in the plugin's rule
              and never the key.
 ```
 
-The limits are configuration (`codeRateLimit`, `userCodeRateLimit`, `invalidGrantRateLimit`); the numbers above are the defaults the model fixes. Rotating source addresses does not reset the per-session budget, and a session opening pages with different addresses does not reset the per-address one.
+The limits are configuration (`codeRateLimit`, `userCodeRateLimit`, `invalidGrantRateLimit`) and tunable with `RateLimits.overrides`; the numbers above are the defaults the model fixes. The rules are named `codeByIp`, `codeByClient`, `invalidGrantByIp` and `{verify,approve,deny}{ByIp,BySession}` (plan 06); a refused lookup is logged and counted like any other breach. Rotating source addresses does not reset the per-session budget, and a session opening pages with different addresses does not reset the per-address one.
 
 _Previous: [BEH-EA-302](37-device-authorization.md#beh-ea-302-approve-and-deny-are-compare-and-swap-decisions-by-the-claiming-user-only) | Next: [BEH-EA-304](37-device-authorization.md#beh-ea-304-redemption-issues-an-ordinary-bearer-session-only-after-winning-an-atomic-claim)_
 

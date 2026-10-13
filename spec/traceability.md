@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-RTM |
-> | Revision | 1.5 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.6 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Verification Record |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §2 URS/NFR → behavior crosswalk; renumbered subsequent sections; fixed several stale decision-file links and mismatched anchors; updated banners to note the new verify-traceability.sh script (CCR-EA-002) <br> 1.2 (2026-09-12): Populated §6 — a Gherkin acceptance suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602`; added the file-level `REQ-EA` crosswalk table and a pointer to the full per-scenario manifest at `features/traceability.md` (CCR-EA-003) <br> 1.3 (2026-09-13): Added §1 row for [27 Admin and Impersonation](behaviors/27-admin-impersonation.md), BEH-EA-209 through 220 (CCR-EA-004) <br> 1.4 (2026-09-20): Fixed AH-001 (aslak-hellesoy) — `09-admin-and-impersonation/27-admin-impersonation.feature` was missing from `features/scripts/allocate-req-ea.py`'s ORDER list and had been hand-tagged with 25 REQ-EA ids (382–406) already allocated to 18-roles-subject-resolver.feature/19-qadi-bridge-path-a.feature; added to ORDER, re-run, now allocates REQ-EA-603 through 627 instead, updating §6's crosswalk table and the total below (CCR-EA-005) <br> 1.5 (2026-09-29): Replaced the pre-implementation banner and every "Planned"/"no runner" claim with the shipped state; corrected §1's behavior ranges for files 28-30 and BEH-EA-254; traced NFR-EA-007 to BEH-EA-209..220; INV-EA-014 and INV-EA-007/008 Enforcement cells name real tests; §6 lists the re-allocated REQ-EA ids (REQ-EA-681..685 replace five collisions); §7 states what coverage is and is not measured (TMS-009, DTWS-006, DTWS-001, BDD-003, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §2 URS/NFR → behavior crosswalk; renumbered subsequent sections; fixed several stale decision-file links and mismatched anchors; updated banners to note the new verify-traceability.sh script (CCR-EA-002) <br> 1.2 (2026-09-12): Populated §6 — a Gherkin acceptance suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602`; added the file-level `REQ-EA` crosswalk table and a pointer to the full per-scenario manifest at `features/traceability.md` (CCR-EA-003) <br> 1.3 (2026-09-13): Added §1 row for [27 Admin and Impersonation](behaviors/27-admin-impersonation.md), BEH-EA-209 through 220 (CCR-EA-004) <br> 1.4 (2026-09-20): Fixed AH-001 (aslak-hellesoy) — `09-admin-and-impersonation/27-admin-impersonation.feature` was missing from `features/scripts/allocate-req-ea.py`'s ORDER list and had been hand-tagged with 25 REQ-EA ids (382–406) already allocated to 18-roles-subject-resolver.feature/19-qadi-bridge-path-a.feature; added to ORDER, re-run, now allocates REQ-EA-603 through 627 instead, updating §6's crosswalk table and the total below (CCR-EA-005) <br> 1.5 (2026-09-29): Replaced the pre-implementation banner and every "Planned"/"no runner" claim with the shipped state; corrected §1's behavior ranges for files 28-30 and BEH-EA-254; traced NFR-EA-007 to BEH-EA-209..220; INV-EA-014 and INV-EA-007/008 Enforcement cells name real tests; §6 lists the re-allocated REQ-EA ids (REQ-EA-681..685 replace five collisions); §7 states what coverage is and is not measured (TMS-009, DTWS-006, DTWS-001, BDD-003, CCR-EA-006) <br> 1.6 (2026-10-13): Rate-limit budget (plan 06): §1 implementation cell, §5 core rate-limit test rows (`RateLimitBudget`, `RateLimitKey`, `RateLimitBudget.types`), §6 crosswalk counts for the four new rate-limiting scenarios |
 
 ---
 
@@ -37,7 +37,7 @@ One row per `spec/behaviors/NN-*.md` file, naming the module that implements it 
 | [11 HTTP Serving and Error Mapping](behaviors/11-http-error-mapping.md) | 081-088 | `@awthaq/server/src/AuthHttp.ts` |
 | [12 Hooks](behaviors/12-hooks.md) | 089-096 | `@awthaq/core/src/HookPoint.ts` |
 | [13 Events](behaviors/13-events.md) | 097-104 | `@awthaq/core/src/AuthEvents.ts` |
-| [14 Rate Limiting](behaviors/14-rate-limiting.md) | 105-112 | `@awthaq/core/src/RateLimits.ts` |
+| [14 Rate Limiting](behaviors/14-rate-limiting.md) | 105-112 | `@awthaq/core/src/RateLimits.ts` (with `RateLimitModel.ts`, `RateLimitKey.ts`) |
 | [15 Password Authentication](behaviors/15-password.md) | 113-120 | `@awthaq/password/src/Password.ts` |
 | [16 OAuth and OIDC](behaviors/16-oauth.md) | 121-128 | `@awthaq/oauth/src/OAuth.ts` |
 | [17 Passkey and WebAuthn](behaviors/17-passkey.md) | 129-136, 255-257 | `@awthaq/passkey/src/Passkey.ts` |
@@ -293,7 +293,7 @@ The Gherkin acceptance suite at [`features/features/`](../features/features/) is
 
 **What "wired" means here.** A scenario that is not `@skip` is executed by a step definition against the real services or HTTP groups (memory or in-memory SQLite ports) and passes or fails CI. A pruned scenario carries a scenario-level `@skip` and a `# @skip:` comment naming the covering test or the blocking issue; a Feature tagged `@skip @unwired` has no implementation to run against yet (none today: device authorization gained its plugin, `@awthaq/device-authorization`). Wiring order followed `.scratch/resolve-ready-for-human-findings/issues/36-bdd-feature-wiring-prioritization.md`: request-admission and credential-security boundary first (Tier 1), the qadi bridge (Tier 2), cross-cutting infrastructure (Tier 3), the compiler-enforced foundational strata (Tier 4; compile-time Rules are proven by type-gate modules under `features/step-definitions/` that the typecheck compiles), client and tooling ergonomics (Tier 5).
 
-The table below is the per-file wiring status. The counts are executed nodes (a `Scenario Outline` counts once per `Examples` row): **1480 of 1520** scenario nodes run today; the rest are pruned or unwired. The full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 1260 rows) lives in [`features/traceability.md`](../features/traceability.md); `pnpm run spec:verify:strict` fails if a tag and a manifest row disagree.
+The table below is the per-file wiring status. The counts are executed nodes (a `Scenario Outline` counts once per `Examples` row): **1484 of 1524** scenario nodes run today; the rest are pruned or unwired. The full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 1260 rows) lives in [`features/traceability.md`](../features/traceability.md); `pnpm run spec:verify:strict` fails if a tag and a manifest row disagree.
 
 | Feature file | `BEH-EA` range | `REQ-EA` ids | Tier (decision 36) | Wiring status | Running / total nodes |
 |---|---|---|---|---|---|
@@ -310,7 +310,7 @@ The table below is the per-file wiring status. The counts are executed nodes (a 
 | [03-http-layer/11-http-error-mapping.feature](../features/features/03-http-layer/11-http-error-mapping.feature) | 081–088 | 223–241, 690 | 1 | wired, 1 pruned | 22 / 23 |
 | [04-cross-cutting/12-hooks.feature](../features/features/04-cross-cutting/12-hooks.feature) | 089–096 | 242–258 | 3 | wired, 4 pruned | 13 / 17 |
 | [04-cross-cutting/13-events.feature](../features/features/04-cross-cutting/13-events.feature) | 097–104 | 259–277 | 3 | full | 19 / 19 |
-| [04-cross-cutting/14-rate-limiting.feature](../features/features/04-cross-cutting/14-rate-limiting.feature) | 105–112 | 278–303, 691 | 3 | wired, 5 pruned | 23 / 28 |
+| [04-cross-cutting/14-rate-limiting.feature](../features/features/04-cross-cutting/14-rate-limiting.feature) | 105–112 | 278–303, 691, 1271–1274 | 3 | wired, 5 pruned | 27 / 32 |
 | [05-authentication-methods/15-password.feature](../features/features/05-authentication-methods/15-password.feature) | 113–120, 259 | 304–327, 692–694, 1001–1006 | wired before decision 36 | wired, 4 pruned | 33 / 37 |
 | [05-authentication-methods/16-oauth.feature](../features/features/05-authentication-methods/16-oauth.feature) | 121–128 | 328–354, 633, 684–685, 695 | wired before decision 36 | wired, 1 pruned | 30 / 31 |
 | [05-authentication-methods/17-passkey.feature](../features/features/05-authentication-methods/17-passkey.feature) | 129–136, 255–257 | 355–381, 696, 1007–1024 | wired before decision 36 | full | 54 / 54 |

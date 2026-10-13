@@ -78,11 +78,51 @@ export const callerChosenValue = (verification: Verification.VerificationShape) 
 // ---- 14-rate-limiting.feature: BEH-EA-108 (REQ-EA-292) ----
 
 // type-gate: rate-limit-key-is-a-strategy-or-a-function
-export const principalKey: RateLimits.RateLimitKey = "principal";
-export const ipKey: RateLimits.RateLimitKey = "ip";
-export const customKey: RateLimits.RateLimitKey = (input) => `signin:${JSON.stringify(input)}`;
-// @ts-expect-error - a bare string other than the two strategies is not a key: keying on caller-supplied data needs a function
-export const arbitraryKey: RateLimits.RateLimitKey = "x-forwarded-for";
+export const builtInIp = RateLimits.rule({
+  group: "g",
+  endpoint: "e",
+  key: RateLimits.Key.ip,
+  limit: 1,
+  window: "1 minute",
+});
+export const customKey = RateLimits.rule({
+  group: "g",
+  endpoint: "e",
+  key: RateLimits.Key.custom(
+    "custom",
+    Schema.Struct({ email: Schema.String }),
+    (input) => input.email,
+  ),
+  limit: 1,
+  window: "1 minute",
+});
+export const arbitraryKey = RateLimits.rule({
+  group: "g",
+  endpoint: "e",
+  // @ts-expect-error - a bare string is not a key strategy: keying on caller-supplied data needs Key.custom
+  key: "x-forwarded-for",
+  limit: 1,
+  window: "1 minute",
+});
+
+// ---- 14-rate-limiting.feature: BEH-EA-111 (plan 06) ----
+
+const gatedRules = {
+  signIn: RateLimits.rule({
+    group: "gated",
+    endpoint: "get",
+    key: RateLimits.Key.ip,
+    limit: 1,
+    window: "1 minute",
+  }),
+};
+
+// type-gate: spend-names-only-declared-rules
+export const spendsDeclared = (limits: RateLimits.Budget<typeof gatedRules>) =>
+  limits.spend("signIn", { ip: "203.0.113.7" });
+export const spendsUndeclared = (limits: RateLimits.Budget<typeof gatedRules>) =>
+  // @ts-expect-error - "signUp" is not in the table the plugin declared, so it cannot be enforced
+  limits.spend("signUp", { ip: "203.0.113.7" });
 
 // ---- 19-qadi-bridge-path-a.feature: BEH-EA-145 (REQ-EA-406) ----
 

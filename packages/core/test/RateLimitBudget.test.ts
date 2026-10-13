@@ -138,7 +138,7 @@ describe("RateLimits.budget registration (BEH-EA-107/111)", () => {
       const registry = yield* RateLimits.RateLimitsRegistry;
       const registered = yield* registry.registered;
       assert.deepStrictEqual(
-        registered.map((rule) => [rule.plugin, rule.name, rule.strategy, rule.mode, rule.bucket]),
+        registered.map((rule) => [rule.plugin, rule.name, rule.key, rule.mode, rule.bucket]),
         [
           ["invite", "createByIp", "ip", "attempts", "invite.createByIp"],
           ["invite", "createByEmail", "email", "attempts", "invite.createByEmail"],

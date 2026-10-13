@@ -810,7 +810,7 @@ export const RolesRevokedEvent = Schema.TaggedStruct("auth.roles.revoked", {
 export type RolesRevokedEvent = typeof RolesRevokedEvent.Type;
 
 /**
- * EOTS-007: published by `RateLimits.enforce` on every rate-limit breach.
+ * EOTS-007: published by a rate-limit budget (`RateLimits.budget`: `spend` or `guard`) on every rate-limit breach.
  * Deliberately carries no bucket key, email or IP (BEH-EA-108): it names the
  * rule that fired, so a defender can see which throttle is being hit and how
  * often without the event stream itself becoming an identifier oracle.

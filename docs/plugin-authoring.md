@@ -50,7 +50,26 @@ A plugin that needs a mailer, a crypto source, a rate limiter or a transaction b
 Two facts about a plugin are read by tooling without building its layer, so the plugin **declares** them (PV-241):
 
 - **`ports`.** `AuthPlugin.layer(Self, { ports: [Mailer.Mailer, RateLimiter.RateLimiter], ... })` lists the port classes (`@awthaq/ports`) the layer requires. They join the layer's `RIn` like `dependsOn`, and the compiler checks the list is complete: a service whose key is `.../ports/...` that `make`, the handlers or `contributes` require but `ports` omits fails to type-check, naming the missing key. `awthaq plugin list --graph` prints them (`Manifest.ports`). Core services, effect's own (`Crypto`, `SqlClient`) and your own records need no entry.
-- **`rateLimits`.** `AuthPlugin.Service(id, { rateLimits: [{ group, endpoint, name, dimension, limit, window }] })` declares each rule's defaults; `group` is confined to your contract's groups at compile time (BEH-EA-107). Register from the same declaration with `RateLimits.registerDeclared(Self, { key })` (or keep a rule table and build the declaration with `AuthPlugin.declareRateLimits(groups, rules)`), and add a test asserting `RateLimits.declarationDrift(Self, registered)` is empty so the list `awthaq plugin list --rules` prints (`Manifest.rateLimits`) cannot drift from what is enforced. Config-tuned numbers are the defaults there.
+- **`rateLimitRules`.** A plugin that throttles declares its rules once, as a typed table, and spends them by name (BEH-EA-105 to 111):
+
+  ```ts
+  const rules = {
+    signInByIp: RateLimits.rule({ group: "notes", endpoint: "create", key: RateLimits.Key.ip, limit: 30, window: Duration.minutes(15) }),
+    signIn: RateLimits.rule({ group: "notes", endpoint: "create", key: RateLimits.Key.email, limit: 5, window: Duration.minutes(15) }),
+    lockout: RateLimits.failureRule({ group: "notes", endpoint: "create", key: RateLimits.Key.user, limit: 5, window: Duration.minutes(15), bucket: "notes.lockout" }),
+  };
+  // AuthPlugin.Service(id, { rateLimitRules: rules, ... })
+  // make: const limits = yield* RateLimits.budget(Self, { tune, emailKey });
+  yield* limits.spend(["signInByIp", "signIn"], input); // names and input shape are checked by the compiler
+  yield* limits.guard("lockout", { userId });           // a failure budget (BCR-006): refuse before evaluating...
+  yield* limits.charge("lockout", { userId });          // ...and charge only the failures
+  ```
+
+  - `group` is confined to your contract's groups at compile time (BEH-EA-107), `spend` accepts only the table's own attempts-rules and `guard`/`charge` only its failure-rules, and each name demands the input its key reads. `RateLimits.Key.*` are the key strategies (`ip`, `email`, `identifier`, `user`, `session`, `client`, `phone`, `custom`); the handler resolves the IP and the principal and passes `{ ip }` or `{ userId }` in, so the bucket never reads the ambient request. `Key.email` normalises with the one shared `Key.emailKey` (trim, lower-case, strip `+tag`), and `Key.custom(dimension, schema, part)` is the explicit opt-in to a key of your own (BEH-EA-108).
+  - The static `rateLimits` listing `awthaq plugin list --rules` prints (`Manifest.rateLimits`, with each rule's key strategy and mode) is **derived from that same table**, and `budget` registers it: there is no second list to keep in agreement and no drift test to write. `AuthPlugin.layer` refuses at build a plugin that declares rules but never opens its budget (`RateLimitBudgetNotOpened`), and `budget` takes a narrow owner with no `layer` member, so `RateLimits.budget(Self)` inside `Self`'s own `layer` needs no type annotation.
+  - A breach is published (`auth.rateLimit.exceeded`, never carrying the key), logged, counted and answered with `Api.RateLimited` (EOTS-007): declare it in the endpoint's `error` list. Handlers outside `make` and credential contributions read the opened handle with `RateLimits.budgetOf(Self)`; a group-wide rule (`endpoint: "*"`) reports the endpoint you pass in `spend(..., { endpoint })`.
+  - Tune in `make` with `budget(Self, { tune })` (an `Effect` of per-rule `{ limit, window, escalation }`, evaluated on every call so a tenant's config in force applies, EP-007). An application tunes or escalates any shipped rule without touching the plugin: `RateLimits.overrides(RateLimits.tune(Password, { signIn: { limit: 3 } }))`.
+  - Add `RateLimiter.RateLimiter` to `ports`: a budget consumes through it.
 
 ## Contributing a credential type
 
@@ -95,7 +114,7 @@ An operation that is several SQL statements runs in one `sql.withTransaction` so
 
 ## Checklist for a new plugin
 
-1. `AuthPlugin.Service` with `apiVersion`, `contract`, `tables`, `migrations` (and `dependsOn` only if needed), `rateLimits` when it throttles, and `ports` on `AuthPlugin.layer` for every port it requires.
+1. `AuthPlugin.Service` with `apiVersion`, `contract`, `tables`, `migrations` (and `dependsOn` only if needed), `rateLimitRules` when it throttles (and `RateLimits.budget(Self)` in `make`), and `ports` on `AuthPlugin.layer` for every port it requires.
 2. Errors typed and status-mapped; `HookAborted` on every vetoable endpoint.
 3. Config as a `Context.Reference` with a default.
 4. Records service with `layerMemory` and `layerSql` (the template ships only `layerSql`; production plugins ship both).

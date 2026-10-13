@@ -124,34 +124,6 @@ export interface Class<
 
 export type { RateLimitDeclaration, RateLimitDimension } from "./RateLimitModel.ts";
 
-/**
- * PV-241: builds a legacy `rateLimits` declaration from a hand-kept rule list. Superseded by the
- * `rateLimitRules` table (removed in plan 06 phase 11).
- */
-export const declareRateLimits = <const Group extends string>(
-  groups: ReadonlyArray<Group>,
-  rules: Iterable<RateLimitDeclaration>,
-): ReadonlyArray<RateLimitDeclaration<Group>> => {
-  const declared: Array<RateLimitDeclaration<Group>> = [];
-  for (const rule of rules) {
-    const group = groups.find((candidate) => candidate === rule.group);
-    if (group === undefined) {
-      throw new Error(
-        `awthaq: rate-limit rule "${rule.name}" names group "${rule.group}", which is not one of [${groups.join(", ")}]`,
-      );
-    }
-    declared.push({
-      group,
-      endpoint: rule.endpoint,
-      name: rule.name,
-      dimension: rule.dimension,
-      limit: rule.limit,
-      window: rule.window,
-    });
-  }
-  return declared;
-};
-
 /** PV-241: the group ids of a plugin's contract, the only groups a declared rule may name. */
 export type GroupIdOf<Groups> =
   Groups extends HttpApiGroup.HttpApiGroup<infer Id, infer _Endpoints, infer _Error> ? Id : never;
@@ -279,12 +251,6 @@ export const Service =
       readonly migrations?: Migrations;
       readonly readsTables?: ReadonlyArray<string>;
       /**
-       * PV-241/BEH-EA-111: the rate-limit rules this plugin enforces, declared statically so `plugin list
-       * --rules` prints them without building a layer. Each rule's `group` must be one of this plugin's own
-       * contract groups (a compile error otherwise); the numbers are the defaults a config may tune.
-       */
-      readonly rateLimits?: ReadonlyArray<RateLimitDeclaration<NoInfer<GroupIdOf<Groups>>>>;
-      /**
        * BEH-EA-105/107/111: the typed rate-limit rule table (`{ signIn: RateLimits.rule({ group, endpoint,
        * key: RateLimits.Key.email, limit, window }) }`). Declared once: the static `rateLimits` listing is
        * derived from it, `RateLimits.budget(Self)` registers it and `spend`s only its names, and a rule
@@ -321,10 +287,7 @@ export const Service =
       tables: options.tables ?? [],
       migrations: options.migrations ?? [],
       readsTables: options.readsTables ?? [],
-      rateLimits:
-        options.rateLimitRules === undefined
-          ? (options.rateLimits ?? [])
-          : RateLimitModel.declare(options.rateLimitRules),
+      rateLimits: RateLimitModel.declare(options.rateLimitRules ?? {}),
       rateLimitRules: options.rateLimitRules ?? {},
       config: options.config ?? [],
       userFields,

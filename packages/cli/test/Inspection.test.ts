@@ -187,7 +187,7 @@ describe("plugin list --graph: ports and hook taps", () => {
 // PV-241/BEH-EA-111: `plugin list --rules` prints `manifest.rateLimits`, the statically declared rules.
 describe("plugin list --rules", () => {
   it.effect(
-    "prints every declared rule with its plugin, endpoint, dimension, limit and window",
+    "prints every declared rule with its plugin, endpoint, dimension, key strategy, mode, limit and window",
     () =>
       Effect.gen(function* () {
         const signIn = Plugin.rules(passwordAndRoles).find(
@@ -199,16 +199,20 @@ describe("plugin list --rules", () => {
           endpoint: "signIn",
           name: "signIn",
           dimension: "identity",
+          key: "email",
+          mode: "attempts",
           limit: 5,
           window: "15m",
         });
         const text = yield* captureStdout(
           Plugin.show(passwordAndRoles, { graph: false, rules: true, format: "text" }),
         );
-        assert.match(text[0] ?? "", /^PLUGIN\s+RULE\s+ENDPOINT\s+DIMENSION\s+LIMIT/);
+        assert.match(text[0] ?? "", /^PLUGIN\s+RULE\s+ENDPOINT\s+DIMENSION\s+KEY\s+MODE\s+LIMIT/);
         assert.isTrue(
           text.some((line) =>
-            /^password\s+signIn\s+password\.signIn\s+identity\s+5 per 15m/.test(line),
+            /^password\s+signIn\s+password\.signIn\s+identity\s+email\s+attempts\s+5 per 15m/.test(
+              line,
+            ),
           ),
         );
       }),

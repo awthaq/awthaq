@@ -2055,3 +2055,37 @@ All packages are one `fixed` group (`.changeset/config.json`). Bump `minor` for 
 - **Q10. Shared-bucket overrides.** Dying on a per-rule override of a shared bucket (device `userCode`) is strict.
   Alternatives: an override on any member applies to all members of the bucket, or overrides address the bucket by
   name.
+
+---
+
+## 11. Decisions taken (execution)
+
+Open questions were answered with the plan's recommended default; where the plan gave none, the richest option with a real caller.
+
+1. **Q1 bucket-key rename**: accepted (plan default). Every rule moved to a budget uses `ratelimit:<bucket>:<part>`; each per-plugin changeset lists the old and new spellings, and the counter reset (including second-factor lockouts in progress) is called out in the core and cleanup changesets.
+2. **Q2 labels and dimensions**: renamed to camelCase table keys and re-labelled (`userId` rules `principal`, `clientId` rules `identity`), as planned.
+3. **Q3 core-owned rules in the manifest**: no. The account export rule is in the registry (owner `account`) but not in `manifest.rateLimits`.
+4. **Q4 per-plugin knobs**: kept as `tune` (`OAuthConfig.rateLimits`, `DeviceAuthorizationConfig.*RateLimit`, `ApiKeyConfig.*RateLimit`, `SamlConfig.rateLimits`/`adminRate`, `WebhooksConfig.adminRate`, `TwoFactorConfig.failure*`); no deprecation.
+5. **Q5 second-factor lockout observability**: unchanged (`SecondFactorLocked`, `auth.twoFactor.*`, no `auth.rateLimit.exceeded`).
+6. **Q6 disabling a rule**: not offered.
+7. **Q7 endpoint confinement at the type level**: not done; `group` stays confined, `endpoint` is a free string (or `"*"`).
+8. **Q8 webhook delivery pacing**: stays a raw `RateLimiter.consume`.
+9. **Q9 unthrottled surfaces**: left as is (admin, organization, SCIM); a follow-up plan decides.
+10. **Q10 shared-bucket overrides**: strict at open. Built values of rules sharing a (bucket, key strategy) must agree, otherwise `RateLimitBucketConflict`; see adaptation 2 below for the refinement.
+
+Phase 0 (typing spike), done against the real `HttpApi`/`Effect` types while building phase 1:
+
+- (a) no TS7022/TS7024 in `Password.layer`, `MagicLink.layer`, `ApiKey.layer`, `Sso.layer`, `TwoFactor.layer`; the cycle gate T8 compiles. (b) `spend("nope")`, a missing input field, `spend` of a failure rule and `guard` of an attempts rule are errors (T1-T4). (c) `Service` rejects a foreign group (T5). (d) `Class.contract` is assignable to `Owner["contract"]`. (e) `Schema.is` over a struct accepts extra fields and is assignable to the `accepts` guard. (f) `Effect<Tuning<Limits>>` is assignable to `Effect<ErasedTuning>` with `Limits` generic. (g) `RateLimits.budgetOf(ApiKey)` inside `ApiKeyHandlers` and `CredentialContributionsLive`, both declared before `class ApiKey`, compiles without a cycle. No fallback of section 4 phase 0.3 was needed.
+
+Adaptations to the plan text, found while executing:
+
+1. **`bucket` rides in the rule's type.** `bucketKey(rule, input)` needs an explicit bucket (it has no table name to derive a default from), and `bucket: string | undefined` on `Rule` cannot express that. `rule`/`failureRule` are overloaded on `bucket` (`Rule<...> & { readonly bucket: Bucket }`), so passing a rule without one to `bucketKey` is a compile error. Overloads, no assertions.
+2. **A counter is a (bucket, key strategy) pair.** The plan's `open` required equal mode/limit/window for every rule naming one bucket. Device authorization's six user-code lookup rules share the bucket `device_authorization.userCode` but key on `ip:` and `session:` parts with independently configurable sizing (`userCodeRateLimit.ip` vs `.session`), so the plan's check would have died at build for a deployment configuring them differently. The conflict check now keys on (bucket, strategy); rules of different strategies share a bucket name with their own sizing, and the same strategy must agree. The bucket-prefix rule (must start with one of the owner's groups) is unchanged.
+3. **Account export in the registry.** `AccountHandlers` opens `RateLimits.budget(accountRateLimits)`, so it appears in `registered` under owner `account`; BDD readers that assume "only plugin rules" (REQ-EA-289, REQ-EA-298) filter that owner out.
+4. **Declaration-emit portability.** A plugin that only spends a budget (`Sso`, `AccountHandlers`) has `AuthEvents`/`RateLimiter` in its inferred `layer` type but no import to name them (TS2883). `RateLimits.Events` and `RateLimits.Limiter` re-export them so the `RateLimits` namespace every such plugin already imports is the path.
+5. **Template rule keys on the user.** The plan said `Key.ip` on the template's public endpoint; the template's only throttled endpoint is authenticated (`create`), so the rule is `createByUser` on `Key.user` (5 a minute), and the test shows the sixth call answering 429 per caller.
+6. **BEH-EA-108 alias scenario uses password only.** The new BDD scenario drives the password plugin; the magic-link and passkey `+tag` sharing are unit tests (`MagicLink.test.ts`, `EmailOtp.test.ts`, `PasskeyEnumeration.test.ts`), since the cross-cutting world composes only password.
+7. **Tests of core's ordering and freeze** moved into `RateLimitBudget.test.ts` (B1/B2) rather than staying in a rewritten `RateLimits.test.ts`, which is deleted.
+8. New BDD ids are REQ-EA-1271..1274 (BEH-EA-108 alias scenario, BEH-EA-110 override scenario, BEH-EA-111 guard and type-gate scenarios).
+9. `pnpm-lock.yaml` and `examples/plugin-template/package.json`/`tsconfig.json` gained `@awthaq/ports` (the template's `ports: [RateLimiter.RateLimiter]`); the lockfile entry was edited by hand because the registry is unreachable offline and `pnpm install --frozen-lockfile` accepts it.
+- `pnpm test:pg` ran against a throwaway Postgres container and passed (30 files, 648 tests); `pnpm knip` reports only the 101 untracked `.reports/` files; `pnpm package:smoke` passed on a retry (a first run hit a transient `ENOSPC` in the npm cache while the disk was full).

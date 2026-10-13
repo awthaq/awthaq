@@ -127,9 +127,9 @@ export interface RateLimitDeclaration<Group extends string = string> {
   /** The rule's own name: its key in the table, as the event's `rule` reports it. */
   readonly name: string;
   readonly dimension: Key.Dimension;
-  /** The key strategy (`"ip"`, `"email"`, ...). Optional only while legacy declarations exist (plan 06 phase 11). */
-  readonly key?: Key.Key<unknown>["strategy"];
-  readonly mode?: Mode;
+  /** The key strategy (`"ip"`, `"email"`, ...), printed by `plugin list --rules`. */
+  readonly key: Key.Key<unknown>["strategy"];
+  readonly mode: Mode;
   readonly limit: number;
   readonly window: Duration.Input;
 }
@@ -245,32 +245,24 @@ export interface BudgetOptions<Limits> {
 
 // ---- the registry ---------------------------------------------------------------------------------
 
-/** The legacy (pre-budget) key spelling a rule registered with; removed with `register` (plan 06 phase 11). */
-export type RateLimitKey = "principal" | "ip" | ((input: unknown) => string);
-
-/** Legacy registration input of `RateLimitsRegistry.register` (plan 06 phase 11 removes it). */
-export interface RuleInput {
+/** One rule as the registry reports it (BEH-EA-111): the tuned numbers in force at build, never a key function. */
+export interface RegisteredRule {
+  readonly plugin: string;
+  /** The table key. */
+  readonly name: string;
   readonly group: string;
   readonly endpoint: string;
-  readonly key: RateLimitKey;
+  readonly dimension: Key.Dimension;
+  /** The key strategy (`"ip"`, `"email"`, ...). */
+  readonly key: Key.Key<unknown>["strategy"];
+  readonly mode: Mode;
+  /** The bucket the rule's counter lives in. */
+  readonly bucket: string;
   readonly limit: number;
   readonly window: Duration.Input;
-  /** RBS-009: opt-in exponential penalty for repeat breaches. Off by default. */
-  readonly escalation?: RateLimiter.Escalation;
-  readonly order?: number;
-}
-
-export interface RegisteredRule extends RuleInput {
-  readonly plugin: string;
+  readonly escalation?: RateLimiter.Escalation | undefined;
+  readonly order: number;
   readonly sequence: number;
-  /** The table key. Set for every rule a budget opened. */
-  readonly name?: string;
-  readonly dimension?: Key.Dimension;
-  /** The key strategy (`"ip"`, `"email"`, ...). */
-  readonly strategy?: Key.Key<unknown>["strategy"];
-  readonly mode?: Mode;
-  /** The bucket the rule's counter lives in. */
-  readonly bucket?: string;
 }
 
 /** One rule of a table, resolved: the tuned sizing in force at open and the bucket it counts in. */
@@ -279,16 +271,9 @@ export interface Registration {
   readonly rule: Rule;
   readonly bucket: string;
   readonly sizing: Sizing;
-  /** The bucket-key derivation this rule consumes, exactly as `spend` calls it. */
-  readonly keyOf: (input: unknown) => string;
 }
 
 export interface RateLimitsRegistryShape {
-  /** Legacy single-rule registration. */
-  readonly register: (
-    owner: Owner,
-    input: RuleInput,
-  ) => Effect.Effect<void, RateLimitScopeViolation>;
   /** Registers `owner`'s whole table and remembers its handle. Dies on: scope violation, frozen, double open, bucket conflict. */
   readonly open: (
     owner: Owner,

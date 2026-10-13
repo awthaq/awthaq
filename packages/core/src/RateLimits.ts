@@ -123,18 +123,6 @@ export const layer: Layer.Layer<RateLimitModel.RateLimitsRegistry> = Layer.effec
         message: `awthaq: plugin "${owner.id}" cannot rate-limit group "${group}", which is not one of its own contract groups`,
       });
 
-    const register: RateLimitModel.RateLimitsRegistryShape["register"] = (owner, input) =>
-      Effect.gen(function* () {
-        if (!Object.hasOwn(owner.contract.groups, input.group)) {
-          return yield* Effect.fail(scopeViolation(owner, input.group));
-        }
-        yield* assertOpen;
-        yield* Ref.update(entries, (current) => [
-          ...current,
-          { rule: { ...input, plugin: owner.id, sequence: current.length }, owner },
-        ]);
-      });
-
     const open: RateLimitModel.RateLimitsRegistryShape["open"] = (owner, registrations, handle) =>
       Effect.gen(function* () {
         yield* assertOpen;
@@ -204,16 +192,13 @@ export const layer: Layer.Layer<RateLimitModel.RateLimitsRegistry> = Layer.effec
               group: registration.rule.group,
               endpoint: registration.rule.endpoint,
               dimension: registration.rule.dimension,
-              strategy: registration.rule.strategy,
+              key: registration.rule.strategy,
               mode: registration.rule.mode,
               bucket: registration.bucket,
-              key: registration.keyOf,
               limit: registration.sizing.limit,
               window: registration.sizing.window,
+              escalation: registration.sizing.escalation,
               order: registration.rule.order,
-              ...(registration.sizing.escalation === undefined
-                ? {}
-                : { escalation: registration.sizing.escalation }),
             },
             owner,
           })),
@@ -241,91 +226,9 @@ export const layer: Layer.Layer<RateLimitModel.RateLimitsRegistry> = Layer.effec
       },
     );
 
-    return RateLimitsRegistry.of({ register, open, handleOf, registered });
+    return RateLimitsRegistry.of({ open, handleOf, registered });
   }),
 );
-
-/**
- * PV-241/BEH-EA-111: registers every rule `owner` declared statically (`AuthPlugin.Service`'s legacy
- * `rateLimits`), so a plugin whose rules are all declared keeps one list, not two. Removed with the
- * legacy path (plan 06 phase 11).
- */
-export const registerDeclared = (
-  owner: AuthPlugin.Any,
-  options?: {
-    readonly key?: (
-      rule: RateLimitModel.RateLimitDeclaration,
-    ) => RateLimitModel.RateLimitKey | undefined;
-    readonly tune?: (
-      rule: RateLimitModel.RateLimitDeclaration,
-    ) => Partial<Pick<RateLimitModel.RuleInput, "limit" | "window">> | undefined;
-  },
-) =>
-  Effect.flatMap(RateLimitsRegistry, (registry) =>
-    Effect.forEach(
-      owner.rateLimits ?? [],
-      (rule) =>
-        registry.register(owner, {
-          group: rule.group,
-          endpoint: rule.endpoint,
-          key:
-            options?.key?.(rule) ??
-            (rule.dimension === "ip" || rule.dimension === "principal"
-              ? rule.dimension
-              : () => `${rule.group}:${rule.name}`),
-          limit: rule.limit,
-          window: rule.window,
-          ...options?.tune?.(rule),
-        }),
-      { discard: true },
-    ),
-  );
-
-/** PV-241: how a plugin's runtime registrations differ from its declaration (all empty when they agree). */
-export interface DeclarationDrift {
-  /** Registered (group, endpoint) pairs no declaration names. */
-  readonly undeclared: ReadonlyArray<string>;
-  /** Declared (group, endpoint) pairs nothing registered. */
-  readonly unregistered: ReadonlyArray<string>;
-  /** Declared and registered, but with different limits or windows (a config-tuned plugin should compare under its defaults). */
-  readonly mismatched: ReadonlyArray<string>;
-}
-
-const addressOf = (rule: { readonly group: string; readonly endpoint: string }) =>
-  `${rule.group}.${rule.endpoint}`;
-
-interface Sized {
-  readonly limit: number;
-  readonly window: Duration.Input;
-}
-
-const shapesOf = (rules: ReadonlyArray<Sized>) =>
-  rules
-    .map((rule) => `${rule.limit}/${millisOf(rule.window)}`)
-    .toSorted()
-    .join(",");
-
-/** PV-241/BEH-EA-111: the legacy consistency check (removed with the legacy path, plan 06 phase 11). */
-export const declarationDrift = (
-  owner: AuthPlugin.Any,
-  registered: ReadonlyArray<RateLimitModel.RegisteredRule>,
-): DeclarationDrift => {
-  const declared = owner.rateLimits ?? [];
-  const mine = registered.filter((rule) => rule.plugin === owner.id);
-  const declaredAddresses = new Set(declared.map(addressOf));
-  const registeredAddresses = new Set(mine.map(addressOf));
-  return {
-    undeclared: [...registeredAddresses].filter((address) => !declaredAddresses.has(address)),
-    unregistered: [...declaredAddresses].filter((address) => !registeredAddresses.has(address)),
-    mismatched: [...declaredAddresses]
-      .filter((address) => registeredAddresses.has(address))
-      .filter(
-        (address) =>
-          shapesOf(declared.filter((rule) => addressOf(rule) === address)) !==
-          shapesOf(mine.filter((rule) => addressOf(rule) === address)),
-      ),
-  };
-};
 
 // ---- observation -------------------------------------------------------------------------------
 
@@ -336,7 +239,7 @@ export const exceededCounter = Metric.counter("awthaq.ratelimit.exceeded", {
 });
 
 /** EOTS-007: which rule a breach belongs to. Every field is a fixed label, so none of it can carry caller input. */
-export interface EnforceMeta {
+interface EnforceMeta {
   readonly group: string;
   readonly endpoint: string;
   readonly rule: string;
@@ -355,33 +258,6 @@ const observe = (events: AuthEvents.AuthEventsShape, meta: EnforceMeta, retryAft
     ],
     { discard: true },
   );
-
-export interface EnforceInput {
-  readonly key: string;
-  readonly limit: number;
-  readonly window: Duration.Input;
-  readonly escalation?: RateLimiter.Escalation;
-  readonly meta: EnforceMeta;
-}
-
-/**
- * Legacy single-key enforcement, still used by plugins that have not moved to a budget (removed with
- * the legacy path, plan 06 phase 11). The bucket key (an email, an IP) is never published, logged or
- * used as a metric attribute (BEH-EA-108); the port's own `RateLimitExceeded` is re-raised unchanged.
- */
-export const enforce = (input: EnforceInput) =>
-  Effect.gen(function* () {
-    const limiter = yield* RateLimiter.RateLimiter;
-    const events = yield* AuthEvents.AuthEvents;
-    return yield* limiter
-      .consume({
-        key: input.key,
-        limit: input.limit,
-        window: input.window,
-        escalation: input.escalation,
-      })
-      .pipe(Effect.tapError((error) => observe(events, input.meta, error.retryAfterMillis)));
-  });
 
 // ---- application overrides ---------------------------------------------------------------------
 
@@ -567,7 +443,6 @@ export const budget = <Limits extends Table>(
         rule,
         sizing,
         bucket,
-        keyOf: (input: unknown) => rule.keyOf(bucket, input, context),
       })),
     );
     yield* registry.open(owner, registrations, erased);

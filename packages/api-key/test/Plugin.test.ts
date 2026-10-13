@@ -27,7 +27,7 @@ describe("ApiKey plugin", () => {
         const registry = yield* RateLimits.RateLimitsRegistry;
         const mine = (yield* registry.registered).filter((rule) => rule.plugin === "apikey");
         assert.deepStrictEqual(
-          mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.strategy, rule.dimension]),
+          mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.key, rule.dimension]),
           [
             ["tokenByIp", "apikey.token", "token", "ip", "ip"],
             ["tokenByClient", "apikey.token", "token", "client", "identity"],

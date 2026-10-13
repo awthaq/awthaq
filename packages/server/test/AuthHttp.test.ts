@@ -510,7 +510,7 @@ describe("GET /user/export (CSG-005)", () => {
       const registry = yield* RateLimits.RateLimitsRegistry;
       const rules = yield* registry.registered;
       assert.deepStrictEqual(
-        rules.map((rule) => [rule.plugin, rule.group, rule.endpoint, rule.name, rule.strategy]),
+        rules.map((rule) => [rule.plugin, rule.group, rule.endpoint, rule.name, rule.key]),
         [["account", "account", "exportData", "exportData", "user"]],
       );
     }).pipe(Effect.provide(AppLayer)),
