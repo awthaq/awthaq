@@ -25,8 +25,8 @@
 // to lapse and the delivery is sent again, with the same `webhook-id`. Receivers deduplicate on it.
 
 import { type AuditLog, EventRelay } from "@awthaq/core";
-import { Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
-import { TenantScoped } from "@awthaq/sql";
+import { HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { type StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -62,7 +62,15 @@ const relay = TenantScoped.crossTenant("webhooks relay: tenantRoutes decides del
 // ---- enqueue: the EventTransport ---------------------------------------------------------------
 
 /** Turns a relayed batch into queued deliveries. Requires the records, `Crypto` (ids) and the plugin config. */
-export const enqueue = (events: ReadonlyArray<Parameters<typeof WebhookPayload.toBody>[0]>) =>
+// The explicit types on `enqueue`, `drainDue` and `pruneOnce` are the narrow exception the plugins document
+// (TS2883): declaration emit cannot name `StoreUnavailable` through the records' inferred error.
+export const enqueue = (
+  events: ReadonlyArray<Parameters<typeof WebhookPayload.toBody>[0]>,
+): Effect.Effect<
+  number,
+  StoreFailure.StoreUnavailable,
+  WebhookRecords.WebhookRecords | Crypto.Crypto
+> =>
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
     const crypto = yield* Crypto.Crypto;
@@ -148,11 +156,14 @@ const failureClass = (error: unknown): string => {
   return error instanceof WebhookTransport.WebhookTransportError ? error.failure : "connect";
 };
 
-/** Sends one claimed delivery and records what happened. Never fails: every problem is an outcome. */
+/**
+ * Sends one claimed delivery and records what happened. Every problem with the delivery is an outcome; the
+ * only failure is the store's own outage (`StoreUnavailable`), which `attemptCounted` logs and retries.
+ */
+
 export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
-    const encryption = yield* Encryption.Encryption;
     const limiter = yield* RateLimiter.RateLimiter;
     const transport = yield* WebhookTransport.WebhookTransport;
     const settings = yield* WebhooksConfig.WebhooksConfig;
@@ -228,10 +239,10 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
       : Result.map(yield* HostResolver.pin(endpoint.url), Option.some);
     if (Result.isFailure(pin)) return yield* failed({ error: "blocked" });
 
-    const secrets = yield* WebhookSecrets.open(encryption, endpoint, now);
+    const secrets = yield* WebhookSecrets.open(endpoint, now);
     if (Option.isNone(secrets)) return yield* failed({ error: "secret" });
     // BEH-EA-313: the endpoint's custom headers, opened like the secret (a value that does not open fails as `secret`).
-    const custom = yield* WebhookSecrets.openHeaders(encryption, endpoint);
+    const custom = yield* WebhookSecrets.openHeaders(endpoint);
     if (Option.isNone(custom)) return yield* failed({ error: "secret" });
 
     const timestamp = Math.floor(DateTime.toEpochMillis(now) / 1000);
@@ -288,7 +299,15 @@ const attemptCounted = (delivery: WebhookRecords.DeliveryRecord) =>
  * Claims what is due and attempts it, `concurrency` at a time. Resolves to how many deliveries were
  * attempted (0 when nothing is due) — what a test steps and what the loop uses to decide whether to sleep.
  */
-export const drainDue = Effect.gen(function* () {
+export const drainDue: Effect.Effect<
+  number,
+  StoreFailure.StoreUnavailable,
+  | Crypto.Crypto
+  | HostResolver.HostResolver
+  | RateLimiter.RateLimiter
+  | WebhookRecords.WebhookRecords
+  | WebhookTransport.WebhookTransport
+> = Effect.gen(function* () {
   const records = yield* WebhookRecords.WebhookRecords;
   const settings = yield* WebhooksConfig.WebhooksConfig;
   const now = yield* DateTime.now;
@@ -305,7 +324,11 @@ export const drainDue = Effect.gen(function* () {
 });
 
 /** Deletes finished rows older than `deliveryRetention`. */
-export const pruneOnce = Effect.gen(function* () {
+export const pruneOnce: Effect.Effect<
+  number,
+  StoreFailure.StoreUnavailable,
+  WebhookRecords.WebhookRecords
+> = Effect.gen(function* () {
   const records = yield* WebhookRecords.WebhookRecords;
   const settings = yield* WebhooksConfig.WebhooksConfig;
   const now = yield* DateTime.now;

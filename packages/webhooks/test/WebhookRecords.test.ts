@@ -2,8 +2,9 @@
 // `layerSql` is migrated through the plugin's own real `migrations` (and, under `pnpm run test:pg`,
 // runs on Postgres), so the unique (endpoint, event) pair is a real database constraint.
 import { Migrations } from "@awthaq/core";
-import { TenantScoped } from "@awthaq/sql";
-import { Tenant } from "@awthaq/ports";
+import { SealedColumn, TenantScoped } from "@awthaq/sql";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { type Encryption, Tenant } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -11,8 +12,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
-import { relay } from "./support.ts";
+import { EncryptionLive, relay } from "./support.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as Webhooks from "../src/Webhooks.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
@@ -23,10 +25,17 @@ const Migrated = Layer.effectDiscard(Migrations.run(Webhooks.Webhooks.migrations
   Layer.provide(SqlLive),
 );
 
-const SqlLayer = WebhookRecords.layerSql.pipe(
+// The records layers need `Encryption` (their sealed columns); the conformance suites provide a rotatable one themselves.
+const SqlNeedsEncryption = WebhookRecords.layerSql.pipe(
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
+const SqlLayer = SqlNeedsEncryption.pipe(Layer.provide(EncryptionLive));
+const MemoryLayer = WebhookRecords.layerMemory.pipe(Layer.provide(EncryptionLive));
+
+/** What a sealed secret holds, opened through the substrate. */
+const openSecret = (sealed: SealedColumn.Sealed<string>) =>
+  Effect.map(SealedColumn.orDie(sealed.open), Redacted.value);
 
 const at = (millis: number) => DateTime.makeUnsafe(millis);
 
@@ -35,7 +44,7 @@ const endpointInput = (id: string, extra: { readonly tags?: ReadonlyArray<string
   url: `https://${id}.example.com/hook`,
   description: `endpoint ${id}`,
   eventTags: extra.tags ?? ["*"],
-  secret: `sealed-${id}`,
+  secret: Redacted.make(`secret-${id}`),
   createdBy: "admin-1",
 });
 
@@ -54,6 +63,13 @@ const newDelivery = (
   body: `{"id":"${eventId}"}`,
   nextAttemptAt,
 });
+
+const openHeaders = (record: WebhookRecords.EndpointRecord) =>
+  Option.match(record.headers, {
+    onNone: () => Effect.succeed(Option.none<Readonly<Record<string, string>>>()),
+    onSome: (sealed) =>
+      Effect.map(SealedColumn.orDie(sealed.open), (opened) => Option.some(Redacted.value(opened))),
+  });
 
 const suite = (
   name: string,
@@ -99,22 +115,31 @@ const suite = (
           const records = yield* WebhookRecords.WebhookRecords;
           const created = yield* records.createEndpoint({
             ...endpointInput("h"),
-            headers: { sealed: "sealed-headers-1", names: ["authorization"] },
+            headers: { value: { authorization: "Bearer one" }, names: ["authorization"] },
           });
-          assert.deepStrictEqual(created.headers, Option.some("sealed-headers-1"));
+          assert.deepStrictEqual(
+            yield* openHeaders(created),
+            Option.some({ authorization: "Bearer one" }),
+          );
           assert.deepStrictEqual(created.headerNames, ["authorization"]);
           const plain = yield* records.createEndpoint(endpointInput("n"));
           assert.deepStrictEqual(plain.headers, Option.none());
           assert.deepStrictEqual(plain.headerNames, []);
           const replaced = yield* records.updateEndpoint("h", {
-            headers: { sealed: "sealed-headers-2", names: ["x-a", "x-b"] },
+            headers: { value: { "x-a": "1", "x-b": "2" }, names: ["x-a", "x-b"] },
           });
-          assert.deepStrictEqual(replaced.headers, Option.some("sealed-headers-2"));
+          assert.deepStrictEqual(
+            yield* openHeaders(replaced),
+            Option.some({ "x-a": "1", "x-b": "2" }),
+          );
           assert.deepStrictEqual(replaced.headerNames, ["x-a", "x-b"]);
           const untouched = yield* records.updateEndpoint("h", {
             url: "https://moved.example.com/x",
           });
-          assert.deepStrictEqual(untouched.headers, Option.some("sealed-headers-2"));
+          assert.deepStrictEqual(
+            yield* openHeaders(untouched),
+            Option.some({ "x-a": "1", "x-b": "2" }),
+          );
           const cleared = yield* records.updateEndpoint("h", { headers: null });
           assert.deepStrictEqual(cleared.headers, Option.none());
           assert.deepStrictEqual(cleared.headerNames, []);
@@ -128,15 +153,24 @@ const suite = (
           const records = yield* WebhookRecords.WebhookRecords;
           yield* records.createEndpoint(endpointInput("a"));
           const rotated = yield* records.setSecrets("a", {
-            secret: "sealed-new",
-            previousSecret: "sealed-old",
+            secret: Redacted.make("secret-new"),
+            previousSecret: Redacted.make("secret-old"),
             previousSecretExpiresAt: at(5_000),
           });
-          assert.strictEqual(rotated.secret, "sealed-new");
-          assert.deepStrictEqual(rotated.previousSecret, Option.some("sealed-old"));
+          assert.strictEqual(yield* openSecret(rotated.secret), "secret-new");
+          assert.strictEqual(
+            yield* Effect.map(
+              Option.match(rotated.previousSecret, {
+                onNone: () => Effect.succeed("none"),
+                onSome: openSecret,
+              }),
+              (value) => value,
+            ),
+            "secret-old",
+          );
           assert.deepStrictEqual(rotated.previousSecretExpiresAt, Option.some(at(5_000)));
           const cleared = yield* records.setSecrets("a", {
-            secret: "sealed-new",
+            secret: Redacted.make("secret-new"),
             previousSecret: null,
             previousSecretExpiresAt: null,
           });
@@ -370,7 +404,7 @@ const suite = (
 /** Two `createdAt`s that sort (the memory layer stamps the ambient clock, which `it.effect` freezes). */
 const TestClockTick = TestClock.adjust(Duration.millis(5));
 
-suite("WebhookRecords (layerMemory)", WebhookRecords.layerMemory);
+suite("WebhookRecords (layerMemory)", MemoryLayer);
 suite("WebhookRecords (layerSql)", SqlLayer);
 
 // ---- BEH-EA-309 / plan 05: tenant isolation, once, by the store ------------------------------------
@@ -472,7 +506,7 @@ const endpointMethods: TestAuth.TableCase<
         found(
           withRecords((r) =>
             r.setSecrets(row.endpoint, {
-              secret: "s",
+              secret: Redacted.make("s"),
               previousSecret: null,
               previousSecretExpiresAt: null,
             }),
@@ -680,7 +714,7 @@ const vitestFramework: TestAuth.TestFramework = {
 TestAuth.runTenantIsolationTests(vitestFramework, {
   plugin: Webhooks.Webhooks,
   adapters: [
-    { name: "layerMemory", layer: WebhookRecords.layerMemory },
+    { name: "layerMemory", layer: MemoryLayer },
     { name: "layerSql", layer: SqlLayer },
   ],
   cases: [
@@ -689,3 +723,133 @@ TestAuth.runTenantIsolationTests(vitestFramework, {
   ],
   rls: { layer: SqlLayer },
 });
+
+// ---- the three sealed columns: the substrate's wiring suite over both adapters --------------------------------
+
+type SealedField = "secret" | "previousSecret" | "headers";
+
+const sampleEndpoint = (id: string) => ({
+  id,
+  url: `https://${id}.example.com/hook`,
+  eventTags: ["*"],
+  createdBy: "admin-1",
+});
+
+const storedEndpoint = (id: string) =>
+  Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+    Effect.map(records.findEndpoint(id), Option.getOrThrow),
+  );
+const secretOf = (id: string) => Effect.map(storedEndpoint(id), (endpoint) => endpoint.secret);
+const previousSecretOf = (id: string) =>
+  Effect.map(storedEndpoint(id), (endpoint) => Option.getOrThrow(endpoint.previousSecret));
+const headersOf = (id: string) =>
+  Effect.map(storedEndpoint(id), (endpoint) => Option.getOrThrow(endpoint.headers));
+
+/** One records adapter's storage: how the suite looks at, and plants, what is at rest. */
+type Storage<R> = {
+  readonly name: string;
+  readonly layer: Layer.Layer<R, unknown, Encryption.Encryption>;
+  readonly raw: (id: string, column: SealedField) => Effect.Effect<string, unknown, R>;
+  readonly plant: (
+    id: string,
+    column: SealedField,
+    stored: string,
+  ) => Effect.Effect<void, unknown, R>;
+};
+
+const memoryStorage: Storage<WebhookRecords.WebhookRecords | WebhookRecords.MemoryEnvelopes> = {
+  name: "layerMemory",
+  layer: WebhookRecords.layerMemory,
+  raw: (id, column) =>
+    Effect.flatMap(WebhookRecords.MemoryEnvelopes, (rows) => rows.stored(id, column)),
+  plant: (id, column, stored) =>
+    Effect.flatMap(WebhookRecords.MemoryEnvelopes, (rows) => rows.plant(id, column, stored)),
+};
+
+const sqlStorage: Storage<WebhookRecords.WebhookRecords | SqlClient.SqlClient> = {
+  name: "layerSql",
+  layer: SqlNeedsEncryption,
+  raw: (id, column) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{
+        readonly value: string;
+      }>`SELECT ${sql(column)} AS value FROM webhooks_endpoint WHERE id = ${id}`;
+      return rows[0]?.value ?? "";
+    }),
+  plant: (id, column, stored) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE webhooks_endpoint SET ${sql(column)} = ${stored} WHERE id = ${id}`;
+    }),
+};
+
+const sealedSuites = <Extra>(storage: Storage<WebhookRecords.WebhookRecords | Extra>) => {
+  const forColumn = <A>(
+    column: SealedColumn.Column<A>,
+    field: SealedField,
+    sample: A,
+    write: (id: string, value: A) => Effect.Effect<unknown, unknown, WebhookRecords.WebhookRecords>,
+    read: (
+      id: string,
+    ) => Effect.Effect<SealedColumn.Sealed<A>, unknown, WebhookRecords.WebhookRecords>,
+  ) =>
+    TestAuth.runSealedColumnTests<A, WebhookRecords.WebhookRecords | Extra>(vitestFramework, {
+      column,
+      sample,
+      adapters: [
+        {
+          name: storage.name,
+          layer: storage.layer,
+          raw: (id) => storage.raw(id, field),
+          plant: (id, stored) => storage.plant(id, field, stored),
+        },
+      ],
+      write: (id, value) => Effect.asVoid(write(id, value)),
+      read,
+    });
+  forColumn(
+    WebhookRecords.secretColumn,
+    "secret",
+    "whsec_sample",
+    (id, value) =>
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.createEndpoint({ ...sampleEndpoint(id), secret: Redacted.make(value) }),
+      ),
+    secretOf,
+  );
+  forColumn(
+    WebhookRecords.previousSecretColumn,
+    "previousSecret",
+    "whsec_previous",
+    (id, value) =>
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        Effect.andThen(
+          records.createEndpoint({ ...sampleEndpoint(id), secret: Redacted.make("whsec_current") }),
+          records.setSecrets(id, {
+            secret: Redacted.make("whsec_current"),
+            previousSecret: Redacted.make(value),
+            previousSecretExpiresAt: at(5_000),
+          }),
+        ),
+      ),
+    previousSecretOf,
+  );
+  forColumn(
+    WebhookRecords.headersColumn,
+    "headers",
+    { authorization: "Bearer very-secret-token" },
+    (id, value) =>
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.createEndpoint({
+          ...sampleEndpoint(id),
+          secret: Redacted.make("whsec_current"),
+          headers: { value, names: Object.keys(value) },
+        }),
+      ),
+    headersOf,
+  );
+};
+
+sealedSuites(memoryStorage);
+sealedSuites(sqlStorage);

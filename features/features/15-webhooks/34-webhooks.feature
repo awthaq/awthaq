@@ -115,33 +115,11 @@ Feature: Outbound Webhooks
       And reading endpoint "billing" never contains that secret
 
     @REQ-EA-1135
-    Scenario: The stored secret is an Encryption envelope bound to its endpoint and field
+    Scenario: The stored secret opens to the plaintext it was created with, through its sealed handle
       Given an endpoint "billing" registered for "auth.user.*"
       And an endpoint "other" registered for "auth.user.*"
-      Then the stored secret of "billing" does not contain its plaintext
-      And it decrypts to the plaintext only under the additional data naming "billing" and "secret"
-      And it does not decrypt under the additional data naming "other" and "secret"
-      And it does not decrypt under the additional data naming "billing" and "previousSecret"
-
-    @REQ-EA-1136
-    Scenario: A sealed secret copied into another endpoint's row does not decrypt, and nothing is sent
-      Given an endpoint "billing" registered for "auth.user.signedIn"
-      And an endpoint "other" registered for "auth.user.signedIn"
-      And the sealed secret of "other" is copied into the row of "billing"
-      And a "auth.user.signedIn" event "e1" for user "user-1"
-      When event "e1" is queued and delivered
-      Then endpoint "billing" was sent 0 requests
-      And the delivery of event "e1" to "billing" failed as "secret"
-
-    @REQ-EA-1137
-    Scenario: The previous secret swapped into the current field does not decrypt, and nothing is sent
-      Given an endpoint "billing" registered for "auth.user.signedIn"
-      And the secret of "billing" is rotated, keeping the old one as "old"
-      And the previous sealed secret of "billing" is moved into its current secret field
-      And a "auth.user.signedIn" event "e1" for user "user-1"
-      When event "e1" is queued and delivered
-      Then endpoint "billing" was sent 0 requests
-      And the delivery of event "e1" to "billing" failed as "secret"
+      Then the secret of "billing" opens to the plaintext it was created with
+      And the secret of "other" opens to the plaintext it was created with
 
     @REQ-EA-1138
     Scenario: Rotation makes a new secret current and keeps the previous one for the default 24 hours
@@ -885,7 +863,7 @@ Feature: Outbound Webhooks
     Scenario: The values are sealed at rest and the API returns names only
       Given the administrator gate allows every action
       When the administrator registers "https://hooks.example.com/billing" for "auth.user.signedIn" with the headers "Authorization" holding "Bearer very-secret-token" as "billing"
-      Then the stored headers of "billing" do not contain "very-secret-token"
+      Then the sealed headers of "billing" open to "authorization" holding "Bearer very-secret-token"
       And reading endpoint "billing" shows the header name "authorization" and never "very-secret-token"
 
     @REQ-EA-1265

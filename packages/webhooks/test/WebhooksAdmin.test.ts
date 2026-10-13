@@ -3,7 +3,8 @@
 // the delivery log and manual redrive, and the per-administrator rate limit.
 import { Api } from "@awthaq/api";
 import { AuthEvents, Auth, AuthPlugin, Erasure, DataExport, RateLimits, Users } from "@awthaq/core";
-import { Encryption, RateLimiter } from "@awthaq/ports";
+import { RateLimiter } from "@awthaq/ports";
+import { SealedColumn } from "@awthaq/sql";
 import { Authentication, Csrf } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -18,7 +19,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as Webhooks from "../src/Webhooks.ts";
-import { CoreLive, deliveryLayer, relay, seedEndpoint } from "./support.ts";
+import { CoreLive, deliveryLayer, EncryptionLive, relay, seedEndpoint } from "./support.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 
 const allow = () => Effect.succeed(true);
@@ -142,29 +143,25 @@ describe("the gate is fail-closed", () => {
 });
 
 describe("registering an endpoint", () => {
-  it.effect(
-    "returns the secret once; the row holds only its sealed envelope; reads never carry it",
-    () =>
-      Effect.gen(function* () {
-        const webhooks = yield* Webhooks.Webhooks;
-        const encryption = yield* Encryption.Encryption;
-        const records = yield* WebhookRecords.WebhookRecords;
-        const created = yield* create({ description: "  primary  " });
-        assert.match(created.secret, /^whsec_/);
-        assert.strictEqual(created.endpoint.description, "primary");
-        assert.deepStrictEqual(created.endpoint.eventTags, ["auth.user.*"]);
-        assert.isTrue(created.endpoint.enabled);
-        const row = Option.getOrThrow(yield* records.findEndpoint(created.endpoint.id));
-        assert.notInclude(row.secret, created.secret);
-        const opened = yield* encryption.decrypt(row.secret, WebhookSecrets.aad(row.id, "secret"));
-        assert.strictEqual(Redacted.value(opened.plaintext), created.secret);
-        // No later read ever includes it.
-        const listed = JSON.stringify(yield* webhooks.listEndpoints(admin));
-        const got = JSON.stringify(yield* webhooks.getEndpoint(admin, created.endpoint.id));
-        assert.notInclude(listed, created.secret);
-        assert.notInclude(got, created.secret);
-        assert.notInclude(listed, "sealed");
-      }).pipe(Effect.provide(buildLayer({ canManageWebhooks: allow }))),
+  it.effect("returns the secret once, and it opens from the record; reads never carry it", () =>
+    Effect.gen(function* () {
+      const webhooks = yield* Webhooks.Webhooks;
+      const records = yield* WebhookRecords.WebhookRecords;
+      const created = yield* create({ description: "  primary  " });
+      assert.match(created.secret, /^whsec_/);
+      assert.strictEqual(created.endpoint.description, "primary");
+      assert.deepStrictEqual(created.endpoint.eventTags, ["auth.user.*"]);
+      assert.isTrue(created.endpoint.enabled);
+      const row = Option.getOrThrow(yield* records.findEndpoint(created.endpoint.id));
+      const opened = yield* SealedColumn.orDie(row.secret.open);
+      assert.strictEqual(Redacted.value(opened), created.secret);
+      // No later read ever includes it.
+      const listed = JSON.stringify(yield* webhooks.listEndpoints(admin));
+      const got = JSON.stringify(yield* webhooks.getEndpoint(admin, created.endpoint.id));
+      assert.notInclude(listed, created.secret);
+      assert.notInclude(got, created.secret);
+      assert.notInclude(listed, "sealed");
+    }).pipe(Effect.provide(buildLayer({ canManageWebhooks: allow }))),
   );
 
   it.effect(
@@ -252,7 +249,6 @@ describe("editing, rotating and removing", () => {
     () =>
       Effect.gen(function* () {
         const webhooks = yield* Webhooks.Webhooks;
-        const encryption = yield* Encryption.Encryption;
         const records = yield* WebhookRecords.WebhookRecords;
         const first = yield* create();
         const rotated = yield* webhooks.rotateSecret(admin, first.endpoint.id);
@@ -260,24 +256,16 @@ describe("editing, rotating and removing", () => {
         assert.isNotNull(rotated.endpoint.previousSecretExpiresAt);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         const row = Option.getOrThrow(yield* records.findEndpoint(first.endpoint.id));
-        const during = Option.getOrThrow(
-          yield* WebhookSecrets.open(encryption, row, DateNowUtc(now)),
-        );
+        const during = Option.getOrThrow(yield* WebhookSecrets.open(row, DateNowUtc(now)));
         assert.deepStrictEqual(during.map(Redacted.value), [rotated.secret, first.secret]);
         const after = Option.getOrThrow(
-          yield* WebhookSecrets.open(
-            encryption,
-            row,
-            DateNowUtc(now + Duration.toMillis(Duration.hours(25))),
-          ),
+          yield* WebhookSecrets.open(row, DateNowUtc(now + Duration.toMillis(Duration.hours(25)))),
         );
         assert.deepStrictEqual(after.map(Redacted.value), [rotated.secret]);
         // A second rotation forgets the first secret: only ever current + previous.
         const again = yield* webhooks.rotateSecret(admin, first.endpoint.id);
         const row2 = Option.getOrThrow(yield* records.findEndpoint(first.endpoint.id));
-        const two = Option.getOrThrow(
-          yield* WebhookSecrets.open(encryption, row2, DateNowUtc(now)),
-        );
+        const two = Option.getOrThrow(yield* WebhookSecrets.open(row2, DateNowUtc(now)));
         assert.deepStrictEqual(two.map(Redacted.value), [again.secret, rotated.secret]);
       }).pipe(Effect.provide(buildLayer({ canManageWebhooks: allow }))),
   );
@@ -442,7 +430,9 @@ describe("the plugin composes on the admin tier", () => {
 });
 
 describe("privacy: erasure and export", () => {
-  const PrivacyLayer = Layer.mergeAll(WebhookRecords.layerMemory).pipe(
+  const PrivacyLayer = Layer.mergeAll(
+    WebhookRecords.layerMemory.pipe(Layer.provide(EncryptionLive)),
+  ).pipe(
     Layer.provideMerge(Layer.mergeAll(Erasure.registryLayer, DataExport.registryLayer)),
     Layer.provideMerge(CoreLive),
   );
@@ -458,7 +448,7 @@ describe("privacy: erasure and export", () => {
         id: "ep",
         url: "https://hooks.example.com/x",
         eventTags: ["*"],
-        secret: "sealed",
+        secret: Redacted.make("whsec_x"),
         createdBy: "a",
       });
       const at = yield* nowUtc;

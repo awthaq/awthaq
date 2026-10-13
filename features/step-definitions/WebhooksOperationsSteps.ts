@@ -3,6 +3,7 @@
 // of `WebhooksSteps.ts` (the real in-memory core, records and plugin service, a programmable receiver) and add a
 // scriptable resolver and a recording transport, so what a scenario asserts about the pin is what the transport was asked
 // to connect to.
+import { SealedColumn } from "@awthaq/sql";
 import { AuditLog, AuthEvents, Tenant } from "@awthaq/core";
 import { WebhookRecords, WebhookSignature, WebhookTransport, Webhooks } from "@awthaq/webhooks";
 import { PinnedHttp } from "@awthaq/ports";
@@ -451,8 +452,8 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     },
   );
   Then(
-    "the stored headers of {string} do not contain {string}",
-    function* (name: string, text: string) {
+    "the sealed headers of {string} open to {string} holding {string}",
+    function* (name: string, header: string, value: string) {
       const endpoint = yield* endpointNamed(name);
       const row = yield* run(
         Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
@@ -460,8 +461,8 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
         ),
       );
       assert.ok(Option.isSome(row) && Option.isSome(row.value.headers));
-      assert.ok(!row.value.headers.value.includes(text));
-      assert.ok(!JSON.stringify(row.value).includes(text));
+      const opened = yield* run(SealedColumn.orDie(row.value.headers.value.open));
+      assert.deepEqual(Redacted.value(opened), { [header]: value });
     },
   );
   Then(

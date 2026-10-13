@@ -244,8 +244,7 @@ const baseLayer = (
   resolver: ReturnType<typeof makeResolver>,
 ) =>
   Layer.mergeAll(
-    WebhookRecords.layerMemory,
-    EncryptionLive,
+    WebhookRecords.layerMemory.pipe(Layer.provideMerge(EncryptionLive)),
     receiver.layer,
     receiver.transportLayer,
     options.limiter === "memory" ? RateLimiter.layerMemory : RateLimiter.layerPermissive,

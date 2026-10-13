@@ -378,11 +378,14 @@ describe("runSealedColumnTests", () => {
     TestAuth.runSealedColumnTests(recordingFramework(sink), {
       column: secretColumn,
       sample: "hunter2",
-      adapters,
+      adapters: adapters.map((adapter) => ({
+        ...adapter,
+        raw: (id: string) => Effect.flatMap(Secrets, (secrets) => secrets.raw(id)),
+        plant: (id: string, stored: string) =>
+          Effect.flatMap(Secrets, (secrets) => secrets.plant(id, stored)),
+      })),
       write: (id, value) => Effect.flatMap(Secrets, (secrets) => secrets.write(id, value)),
       read: (id) => Effect.flatMap(Secrets, (secrets) => secrets.read(id)),
-      raw: (id) => Effect.flatMap(Secrets, (secrets) => secrets.raw(id)),
-      plant: (id, stored) => Effect.flatMap(Secrets, (secrets) => secrets.plant(id, stored)),
     });
     await sink.settled();
     return sink;

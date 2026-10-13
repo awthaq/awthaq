@@ -10,8 +10,8 @@
 // - Signed like Standard Webhooks (`webhook-id`/`-timestamp`/`-signature`, HMAC-SHA256 over
 //   `id.timestamp.body`), so a receiver that verifies svix/Clerk webhooks verifies these. Each attempt is
 //   re-stamped, the id is the event id (idempotency key), and a rotation sends both signatures for a grace window.
-// - One secret per endpoint, generated here, shown once, stored only as an `Encryption` envelope whose AAD
-//   binds it to its endpoint and field.
+// - One secret per endpoint, generated here, shown once, stored only as an `Encryption` envelope (a
+//   `SealedColumn`, ADR-EA-019 decision 6) whose AAD binds it to its endpoint and column.
 // - Endpoint URLs are an SSRF surface: https only, no credentials, no private/loopback/link-local/reserved
 //   address or internal name, and the name must *resolve* to public addresses only — checked when registered and
 //   again on every attempt. Redirects are never followed and response bodies are never read or stored.
@@ -35,8 +35,8 @@ import {
   Tenant,
   Users,
 } from "@awthaq/core";
-import { Defects, Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
-import { TenantScoped } from "@awthaq/sql";
+import { Defects, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import { makeSubject } from "@qadi/core";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -50,7 +50,6 @@ import * as WebhookDelivery from "./WebhookDelivery.ts";
 import * as WebhookHeaders from "./WebhookHeaders.ts";
 import * as WebhookPayload from "./WebhookPayload.ts";
 import * as WebhookRecords from "./WebhookRecords.ts";
-import * as WebhookSecrets from "./WebhookSecrets.ts";
 import * as WebhookSignature from "./WebhookSignature.ts";
 import * as WebhooksApi from "./WebhooksApi.ts";
 import * as WebhooksConfig from "./WebhooksConfig.ts";
@@ -69,40 +68,52 @@ export interface WebhooksShape {
     input: WebhooksApi.CreateEndpointPayload,
   ) => Effect.Effect<
     WebhooksApi.EndpointWithSecretDto,
-    Gate | WebhooksApi.InvalidWebhookEndpoint | WebhooksApi.WebhookEndpointLimitReached
+    | Gate
+    | Api.StoreUnavailable
+    | WebhooksApi.InvalidWebhookEndpoint
+    | WebhooksApi.WebhookEndpointLimitReached
   >;
   readonly listEndpoints: (
     caller: Api.UserPrincipal,
-  ) => Effect.Effect<ReadonlyArray<WebhooksApi.EndpointDto>, Gate>;
+  ) => Effect.Effect<ReadonlyArray<WebhooksApi.EndpointDto>, Gate | Api.StoreUnavailable>;
   readonly getEndpoint: (
     caller: Api.UserPrincipal,
     endpointId: string,
-  ) => Effect.Effect<WebhooksApi.EndpointDto, Gate | WebhooksApi.WebhookEndpointNotFound>;
+  ) => Effect.Effect<
+    WebhooksApi.EndpointDto,
+    Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound
+  >;
   readonly updateEndpoint: (
     caller: Api.UserPrincipal,
     endpointId: string,
     input: WebhooksApi.UpdateEndpointPayload,
   ) => Effect.Effect<
     WebhooksApi.EndpointDto,
-    Gate | WebhooksApi.WebhookEndpointNotFound | WebhooksApi.InvalidWebhookEndpoint
+    | Gate
+    | Api.StoreUnavailable
+    | WebhooksApi.WebhookEndpointNotFound
+    | WebhooksApi.InvalidWebhookEndpoint
   >;
   /** Removes the endpoint and its delivery log. */
   readonly deleteEndpoint: (
     caller: Api.UserPrincipal,
     endpointId: string,
-  ) => Effect.Effect<void, Gate | WebhooksApi.WebhookEndpointNotFound>;
+  ) => Effect.Effect<void, Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound>;
   /** New secret now; the old one keeps signing alongside it for `secretGrace`. */
   readonly rotateSecret: (
     caller: Api.UserPrincipal,
     endpointId: string,
-  ) => Effect.Effect<WebhooksApi.EndpointWithSecretDto, Gate | WebhooksApi.WebhookEndpointNotFound>;
+  ) => Effect.Effect<
+    WebhooksApi.EndpointWithSecretDto,
+    Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound
+  >;
   readonly listDeliveries: (
     caller: Api.UserPrincipal,
     endpointId: string,
     query: WebhooksApi.ListDeliveriesQuery,
   ) => Effect.Effect<
     ReadonlyArray<WebhooksApi.DeliveryDto>,
-    Gate | WebhooksApi.WebhookEndpointNotFound
+    Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound
   >;
   /** Sends a dead-lettered delivery again (attempts reset). */
   readonly retryDelivery: (
@@ -110,7 +121,10 @@ export interface WebhooksShape {
     deliveryId: string,
   ) => Effect.Effect<
     WebhooksApi.DeliveryDto,
-    Gate | WebhooksApi.WebhookDeliveryNotFound | WebhooksApi.WebhookDeliveryNotRetryable
+    | Gate
+    | Api.StoreUnavailable
+    | WebhooksApi.WebhookDeliveryNotFound
+    | WebhooksApi.WebhookDeliveryNotRetryable
   >;
   /**
    * BEH-EA-310: queues a signed synthetic `webhook.test` event for the endpoint and returns its (pending) delivery
@@ -121,7 +135,10 @@ export interface WebhooksShape {
     endpointId: string,
   ) => Effect.Effect<
     WebhooksApi.DeliveryDto,
-    Gate | WebhooksApi.WebhookEndpointNotFound | WebhooksApi.InvalidWebhookEndpoint
+    | Gate
+    | Api.StoreUnavailable
+    | WebhooksApi.WebhookEndpointNotFound
+    | WebhooksApi.InvalidWebhookEndpoint
   >;
 }
 
@@ -368,7 +385,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
   config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
 }) {
   static readonly layer = AuthPlugin.layer(Webhooks, {
-    ports: [Encryption.Encryption, HostResolver.HostResolver, RateLimiter.RateLimiter],
+    ports: [HostResolver.HostResolver, RateLimiter.RateLimiter],
     handlers: HttpApiBuilder.group(
       WebhooksApi.WebhooksApi,
       "webhooks.admin",
@@ -452,7 +469,6 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
     contributes: Layer.mergeAll(webhooksErasure, webhooksExport),
     make: Effect.gen(function* () {
       const records = yield* WebhookRecords.WebhookRecords;
-      const encryption = yield* Encryption.Encryption;
       const crypto = yield* Crypto.Crypto;
       const events = yield* AuthEvents.AuthEvents;
       const resolver = yield* HostResolver.HostResolver;
@@ -534,16 +550,11 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           ? Effect.fail(new WebhooksApi.InvalidWebhookEndpoint({ reason: refused.value }))
           : Effect.void;
       };
-      const sealedHeaders = Effect.fnUntraced(function* (
-        endpointId: string,
-        headers: Readonly<Record<string, string>>,
-      ) {
+      /** BEH-EA-313: normalised custom headers and their names; the records seal the values. */
+      const customHeaders = (headers: Readonly<Record<string, string>>) => {
         const normalized = WebhookHeaders.normalize(headers);
-        return {
-          sealed: yield* WebhookSecrets.sealHeaders(encryption, endpointId, normalized),
-          names: WebhookHeaders.namesOf(normalized),
-        };
-      });
+        return { value: normalized, names: WebhookHeaders.namesOf(normalized) };
+      };
       const validateTags = (tags: ReadonlyArray<string>) => {
         const unknown = WebhookPayload.unknownPattern(tags);
         return unknown === undefined
@@ -571,18 +582,17 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           const secret = yield* WebhookSignature.generateSecret.pipe(
             Effect.provideService(Crypto.Crypto, crypto),
           );
-          const sealed = yield* WebhookSecrets.seal(encryption, id, "secret", secret);
           const record = yield* records.createEndpoint({
             id,
             url: input.url,
             description: input.description?.trim(),
             eventTags: input.eventTags,
-            secret: sealed,
+            secret,
             createdBy: caller.ref.id,
             headers:
               input.headers === undefined || Object.keys(input.headers).length === 0
                 ? undefined
-                : yield* sealedHeaders(id, input.headers),
+                : customHeaders(input.headers),
           });
           yield* Effect.logInfo("awthaq/webhooks: endpoint created", { endpointId: id });
           yield* events.publish({
@@ -618,7 +628,9 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           if (input.headers !== undefined && input.headers !== null) {
             yield* validateHeaders(input.headers);
           }
-          const notFound = <A>(effect: Effect.Effect<A, WebhookRecords.WebhookRecordNotFound>) =>
+          const notFound = <A, E>(
+            effect: Effect.Effect<A, E | WebhookRecords.WebhookRecordNotFound>,
+          ) =>
             effect.pipe(
               Effect.catchTag("WebhookRecordNotFound", () =>
                 Effect.fail(new WebhooksApi.WebhookEndpointNotFound()),
@@ -635,7 +647,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
                   ? undefined
                   : input.headers === null || Object.keys(input.headers).length === 0
                     ? null
-                    : yield* sealedHeaders(endpointId, input.headers),
+                    : customHeaders(input.headers),
             }),
           );
           if (input.enabled !== undefined) {
@@ -680,22 +692,14 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           const settings = yield* authorize(caller, "rotateSecret");
           const endpoint = yield* existing(endpointId);
           const now = yield* DateTime.now;
-          // The current secret becomes the previous one — re-sealed, because its AAD names the field.
-          const previous = yield* encryption
-            .decrypt(endpoint.secret, WebhookSecrets.aad(endpointId, "secret"))
-            .pipe(
-              Effect.flatMap((decrypted) =>
-                WebhookSecrets.seal(encryption, endpointId, "previousSecret", decrypted.plaintext),
-              ),
-              Effect.option,
-            );
+          // The current secret becomes the previous one — the records re-seal it, because the AAD names the column.
+          const previous = yield* SealedColumn.option(endpoint.secret.open);
           const secret = yield* WebhookSignature.generateSecret.pipe(
             Effect.provideService(Crypto.Crypto, crypto),
           );
-          const sealed = yield* WebhookSecrets.seal(encryption, endpointId, "secret", secret);
           const record = yield* records
             .setSecrets(endpointId, {
-              secret: sealed,
+              secret,
               previousSecret: Option.getOrNull(previous),
               previousSecretExpiresAt: Option.isSome(previous)
                 ? DateTime.addDuration(now, settings.secretGrace)

@@ -4,10 +4,11 @@
 // schema, built the way every plugin's `*Records.ts` is: directly against `SqlSchema`, one
 // `layerMemory` and one `layerSql` behind one contract suite. Two tables:
 //
-// - `webhooks_endpoint` — a registered receiver: its URL, the event-tag filter, the secret (the
-//   *sealed* envelope from the `Encryption` port, never plaintext) and, during a rotation's grace
-//   window, the previous sealed secret; `disabledAt` when an administrator (or the failure
-//   threshold) switched it off.
+// - `webhooks_endpoint` — a registered receiver: its URL, the event-tag filter, the secret and,
+//   during a rotation's grace window, the previous secret, and the custom headers. All three are
+//   `SealedColumn`s (plan 05, ADR-EA-019 decision 6): the records accept plaintext `Redacted` values,
+//   store an `Encryption` envelope, and hand out `Sealed` values whose `open` is the only place a
+//   plaintext appears; `disabledAt` when an administrator (or the failure threshold) switched it off.
 // - `webhooks_delivery` — the delivery queue *and* the delivery log in one table: one row per
 //   (endpoint, event), unique on that pair, so the relay's at-least-once hand-off (a redelivered
 //   batch) enqueues each pair once. `status` moves `pending` -> `succeeded` | `dead`; `attempts`,
@@ -25,7 +26,8 @@
 // and the worker, which run with no tenant and serve every tenant's endpoints, present a
 // `TenantScoped.CrossTenant` witness, so a method that spans tenants says so in its signature.
 
-import { Models as SqlModels, TenantScoped } from "@awthaq/sql";
+import type { Encryption } from "@awthaq/ports";
+import { Models as SqlModels, SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -33,11 +35,36 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import type * as WebhookHeaders from "./WebhookHeaders.ts";
+
+const headersSchema = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
+
+/** The three sealed columns of `webhooks_endpoint`; the pre-plan-05 AAD spelling still opens and re-seals. */
+export const secretColumn = SealedColumn.column({
+  table: "webhooks_endpoint",
+  column: "secret",
+  key: "id",
+  legacyAad: [(id) => `webhooks-endpoint:${id}:secret`],
+});
+export const previousSecretColumn = SealedColumn.column({
+  table: "webhooks_endpoint",
+  column: "previousSecret",
+  key: "id",
+  legacyAad: [(id) => `webhooks-endpoint:${id}:previousSecret`],
+});
+export const headersColumn = SealedColumn.column({
+  table: "webhooks_endpoint",
+  column: "headers",
+  key: "id",
+  schema: headersSchema,
+  legacyAad: [(id) => `webhooks-endpoint:${id}:headers`],
+});
 
 export type DeliveryStatus = "pending" | "succeeded" | "dead";
 export type DisabledReason = "manual" | "failing";
@@ -48,9 +75,9 @@ export interface EndpointRecord {
   readonly description: Option.Option<string>;
   /** Exact tags, `family.*` prefixes, or `*`. */
   readonly eventTags: ReadonlyArray<string>;
-  /** The sealed envelope (`Encryption.encrypt`) — never the plaintext secret. */
-  readonly secret: string;
-  readonly previousSecret: Option.Option<string>;
+  /** Sealed: `open` it where the secret is needed (signing). */
+  readonly secret: SealedColumn.Sealed<string>;
+  readonly previousSecret: Option.Option<SealedColumn.Sealed<string>>;
   readonly previousSecretExpiresAt: Option.Option<DateTime.Utc>;
   readonly disabledAt: Option.Option<DateTime.Utc>;
   readonly disabledReason: Option.Option<DisabledReason>;
@@ -63,8 +90,8 @@ export interface EndpointRecord {
    * when it is registered. `None` is the platform's own endpoint. An endpoint hears only its own tenant's events.
    */
   readonly tenantId: Option.Option<string>;
-  /** BEH-EA-313: the sealed (`Encryption`) JSON object of custom request headers; `None` when there are none. */
-  readonly headers: Option.Option<string>;
+  /** BEH-EA-313: the sealed JSON object of custom request headers; `None` when there are none. */
+  readonly headers: Option.Option<SealedColumn.Sealed<WebhookHeaders.CustomHeaders>>;
   /** The names in `headers` (not secret): what the API shows. */
   readonly headerNames: ReadonlyArray<string>;
   readonly createdAt: DateTime.Utc;
@@ -119,25 +146,30 @@ export interface WebhookRecordsShape {
     readonly url: string;
     readonly description?: string | undefined;
     readonly eventTags: ReadonlyArray<string>;
-    readonly secret: string;
+    readonly secret: Redacted.Redacted<string>;
     readonly createdBy: string;
     readonly headers?:
-      | { readonly sealed: string; readonly names: ReadonlyArray<string> }
+      | { readonly value: WebhookHeaders.CustomHeaders; readonly names: ReadonlyArray<string> }
       | undefined;
-  }) => Effect.Effect<EndpointRecord>;
+  }) => Effect.Effect<EndpointRecord, StoreFailure.StoreUnavailable>;
   /** The ambient tenant's endpoint (`None` for another tenant's, exactly like an unknown id). */
-  readonly findEndpoint: (id: string) => Effect.Effect<Option.Option<EndpointRecord>>;
+  readonly findEndpoint: (
+    id: string,
+  ) => Effect.Effect<Option.Option<EndpointRecord>, StoreFailure.StoreUnavailable>;
   /** The ambient tenant's endpoints, oldest first. The set is bounded by `WebhooksConfig.maxEndpoints`. */
-  readonly listEndpoints: Effect.Effect<ReadonlyArray<EndpointRecord>>;
+  readonly listEndpoints: Effect.Effect<
+    ReadonlyArray<EndpointRecord>,
+    StoreFailure.StoreUnavailable
+  >;
   /** Relay: every tenant's enabled endpoints, oldest first. */
   readonly listEnabledEndpoints: (
     grant: TenantScoped.CrossTenant,
-  ) => Effect.Effect<ReadonlyArray<EndpointRecord>>;
+  ) => Effect.Effect<ReadonlyArray<EndpointRecord>, StoreFailure.StoreUnavailable>;
   /** Worker: an endpoint of any tenant, by id, for a delivery being attempted. */
   readonly findEndpointForDelivery: (
     grant: TenantScoped.CrossTenant,
     id: string,
-  ) => Effect.Effect<Option.Option<EndpointRecord>>;
+  ) => Effect.Effect<Option.Option<EndpointRecord>, StoreFailure.StoreUnavailable>;
   readonly updateEndpoint: (
     id: string,
     patch: {
@@ -147,38 +179,48 @@ export interface WebhookRecordsShape {
       readonly eventTags?: ReadonlyArray<string> | undefined;
       /** `null` clears the custom headers; a value replaces them. */
       readonly headers?:
-        | { readonly sealed: string; readonly names: ReadonlyArray<string> }
+        | { readonly value: WebhookHeaders.CustomHeaders; readonly names: ReadonlyArray<string> }
         | null
         | undefined;
     },
-  ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound>;
+  ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound | StoreFailure.StoreUnavailable>;
   readonly setSecrets: (
     id: string,
     secrets: {
-      readonly secret: string;
-      readonly previousSecret: string | null;
+      readonly secret: Redacted.Redacted<string>;
+      readonly previousSecret: Redacted.Redacted<string> | null;
       readonly previousSecretExpiresAt: DateTime.Utc | null;
     },
-  ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound>;
+  ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound | StoreFailure.StoreUnavailable>;
   /** `null` re-enables (and resets `consecutiveDead`). */
   readonly setDisabled: (
     id: string,
     disabled: { readonly at: DateTime.Utc; readonly reason: DisabledReason } | null,
-  ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound>;
+  ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound | StoreFailure.StoreUnavailable>;
   /** Worker: switches an endpoint of any tenant off after too many dead-lettered deliveries in a row. */
   readonly disableFailing: (
     grant: TenantScoped.CrossTenant,
     id: string,
     at: DateTime.Utc,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** Adds one to `consecutiveDead` and returns the new count. */
-  readonly bumpDead: (grant: TenantScoped.CrossTenant, id: string) => Effect.Effect<number>;
-  readonly clearDead: (grant: TenantScoped.CrossTenant, id: string) => Effect.Effect<void>;
+  readonly bumpDead: (
+    grant: TenantScoped.CrossTenant,
+    id: string,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
+  readonly clearDead: (
+    grant: TenantScoped.CrossTenant,
+    id: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** Removes the endpoint and every delivery row of it. */
-  readonly deleteEndpoint: (id: string) => Effect.Effect<void, WebhookRecordNotFound>;
+  readonly deleteEndpoint: (
+    id: string,
+  ) => Effect.Effect<void, WebhookRecordNotFound | StoreFailure.StoreUnavailable>;
   // ---- deliveries
   /** Inserts the rows not already present for their (endpointId, eventId); returns how many were new. */
-  readonly enqueue: (rows: ReadonlyArray<NewDelivery>) => Effect.Effect<number>;
+  readonly enqueue: (
+    rows: ReadonlyArray<NewDelivery>,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   /** Pending rows due at `now` whose endpoint is enabled, oldest due first; each is leased until `now + lease`. */
   readonly claimDue: (
     grant: TenantScoped.CrossTenant,
@@ -187,56 +229,58 @@ export interface WebhookRecordsShape {
       readonly limit: number;
       readonly lease: Duration.Duration;
     },
-  ) => Effect.Effect<ReadonlyArray<DeliveryRecord>>;
+  ) => Effect.Effect<ReadonlyArray<DeliveryRecord>, StoreFailure.StoreUnavailable>;
   /** A delivery of the ambient tenant's endpoint. */
-  readonly findDelivery: (id: string) => Effect.Effect<Option.Option<DeliveryRecord>>;
+  readonly findDelivery: (
+    id: string,
+  ) => Effect.Effect<Option.Option<DeliveryRecord>, StoreFailure.StoreUnavailable>;
   readonly markSucceeded: (
     grant: TenantScoped.CrossTenant,
     id: string,
     outcome: Outcome,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** A failed attempt that will be retried: counts the attempt and schedules the next. */
   readonly reschedule: (
     grant: TenantScoped.CrossTenant,
     id: string,
     next: { readonly nextAttemptAt: DateTime.Utc } & Outcome,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** A postponement that is not an attempt (the endpoint's own outbound rate limit): nothing is counted. */
   readonly defer: (
     grant: TenantScoped.CrossTenant,
     id: string,
     nextAttemptAt: DateTime.Utc,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   readonly markDead: (
     grant: TenantScoped.CrossTenant,
     id: string,
     outcome: Outcome,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** A dead delivery goes back to `pending`, due now, with its attempts reset. */
   readonly redrive: (
     id: string,
     now: DateTime.Utc,
-  ) => Effect.Effect<DeliveryRecord, WebhookRecordNotFound>;
+  ) => Effect.Effect<DeliveryRecord, WebhookRecordNotFound | StoreFailure.StoreUnavailable>;
   /** Newest first; `before` is an exclusive delivery id (a uuidv7, so time-ordered). */
   readonly listDeliveries: (input: {
     readonly endpointId: string;
     readonly status?: DeliveryStatus | undefined;
     readonly before?: string | undefined;
     readonly limit: number;
-  }) => Effect.Effect<ReadonlyArray<DeliveryRecord>>;
+  }) => Effect.Effect<ReadonlyArray<DeliveryRecord>, StoreFailure.StoreUnavailable>;
   /** Removes finished (`succeeded`/`dead`) rows completed before `cutoff`; returns how many. */
   readonly pruneFinished: (
     grant: TenantScoped.CrossTenant,
     cutoff: DateTime.Utc,
-  ) => Effect.Effect<number>;
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   readonly deleteBySubject: (
     grant: TenantScoped.CrossTenant,
     userId: string,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   readonly listBySubject: (
     grant: TenantScoped.CrossTenant,
     userId: string,
-  ) => Effect.Effect<ReadonlyArray<DeliveryRecord>>;
+  ) => Effect.Effect<ReadonlyArray<DeliveryRecord>, StoreFailure.StoreUnavailable>;
 }
 
 export class WebhookRecords extends Context.Service<WebhookRecords, WebhookRecordsShape>()(
@@ -258,17 +302,93 @@ const millis = DateTime.toEpochMillis;
 
 // ---- layerMemory ------------------------------------------------------------------------
 
+/**
+ * A test seam of `layerMemory`: the stored envelope of one sealed column, and a way to overwrite it. The
+ * conformance suite for sealed columns (`TestAuth.runSealedColumnTests`) needs to look at, and plant, what
+ * is at rest; over SQL that is a statement, over memory it is this.
+ */
+export class MemoryEnvelopes extends Context.Service<
+  MemoryEnvelopes,
+  {
+    readonly stored: (
+      id: string,
+      field: "secret" | "previousSecret" | "headers",
+    ) => Effect.Effect<string>;
+    readonly plant: (
+      id: string,
+      field: "secret" | "previousSecret" | "headers",
+      stored: string,
+    ) => Effect.Effect<void>;
+  }
+>()("awthaq/webhooks/WebhookRecords/MemoryEnvelopes") {}
+
+/** An endpoint as the memory adapter keeps it: the three sealed columns are envelope strings, like a SQL row. */
+interface StoredEndpoint extends Omit<EndpointRecord, "secret" | "previousSecret" | "headers"> {
+  readonly secret: string;
+  readonly previousSecret: Option.Option<string>;
+  readonly headers: Option.Option<string>;
+}
+
 interface State {
-  readonly endpoints: ReadonlyArray<EndpointRecord>;
+  readonly endpoints: ReadonlyArray<StoredEndpoint>;
   readonly deliveries: ReadonlyArray<DeliveryRecord>;
 }
 
-export const layerMemory = Layer.effect(
-  WebhookRecords,
+// The explicit type is the narrow exception the plugins document (TS2883): declaration emit cannot name
+// `Encryption` through the inferred requirement of the sealed-column codecs.
+export const layerMemory: Layer.Layer<
+  WebhookRecords | MemoryEnvelopes,
+  never,
+  Encryption.Encryption
+> = Layer.effectContext(
   Effect.gen(function* () {
     const state = yield* Ref.make<State>({ endpoints: [], deliveries: [] });
 
-    const seenTenant = (row: EndpointRecord, seen: TenantScoped.Visibility) =>
+    /** Persists a re-seal only while the row still holds the envelope that was read (the substrate's compare-and-swap). */
+    const swapOf =
+      (field: "secret" | "previousSecret" | "headers"): SealedColumn.Swap =>
+      (rowKey, stored, fresh) =>
+        Ref.modify(state, (s) => {
+          const row = s.endpoints.find((candidate) => candidate.id === rowKey);
+          const held =
+            row === undefined
+              ? undefined
+              : field === "secret"
+                ? row.secret
+                : Option.getOrUndefined(row[field]);
+          if (row === undefined || held !== stored) return [false, s] as const;
+          const next: StoredEndpoint =
+            field === "secret"
+              ? { ...row, secret: fresh }
+              : field === "previousSecret"
+                ? { ...row, previousSecret: Option.some(fresh) }
+                : { ...row, headers: Option.some(fresh) };
+          return [
+            true,
+            {
+              ...s,
+              endpoints: s.endpoints.map((candidate) =>
+                candidate.id === rowKey ? next : candidate,
+              ),
+            },
+          ] as const;
+        });
+    const secretCodec = yield* SealedColumn.codec(secretColumn, swapOf("secret"));
+    const previousSecretCodec = yield* SealedColumn.codec(
+      previousSecretColumn,
+      swapOf("previousSecret"),
+    );
+    const headersCodec = yield* SealedColumn.codec(headersColumn, swapOf("headers"));
+    const toRecord = (row: StoredEndpoint): EndpointRecord => ({
+      ...row,
+      secret: secretCodec.sealed(row.id, row.secret),
+      previousSecret: Option.map(row.previousSecret, (stored) =>
+        previousSecretCodec.sealed(row.id, stored),
+      ),
+      headers: Option.map(row.headers, (stored) => headersCodec.sealed(row.id, stored)),
+    });
+
+    const seenTenant = (row: StoredEndpoint, seen: TenantScoped.Visibility) =>
       TenantScoped.matches(Option.getOrNull(row.tenantId), seen);
 
     /** Whether the ambient tenant sees the endpoint `endpointId` (a delivery is visible through its endpoint). */
@@ -280,14 +400,14 @@ export const layerMemory = Layer.effect(
     /** Applies `change` to one of the ambient tenant's endpoints; `NotFound` when there is none. */
     const modifyEndpoint = (
       id: string,
-      change: (row: EndpointRecord, now: DateTime.Utc) => EndpointRecord,
+      change: (row: StoredEndpoint, now: DateTime.Utc) => StoredEndpoint,
     ) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const seen = yield* TenantScoped.visibility();
         const outcome = yield* Ref.modify(
           state,
-          (s): readonly [Result.Result<EndpointRecord, WebhookRecordNotFound>, State] => {
+          (s): readonly [Result.Result<StoredEndpoint, WebhookRecordNotFound>, State] => {
             const existing = s.endpoints.find((row) => row.id === id && seenTenant(row, seen));
             if (existing === undefined) return [Result.fail(notFound(id)), s] as const;
             const updated = { ...change(existing, now), updatedAt: now };
@@ -297,7 +417,7 @@ export const layerMemory = Layer.effect(
             ] as const;
           },
         );
-        return yield* Effect.fromResult(outcome);
+        return toRecord(yield* Effect.fromResult(outcome));
       });
 
     /** A relay/worker write to one delivery of any tenant: the witness is the signature's proof. */
@@ -318,12 +438,12 @@ export const layerMemory = Layer.effect(
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const { tenantId } = yield* TenantScoped.stamp({ tenantId: null });
-        const record: EndpointRecord = {
+        const record: StoredEndpoint = {
           id: input.id,
           url: input.url,
           description: Option.fromNullishOr(input.description),
           eventTags: input.eventTags,
-          secret: input.secret,
+          secret: yield* secretCodec.seal(input.id, input.secret),
           previousSecret: Option.none(),
           previousSecretExpiresAt: Option.none(),
           disabledAt: Option.none(),
@@ -331,13 +451,16 @@ export const layerMemory = Layer.effect(
           consecutiveDead: 0,
           createdBy: input.createdBy,
           tenantId: Option.fromNullishOr(tenantId),
-          headers: Option.fromNullishOr(input.headers?.sealed),
+          headers:
+            input.headers === undefined
+              ? Option.none()
+              : Option.some(yield* headersCodec.seal(input.id, Redacted.make(input.headers.value))),
           headerNames: input.headers?.names ?? [],
           createdAt: now,
           updatedAt: now,
         };
         yield* Ref.update(state, (s) => ({ ...s, endpoints: [...s.endpoints, record] }));
-        return record;
+        return toRecord(record);
       });
 
     const enqueue: WebhookRecordsShape["enqueue"] = (rows) =>
@@ -410,27 +533,28 @@ export const layerMemory = Layer.effect(
         }),
       );
 
-    return {
+    const records = {
       createEndpoint,
       findEndpoint: (id) =>
         Effect.gen(function* () {
           const seen = yield* TenantScoped.visibility();
           const s = yield* Ref.get(state);
-          return Option.fromNullishOr(
-            s.endpoints.find((row) => row.id === id && seenTenant(row, seen)),
+          return Option.map(
+            Option.fromNullishOr(s.endpoints.find((row) => row.id === id && seenTenant(row, seen))),
+            toRecord,
           );
         }),
       listEndpoints: Effect.gen(function* () {
         const seen = yield* TenantScoped.visibility();
         const s = yield* Ref.get(state);
-        return byCreation(s.endpoints.filter((row) => seenTenant(row, seen)));
+        return byCreation(s.endpoints.filter((row) => seenTenant(row, seen))).map(toRecord);
       }),
       listEnabledEndpoints: (grant) =>
         Effect.andThen(
           TenantScoped.visibility(grant),
           Ref.get(state).pipe(
             Effect.map((s) =>
-              byCreation(s.endpoints.filter((row) => Option.isNone(row.disabledAt))),
+              byCreation(s.endpoints.filter((row) => Option.isNone(row.disabledAt))).map(toRecord),
             ),
           ),
         ),
@@ -438,7 +562,9 @@ export const layerMemory = Layer.effect(
         Effect.andThen(
           TenantScoped.visibility(grant),
           Ref.get(state).pipe(
-            Effect.map((s) => Option.fromNullishOr(s.endpoints.find((row) => row.id === id))),
+            Effect.map((s) =>
+              Option.map(Option.fromNullishOr(s.endpoints.find((row) => row.id === id)), toRecord),
+            ),
           ),
         ),
       disableFailing: (grant, id, at) =>
@@ -459,27 +585,44 @@ export const layerMemory = Layer.effect(
           })),
         ),
       updateEndpoint: (id, patch) =>
-        modifyEndpoint(id, (row) => ({
-          ...row,
-          ...(patch.url === undefined ? {} : { url: patch.url }),
-          ...(patch.description === undefined
-            ? {}
-            : { description: Option.fromNullOr(patch.description) }),
-          ...(patch.eventTags === undefined ? {} : { eventTags: patch.eventTags }),
-          ...(patch.headers === undefined
-            ? {}
-            : {
-                headers: Option.fromNullOr(patch.headers?.sealed ?? null),
-                headerNames: patch.headers?.names ?? [],
-              }),
-        })),
+        (patch.headers === undefined || patch.headers === null
+          ? Effect.succeed(Option.none<string>())
+          : Effect.map(headersCodec.seal(id, Redacted.make(patch.headers.value)), Option.some)
+        ).pipe(
+          Effect.flatMap((sealedHeaders) =>
+            modifyEndpoint(id, (row) => ({
+              ...row,
+              ...(patch.url === undefined ? {} : { url: patch.url }),
+              ...(patch.description === undefined
+                ? {}
+                : { description: Option.fromNullOr(patch.description) }),
+              ...(patch.eventTags === undefined ? {} : { eventTags: patch.eventTags }),
+              ...(patch.headers === undefined
+                ? {}
+                : {
+                    headers: sealedHeaders,
+                    headerNames: patch.headers?.names ?? [],
+                  }),
+            })),
+          ),
+        ),
       setSecrets: (id, secrets) =>
-        modifyEndpoint(id, (row) => ({
-          ...row,
-          secret: secrets.secret,
-          previousSecret: Option.fromNullOr(secrets.previousSecret),
-          previousSecretExpiresAt: Option.fromNullOr(secrets.previousSecretExpiresAt),
-        })),
+        Effect.all({
+          secret: secretCodec.seal(id, secrets.secret),
+          previous:
+            secrets.previousSecret === null
+              ? Effect.succeed(Option.none<string>())
+              : Effect.map(previousSecretCodec.seal(id, secrets.previousSecret), Option.some),
+        }).pipe(
+          Effect.flatMap(({ secret, previous }) =>
+            modifyEndpoint(id, (row) => ({
+              ...row,
+              secret,
+              previousSecret: previous,
+              previousSecretExpiresAt: Option.fromNullOr(secrets.previousSecretExpiresAt),
+            })),
+          ),
+        ),
       setDisabled: (id, disabled) =>
         modifyEndpoint(id, (row) => ({
           ...row,
@@ -650,6 +793,31 @@ export const layerMemory = Layer.effect(
           ),
         ),
     } satisfies WebhookRecordsShape;
+    const envelopes = MemoryEnvelopes.of({
+      stored: (id, field) =>
+        Effect.map(Ref.get(state), (s) => {
+          const row = s.endpoints.find((candidate) => candidate.id === id);
+          return row === undefined
+            ? ""
+            : field === "secret"
+              ? row.secret
+              : Option.getOrElse(row[field], () => "");
+        }),
+      plant: (id, field, stored) =>
+        Ref.update(state, (s) => ({
+          ...s,
+          endpoints: s.endpoints.map((row) =>
+            row.id !== id
+              ? row
+              : field === "secret"
+                ? { ...row, secret: stored }
+                : field === "previousSecret"
+                  ? { ...row, previousSecret: Option.some(stored) }
+                  : { ...row, headers: Option.some(stored) },
+          ),
+        })),
+    });
+    return Context.make(WebhookRecords, records).pipe(Context.add(MemoryEnvelopes, envelopes));
   }),
 );
 
@@ -693,7 +861,11 @@ const makeDeliveryRow = (wire: SqlModels.DialectWire) =>
     completedAt: wire.nullableDateTime,
   });
 
-export const layerSql = Layer.effect(
+export const layerSql: Layer.Layer<
+  WebhookRecords,
+  never,
+  SqlClient.SqlClient | Encryption.Encryption
+> = Layer.effect(
   WebhookRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -724,21 +896,37 @@ export const layerSql = Layer.effect(
     );
     const EndpointRow = makeEndpointRow(wire);
     const DeliveryRow = makeDeliveryRow(wire);
+    const secretCodec = yield* SealedColumn.codec(
+      secretColumn,
+      yield* SealedColumn.sqlSwap(secretColumn),
+    );
+    const previousSecretCodec = yield* SealedColumn.codec(
+      previousSecretColumn,
+      yield* SealedColumn.sqlSwap(previousSecretColumn),
+    );
+    const headersCodec = yield* SealedColumn.codec(
+      headersColumn,
+      yield* SealedColumn.sqlSwap(headersColumn),
+    );
 
     const toEndpoint = (row: typeof EndpointRow.Type): EndpointRecord => ({
       id: row.id,
       url: row.url,
       description: Option.fromNullOr(row.description),
       eventTags: row.eventTags,
-      secret: row.secret,
-      previousSecret: Option.fromNullOr(row.previousSecret),
+      secret: secretCodec.sealed(row.id, row.secret),
+      previousSecret: Option.map(Option.fromNullOr(row.previousSecret), (stored) =>
+        previousSecretCodec.sealed(row.id, stored),
+      ),
       previousSecretExpiresAt: Option.fromNullOr(row.previousSecretExpiresAt),
       disabledAt: Option.fromNullOr(row.disabledAt),
       disabledReason: Option.fromNullOr(row.disabledReason),
       consecutiveDead: row.consecutiveDead,
       createdBy: row.createdBy,
       tenantId: Option.fromNullOr(row.tenantId),
-      headers: Option.fromNullOr(row.headers),
+      headers: Option.map(Option.fromNullOr(row.headers), (stored) =>
+        headersCodec.sealed(row.id, stored),
+      ),
       headerNames: row.headerNames,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -937,7 +1125,8 @@ export const layerSql = Layer.effect(
         ),
     });
 
-    const sealed = <A, E>(effect: Effect.Effect<A, E>) => Effect.orDie(effect);
+    /** `StoreUnavailable` for a store outage, a defect for a row that no longer decodes (ADR-EA-028). */
+    const failing = (method: string) => StoreFailure.orStoreUnavailable(`WebhookRecords.${method}`);
     const requireRow =
       <A>(id: string) =>
       (row: Option.Option<A>): Effect.Effect<A, WebhookRecordNotFound> =>
@@ -945,125 +1134,148 @@ export const layerSql = Layer.effect(
 
     return {
       createEndpoint: (input) =>
-        Effect.all([DateTime.now, TenantScoped.stamp({ tenantId: null })]).pipe(
-          Effect.flatMap(([now, stamped]) =>
-            insertEndpoint({
-              id: input.id,
-              url: input.url,
-              description: input.description ?? null,
-              eventTags: input.eventTags,
-              secret: input.secret,
-              previousSecret: null,
-              previousSecretExpiresAt: null,
-              disabledAt: null,
-              disabledReason: null,
-              consecutiveDead: 0,
-              createdBy: input.createdBy,
-              tenantId: stamped.tenantId,
-              headers: input.headers?.sealed ?? null,
-              headerNames: input.headers?.names ?? [],
-              createdAt: now,
-              updatedAt: now,
-            }),
-          ),
-          Effect.map(toEndpoint),
-          sealed,
-        ),
-      findEndpoint: (id) => endpointById(id).pipe(Effect.map(Option.map(toEndpoint)), sealed),
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const stamped = yield* TenantScoped.stamp({ tenantId: null });
+          const secret = yield* secretCodec.seal(input.id, input.secret);
+          const headers =
+            input.headers === undefined
+              ? null
+              : yield* headersCodec.seal(input.id, Redacted.make(input.headers.value));
+          return yield* insertEndpoint({
+            id: input.id,
+            url: input.url,
+            description: input.description ?? null,
+            eventTags: input.eventTags,
+            secret,
+            previousSecret: null,
+            previousSecretExpiresAt: null,
+            disabledAt: null,
+            disabledReason: null,
+            consecutiveDead: 0,
+            createdBy: input.createdBy,
+            tenantId: stamped.tenantId,
+            headers,
+            headerNames: input.headers?.names ?? [],
+            createdAt: now,
+            updatedAt: now,
+            // `INSERT ... RETURNING` always returns the row it wrote.
+          }).pipe(Effect.catchTag("NoSuchElementError", Effect.die), failing("createEndpoint"));
+        }).pipe(Effect.map(toEndpoint)),
+      findEndpoint: (id) =>
+        endpointById(id).pipe(failing("findEndpoint"), Effect.map(Option.map(toEndpoint))),
       listEndpoints: allEndpoints({}).pipe(
+        failing("listEndpoints"),
         Effect.map((rows) => rows.map(toEndpoint)),
-        sealed,
       ),
       listEnabledEndpoints: (grant) =>
         enabledEndpoints({}).pipe(
-          Effect.map((rows) => rows.map(toEndpoint)),
           witnessed(grant),
-          sealed,
+          failing("listEnabledEndpoints"),
+          Effect.map((rows) => rows.map(toEndpoint)),
         ),
       findEndpointForDelivery: (grant, id) =>
         endpointByIdAnyTenant(id).pipe(
-          Effect.map(Option.map(toEndpoint)),
           witnessed(grant),
-          sealed,
+          failing("findEndpointForDelivery"),
+          Effect.map(Option.map(toEndpoint)),
         ),
       disableFailing: (grant, id, at) =>
         witnessed(grant)(
           sql`UPDATE webhooks_endpoint SET "disabledAt" = ${wireDate(at)}, "disabledReason" = 'failing',
             "updatedAt" = ${wireDate(at)} WHERE id = ${id}`,
-        ).pipe(sealed, Effect.asVoid),
+        ).pipe(failing("disableFailing"), Effect.asVoid),
       updateEndpoint: (id, patch) =>
         Effect.gen(function* () {
-          const current = yield* sealed(endpointById(id)).pipe(Effect.flatMap(requireRow(id)));
+          const current = yield* endpointById(id).pipe(
+            failing("updateEndpoint"),
+            Effect.flatMap(requireRow(id)),
+          );
           const now = yield* DateTime.now;
-          const updated = yield* sealed(
-            writeMutable({
-              id,
-              url: patch.url ?? current.url,
-              description:
-                patch.description === undefined ? current.description : patch.description,
-              eventTags: patch.eventTags ?? current.eventTags,
-              headers:
-                patch.headers === undefined ? current.headers : (patch.headers?.sealed ?? null),
-              headerNames:
-                patch.headers === undefined ? current.headerNames : (patch.headers?.names ?? []),
-              updatedAt: now,
-            }),
-          ).pipe(Effect.flatMap(requireRow(id)));
+          const headers =
+            patch.headers === undefined
+              ? current.headers
+              : patch.headers === null
+                ? null
+                : yield* headersCodec.seal(id, Redacted.make(patch.headers.value));
+          const updated = yield* writeMutable({
+            id,
+            url: patch.url ?? current.url,
+            description: patch.description === undefined ? current.description : patch.description,
+            eventTags: patch.eventTags ?? current.eventTags,
+            headers,
+            headerNames:
+              patch.headers === undefined ? current.headerNames : (patch.headers?.names ?? []),
+            updatedAt: now,
+          }).pipe(failing("updateEndpoint"), Effect.flatMap(requireRow(id)));
           return toEndpoint(updated);
         }),
       setSecrets: (id, secrets) =>
-        DateTime.now.pipe(
-          Effect.flatMap((now) => writeSecrets({ id, ...secrets, updatedAt: now })),
-          sealed,
-          Effect.flatMap(requireRow(id)),
-          Effect.map(toEndpoint),
-        ),
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const secret = yield* secretCodec.seal(id, secrets.secret);
+          const previousSecret =
+            secrets.previousSecret === null
+              ? null
+              : yield* previousSecretCodec.seal(id, secrets.previousSecret);
+          return yield* writeSecrets({
+            id,
+            secret,
+            previousSecret,
+            previousSecretExpiresAt: secrets.previousSecretExpiresAt,
+            updatedAt: now,
+          }).pipe(failing("setSecrets"));
+        }).pipe(Effect.flatMap(requireRow(id)), Effect.map(toEndpoint)),
       setDisabled: (id, disabled) =>
         Effect.gen(function* () {
-          const current = yield* sealed(endpointById(id)).pipe(Effect.flatMap(requireRow(id)));
+          const current = yield* endpointById(id).pipe(
+            failing("setDisabled"),
+            Effect.flatMap(requireRow(id)),
+          );
           const now = yield* DateTime.now;
-          const updated = yield* sealed(
-            writeDisabled({
-              id,
-              disabledAt: disabled?.at ?? null,
-              disabledReason: disabled?.reason ?? null,
-              consecutiveDead: disabled === null ? 0 : current.consecutiveDead,
-              updatedAt: now,
-            }),
-          ).pipe(Effect.flatMap(requireRow(id)));
+          const updated = yield* writeDisabled({
+            id,
+            disabledAt: disabled?.at ?? null,
+            disabledReason: disabled?.reason ?? null,
+            consecutiveDead: disabled === null ? 0 : current.consecutiveDead,
+            updatedAt: now,
+          }).pipe(failing("setDisabled"), Effect.flatMap(requireRow(id)));
           return toEndpoint(updated);
         }),
       bumpDead: (grant, id) =>
         bump(id).pipe(
           Effect.map((row) => (Option.isSome(row) ? row.value.consecutiveDead : 0)),
           witnessed(grant),
-          sealed,
+          failing("bumpDead"),
         ),
       clearDead: (grant, id) =>
         witnessed(grant)(
           sql`UPDATE webhooks_endpoint SET "consecutiveDead" = 0 WHERE id = ${id}`,
-        ).pipe(sealed, Effect.asVoid),
+        ).pipe(failing("clearDead"), Effect.asVoid),
       deleteEndpoint: (id) =>
         Effect.gen(function* () {
           const scope = yield* endpointScope();
-          const removed = yield* sealed(
-            sql`DELETE FROM webhooks_endpoint WHERE id = ${id} AND ${scope} RETURNING id`,
-          );
+          const removed =
+            yield* sql`DELETE FROM webhooks_endpoint WHERE id = ${id} AND ${scope} RETURNING id`.pipe(
+              failing("deleteEndpoint"),
+            );
           if (removed.length === 0) return yield* Effect.fail(notFound(id));
-          yield* sealed(sql`DELETE FROM webhooks_delivery WHERE "endpointId" = ${id}`);
+          yield* sql`DELETE FROM webhooks_delivery WHERE "endpointId" = ${id}`.pipe(
+            failing("deleteEndpoint"),
+          );
         }),
       enqueue: (rows) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
           let inserted = 0;
           for (const row of rows) {
-            const wrote = yield* sealed(sql`
+            const wrote = yield* sql`
               INSERT INTO webhooks_delivery (id, "endpointId", "eventId", "eventTag", "subjectUserId", body, status,
                 attempts, "nextAttemptAt", "createdAt")
               VALUES (${row.id}, ${row.endpointId}, ${row.eventId}, ${row.eventTag}, ${row.subjectUserId ?? null},
                 ${row.body}, 'pending', 0, ${wireDate(row.nextAttemptAt)}, ${wireDate(now)})
               ON CONFLICT ("endpointId", "eventId") DO NOTHING
-              RETURNING id`);
+              RETURNING id`.pipe(failing("enqueue"));
             inserted += wrote.length;
           }
           return inserted;
@@ -1078,65 +1290,60 @@ export const layerSql = Layer.effect(
             if (Option.isSome(row)) claimed.push(toDelivery(row.value));
           }
           return claimed;
-        }).pipe(witnessed(grant), sealed),
-      findDelivery: (id) => deliveryById(id).pipe(Effect.map(Option.map(toDelivery)), sealed),
+        }).pipe(witnessed(grant), failing("claimDue")),
+      findDelivery: (id) =>
+        deliveryById(id).pipe(failing("findDelivery"), Effect.map(Option.map(toDelivery))),
       markSucceeded: (grant, id, outcome) =>
-        sealed(
-          witnessed(grant)(sql`
+        witnessed(grant)(sql`
           UPDATE webhooks_delivery SET status = 'succeeded', attempts = attempts + 1,
             "lastAttemptAt" = ${wireDate(outcome.at)}, "lastStatusCode" = ${outcome.statusCode ?? null},
             "lastError" = NULL, "completedAt" = ${wireDate(outcome.at)}
-          WHERE id = ${id}`),
-        ).pipe(Effect.asVoid),
+          WHERE id = ${id}`).pipe(failing("markSucceeded"), Effect.asVoid),
       reschedule: (grant, id, next) =>
-        sealed(
-          witnessed(grant)(sql`
+        witnessed(grant)(sql`
           UPDATE webhooks_delivery SET attempts = attempts + 1, "nextAttemptAt" = ${wireDate(next.nextAttemptAt)},
             "lastAttemptAt" = ${wireDate(next.at)}, "lastStatusCode" = ${next.statusCode ?? null},
             "lastError" = ${next.error ?? null}
-          WHERE id = ${id}`),
-        ).pipe(Effect.asVoid),
+          WHERE id = ${id}`).pipe(failing("reschedule"), Effect.asVoid),
       defer: (grant, id, nextAttemptAt) =>
-        sealed(
-          witnessed(grant)(
-            sql`UPDATE webhooks_delivery SET "nextAttemptAt" = ${wireDate(nextAttemptAt)} WHERE id = ${id}`,
-          ),
-        ).pipe(Effect.asVoid),
+        witnessed(grant)(
+          sql`UPDATE webhooks_delivery SET "nextAttemptAt" = ${wireDate(nextAttemptAt)} WHERE id = ${id}`,
+        ).pipe(failing("defer"), Effect.asVoid),
       markDead: (grant, id, outcome) =>
-        sealed(
-          witnessed(grant)(sql`
+        witnessed(grant)(sql`
           UPDATE webhooks_delivery SET status = 'dead', attempts = attempts + 1,
             "lastAttemptAt" = ${wireDate(outcome.at)}, "lastStatusCode" = ${outcome.statusCode ?? null},
             "lastError" = ${outcome.error ?? null}, "completedAt" = ${wireDate(outcome.at)}
-          WHERE id = ${id}`),
-        ).pipe(Effect.asVoid),
+          WHERE id = ${id}`).pipe(failing("markDead"), Effect.asVoid),
       redrive: (id, now) =>
         redriveOne({ id, now }).pipe(
-          sealed,
+          failing("redrive"),
           Effect.flatMap(requireRow(id)),
           Effect.map(toDelivery),
         ),
       listDeliveries: ({ endpointId, status, before, limit }) =>
         listDeliveries({ endpointId, status: status ?? null, before: before ?? null, limit }).pipe(
+          failing("listDeliveries"),
           Effect.map((rows) => rows.map(toDelivery)),
-          sealed,
         ),
       pruneFinished: (grant, cutoff) =>
-        sealed(
-          witnessed(grant)(sql`
+        witnessed(grant)(sql`
           DELETE FROM webhooks_delivery
           WHERE status IN ('succeeded', 'dead') AND "completedAt" < ${wireDate(cutoff)}
-          RETURNING id`),
-        ).pipe(Effect.map((rows) => rows.length)),
+          RETURNING id`).pipe(
+          failing("pruneFinished"),
+          Effect.map((rows) => rows.length),
+        ),
       deleteBySubject: (grant, userId) =>
-        sealed(
-          witnessed(grant)(sql`DELETE FROM webhooks_delivery WHERE "subjectUserId" = ${userId}`),
-        ).pipe(Effect.asVoid),
+        witnessed(grant)(sql`DELETE FROM webhooks_delivery WHERE "subjectUserId" = ${userId}`).pipe(
+          failing("deleteBySubject"),
+          Effect.asVoid,
+        ),
       listBySubject: (grant, userId) =>
         bySubject(userId).pipe(
-          Effect.map((rows) => rows.map(toDelivery)),
           witnessed(grant),
-          sealed,
+          failing("listBySubject"),
+          Effect.map((rows) => rows.map(toDelivery)),
         ),
     } satisfies WebhookRecordsShape;
   }),

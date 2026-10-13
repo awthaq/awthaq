@@ -262,7 +262,14 @@ export const codec = <A>(declared: Column<A>, swap: Swap) =>
 
 // ---- the two sanctioned call-site treatments of Unreadable ---------------------------
 
-const isUnreadable = (error: unknown): error is Unreadable => error instanceof Unreadable;
+const isUnreadable = <E>(error: E): error is Extract<E, Unreadable> => error instanceof Unreadable;
+
+const describe = (unreadable: Unreadable) => ({
+  table: unreadable.table,
+  column: unreadable.column,
+  rowKey: unreadable.rowKey,
+  reason: unreadable.reason,
+});
 
 /** Fail closed: a defect naming the column (never the value). For a value the operation cannot proceed without. */
 export const orDie = <A, E, R>(self: Effect.Effect<A, E, R>) =>
@@ -273,18 +280,18 @@ export const orDie = <A, E, R>(self: Effect.Effect<A, E, R>) =>
     ),
   );
 
+const unreadableMarker: unique symbol = Symbol("awthaq/sql/SealedColumn/unreadable");
+
 /** Degrade: `None` plus one warning (ids only). For one optional value or one row of a list. */
 export const option = <A, E, R>(self: Effect.Effect<A, E, R>) =>
-  Effect.catchIf(Effect.map(self, Option.some), isUnreadable, (unreadable) =>
-    Effect.logWarning("awthaq: a sealed column cannot be opened").pipe(
-      Effect.annotateLogs({
-        table: unreadable.table,
-        column: unreadable.column,
-        rowKey: unreadable.rowKey,
-        reason: unreadable.reason,
-      }),
-      Effect.as(Option.none<A>()),
+  Effect.map(
+    Effect.catchIf(self, isUnreadable, (unreadable) =>
+      Effect.logWarning("awthaq: a sealed column cannot be opened").pipe(
+        Effect.annotateLogs(describe(unreadable)),
+        Effect.as(unreadableMarker),
+      ),
     ),
+    (value) => (value === unreadableMarker ? Option.none<A>() : Option.some(value)),
   );
 
 // ---- maintenance ----------------------------------------------------------------------

@@ -1529,3 +1529,11 @@ Phase 3:
 - `examples/plugin-template` declares `notes_note` Global ("template example; phase 13 partitions it") until phase 13 adds the column.
 - Fixtures were codemodded to `AuthPlugin.Table.global("test fixture")`; the BDD type gates (`table-bare`, `table-foreign-prefix`, `table-prefixed`) were rewritten for the record form, and `Auth.make`'s key list gained `tenancy`.
 - The behavior is BEH-EA-328; `01-plugin-contract.md` is revision 1.2, `28-tenancy.md` 1.2, traceability 1.13. The webhooks isolation conformance call now passes the real `Webhooks.Webhooks` plugin.
+
+Phase 4:
+
+- `SealedColumn.orDie`/`option` were typed `Effect<_, unknown, _>` at call sites (a phase 1 typing bug: `catchIf` with an `unknown`-parameter guard lost the error type); they now use a generic `isUnreadable` refinement and return `Exclude<E, Unreadable>`.
+- `runSealedColumnTests` takes `raw` and `plant` per adapter (storage differs: a SQL statement, a memory row), so it is called once per adapter. `WebhookRecords.layerMemory` additionally provides `MemoryEnvelopes`, a test seam over its in-memory envelopes, because a memory adapter has no other way to expose what is at rest. It is exported for the suites, not part of the production surface.
+- BDD (`34-webhooks.feature`): REQ-EA-1136 and REQ-EA-1137 (a sealed secret copied into, or swapped within, a row does not decrypt) are deleted, since the records no longer expose an envelope to copy; the moved-ciphertext case is `runSealedColumnTests`' and the delivery-level `secret` failure is `WebhookDelivery.test.ts` ("a secret that no longer decrypts"). REQ-EA-1135 and REQ-EA-1264 now assert that the sealed value opens to what was created/registered.
+- `enqueue`, `drainDue` and `pruneOnce` in `WebhookDelivery.ts` carry explicit types (the TS2883 exception the plugins document: declaration emit cannot name `StoreUnavailable` through the records' inferred error). `WebhookRecords.layerMemory`/`layerSql` carry explicit `Layer` types for the same reason (`Encryption`).
+- `Webhooks` no longer lists `Encryption` among its `ports`.

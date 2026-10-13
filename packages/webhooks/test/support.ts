@@ -19,7 +19,6 @@ import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as WebhookDelivery from "../src/WebhookDelivery.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
-import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as WebhookSignature from "../src/WebhookSignature.ts";
 import * as WebhookTransport from "../src/WebhookTransport.ts";
 import * as Webhooks from "../src/Webhooks.ts";
@@ -28,7 +27,7 @@ import { TestAuth } from "@awthaq/test";
 /** The witness a test presents where the relay or the worker would. */
 export const relay = TenantScoped.crossTenant("webhooks test: the relay serves every tenant");
 
-const EncryptionLive = Encryption.layer.pipe(
+export const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
     KeyProvider.layerEnv.pipe(
       Layer.provide(
@@ -121,8 +120,7 @@ export interface DeliveryOptions {
 export const deliveryLayer = (options: DeliveryOptions = {}) => {
   const receiver = options.receiver ?? fakeReceiver().layer;
   return Layer.mergeAll(
-    WebhookRecords.layerMemory,
-    EncryptionLive,
+    WebhookRecords.layerMemory.pipe(Layer.provideMerge(EncryptionLive)),
     receiver,
     options.transport ?? WebhookTransport.layerHttpClient.pipe(Layer.provide(receiver)),
     options.limiter ?? RateLimiter.layerPermissive,
@@ -143,14 +141,13 @@ export const seedEndpoint = (
 ) =>
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
-    const encryption = yield* Encryption.Encryption;
     const id = input.id ?? `ep-${Math.random().toString(16).slice(2)}`;
     const secret = yield* WebhookSignature.generateSecret;
     const create = records.createEndpoint({
       id,
       url: input.url ?? "https://hooks.example.com/awthaq",
       eventTags: input.eventTags ?? ["*"],
-      secret: yield* WebhookSecrets.seal(encryption, id, "secret", secret),
+      secret,
       createdBy: "admin-1",
     });
     // The store stamps the ambient tenant at registration.

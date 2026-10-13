@@ -3,14 +3,16 @@
 // with an endpoint that fails once (retry).
 import { AuthEvents, EventRelay, Users } from "@awthaq/core";
 import { Tenant } from "@awthaq/ports";
+import { StoreFailure } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
+import * as WebhookDelivery from "../src/WebhookDelivery.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as Webhooks from "../src/Webhooks.ts";
-import { deliveryLayer, fakeReceiver, seedEndpoint, signedIn } from "./support.ts";
+import { deliveryLayer, fakeReceiver, published, seedEndpoint, signedIn } from "./support.ts";
 
 /**
  * Lets the forked relay and worker fibers run between clock ticks. Decrypting an endpoint secret is real
@@ -74,6 +76,47 @@ describe("Webhooks.background: relay + worker", () => {
           Layer.merge(deliveryLayer({ receiver: flaky.layer }), EventRelay.layerCursorMemory),
         ),
       ),
+  );
+});
+
+describe("Webhooks.background: a store outage", () => {
+  it.effect(
+    "in claimDue is logged and retried on the next tick, and the worker keeps running",
+    () => {
+      const receiver = fakeReceiver();
+      let outages = 1;
+      // The first claim finds the store down; every later one reaches the real records.
+      const flaky = Layer.effect(
+        WebhookRecords.WebhookRecords,
+        Effect.map(WebhookRecords.WebhookRecords, (records) =>
+          WebhookRecords.WebhookRecords.of({
+            ...records,
+            claimDue: (grant, input) => {
+              if (outages <= 0) return records.claimDue(grant, input);
+              outages -= 1;
+              return Effect.fail(
+                new StoreFailure.StoreUnavailable({ operation: "WebhookRecords.claimDue" }),
+              );
+            },
+          }),
+        ),
+      ).pipe(Layer.provideMerge(deliveryLayer({ receiver: receiver.layer })));
+      return Effect.gen(function* () {
+        yield* seedEndpoint({ eventTags: ["auth.user.signedIn"] });
+        yield* WebhookDelivery.enqueue([yield* published(signedIn("outage"))]);
+        yield* Layer.build(
+          WebhookDelivery.workerLayer.pipe(
+            Layer.provide(Webhooks.config({ pollInterval: Duration.seconds(1) })),
+          ),
+        );
+        yield* tick(Duration.millis(10));
+        assert.strictEqual(outages, 0, "the first claim hit the outage");
+        assert.strictEqual(receiver.sent.length, 0);
+        // The worker backs off and tries again; this time the store answers.
+        yield* tick(Duration.seconds(5));
+        assert.strictEqual(receiver.sent.length, 1);
+      }).pipe(Effect.scoped, Effect.provide(flaky));
+    },
   );
 });
 

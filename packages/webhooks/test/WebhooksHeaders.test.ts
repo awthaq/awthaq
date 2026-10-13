@@ -1,7 +1,6 @@
 // BEH-EA-313 (spec/behaviors/34-webhooks.md): per-endpoint custom request headers. Values are credentials: sealed with
 // `Encryption` (AAD naming endpoint and field), never returned (only names), and bounded so a custom header can never
 // replace what the delivery itself says.
-import { Encryption } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -79,28 +78,22 @@ describe("WebhookHeaders.problem", () => {
 });
 
 describe("custom headers on an endpoint", () => {
-  it.effect("values are sealed at rest and never returned; the API shows the names", () =>
+  it.effect("values open from the record and are never returned; the API shows the names", () =>
     Effect.gen(function* () {
       const webhooks = yield* Webhooks.Webhooks;
       const records = yield* WebhookRecords.WebhookRecords;
-      const encryption = yield* Encryption.Encryption;
       const created = yield* create({
         Authorization: "Bearer very-secret-token",
         "X-Team": "billing",
       });
       assert.deepStrictEqual(created.endpoint.headerNames, ["authorization", "x-team"]);
       const row = Option.getOrThrow(yield* records.findEndpoint(created.endpoint.id));
-      const stored = Option.getOrThrow(row.headers);
-      assert.notInclude(stored, "very-secret-token");
-      assert.notInclude(JSON.stringify(row), "very-secret-token");
-      // It opens only under its own endpoint and field.
-      const opened = yield* WebhookSecrets.openHeaders(encryption, row);
+      // The at-rest properties (an envelope, bound to its endpoint and column) are the sealed-column suite's.
+      const opened = yield* WebhookSecrets.openHeaders(row);
       assert.deepStrictEqual(Option.getOrThrow(opened), {
         authorization: "Bearer very-secret-token",
         "x-team": "billing",
       });
-      const elsewhere = yield* WebhookSecrets.openHeaders(encryption, { ...row, id: "another" });
-      assert.isTrue(Option.isNone(elsewhere));
       // Reads carry names only.
       const dump = JSON.stringify([
         yield* webhooks.listEndpoints(admin),
@@ -165,13 +158,13 @@ describe("custom headers on an endpoint", () => {
         const records = yield* WebhookRecords.WebhookRecords;
         const first = yield* create({ "x-a": "1" });
         const second = yield* create({ "x-b": "2" });
-        const stolen = Option.getOrThrow(
-          Option.getOrThrow(yield* records.findEndpoint(second.endpoint.id)).headers,
-        );
+        const envelopes = yield* WebhookRecords.MemoryEnvelopes;
         // The other endpoint's sealed headers copied into this endpoint's row do not decrypt.
-        yield* records.updateEndpoint(first.endpoint.id, {
-          headers: { sealed: stolen, names: ["x-b"] },
-        });
+        yield* envelopes.plant(
+          first.endpoint.id,
+          "headers",
+          yield* envelopes.stored(second.endpoint.id, "headers"),
+        );
         yield* WebhookDelivery.enqueue([yield* published(signedIn())]);
         yield* WebhookDelivery.drainDue;
         // Both endpoints hear the event; only the intact one (`second`, sealed for itself) was sent to.
