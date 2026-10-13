@@ -10,7 +10,8 @@
 //   as one whole unit, but only at the top level. Inside a caller's transaction the retry belongs
 //   to the caller: a Postgres deadlock aborts the whole transaction, so retrying one savepoint
 //   would be wrong (ADR-EA-028, "Transient retry").
-// - `read(operation)`: the same classification, never retried (a read has no unit to repeat).
+// - `read(operation)` (alias `once`): the same classification, never retried (a read has no unit to
+//   repeat; neither has a write whose repetition would change its answer).
 // - `drainBatches`: a retention delete as a loop of bounded statements (CSG-003/ALF-010).
 //
 // A primitive that changes what a replica-eligible listing returns passes `{ capture: true }`, so
@@ -64,11 +65,15 @@ export const make = (sql: SqlClient.SqlClient) => {
         );
       });
 
-  /** A store read: classified like `orStoreUnavailable`, never retried. */
+  /**
+   * A store read: classified like `orStoreUnavailable`, never retried. Also the wrapper for a write
+   * that is not safe to repeat (a presentation that succeeded but was not acknowledged would come
+   * back as a miss), which is why it is exported as `once` too.
+   */
   const read =
     (operation: string) =>
     <A, E, R>(self: Effect.Effect<A, E, R>) =>
       orStoreUnavailable(operation)(self);
 
-  return { write, read };
+  return { write, read, once: read };
 };

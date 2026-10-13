@@ -670,33 +670,8 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    // MLO-006: the atomic `UPDATE ... RETURNING` decides a concurrent race.
     it.effect(
-      "BEH-EA-062: two concurrent tryConsume calls for one live token yield exactly one row",
-      () =>
-        Effect.gen(function* () {
-          const verification = yield* Repositories.VerificationRepository;
-          const now = yield* DateTime.now;
-          yield* verification.upsertLive(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "verify-email:race",
-              valueHash: "hash-race",
-              expiresAt: DateTime.add(now, { minutes: 10 }),
-              consumedAt: null,
-            }),
-          );
-          const claim = verification.tryConsume({
-            identifier: "verify-email:race",
-            valueHash: "hash-race",
-            now,
-          });
-          const results = yield* Effect.all([claim, claim], { concurrency: "unbounded" });
-          assert.strictEqual(results.filter(Option.isSome).length, 1);
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "BEH-EA-122: VerificationToken.payload round-trips JSON-encoded, defaulting to null",
+      "BEH-EA-122: VerificationToken.payload stores the JSON text it is given, defaulting to the literal null",
       () =>
         Effect.gen(function* () {
           const verification = yield* Repositories.VerificationRepository;
@@ -707,10 +682,13 @@ export const contractCases = (
               valueHash: "hash-1",
               expiresAt: now,
               consumedAt: null,
-              payload: { codeVerifier: "abc", nonce: "xyz" },
+              payload: JSON.stringify({ codeVerifier: "abc", nonce: "xyz" }),
             }),
           );
-          assert.deepStrictEqual(withPayload.payload, { codeVerifier: "abc", nonce: "xyz" });
+          assert.strictEqual(
+            withPayload.payload,
+            JSON.stringify({ codeVerifier: "abc", nonce: "xyz" }),
+          );
 
           const withoutPayload = yield* verification.insert(
             yield* M.VerificationToken.insert.makeEffect({
@@ -720,148 +698,13 @@ export const contractCases = (
               consumedAt: null,
             }),
           );
-          assert.strictEqual(withoutPayload.payload, null);
+          assert.strictEqual(withoutPayload.payload, "null");
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect(
-      "ADR-EA-016: upsertLive replaces the current live row in place, leaving consumed history untouched",
-      () =>
-        Effect.gen(function* () {
-          const verification = yield* Repositories.VerificationRepository;
-          const now = yield* DateTime.now;
-          const consumedRow = yield* verification.insert(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "verify-email:user-3",
-              valueHash: "hash-old",
-              expiresAt: now,
-              consumedAt: null,
-            }),
-          );
-          yield* verification.update(
-            yield* M.VerificationToken.update.makeEffect({
-              id: consumedRow.id,
-              consumedAt: now,
-            }),
-          );
-          const staleLiveRow = yield* verification.insert(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "verify-email:user-3",
-              valueHash: "hash-stale",
-              expiresAt: now,
-              consumedAt: null,
-            }),
-          );
-
-          const fresh = yield* M.VerificationToken.insert.makeEffect({
-            identifier: "verify-email:user-3",
-            valueHash: "hash-fresh",
-            expiresAt: now,
-            consumedAt: null,
-          });
-          const replaced = yield* verification.upsertLive(fresh);
-
-          assert.strictEqual(replaced.valueHash, "hash-fresh");
-          const stillConsumed = yield* verification.findById(consumedRow.id);
-          assert.strictEqual(stillConsumed.valueHash, "hash-old");
-          const staleGone = yield* verification.findById(staleLiveRow.id).pipe(Effect.exit);
-          assert.strictEqual(staleGone._tag, "Failure");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "ADR-EA-016: two concurrent upsertLives for the same identifier never leave two live rows",
-      () =>
-        Effect.gen(function* () {
-          const verification = yield* Repositories.VerificationRepository;
-          const sql = yield* SqlClient.SqlClient;
-          const now = yield* DateTime.now;
-          const identifier = "verify-email:user-11";
-
-          yield* Effect.all(
-            [
-              M.VerificationToken.insert
-                .makeEffect({ identifier, valueHash: "hash-a", expiresAt: now, consumedAt: null })
-                .pipe(Effect.flatMap(verification.upsertLive)),
-              M.VerificationToken.insert
-                .makeEffect({ identifier, valueHash: "hash-b", expiresAt: now, consumedAt: null })
-                .pipe(Effect.flatMap(verification.upsertLive)),
-            ],
-            { concurrency: "unbounded" },
-          );
-
-          const rows =
-            yield* sql`SELECT COUNT(*) AS count FROM verification_tokens WHERE identifier = ${identifier} AND "consumedAt" IS NULL`;
-          assert.strictEqual(Number(rows[0]?.["count"]), 1);
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect("BEH-EA-058/062: tryConsume is the one atomic claim behind consumption", () =>
-      Effect.gen(function* () {
-        const verification = yield* Repositories.VerificationRepository;
-        const now = yield* DateTime.now;
-        yield* verification.insert(
-          yield* M.VerificationToken.insert.makeEffect({
-            identifier: "reset-password:user-4",
-            valueHash: "correct-hash",
-            expiresAt: DateTime.addDuration(now, Duration.minutes(10)),
-            consumedAt: null,
-          }),
-        );
-
-        const wrongHash = yield* verification.tryConsume({
-          identifier: "reset-password:user-4",
-          valueHash: "wrong-hash",
-          now,
-        });
-        assert.isTrue(Option.isNone(wrongHash));
-
-        const firstConsume = yield* verification.tryConsume({
-          identifier: "reset-password:user-4",
-          valueHash: "correct-hash",
-          now,
-        });
-        assert.isTrue(Option.isSome(firstConsume));
-
-        const replay = yield* verification.tryConsume({
-          identifier: "reset-password:user-4",
-          valueHash: "correct-hash",
-          now,
-        });
-        assert.isTrue(Option.isNone(replay));
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "ADR-EA-016: VerificationReservationsRepository.claim is exclusive while unexpired",
-      () =>
-        Effect.gen(function* () {
-          const reservations = yield* Repositories.VerificationReservationsRepository;
-          const now = yield* DateTime.now;
-
-          const first = yield* reservations.claim({
-            identifier: "promote:user-5",
-            expiresAt: DateTime.addDuration(now, Duration.minutes(1)),
-            now,
-          });
-          assert.isTrue(first);
-
-          const second = yield* reservations.claim({
-            identifier: "promote:user-5",
-            expiresAt: DateTime.addDuration(now, Duration.minutes(1)),
-            now,
-          });
-          assert.isFalse(second);
-
-          const later = DateTime.addDuration(now, Duration.minutes(2));
-          const third = yield* reservations.claim({
-            identifier: "promote:user-5",
-            expiresAt: DateTime.addDuration(later, Duration.minutes(1)),
-            now: later,
-          });
-          assert.isTrue(third);
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
+    // The verification repository cases (the atomic claim, the live-row replacement, the reservation
+    // claim and its boundary) are `StoreContract.verification`, which runs on every adapter (plan 02,
+    // ADR-EA-041).
 
     // ESR-009: the RETURNING-decoded session writes of RRS-003/ticket 15 —
     // a timestamp/nullable-timestamp round trip through each dialect's codec.
@@ -1272,7 +1115,7 @@ export const contractCases = (
           valueHash: "h",
           expiresAt: future,
           createdAt: now,
-          payload: null,
+          payload: "null",
           maxAttempts: null,
           attempts: 0,
         });

@@ -1815,7 +1815,8 @@ export interface VerificationRepositoryShape {
     readonly valueHash: string;
     readonly expiresAt: DateTime.Utc;
     readonly createdAt: DateTime.Utc;
-    readonly payload: unknown;
+    /** The payload as JSON text (`"null"` for none); opaque to the repository. */
+    readonly payload: string;
     /** SOS-004: the attempt budget, `null` for none; `attempts` restarts at 0 on every (re)issue. */
     readonly maxAttempts: number | null;
     readonly attempts: number;
@@ -1848,8 +1849,8 @@ export interface VerificationRepositoryShape {
     readonly id: VerificationTokenId;
     readonly now: DateTime.Utc;
   }) => Effect.Effect<void, RepositoryError>;
-  /** BCR-003: sweeps every token (live or already-consumed) naming this user — the cascade `Account.ts`'s `deleteUser` needs. */
-  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
+  /** BCR-003: sweeps every token (live or already-consumed) naming this user — the cascade `Account.ts`'s `deleteUser` needs. Resolves to how many went. */
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<number, RepositoryError>;
   /**
    * CSG-003: retention. Deletes up to `limit` tokens that were consumed, or
    * expired, before `cutoff` — a live token, and a recent consumed one (the
@@ -1908,7 +1909,7 @@ export const VerificationRepositoryLive: Layer.Layer<
         valueHash: Schema.String,
         expiresAt: models.wire.dateTime,
         createdAt: models.wire.dateTime,
-        payload: Schema.fromJsonString(Schema.Unknown),
+        payload: Schema.String,
         maxAttempts: Schema.NullOr(Schema.Number),
         attempts: Schema.Number,
       }),
@@ -1938,9 +1939,16 @@ export const VerificationRepositoryLive: Layer.Layer<
         traced("VerificationTokens.upsertLive", { id: input.id }),
       );
 
+    const deleteAllByUserQuery = SqlSchema.findAll({
+      Request: UserId,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (userId) =>
+        sql`DELETE FROM verification_tokens WHERE "userId" = ${userId} RETURNING id`,
+    });
+
     const deleteAllByUser: VerificationRepositoryShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM verification_tokens WHERE "userId" = ${userId}`.pipe(
-        Effect.asVoid,
+      deleteAllByUserQuery(userId).pipe(
+        Effect.map((rows) => rows.length),
         traced("VerificationTokens.deleteAllByUser", { userId }),
       );
 

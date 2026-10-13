@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-08 |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) <br> 1.4 (2026-10-13): `Verification.redeem` owns the claim-and-use transaction in both adapters; BEH-EA-058 "as shipped" text, BEH-EA-059 and BEH-EA-062 notes (ADR-EA-039, plan 07) <br> 1.5 (2026-10-13): BEH-EA-063: a reservation is expired iff `now >= expiresAt` in both layers; SOS-004: a miss is charged to the row it was judged against (plan 02 phase 0) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) <br> 1.4 (2026-10-13): `Verification.redeem` owns the claim-and-use transaction in both adapters; BEH-EA-058 "as shipped" text, BEH-EA-059 and BEH-EA-062 notes (ADR-EA-039, plan 07) <br> 1.5 (2026-10-13): BEH-EA-063: a reservation is expired iff `now >= expiresAt` in both layers; SOS-004: a miss is charged to the row it was judged against (plan 02 phase 0) <br> 1.6 (2026-10-13): One implementation over `VerificationStore`: a consumed row is kept as evidence in every adapter and is never consumable again (BEH-EA-062, was `MUST be gone` in memory), the payload is one JSON codec, a reservation's tenant is stamped by every adapter (plan 02 phase 3) |
 
 ---
 
@@ -112,6 +112,8 @@ REQUIREMENT: When multiple callers race to consume the same token
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as the `consume-verification-value` operation's core guarantee, with an explicit blame rule alongside it: a caller that proceeds with a state change without gating on a non-null consume result is responsible for the resulting violation — the race-safety guarantee protects only callers that actually check the result. awthaq's plan carries the same operation and the same blame assignment into its own `Verification` domain service.
+
+**One implementation over a store port (plan 02, ADR-EA-041).** `Verification` is written once, over `VerificationStore` (a `Ref` adapter in `@awthaq/ports`, a SQL adapter in `@awthaq/sql`), whose primitives are atomic by contract (`StoreContract.verification`, run on the `Ref`, SQLite, WAL-file and Postgres adapters): `upsertLive` replaces the identifier's one unconsumed row; `present` claims it in one step and, on a miss against a budgeted live row, spends an attempt charged to the row the miss was judged against; `reserve`, `deleteByUser` and `purgeExpired`. Two consequences replace text this behavior used to carry. A **consumed row is kept in every adapter** (as replay evidence, until `Retention.sweep`'s forensic window passes): the requirement is that a spent token MUST NOT be consumable again, and "the row MUST be gone" held only of the `Ref` twin. The **payload** is JSON text, encoded and decoded once by the service: a value JSON cannot carry (a `bigint`, a cycle) is a defect on every backend, and a `DateTime` or a class instance comes back as its JSON form on every backend, not by reference on one of them. An outage in a store primitive is `StoreUnavailable` named for the service operation (`Verification.consume`, `Verification.redeem`, ...).
 
 **Memory concurrency (ADR-EA-039, TRBS-005).** While a `redeem`'s `use` runs, `layerMemory` holds the claimed row, so a *concurrent* redeem of the same identifier misses at once (and publishes `auth.token.replay`). Over SQL the second claim's `UPDATE` waits on the row lock and then wins if the first rolled back. At most one succeeds in both; only the loser's timing differs.
 

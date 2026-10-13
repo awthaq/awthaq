@@ -1,29 +1,18 @@
 // @awthaq/core — Verification
 //
 // spec/behaviors/08-verification-tokens.md, BEH-EA-057 through BEH-EA-064.
-// Two `Layer`s over the same `VerificationShape`: `layerMemory` (a `Ref`)
-// and `layerSql` (`@awthaq/sql`'s `VerificationRepository`/
-// `VerificationReservationsRepository`), per
-// `spec/decisions/016-verification-sql-claiming.md` (ADR-EA-016, revised
-// 1.1 after a code-review finding on the original delete-then-insert
-// design) — a dedicated `verification_reservations` table for `reserve`,
-// claimed by a conditional upsert (`VerificationReservationsRepository.claim`);
-// `issue` built on one atomic `INSERT ... ON CONFLICT ... DO UPDATE`
-// against a partial unique index on `(identifier) WHERE consumedAt IS NULL`
-// (`VerificationRepository.upsertLive`), so two concurrent `issue`s for the
-// same `identifier` can never both leave a live row behind — the DB
-// engine's own conflict resolution replaces the current live row
-// atomically instead of racing a separate delete against a separate
-// insert; `consume` built on one atomic `UPDATE ... RETURNING`
-// (`VerificationRepository.tryConsume`) so unknown/expired/wrong-secret/
-// already-consumed all collapse into the same "no row back" result. Both
-// give `layerSql` the same win-or-lose-inside-one-atomic-step guarantee
-// `layerMemory`'s `Ref.modify`/`HashMap.set` give. BEH-EA-058's transaction
-// requirement is met by `redeem` (ADR-EA-039, which supersedes ADR-EA-016's "no change to
-// `VerificationShape`" paragraph): it claims the token and runs the caller's state change in one
-// transaction, records a miss itself, and gives the token back when the state change fails, the same
-// way over both Layers (SQL by rollback, memory by compensation). `consume` stays as the burn-first
-// operation for tokens whose spending is the point (OAuth/SAML request state, the native exchange code).
+// Plan 02 (ADR-EA-041): written once, over `@awthaq/ports`' `VerificationStore` (a `Ref` adapter
+// there, a SQL adapter in `@awthaq/sql`). Per `spec/decisions/016-verification-sql-claiming.md`
+// (ADR-EA-016) the store's primitives are the atomic steps: `upsertLive` replaces the identifier's
+// one unconsumed row in a single step (the SQL adapter's is one `INSERT ... ON CONFLICT ... DO
+// UPDATE` against a partial unique index), `present` claims a token in a single step (unknown,
+// expired, wrong-secret and already-consumed all collapse into the same miss), and `reserve` is a
+// conditional upsert into a dedicated reservations table. BEH-EA-058's transaction requirement is
+// met by `redeem` (ADR-EA-039, which supersedes ADR-EA-016's "no change to `VerificationShape`"
+// paragraph): it claims the token and runs the caller's state change in one transaction, records a
+// miss itself, and gives the token back when the state change fails (the SQL adapter by rollback,
+// the `Ref` adapter by `settle`'s compensation). `consume` stays as the burn-first operation for
+// tokens whose spending is the point (OAuth/SAML request state, the native exchange code).
 //
 // BEH-EA-059: `consume`'s every failure path — expired, unknown, or
 // already-consumed — publishes `auth.token.replay` to `AuthEvents.ts`
@@ -32,8 +21,8 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
-import { Defects, Hmac, type Ids, PruneExpired, SqlTransaction } from "@awthaq/ports";
-import { Models as SqlModels, Repositories as SqlRepositories, SqlStore } from "@awthaq/sql";
+import { Defects, Hmac, type Ids, VerificationStore } from "@awthaq/ports";
+import { VerificationStoreSql, type Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -42,16 +31,13 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { isSqlError } from "effect/unstable/sql/SqlError";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
-import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import { UserId } from "./Users.ts";
 
 // MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
@@ -211,36 +197,42 @@ export class Verification extends Context.Service<Verification, VerificationShap
   "awthaq/core/Verification",
 ) {}
 
-interface TokenRow {
-  readonly id: VerificationTokenId;
-  readonly identifier: string;
-  readonly userId: Option.Option<UserId>;
-  readonly valueHash: string;
-  readonly createdAt: DateTime.Utc;
-  readonly expiresAt: DateTime.Utc;
-  readonly payload: unknown;
-  /** SOS-004: `None` = no budget (the default 256-bit token). */
-  readonly maxAttempts: Option.Option<number>;
-  readonly attempts: number;
-}
+/** The payload as a caller sees it: parsed from the stored JSON text, `undefined` when there is none (ESS-010). */
+const decodePayload = (json: Option.Option<string>): unknown =>
+  Option.match(json, {
+    onNone: () => undefined,
+    onSome: (text): unknown => JSON.parse(text),
+  });
 
-/** ADR-EA-039: `held` is the rows a `redeem` has claimed and may still give back, keyed by token id. */
-interface MemoryTokens {
-  readonly live: HashMap.HashMap<string, TokenRow>;
-  readonly held: HashMap.HashMap<VerificationTokenId, TokenRow>;
-}
-
-const viewOf = (row: TokenRow): VerificationTokenView => ({
+const viewOf = (row: VerificationStore.TokenRow): VerificationTokenView => ({
   id: row.id,
   identifier: row.identifier,
   createdAt: row.createdAt,
   expiresAt: row.expiresAt,
-  payload: row.payload,
+  payload: decodePayload(row.payloadJson),
   userId: row.userId,
 });
 
-const isExpired = (row: TokenRow, now: DateTime.Utc): boolean =>
-  DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.expiresAt);
+/**
+ * BEH-EA-122: the payload is stored as JSON text, encoded here once for every adapter. `undefined`
+ * and an explicit `null` both mean "no payload" (ESS-010); anything JSON cannot carry (a `bigint`, a
+ * cycle, a function) is a caller bug, so a defect on every backend instead of a silent change.
+ */
+const encodePayload = (payload: unknown): Effect.Effect<Option.Option<string>> =>
+  payload === undefined || payload === null
+    ? Effect.succeed(Option.none())
+    : Effect.try({
+        try: () => {
+          const text: unknown = JSON.stringify(payload);
+          if (typeof text !== "string") throw new TypeError("not representable as JSON");
+          return Option.some(text);
+        },
+        catch: (cause) =>
+          new Defects.InvalidConfiguration({
+            setting: "Verification.issue.payload",
+            message: `awthaq: a token payload must be JSON-encodable: ${String(cause)}`,
+          }),
+      }).pipe(Effect.orDie);
 
 /** BCR-005: bytes at or above this are rejected, so `byte % 10` is uniform (250 = 25 * 10). */
 const DIGIT_REJECTION_BOUND = 250;
@@ -296,15 +288,14 @@ type Outcome<A, E> =
   | { readonly _tag: "Refused"; readonly error: E };
 
 /**
- * What each adapter supplies. `consume` and `redeem` are written once over it (plan 02 promotes it
- * to a `VerificationStore` seam).
+ * What `consume` and `redeem` need of a store, in the domain's own terms: `VerificationStore`'s
+ * primitives with the views and the operation labels applied (see the layer below).
  */
 interface ClaimStore {
   /**
-   * One atomic step. Takes the live row for `identifier` whose hash is `valueHash` (SQL: sets
-   * `consumedAt`; memory: moves it out of `live`, and into `held` when `hold`). On a miss it spends the
-   * attempt a budgeted live row is owed (SOS-004): memory in the same step, SQL in the unit of work's
-   * `afterUnit` lane (ADR-EA-037) so a rolled-back caller still burns the budget. `None` is a miss.
+   * One atomic step (`VerificationStore.present`). Takes the live row for `identifier` whose hash is
+   * `valueHash`, and holds it aside when `hold`. On a miss it spends the attempt a budgeted live row
+   * is owed (SOS-004), in a way that survives a rolled-back caller (ADR-EA-037). `None` is a miss.
    */
   readonly claim: (input: {
     readonly identifier: string;
@@ -313,14 +304,14 @@ interface ClaimStore {
     readonly hold: boolean;
     readonly operation: string;
   }) => Effect.Effect<Option.Option<VerificationTokenView>, StoreUnavailable>;
-  /** The unit `redeem` runs in. `layerSql`: one transaction (a savepoint inside an outer one). `layerMemory`: the effect itself. */
+  /** The unit `redeem` runs in (`VerificationStore.transaction`). */
   readonly transaction: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | StoreUnavailable, R>;
   /**
-   * After a held claim's `use` ended. `"kept"` drops the hold. `"returned"` gives the row back, unless a
-   * newer `issue` replaced it or `deleteAllByUser` swept it meanwhile. Over SQL this is a no-op, because
-   * the rollback already did it.
+   * After a held claim's `use` ended (`VerificationStore.settle`). `"kept"` drops the hold.
+   * `"returned"` gives the row back, unless a newer `issue` replaced it or `deleteAllByUser` swept it
+   * meanwhile. Over SQL this is a no-op, because the rollback already did it.
    */
   readonly release: (id: VerificationTokenId, how: "kept" | "returned") => Effect.Effect<void>;
 }
@@ -404,191 +395,13 @@ const makeTokenFlows = (
 };
 
 /**
- * TRBS-005: single-process, test-grade storage. State is one per-process
- * `Ref`: it is not shared across instances (a revocation on one instance does
- * not propagate to another), it is lost on restart, and it grows without bound
- * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
- * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
- * `PubSub` has the same process boundary.
+ * Written once over `VerificationStore` (ADR-EA-041). Needs the store, `Crypto` (the value and its
+ * hash) and `AuthEvents` (the replay event).
  */
-export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthEvents.AuthEvents> =
-  Layer.effect(
-    Verification,
-    Effect.gen(function* () {
-      const tokens = yield* Ref.make<MemoryTokens>({
-        live: HashMap.empty(),
-        held: HashMap.empty(),
-      });
-      const reservations = yield* Ref.make(HashMap.empty<string, DateTime.Utc>());
-      const crypto = yield* Crypto.Crypto;
-      const events = yield* AuthEvents.AuthEvents;
-
-      const hash = (value: string) =>
-        crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.map(toHex));
-
-      const issue: VerificationShape["issue"] = Effect.fnUntraced(
-        function* (input) {
-          const id = VerificationTokenId(yield* crypto.randomUUIDv7);
-          const maxAttempts = yield* validBudget(input.maxAttempts);
-          const value = yield* mintValue(crypto, input.format);
-          const valueHash = yield* hash(value);
-          const now = yield* DateTime.now;
-          const row: TokenRow = {
-            id,
-            identifier: input.identifier,
-            userId: Option.fromNullishOr(input.userId),
-            valueHash,
-            maxAttempts,
-            attempts: 0,
-            createdAt: now,
-            expiresAt: DateTime.addDuration(now, input.ttl),
-            // ESS-010: an explicit `null` is treated as absent, exactly as
-            // `layerSql` stores it (a JSON `null` column decodes to `undefined`),
-            // so both layers hand back the same `payload`.
-            payload: input.payload === null ? undefined : input.payload,
-          };
-          // TMS-004: an unconsumed token was never removed; prune expired rows once the map is large.
-          yield* Ref.update(tokens, (s) => ({
-            ...s,
-            live: HashMap.set(
-              PruneExpired.pruneExpiredAbove(s.live, now, (r) => r.expiresAt),
-              input.identifier,
-              row,
-            ),
-          }));
-          return {
-            token: {
-              id,
-              identifier: row.identifier,
-              createdAt: row.createdAt,
-              expiresAt: row.expiresAt,
-              payload: row.payload,
-              userId: row.userId,
-            },
-            value: Redacted.make(value),
-          };
-        },
-        Effect.catchTag("PlatformError", storeUnavailable("Verification.issue")),
-      );
-
-      const store = {
-        claim: ({ identifier, valueHash, now, hold }) =>
-          // BEH-EA-062: the row is removed by the same atomic step that reads it, so a second
-          // concurrent caller sees nothing to claim: win or lose is decided inside `Ref.modify`'s
-          // pure function, not by a separate read followed by a separate delete.
-          Ref.modify(tokens, (s) => {
-            const row = HashMap.get(s.live, identifier);
-            if (Option.isNone(row) || isExpired(row.value, now)) return [Option.none(), s] as const;
-            // ACS-002: the digest is compared in constant time, like `Sessions`' secret hash;
-            // `layerSql` does it in the DB predicate.
-            if (!Hmac.constantTimeEqualString(row.value.valueHash, valueHash)) {
-              // SOS-004: a wrong presentation against a live budgeted row spends one attempt, and
-              // the row is burned when the budget is gone, in the same atomic step, so concurrent
-              // guesses cannot exceed it.
-              const spent = row.value.attempts + 1;
-              const burned =
-                Option.isSome(row.value.maxAttempts) && spent >= row.value.maxAttempts.value;
-              const live = Option.isNone(row.value.maxAttempts)
-                ? s.live
-                : burned
-                  ? HashMap.remove(s.live, identifier)
-                  : HashMap.set(s.live, identifier, { ...row.value, attempts: spent });
-              return [Option.none(), { ...s, live }] as const;
-            }
-            return [
-              Option.some(viewOf(row.value)),
-              {
-                live: HashMap.remove(s.live, identifier),
-                held: hold ? HashMap.set(s.held, row.value.id, row.value) : s.held,
-              },
-            ] as const;
-          }),
-        transaction: (effect) => effect,
-        release: (id, how) =>
-          Ref.update(tokens, (s) => {
-            const row = HashMap.get(s.held, id);
-            if (Option.isNone(row)) return s; // swept by deleteAllByUser while `use` ran
-            const held = HashMap.remove(s.held, id);
-            // A fresh `issue` for the identifier superseded this row while `use` ran: the newer row wins.
-            return how === "kept" || HashMap.has(s.live, row.value.identifier)
-              ? { ...s, held }
-              : { live: HashMap.set(s.live, row.value.identifier, row.value), held };
-          }),
-      } satisfies ClaimStore;
-
-      const { consume, redeem } = makeTokenFlows(store, crypto, events);
-
-      const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
-        const now = yield* DateTime.now;
-        return yield* Ref.modify(reservations, (s) => {
-          const existing = HashMap.get(s, input.identifier);
-          if (
-            Option.isSome(existing) &&
-            DateTime.toEpochMillis(now) < DateTime.toEpochMillis(existing.value)
-          ) {
-            // BEH-EA-063: expired iff `now >= expiresAt`; a live reservation refuses.
-            return [false, s] as const;
-          }
-          // TMS-004: expired reservations are otherwise never removed.
-          return [
-            true,
-            HashMap.set(
-              PruneExpired.pruneExpiredAbove(s, now, (expiresAt) => expiresAt),
-              input.identifier,
-              DateTime.addDuration(now, input.ttl),
-            ),
-          ] as const;
-        });
-      });
-
-      const deleteAllByUser: VerificationShape["deleteAllByUser"] = (userId) =>
-        Ref.update(tokens, (s) => {
-          const keep = (row: TokenRow) =>
-            !(Option.isSome(row.userId) && row.userId.value === userId);
-          // A held claim is swept too, so a rollback cannot resurrect an erased user's token (plan 03).
-          return { live: HashMap.filter(s.live, keep), held: HashMap.filter(s.held, keep) };
-        });
-
-      const purgeExpired: VerificationShape["purgeExpired"] = (before) =>
-        Effect.gen(function* () {
-          const cutoff = DateTime.toEpochMillis(before);
-          // Never an in-flight hold: `held` is not pruned.
-          const expiredTokens = yield* Ref.modify(tokens, (s) => {
-            const kept = HashMap.filter(
-              s.live,
-              (row) => DateTime.toEpochMillis(row.expiresAt) >= cutoff,
-            );
-            return [HashMap.size(s.live) - HashMap.size(kept), { ...s, live: kept }] as const;
-          });
-          const reserved = yield* Ref.modify(reservations, (s) => {
-            const kept = HashMap.filter(
-              s,
-              (expiresAt) => DateTime.toEpochMillis(expiresAt) >= cutoff,
-            );
-            return [HashMap.size(s) - HashMap.size(kept), kept] as const;
-          });
-          return expiredTokens + reserved;
-        });
-
-      return { issue, consume, redeem, reserve, deleteAllByUser, purgeExpired };
-    }),
-  );
-
-const toTokenView = (row: SqlModels.VerificationToken): VerificationTokenView => ({
-  id: VerificationTokenId(row.id),
-  identifier: row.identifier,
-  createdAt: row.createdAt,
-  expiresAt: row.expiresAt,
-  payload: row.payload === null ? undefined : row.payload,
-  userId: Option.fromNullishOr(row.userId).pipe(Option.map((id) => UserId(id))),
-});
-
-export const layerSql = Layer.effect(
+export const layer = Layer.effect(
   Verification,
   Effect.gen(function* () {
-    const repo = yield* SqlRepositories.VerificationRepository;
-    const reservationsRepo = yield* SqlRepositories.VerificationReservationsRepository;
-    const sql = yield* SqlClient.SqlClient;
+    const store = yield* VerificationStore.VerificationStore;
     const crypto = yield* Crypto.Crypto;
     const events = yield* AuthEvents.AuthEvents;
 
@@ -597,126 +410,88 @@ export const layerSql = Layer.effect(
 
     const issue: VerificationShape["issue"] = Effect.fnUntraced(
       function* (input) {
+        const id = VerificationTokenId(yield* crypto.randomUUIDv7);
         const maxAttempts = yield* validBudget(input.maxAttempts);
         const value = yield* mintValue(crypto, input.format);
         const valueHash = yield* hash(value);
         const now = yield* DateTime.now;
-        const insert = yield* repo.models.VerificationToken.insert
-          .makeEffect({
-            identifier: input.identifier,
-            userId: input.userId ?? null,
-            valueHash,
-            maxAttempts: Option.getOrNull(maxAttempts),
-            expiresAt: DateTime.addDuration(now, input.ttl),
-            consumedAt: null,
-            payload: input.payload ?? null,
-          })
-          .pipe(Effect.orDie);
-        // BEH-EA-057/ADR-EA-016: one atomic upsert — matches `layerMemory`'s
-        // one-live-token overwrite behavior even under two concurrent
-        // `issue`s for the same `identifier`, since the DB engine's own
-        // conflict resolution (not a separate delete-then-insert racing
-        // itself) decides "fresh row" vs. "replace the current live row" in
-        // a single statement. Already-consumed history is never touched by `issue`
+        const payloadJson = yield* encodePayload(input.payload);
+        // BEH-EA-057/ADR-EA-016: one atomic upsert replaces the identifier's one live token, so two
+        // concurrent `issue`s never leave two. Already-consumed history is never touched by `issue`
         // (only `purgeExpired`, past the forensic window, removes it).
-        const row = yield* repo.upsertLive(insert);
-        return { token: toTokenView(row), value: Redacted.make(value) };
-      },
-      Effect.catchTags({
-        PlatformError: storeUnavailable("Verification.issue"),
-        SqlError: storeUnavailable("Verification.issue"),
-        SchemaError: Effect.die,
-        NoSuchElementError: Effect.die,
-      }),
-    );
-
-    const store = {
-      claim: ({ identifier, valueHash, now, operation }) =>
-        Effect.gen(function* () {
-          // SOS-004: read the live row first, so a miss is charged to the row it was judged against
-          // (`recordFailedAttempt` is pinned to that row's id). A reissue replaces the live row and its
-          // id: one landing between this read and the spend finds nothing to charge, instead of
-          // spending an attempt of a token the wrong presentation never saw.
-          const judged = yield* repo.findByIdentifier(identifier);
-          // BEH-EA-058/062: one atomic `UPDATE ... RETURNING` decides win or lose: no separate read
-          // racing this call's own write, the same guarantee `layerMemory`'s `Ref.modify` gives.
-          const claimed = yield* repo.tryConsume({ identifier, valueHash, now });
-          // SOS-004: a miss against a live budgeted row spends one attempt (one atomic statement; a
-          // row with no budget, an unknown or an expired one is untouched). A caller inside its own
-          // transaction fails it with the miss, which would roll the spend back too: so the spend runs
-          // in the unit of work's `afterUnit` lane, outside the transaction, committed or not
-          // (ADR-EA-037). Outside any unit it runs right here. It is best effort there: the miss must
-          // still answer uniformly (BEH-EA-116), so a store failure is logged and counted, never
-          // turned into a different response.
-          if (Option.isNone(claimed) && Option.isSome(judged)) {
-            yield* SqlTransaction.afterUnit(
-              repo
-                .recordFailedAttempt({ id: judged.value.id, now })
-                .pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logError(
-                      "awthaq: the failed attempt against a verification token could not be recorded",
-                      cause,
-                    ),
-                  ),
-                ),
-            );
-          }
-          return Option.map(claimed, toTokenView);
-        }).pipe(
-          Effect.catchTags({
-            SqlError: storeUnavailable(operation),
-            SchemaError: Effect.die,
-          }),
-        ),
-      // ADR-EA-039: one real transaction (a savepoint inside an outer one, such as the RLS tenant
-      // transaction). `catchIf(isSqlError)` rather than `catchTag`, because the body's own error
-      // type is generic: only a real `SqlError` (BEGIN/COMMIT) becomes the typed outage.
-      transaction: (effect) =>
-        SqlTransaction.transactional(sql)(effect).pipe(
-          Effect.catchIf(isSqlError, storeUnavailable("Verification.redeem")),
-        ),
-      release: () => Effect.void,
-    } satisfies ClaimStore;
-
-    const { consume, redeem } = makeTokenFlows(store, crypto, events);
-
-    const reserve: VerificationShape["reserve"] = Effect.fnUntraced(
-      function* (input) {
-        const now = yield* DateTime.now;
-        return yield* reservationsRepo.claim({
+        const row = yield* store.upsertLive({
+          id,
           identifier: input.identifier,
+          userId: Option.fromNullishOr(input.userId),
+          valueHash,
+          createdAt: now,
           expiresAt: DateTime.addDuration(now, input.ttl),
-          now,
+          payloadJson,
+          maxAttempts,
         });
+        return { token: viewOf(row), value: Redacted.make(value) };
       },
-      Effect.catchTags({
-        SqlError: storeUnavailable("Verification.reserve"),
-        SchemaError: Effect.die,
-      }),
+      Effect.catchTag("PlatformError", storeUnavailable("Verification.issue")),
+      relabel("Verification.issue"),
     );
+
+    const claimStore: ClaimStore = {
+      claim: ({ identifier, valueHash, now, hold, operation }) =>
+        store.present({ identifier, valueHash, now, hold }).pipe(
+          Effect.map((outcome) =>
+            outcome._tag === "Hit" ? Option.some(viewOf(outcome.row)) : Option.none(),
+          ),
+          relabel(operation),
+        ),
+      transaction: (effect) => store.transaction(effect).pipe(relabel("Verification.redeem")),
+      release: (id, how) =>
+        store.settle(id, how).pipe(
+          // A give-back that cannot be recorded must not mask the outcome of the caller's own work.
+          Effect.catchTag("StoreUnavailable", (error) =>
+            Effect.logWarning("awthaq: a held verification token could not be settled", error),
+          ),
+        ),
+    };
+
+    const { consume, redeem } = makeTokenFlows(claimStore, crypto, events);
+
+    const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
+      const now = yield* DateTime.now;
+      return yield* store.reserve({
+        identifier: input.identifier,
+        expiresAt: DateTime.addDuration(now, input.ttl),
+        now,
+      });
+    }, relabel("Verification.reserve"));
 
     const deleteAllByUser: VerificationShape["deleteAllByUser"] = (userId) =>
-      repo
-        .deleteAllByUser(userId)
-        .pipe(Effect.catchTag("SqlError", storeUnavailable("Verification.deleteAllByUser")));
+      store.deleteByUser(userId).pipe(Effect.asVoid, relabel("Verification.deleteAllByUser"));
 
-    // CSG-003: consumed rows are kept as replay evidence (BEH-EA-058) until the retention
-    // sweep's forensic window passes; a bounded loop of short deletes, tokens then reservations.
     const purgeExpired: VerificationShape["purgeExpired"] = (before) =>
-      Effect.all([
-        SqlStore.drainBatches((limit) =>
-          repo
-            .deleteExpiredBefore(before, limit)
-            .pipe(orStoreUnavailable("Verification.purgeExpired")),
-        ),
-        SqlStore.drainBatches((limit) =>
-          reservationsRepo
-            .deleteExpiredBefore(before, limit)
-            .pipe(orStoreUnavailable("Verification.purgeExpired")),
-        ),
-      ]).pipe(Effect.map(([tokens, reserved]) => tokens + reserved));
+      store.purgeExpired(before).pipe(relabel("Verification.purgeExpired"));
 
     return { issue, consume, redeem, reserve, deleteAllByUser, purgeExpired };
   }),
 );
+
+// ---- transitional aliases (removed in phase 7) -----------------------------------
+
+/**
+ * TRBS-005: single-process, test-grade storage. It is not shared across instances (a revocation on
+ * one instance does not propagate to another), it is lost on restart, and it grows until a
+ * retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV store, ADR-EA-014) for any
+ * multi-instance deployment.
+ */
+export const layerMemory = layer.pipe(Layer.provide(VerificationStore.layerMemory));
+
+// The annotation is the TS2883 exception (declaration emit cannot name the repositories through the
+// adapter's inferred layer type); this alias is removed with `layerMemory` in phase 7.
+export const layerSql: Layer.Layer<
+  Verification,
+  never,
+  | SqlRepositories.VerificationRepository
+  | SqlRepositories.VerificationReservationsRepository
+  | SqlClient.SqlClient
+  | Crypto.Crypto
+  | AuthEvents.AuthEvents
+> = layer.pipe(Layer.provide(VerificationStoreSql.layer));

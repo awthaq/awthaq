@@ -1,10 +1,13 @@
 // spec/behaviors/08-verification-tokens.md, BEH-EA-057 through BEH-EA-064.
 //
-// The same contract suite runs against both `Layer`s — `layerMemory` (a
-// `Ref`) and `layerSql` (a real, in-memory SQLite database via
-// `@effect/sql-sqlite-node`) — per
+// Plan 02 (ADR-EA-041): `Verification` is one implementation over `VerificationStore`, so its domain
+// suite runs once, over the `Ref` adapter. What a store must do on every backend (one atomic claim,
+// the live-row replacement, the reservation boundary, the budget spend) is
+// `StoreContract.verification`; the SQL adapter's own failure mapping is
+// `packages/sql/test/VerificationStoreSql.test.ts`; the blocks below that name a real transaction
+// are SQL compositions: the protocol of `redeem` (ADR-EA-039) over `VerificationStoreSql`, per
 // spec/decisions/016-verification-sql-claiming.md (ADR-EA-016).
-import { Hmac, SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction, VerificationStore } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -18,15 +21,16 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { StoreUnavailable } from "../src/Errors.ts";
 import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";
 
@@ -47,16 +51,6 @@ const SqlLive = TestSql.layer("core_Verification");
 const Migrated = Layer.effectDiscard(
   Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provide(SqlLive));
-
-const SqlLayer = Verification.layerSql.pipe(
-  Layer.provide(Repositories.VerificationRepositoryLive),
-  Layer.provide(Repositories.VerificationReservationsRepositoryLive),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
 
 const suite = (
   name: string,
@@ -804,63 +798,73 @@ const suite = (
   });
 };
 
-suite("Verification (layerMemory)", MemoryLayer);
-suite("Verification (layerSql)", SqlLayer);
-
-describe("Verification (layerMemory) pruning (TMS-004)", () => {
-  it.effect("reserve stays correct once expired reservations are pruned", () =>
-    Effect.gen(function* () {
-      const verification = yield* Verification.Verification;
-      for (let i = 0; i < 10_050; i++) {
-        yield* verification.reserve({ identifier: `spray:${i}`, ttl: Duration.seconds(1) });
-      }
-      yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) });
-      yield* TestClock.adjust(Duration.seconds(2));
-      // The prune runs on this call: expired spray reservations go, the live one stays.
-      assert.isTrue(
-        yield* verification.reserve({ identifier: "spray:0", ttl: Duration.seconds(1) }),
-      );
-      assert.isFalse(
-        yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) }),
-      );
-    }).pipe(Effect.provide(MemoryLayer)),
-  );
-});
+suite("Verification", MemoryLayer);
 
 // MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect.
 describe("Verification infrastructure failures (MA-004)", () => {
-  const DownRepository = Layer.effect(
-    Repositories.VerificationReservationsRepository,
-    Effect.gen(function* () {
-      const real = yield* Repositories.VerificationReservationsRepository;
-      return {
-        ...real,
-        claim: () =>
-          Effect.fail(
-            new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
-          ),
-      };
-    }),
-  ).pipe(Layer.provide(Repositories.VerificationReservationsRepositoryLive));
+  // The store double names its own primitive, as an adapter does; the service relabels it to the
+  // operation the caller ran, so the wire label does not change.
+  const down = (primitive: string) => Effect.fail(new StoreUnavailable({ operation: primitive }));
 
-  const DownLayer = Verification.layerSql.pipe(
-    Layer.provide(Repositories.VerificationRepositoryLive),
-    Layer.provide(DownRepository),
+  const DownStore = Layer.mock(VerificationStore.VerificationStore, {
+    upsertLive: () => down("VerificationStore.upsertLive"),
+    present: () => down("VerificationStore.present"),
+    settle: () => Effect.void,
+    transaction: () => down("VerificationStore.transaction"),
+    reserve: () => down("VerificationStore.reserve"),
+    deleteByUser: () => down("VerificationStore.deleteByUser"),
+    purgeExpired: () => down("VerificationStore.purgeExpired"),
+  });
+
+  const DownLayer = Verification.layer.pipe(
+    Layer.provide(DownStore),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
   );
 
-  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable", () =>
+  it.effect("a store outage surfaces as StoreUnavailable named for the service operation", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
-      const failure = yield* verification
-        .reserve({ identifier: "x", ttl: Duration.minutes(1) })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "StoreUnavailable");
-      assert.strictEqual(failure.operation, "Verification.reserve");
+      const operationOf = <A>(effect: Effect.Effect<A, unknown>) =>
+        effect.pipe(
+          Effect.flip,
+          Effect.map((failure) =>
+            Predicate.isTagged(failure, "StoreUnavailable") && "operation" in failure
+              ? failure.operation
+              : String(failure),
+          ),
+        );
+      assert.strictEqual(
+        yield* operationOf(verification.reserve({ identifier: "x", ttl: Duration.minutes(1) })),
+        "Verification.reserve",
+      );
+      assert.strictEqual(
+        yield* operationOf(verification.issue({ identifier: "x", ttl: Duration.minutes(1) })),
+        "Verification.issue",
+      );
+      assert.strictEqual(
+        yield* operationOf(verification.consume("x", Redacted.make("y"))),
+        "Verification.consume",
+      );
+      assert.strictEqual(
+        yield* operationOf(
+          verification.redeem({
+            identifier: "x",
+            value: Redacted.make("y"),
+            use: () => Effect.void,
+          }),
+        ),
+        "Verification.redeem",
+      );
+      assert.strictEqual(
+        yield* operationOf(verification.deleteAllByUser(Users.UserId("u"))),
+        "Verification.deleteAllByUser",
+      );
+      assert.strictEqual(
+        yield* operationOf(verification.purgeExpired(DateTime.makeUnsafe(0))),
+        "Verification.purgeExpired",
+      );
     }).pipe(Effect.provide(DownLayer)),
   );
 
@@ -957,80 +961,6 @@ describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () =
         assert.strictEqual(late._tag, "Verification/TokenConsumed");
       }).pipe(Effect.provide(SqlAuditLayer)),
   );
-
-  // SOS-004: a miss is charged to the row it was judged against. A reissue replaces the live row
-  // (and its id) while the miss is between its claim and its spend; the spend finds nothing of
-  // the old row and must not touch the new token.
-  it.effect("SOS-004: a reissue racing a miss never charges the new token", () => {
-    const identifier = "email-otp:reissue-race@example.com";
-    const reissuedValue = Effect.runSync(Deferred.make<Redacted.Redacted<string>>());
-    // Reissues the identifier just after a claim attempt missed, before the spend lands.
-    const ReissuingRepository = Layer.effect(
-      Repositories.VerificationRepository,
-      Effect.gen(function* () {
-        const real = yield* Repositories.VerificationRepository;
-        const crypto = yield* Crypto.Crypto;
-        return {
-          ...real,
-          tryConsume: (input: Parameters<typeof real.tryConsume>[0]) =>
-            real.tryConsume(input).pipe(
-              Effect.tap((claimed) =>
-                Option.isSome(claimed)
-                  ? Effect.void
-                  : Effect.gen(function* () {
-                      const value = "654321";
-                      const hash = yield* crypto
-                        .digest("SHA-256", new TextEncoder().encode(value))
-                        .pipe(
-                          Effect.map((bytes) => Hmac.toHex(bytes)),
-                          Effect.orDie,
-                        );
-                      const insert = yield* real.models.VerificationToken.insert
-                        .makeEffect({
-                          identifier,
-                          valueHash: hash,
-                          maxAttempts: 2,
-                          expiresAt: DateTime.addDuration(input.now, Duration.minutes(5)),
-                          consumedAt: null,
-                        })
-                        .pipe(Effect.orDie);
-                      yield* real.upsertLive(insert).pipe(Effect.orDie);
-                      yield* Deferred.succeed(reissuedValue, Redacted.make(value));
-                    }),
-              ),
-            ),
-        };
-      }),
-    ).pipe(Layer.provide(Repositories.VerificationRepositoryLive), Layer.provide(NodeCrypto.layer));
-    const RacingLayer = Verification.layerSql.pipe(
-      Layer.provide(ReissuingRepository),
-      Layer.provide(Repositories.VerificationReservationsRepositoryLive),
-      Layer.provide(NodeCrypto.layer),
-      Layer.provideMerge(AuthEvents.layer),
-      Layer.provideMerge(AuditLog.layerMemory),
-      Layer.provideMerge(SqlLive),
-      Layer.provideMerge(Migrated),
-    );
-    return Effect.gen(function* () {
-      const verification = yield* Verification.Verification;
-      yield* verification.issue({
-        identifier,
-        ttl: Duration.minutes(5),
-        format: { _tag: "Numeric", digits: 6 },
-        maxAttempts: 2,
-      });
-      // One wrong guess: it misses, and the "reissue" lands before the spend.
-      yield* verification.consume(identifier, Redacted.make("000000")).pipe(Effect.flip);
-      const fresh = yield* Deferred.await(reissuedValue);
-      // The new token's budget of 2 is untouched: one more wrong guess still leaves it usable.
-      const secondWrong = yield* verification
-        .consume(identifier, Redacted.make("111111"))
-        .pipe(Effect.flip);
-      assert.strictEqual(secondWrong._tag, "Verification/TokenConsumed");
-      const consumed = yield* verification.consume(identifier, fresh);
-      assert.strictEqual(consumed.identifier, identifier);
-    }).pipe(Effect.provide(RacingLayer));
-  });
 
   it.effect("layerMemory: a miss publishes exactly one replay row", () =>
     Effect.gen(function* () {
@@ -1217,39 +1147,6 @@ describe("Verification.redeem over a real transaction", () => {
         assert.strictEqual((yield* replayRows).length, 1);
       }).pipe(Effect.provide(SqlAuditLayer)),
   );
-
-  it.effect("layerSql: a SqlError from the claim surfaces as StoreUnavailable", () => {
-    const DownVerification = Layer.effect(
-      Repositories.VerificationRepository,
-      Effect.gen(function* () {
-        const real = yield* Repositories.VerificationRepository;
-        return {
-          ...real,
-          tryConsume: () =>
-            Effect.fail(
-              new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
-            ),
-        };
-      }),
-    ).pipe(Layer.provide(Repositories.VerificationRepositoryLive));
-    const DownLayer = Verification.layerSql.pipe(
-      Layer.provide(DownVerification),
-      Layer.provide(Repositories.VerificationReservationsRepositoryLive),
-      Layer.provide(NodeCrypto.layer),
-      Layer.provideMerge(AuthEvents.layer),
-      Layer.provideMerge(AuditLog.layerMemory),
-      Layer.provideMerge(SqlLive),
-      Layer.provideMerge(Migrated),
-    );
-    return Effect.gen(function* () {
-      const verification = yield* Verification.Verification;
-      const failure = yield* verification
-        .redeem({ identifier: "x", value: Redacted.make("y"), use: () => Effect.void })
-        .pipe(Effect.flip);
-      if (failure._tag !== "StoreUnavailable") return assert.fail(failure._tag);
-      assert.strictEqual(failure.operation, "Verification.redeem");
-    }).pipe(Effect.provide(DownLayer));
-  });
 });
 
 // ADR-EA-039: the compensation that gives a memory token back, and the drift it documents (TRBS-005).

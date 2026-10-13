@@ -28,3 +28,4 @@ export * as SqlStore from "./SqlStore.ts";
 export * as StoreFailure from "./StoreFailure.ts";
 export * as TenantScope from "./TenantScope.ts";
 export * as TenantScoped from "./TenantScoped.ts";
+export * as VerificationStoreSql from "./VerificationStoreSql.ts";

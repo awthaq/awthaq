@@ -274,7 +274,7 @@ describe("Repositories (SQLite specifics)", () => {
           valueHash: "vh",
           expiresAt: DateTime.add(now, { minutes: 5 }),
           createdAt: now,
-          payload: null,
+          payload: "null",
           maxAttempts: null,
           attempts: 0,
         });

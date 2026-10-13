@@ -393,21 +393,15 @@ const sessionFields = {
  * `update`/`jsonUpdate`: a verification token's identity and hash are
  * fixed at issue.
  *
- * BEH-EA-122 (`@awthaq/oauth`): `payload` round-trips the opaque
- * OAuth-flow state (`codeVerifier`/`nonce`/`callbackURL`/`link`) `issue`'s
- * caller attached — JSON-encoded at rest (`Schema.fromJsonString(Schema.Unknown)`)
- * since its shape is never this stratum's to know, and built as a bare
- * select/insert-only `Model.Field` (like `valueHash` above) rather than
- * `Model.Sensitive`: it needs the same "no update, no JSON variant, ever"
- * treatment `valueHash`'s own comment explains, for the same reason — flow
- * state can carry secrets a leaked JSON response must never disclose. A
- * missing payload is stored as the encoded literal `null`, decoded back to
- * `undefined` by the caller (`Verification.layerSql`'s own `toTokenView`),
- * matching `layerMemory`'s omitted-payload case (`undefined` in, `undefined`
- * out). An *explicit* `payload: null` is indistinguishable from omission once
- * round-tripped through this column, so `Verification.layerMemory` normalizes
- * it to `undefined` at `issue` too (ESS-010): both layers return the same
- * `payload` for omitted, `null` and object.
+ * BEH-EA-122 (`@awthaq/oauth`): `payload` carries the opaque OAuth-flow state
+ * (`codeVerifier`/`nonce`/`callbackURL`/`link`) `issue`'s caller attached, as JSON TEXT: its shape
+ * is never this stratum's to know, and (plan 02) the domain (`Verification`) is the one codec, so
+ * the column is a plain string here, `"null"` when there is none. It is a bare select/insert-only
+ * `Model.Field` (like `valueHash` above) rather than `Model.Sensitive`: it needs the same "no
+ * update, no JSON variant, ever" treatment `valueHash`'s own comment explains, for the same
+ * reason: flow state can carry secrets a leaked JSON response must never disclose. An *explicit*
+ * `payload: null` is indistinguishable from omission once stored, which `Verification` normalizes
+ * at `issue` (ESS-010).
  */
 const verificationTokenFields = {
   id: Model.UuidV7Insert(VerificationTokenId),
@@ -440,10 +434,8 @@ const verificationTokenFields = {
     insert: Schema.Number.pipe(Schema.withConstructorDefault(Effect.succeed(0))),
   }),
   payload: Model.Field({
-    select: Schema.fromJsonString(Schema.Unknown),
-    insert: Schema.fromJsonString(Schema.Unknown).pipe(
-      Schema.withConstructorDefault(Effect.succeed(null)),
-    ),
+    select: Schema.String,
+    insert: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("null"))),
   }),
 };
 
