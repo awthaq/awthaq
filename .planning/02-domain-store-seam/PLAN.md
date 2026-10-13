@@ -1361,3 +1361,14 @@ Open questions were answered with the plan's recommended default; where the plan
 - SQL repository: the old `insert`, `findById`, `findByProviderSubject`, `listByUser`, `updatePasswordHash`, `updateProviderTokens`, `findAad` stay until phase 7 (their repository-level tests with them); `findTokensById` stays (it is the strict path).
 - The concurrent-unlink case moved from `Accounts.test.ts` to `StoreContract.accounts` (8 two-account users, 16 racing deletes), so `Accounts.test.ts` leaves `scripts/test-pg.sh` (it has no SQL leg any more); the contract runs there through `StoreContract.sql.test.ts`.
 - BEH-EA-044 (a password `subject` equals the `userId`) is enforced by neither layer, as before (A-9, noted).
+
+### Phase 5 (Users)
+
+- Plan 03 had landed (`Users.delete` is gone, `UserRemoval` is the row store `AccountErasure` calls), so `UserStore.delete` backs `UserRemoval.remove` and `createWith`'s abandon; `HooksWiringMemory/Sql.test.ts` no longer existed. `UserAttributesHookMemory/Sql.test.ts` were merged into `Users.test.ts` `describe("Users attribute-change hook (AAPS-005)")` and deleted, with two added cases (the concurrent `verifyEmail` and the exact lowering announcement of U-3).
+- `casIdentity` is the one write for the four identity columns (`verifyEmail`, `verifyPhone`, `promoteIdentity`, `changeEmail`), each domain operation deciding from what it read and retrying on `Stale` (three attempts, then `StoreUnavailable("Users.<op>")`). The plan's `Keep<A>` is named `Change<A>`. `FieldValues` is a record keyed by column name, not a `Map`.
+- `insertOrHolder` and `casIdentity` are `once` (never retried on a transient failure); `updateProfile`, `setStatus`, `delete`, `writeFields` retry (fixed values). The adapter's insert builds the model insert with an explicit id and `Model.Override` timestamps, so the domain mints id and clock (U-9).
+- `Users.layerSql` now needs `Crypto` and `SqlClient`; compositions that lacked `Crypto` gained it (cli `SqlApp`, `UserImport.test`).
+- `Users.list` clamps `limit` to `[1, 200]` (U-10); the memory adapter's `listPage` returns a cursor only when more follow (the SQL one reads `limit + 1`, as before).
+- `StoreContract.users` needs `SqlTransaction` for the "insertOrHolder leaves an enclosing transaction usable" case, so its runners provide `layerNoop` beside the `Ref` store and `layerSql` beside the SQL one; the SQL runner adds the three `contract_*` columns the declared-field cases write (`userFieldColumns`).
+- GC-004 (a profile update racing a delete) and MA-004 became domain cases over store doubles; the field-precedence case (U-4) and the limit clamp (U-10) are new domain cases. `UserFields.test.ts` runs its domain suite once; its generated-column cases stay SQL adapter cases (`Auth.make`'s migrations).
+- U-11 (directory RLS), U-12 (lazy re-encryption on read), U-13 (AAPS-005 completeness), U-14 (double veto, plan 03's) are unchanged.

@@ -48,7 +48,10 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
+  Users.layerSql.pipe(
+    Layer.provide(Repositories.UsersRepositoryLive),
+    Layer.provide(NodeCrypto.layer),
+  ),
   Accounts.layerSql.pipe(
     Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
     Layer.provide(NodeCrypto.layer),

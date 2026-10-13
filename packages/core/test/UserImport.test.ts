@@ -32,7 +32,10 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 const SqlDomain = Layer.mergeAll(
-  Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
+  Users.layerSql.pipe(
+    Layer.provide(Repositories.UsersRepositoryLive),
+    Layer.provide(NodeCrypto.layer),
+  ),
   Accounts.layerSql.pipe(
     Layer.provide(Repositories.AccountsRepositoryLive),
     Layer.provide(NodeCrypto.layer),

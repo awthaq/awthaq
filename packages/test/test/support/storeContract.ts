@@ -8,6 +8,8 @@ import {
   AuditLogStore,
   Encryption,
   KeyProvider,
+  SqlTransaction,
+  UserStore,
   VerificationStore,
 } from "@awthaq/ports";
 import {
@@ -15,6 +17,7 @@ import {
   AuditLogStoreSql,
   CoreMigrations,
   Repositories,
+  UserStoreSql,
   VerificationStoreSql,
 } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -53,20 +56,42 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
+/** What `Auth.make`'s linker generates for a plugin's declared user fields: nullable scalar columns on `users`. */
+const addUserFieldColumns = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const types = (dialect: "pg" | "sqlite") =>
+    dialect === "pg"
+      ? { text: "TEXT", real: "DOUBLE PRECISION", flag: "BOOLEAN" }
+      : { text: "TEXT", real: "REAL", flag: "INTEGER" };
+  const columns = yield* sql.onDialectOrElse({
+    pg: () => Effect.succeed(types("pg")),
+    orElse: () => Effect.succeed(types("sqlite")),
+  });
+  yield* sql.unsafe(`ALTER TABLE users ADD COLUMN contract_text ${columns.text}`);
+  yield* sql.unsafe(`ALTER TABLE users ADD COLUMN contract_real ${columns.real}`);
+  yield* sql.unsafe(`ALTER TABLE users ADD COLUMN contract_flag ${columns.flag}`);
+});
+
 /** Every store of the seam, over one client with the core schema applied. */
 const sqlStores = <E>(client: Layer.Layer<SqlClient.SqlClient, E>) => {
   const migrated = Layer.effectDiscard(
-    Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
+    Effect.gen(function* () {
+      yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+      yield* addUserFieldColumns;
+    }),
   ).pipe(Layer.provide(client));
   return Layer.mergeAll(
     AccountStoreSql.layer,
     AuditLogStoreSql.layer,
+    UserStoreSql.layer,
     VerificationStoreSql.layer,
+    SqlTransaction.layerSql,
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
         Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
         Repositories.AuditLogRepositoryLive,
+        Repositories.UsersRepositoryLive,
         Repositories.VerificationRepositoryLive,
         Repositories.VerificationReservationsRepositoryLive,
       ),
@@ -104,6 +129,11 @@ export const runOnMemory = (): void => {
     layer: AccountStore.layerMemory,
     cases: StoreContract.accounts,
   });
+  StoreContract.run(framework, {
+    adapter: "UserStore (Ref)",
+    layer: Layer.mergeAll(UserStore.layerMemory, SqlTransaction.layerNoop),
+    cases: StoreContract.users,
+  });
 };
 
 /** Runs the contract of every port on the SQL adapters over `client`. */
@@ -122,5 +152,10 @@ export const runOnSql = <E>(label: string, client: Layer.Layer<SqlClient.SqlClie
     adapter: `AccountStore (${label})`,
     layer: sqlStores(client),
     cases: StoreContract.accounts,
+  });
+  StoreContract.run(framework, {
+    adapter: `UserStore (${label})`,
+    layer: sqlStores(client),
+    cases: StoreContract.users,
   });
 };

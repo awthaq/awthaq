@@ -172,6 +172,8 @@ export interface UsersRepositoryShape {
     readonly name: string;
     readonly metadata: string | null | undefined;
     readonly image: string | null | undefined;
+    /** The instant `updatedAt` takes; the caller's clock reading (default: now). */
+    readonly updatedAt?: DateTime.Utc;
   }) => Effect.Effect<Option.Option<User>, RepositoryError>;
   readonly findById: (
     id: UserId,
@@ -227,9 +229,50 @@ export interface UsersRepositoryShape {
       readonly status: "active" | "suspended";
       readonly reason: string | null;
       readonly until: DateTime.Utc | null;
+      /** The instant `updatedAt` takes; the caller's clock reading (default: now). */
+      readonly updatedAt?: DateTime.Utc;
     },
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
   readonly delete: (id: UserId) => Effect.Effect<void, RepositoryError>;
+  /**
+   * Plan 02 (`UserStoreSql`): `DELETE ... RETURNING id`, so the caller learns whether a row was
+   * removed (the declared fields are columns of the same row, so they go with it).
+   */
+  readonly deleteReturning: (id: UserId) => Effect.Effect<boolean, RepositoryError>;
+  /**
+   * Plan 02 (`UserStoreSql`): the compare-and-swap behind every identity transition. One
+   * `UPDATE ... WHERE id = ? AND <the four identity columns still equal what the caller read>
+   * RETURNING *`: `None` when the row is absent or one of them moved (the caller re-reads to tell
+   * which). A unique violation on the new email or phone surfaces as `SqlError`; the adapter wraps the
+   * statement in its own savepoint.
+   */
+  readonly casIdentity: (input: {
+    readonly id: UserId;
+    readonly expected: {
+      readonly email: string | null;
+      readonly emailVerified: boolean;
+      readonly phone: string | null;
+      readonly phoneVerified: boolean;
+    };
+    readonly next: {
+      readonly email: string | null;
+      readonly emailVerified: boolean;
+      readonly phone: string | null;
+      readonly phoneVerified: boolean;
+    };
+    readonly updatedAt: DateTime.Utc;
+  }) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /**
+   * Plan 02: the same write as `writeFields`, plus `updatedAt`, answering the `returning` columns
+   * as they are after the write from the one `UPDATE ... RETURNING` (`None` when there is no such
+   * user, and then nothing was written).
+   */
+  readonly writeFieldsReturning: (input: {
+    readonly id: UserId;
+    readonly values: Readonly<Record<string, UserFieldScalar | null>>;
+    readonly returning: ReadonlyArray<UserFieldColumn>;
+    readonly updatedAt: DateTime.Utc;
+  }) => Effect.Effect<Option.Option<Readonly<Record<string, UserFieldScalar>>>, RepositoryError>;
   /**
    * BAM-005/BEH-EA-036: keyset page over every user, oldest first —
    * `cursor` is opaque and derived from `(createdAt, id)`; at most `limit`
@@ -504,7 +547,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
 
     const updateProfile: UsersRepositoryShape["updateProfile"] = (input) =>
       Effect.gen(function* () {
-        const updatedAt = yield* DateTime.now;
+        const updatedAt = input.updatedAt ?? (yield* DateTime.now);
         const metadata =
           input.metadata === undefined ? null : yield* concealMetadata(input.id, input.metadata);
         const row = yield* updateProfileQuery({
@@ -649,11 +692,115 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
     });
 
     const setStatus: UsersRepositoryShape["setStatus"] = (id, state) =>
-      DateTime.now.pipe(
-        Effect.flatMap((updatedAt) => setStatusQuery({ id, ...state, updatedAt })),
+      (state.updatedAt === undefined ? DateTime.now : Effect.succeed(state.updatedAt)).pipe(
+        Effect.flatMap((updatedAt) =>
+          setStatusQuery({
+            id,
+            status: state.status,
+            reason: state.reason,
+            until: state.until,
+            updatedAt,
+          }),
+        ),
         Effect.flatMap(revealUser),
         traced("Users.setStatus", { id }),
       );
+
+    // ---- plan 02: what `UserStoreSql` is built on ----------------------------------------------
+    const deleteReturningQuery = SqlSchema.findAll({
+      Request: UserId,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (id) => sql`DELETE FROM users WHERE id = ${id} RETURNING id`,
+    });
+    const deleteReturning: UsersRepositoryShape["deleteReturning"] = (id) =>
+      deleteReturningQuery(id).pipe(
+        Effect.map((rows) => rows.length > 0),
+        traced("Users.deleteReturning", { id }),
+      );
+
+    const casIdentityQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        expectedEmail: Schema.NullOr(Schema.String),
+        expectedEmailVerified: models.wire.boolean,
+        expectedPhone: Schema.NullOr(Schema.String),
+        expectedPhoneVerified: models.wire.boolean,
+        email: Schema.NullOr(Schema.String),
+        emailVerified: models.wire.boolean,
+        phone: Schema.NullOr(Schema.String),
+        phoneVerified: models.wire.boolean,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      // `IS NOT DISTINCT FROM` is Postgres' null-safe equality; SQLite spells it `IS`.
+      execute: (r) =>
+        dialect === "pg"
+          ? sql`UPDATE users SET email = ${r.email}, "emailVerified" = ${r.emailVerified}, phone = ${r.phone}, "phoneVerified" = ${r.phoneVerified}, "updatedAt" = ${r.updatedAt}
+                WHERE id = ${r.id} AND email IS NOT DISTINCT FROM ${r.expectedEmail} AND "emailVerified" = ${r.expectedEmailVerified}
+                  AND phone IS NOT DISTINCT FROM ${r.expectedPhone} AND "phoneVerified" = ${r.expectedPhoneVerified} RETURNING *`
+          : sql`UPDATE users SET email = ${r.email}, "emailVerified" = ${r.emailVerified}, phone = ${r.phone}, "phoneVerified" = ${r.phoneVerified}, "updatedAt" = ${r.updatedAt}
+                WHERE id = ${r.id} AND email IS ${r.expectedEmail} AND "emailVerified" = ${r.expectedEmailVerified}
+                  AND phone IS ${r.expectedPhone} AND "phoneVerified" = ${r.expectedPhoneVerified} RETURNING *`,
+    });
+    const casIdentity: UsersRepositoryShape["casIdentity"] = (input) =>
+      casIdentityQuery({
+        id: input.id,
+        expectedEmail: input.expected.email,
+        expectedEmailVerified: input.expected.emailVerified,
+        expectedPhone: input.expected.phone,
+        expectedPhoneVerified: input.expected.phoneVerified,
+        email: input.next.email,
+        emailVerified: input.next.emailVerified,
+        phone: input.next.phone,
+        phoneVerified: input.next.phoneVerified,
+        updatedAt: input.updatedAt,
+      }).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
+          }),
+        ),
+        traced("Users.casIdentity", { id: input.id }),
+      );
+
+    const encodeDateTime = Schema.encodeSync(models.wire.dateTime);
+    const writeFieldsReturning: UsersRepositoryShape["writeFieldsReturning"] = (input) => {
+      const stored = Object.fromEntries([
+        ...Object.entries(input.values).map(([name, value]) => [
+          name,
+          dialect === "sqlite" && typeof value === "boolean" ? (value ? 1 : 0) : value,
+        ]),
+        ["updatedAt", encodeDateTime(input.updatedAt)],
+      ]);
+      const returning =
+        input.returning.length === 0
+          ? sql`id`
+          : sql.csv(input.returning.map((column) => sql`${sql(column.name)}`));
+      return sql`UPDATE users SET ${sql.update(stored)} WHERE id = ${input.id} RETURNING ${returning}`.pipe(
+        Effect.flatMap((rows) => {
+          const [row] = rows;
+          if (row === undefined) return Effect.succeedNone;
+          return Effect.forEach(input.returning, (column) =>
+            userFieldScalar(column, row[column.name]).pipe(
+              Effect.map((value): readonly [string, UserFieldScalar | null] => [
+                column.name,
+                value,
+              ]),
+            ),
+          ).pipe(
+            Effect.map((entries) =>
+              Option.some(
+                Object.fromEntries(
+                  entries.flatMap(([name, value]) => (value === null ? [] : [[name, value]])),
+                ),
+              ),
+            ),
+          );
+        }),
+        traced("Users.writeFieldsReturning", { id: input.id }),
+      );
+    };
 
     return {
       models,
@@ -672,6 +819,9 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
       promoteIdentity,
       changeEmail,
       setStatus,
+      deleteReturning,
+      casIdentity,
+      writeFieldsReturning,
       listPage,
     };
   });
