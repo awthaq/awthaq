@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-OVERVIEW |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) |
 
 ---
 
-> **Status: implemented, pre-1.0, unpublished.** Every package in the map below exists under `packages/` with a passing test suite, except `@awthaq/two-factor` and `@awthaq/magic-link` (placeholder packages with no exports yet) and the SAML service provider (`@awthaq/saml`, specified in [ADR-EA-023](decisions/023-enterprise-federation-packages.md) and [behaviors/29-saml-sp.md](behaviors/29-saml-sp.md), not built). No package is published to npm. The tables below list what the packages export today; a row is called out where the design commits to more than has shipped. The Ports table is bracketed by `surface:` markers because `spec/scripts/check-drift.mjs` diffs it against the source exports and fails `pnpm check` on drift, so it cannot silently rot.
+> **Status: implemented, pre-1.0, unpublished.** Every package in the map below exists under `packages/` with a passing test suite, including `@awthaq/two-factor`, `@awthaq/magic-link` (magic link and email OTP), `@awthaq/saml` (the SAML service provider and the `Sso` dispatcher, [ADR-EA-023](decisions/023-enterprise-federation-packages.md), [behaviors/29-saml-sp.md](behaviors/29-saml-sp.md)) and `@awthaq/webhooks`. No package is published to npm. The tables below list what the packages export today; a row is called out where the design commits to more than has shipped. The Ports table is bracketed by `surface:` markers because `spec/scripts/check-drift.mjs` diffs it against the source exports and fails `pnpm check` on drift, so it cannot silently rot.
 
 ## Mission
 
@@ -52,7 +52,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 | 7 Composition | (application code) | `Auth.make([...])` and the application's own `Layer.provide` stack. |
 | client | `@awthaq/client`, `@awthaq/react`, `@awthaq/web`, `@awthaq/next` | `HttpApiClient` bindings, reactive atoms, provider glue, framework adapters (`@awthaq/web` is the framework-neutral core; `@awthaq/next` is the Next adapter over it). Headless by design: no drop-in sign-in/sign-up/user-button/organization-switcher components, ever — apps build their own UI against typed contract errors and atoms. |
 | tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, `runPluginContractTests`, the redaction guard; the `awthaq` command line (`doctor`, `config list`, `plugin list`, `routes`, `migration`, `openapi`, `seed admin`, `import`, `login`). |
-| plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim`, `device-authorization` (shipped); `magic-link`, `two-factor` (placeholders); `saml` (specified only) | One `AuthPlugin.Service` class each. |
+| plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim`, `device-authorization`, `magic-link` (magic link and email OTP), `two-factor`, `saml` (with the `Sso` dispatcher), `webhooks` | One or more `AuthPlugin.Service` classes each. |
 | migration | `@awthaq/migrate-auth0`, `@awthaq/migrate-firebase`, `@awthaq/migrate-better-auth` | Verify a foreign password hash on first sign-in, or bridge a still-live foreign session, so a cutover needs no mass reset. |
 
 ## Public API surface

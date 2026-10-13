@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-07 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) <br> 1.5 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) |
 
 ---
 
@@ -67,7 +67,7 @@ REQUIREMENT: A session's absolute expiry MUST be fixed at issuance and MUST
 
 `archive/PRD.md` §13 names both deadlines as reading from `SessionConfig` together: "absolute plus idle expiry." Without the absolute ceiling, a session touched frequently enough — by a legitimate but forgotten background tab, or by an attacker automating activity — could remain valid indefinitely, which is precisely what an absolute expiry exists to rule out regardless of how the idle window behaves.
 
-**As shipped (CSG-003, ADR-EA-033):** expiry is a read-time rejection; the row stays until `Retention.sweep` (opt-in) physically deletes it. `Sessions.purgeExpired(before)` removes every session whose absolute or idle expiry is before the cutoff, tombstoned refresh-rotation rows included, in bounded batches in both layers; the sweep passes `now - sessionGrace` (default 7 days), so reuse detection (BEH-EA-053) outlives the session's own life by the grace. `packages/core/test/Retention.test.ts` proves a live session and one still inside the grace survive.
+**As shipped (CSG-003, ADR-EA-031):** expiry is a read-time rejection; the row stays until `Retention.sweep` (opt-in) physically deletes it. `Sessions.purgeExpired(before)` removes every session whose absolute or idle expiry is before the cutoff, tombstoned refresh-rotation rows included, in bounded batches in both layers; the sweep passes `now - sessionGrace` (default 7 days), so reuse detection (BEH-EA-053) outlives the session's own life by the grace. `packages/core/test/Retention.test.ts` proves a live session and one still inside the grace survive.
 
 ## BEH-EA-052: Idle-window refresh is throttled to at most one write per `touchEvery`
 

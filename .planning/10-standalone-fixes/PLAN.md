@@ -1189,3 +1189,25 @@ the ADR's Rollout with item 2's sign-in sites (revision 1.2). Nothing to plan in
    `auth.admin.impersonationDenied`, `auth.authz.denied`, `auth.organization.permissionDenied`,
    `auth.deviceAuthorization.denied`).
    These are recorded even when the surrounding operation rolls back. Is that the right set?
+
+---
+
+## Decisions taken (execution of items 3, 4, 8 and 9)
+
+Open questions answered with the plan's recommended default; Q2 and Q3 below.
+
+1. **Q2, freshness on `POST /change-email`: yes.** `Password.requestEmailChange` calls `Sessions.requireFresh` with the new `PasswordConfig.reauthMaxAge` (default 5 minutes, `Duration.infinity` turns it off) and fails the new `PasswordApi.PasswordReauthRequired { maxAgeSeconds }` (403), declared on the endpoint. The input gained `currentSessionId`. The gate runs after the requester's own rate-limit spend and before the target inbox's, so a stale session never burns the target's budget.
+2. **Q3, one wire error: no.** The three per-plugin errors stay (`PasskeyReauthRequired`, `TwoFactorReauthRequired`, `Api.ReauthRequired`), plus the new `PasswordReauthRequired`. Only the rule moved, into `Sessions.requireFresh`.
+3. **Q6 (`as const`)**: no new const assertion added; the existing `as const` tuples in `layerMemory`'s `reauthenticate` were kept as they were.
+
+Deviations and details found while executing:
+
+- BEH ids: `BEH-EA-319` (reauthenticate) and `BEH-EA-320` (requireFresh), in `07-sessions.md`; BDD `REQ-EA-1276` and `REQ-EA-1277`.
+- The SQL repository signature is `reauthenticate(id, userId, now, amr?)`: the plan's separate `authenticatedAt` and `now` are the same instant, so they are one parameter.
+- The amr read-then-write in `layerSql.reauthenticate` is left for plan 02 (as the plan allows); the guard is in the `UPDATE`'s own `WHERE`, so a row that dies between the read and the write is still refused.
+- The password/passkey handlers answer `Unauthenticated` without expiring the session cookie (the plan allowed this; the next request clears it).
+- `requireFreshVia` has no return-type annotation (inferred); the per-plugin `requireFreshSession` helpers stay as thin error mappers over `requireFresh` instead of being deleted, because three passkey entry points and two two-factor ones share the mapping. No per-caller test re-tested staleness edge cases (they test that each entry point applies the gate and maps its error), so none was deleted; the edges are in the Sessions contract suite.
+- No HTTP-level 403 test for `PasswordReauthRequired` (the web-handler harness uses the real clock and a zero window would be timing-fragile); the Shape-level tests and the wire annotation cover it.
+- Item 8: check-drift got two new checks (numbered 18 and 19 there; 15-17 were taken): ADR index status equals the ADR file, and the overview plugin roster names every package that defines an `AuthPlugin.Service`. Adding the `placeholder` / `(specified only)` phrases to `STALE` surfaced more stale text than the plan listed: root `README.md` (status, package map, plugin table: now lists device-authorization, magic-link, two-factor), `spec/models/00-adoption-matrix.md`, `05-email-otp.md`, `06-two-factor-totp.md`. Fixed. The retention-sweep citations of "ADR-EA-033" (Retention.ts header, BEH-EA-051 and BEH-EA-057 notes) are ADR-EA-031 Decision 6; fixed with 8j.
+- Not done, as the plan says: 8g's `Organization.ts` local `veto` copy (plan 04), 8h `sealed` (plan 05), 8i `readsTables` (plan 04).
+- Item 9: only `spec/decisions/index.yaml` changed; ADR-EA-028 already carried revision 1.2 for item 2's sign-in sites.

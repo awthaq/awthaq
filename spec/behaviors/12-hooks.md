@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-12 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): `BeforeUserDelete` is consulted once, by `AccountErasure` only; `Users` no longer has `delete` (architecture plan 03) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): `BeforeUserDelete` is consulted once, by `AccountErasure` only; `Users` no longer has `delete` (architecture plan 03) <br> 1.3 (2026-10-13): BEH-EA-093's as-shipped note names `Hooks.BeforeSessionIssue` and the real consumers (plan 10 item 8) |
 
 ---
 
@@ -106,7 +106,7 @@ REQUIREMENT: A tap on a `kind: "divert"` hook point MUST be able to redirect
 
 `archive/PRD.md` §13 names `BeforeSessionIssue` as the canonical `divert` point, and `archive/design/usage-examples-v4.md` §9 shows the two-factor plugin's step-up flow as the worked example: an ordinary `password.signIn` call is diverted into a `TwoFactorRequired` outcome the client catches and answers with a second call, rather than the sign-in either succeeding outright or failing outright. This is what lets a step-up authentication flow be added by installing a plugin, with no change to the password plugin's own definition.
 
-**As shipped (ARF-005, THS-001).** `@awthaq/two-factor` is the first divert consumer: `Hooks.BeforeSignIn` returns `TwoFactorRequired { challenge }` for a user with a confirmed second factor, and every first-factor sign-in (password, magic link, email OTP) handles the alternative through the shared finalisation step, so no session exists until the challenge is proved. The divert context carries `amr`, the methods already proved, and `Hooks.BeforeCredentialReset` (a veto, `{ userId, secondFactorCode? }`) is consulted by `confirmReset` inside its transaction (BEH-EA-259). **Multi-step journeys (AR-002).** This is the mechanism for a journey that needs a second step (choose method, prove a factor, finish): the diverted outcome names a server-held challenge whose state lives in `Verification` (with its own expiry and single-use consumption), and the client resumes by presenting that challenge id. awthaq deliberately has no generic, Kratos-style *flow resource* (a flow id a UI re-renders against) — each multi-step journey has its own typed challenge object instead of a second, parallel API surface over the same state.
+**As shipped (ARF-005, THS-001).** `@awthaq/two-factor` is the first divert consumer: it taps `Hooks.BeforeSessionIssue`, which every first-factor sign-in (password, OAuth, passkey, SAML, magic link, email OTP, device authorization) consults immediately before it issues a session. For a user with a confirmed second factor the tap answers `TwoFactorRequired { userId, challengeId }`, and no session exists until the challenge is proved. The divert context carries `amr`, the methods already proved, so the session minted by the second factor records both (each of those plugins runs the consultation itself; a single shared sign-in completion in core is planned, and this paragraph will then name it). `Hooks.BeforeCredentialReset` (a veto, `{ userId, secondFactorCode? }`) is consulted by `confirmReset` inside its transaction (BEH-EA-259). **Multi-step journeys (AR-002).** This is the mechanism for a journey that needs a second step (choose method, prove a factor, finish): the diverted outcome names a server-held challenge whose state lives in `Verification` (with its own expiry and single-use consumption), and the client resumes by presenting that challenge id. awthaq deliberately has no generic, Kratos-style *flow resource* (a flow id a UI re-renders against) — each multi-step journey has its own typed challenge object instead of a second, parallel API surface over the same state.
 
 
 ## BEH-EA-094: Tapping a hook point nobody defines is a type error, not a silent no-op

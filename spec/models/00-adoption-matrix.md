@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-00 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added MOD-EA-014 (Organization) and MOD-EA-015 (Admin/Impersonation) rows; noted an open question on whether a new enabler category is needed (CCR-EA-002) <br> 1.2 (2026-09-29): Added a `Shipped-Unpublished` status and flipped the eight implemented rows (Password, OAuth, Passkey, API Keys, JWT with the Bearer seam, Organization, Admin, SCIM); rewrote the pre-implementation preamble, §1 and §5 (AOMS-011, DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added MOD-EA-014 (Organization) and MOD-EA-015 (Admin/Impersonation) rows; noted an open question on whether a new enabler category is needed (CCR-EA-002) <br> 1.2 (2026-09-29): Added a `Shipped-Unpublished` status and flipped the eight implemented rows (Password, OAuth, Passkey, API Keys, JWT with the Bearer seam, Organization, Admin, SCIM); rewrote the pre-implementation preamble, §1 and §5 (AOMS-011, DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Magic Link, Email OTP, Two-Factor and SSO rows read shipped; SAML ships as `@awthaq/saml` (plan 10 item 8) |
 
 ---
 
@@ -43,7 +43,7 @@ Admin/Impersonation ([27](../behaviors/27-admin-impersonation.md)), SCIM
 ([28](../behaviors/28-tenancy.md)) have; Jwt, ApiKey and the rest of
 Organization are implemented without a behavior file of their own, which is a
 specification gap, not a claim that the behavior is undefined. SAML has a
-behavior file ([29](../behaviors/29-saml-sp.md)) and no code.
+behavior file ([29](../behaviors/29-saml-sp.md)) and ships as `@awthaq/saml`.
 
 ## 1. Status vocabulary
 
@@ -57,7 +57,7 @@ complete (each model file's "What is missing" says what is not built).
 |---|---|
 | **Shipped-Unpublished** | A plugin package with real source and passing tests exists in `packages/`; not yet published to npm. |
 | **Planned-MVP** | Intended for the first release described in `archive/PRD.md` §17. No code exists. (No entry carries this status now: the whole MVP tuple shipped.) |
-| **Planned-Phase2** | Intended for the second wave of official plugins per `archive/PRD.md` §17. May have a placeholder package with no exports. |
+| **Planned-Phase2** | Intended for the second wave of official plugins per `archive/PRD.md` §17. (No entry carries this status now: every Phase-2 plugin shipped.) |
 | **Planned-Phase3** | Intended for the third wave. Several of these methods (SSO, SAML, OIDC Provider, SCIM) turn awthaq from a relying party into an identity provider, which is a materially larger scope than the rest of the matrix and is planned last on purpose. |
 | **Scheduled** | Specified and committed to, with a decision record, but not yet built. |
 | **Excluded** | Considered and deliberately kept off the roadmap. (No entry in the current 15-row matrix carries this status; it is defined here so a future revision can use it without inventing a new vocabulary.) |
@@ -121,14 +121,14 @@ caveat.
 | Password | Shipped-Unpublished (`@awthaq/password`, `packages/password/test`) | P0 | E1 | [01-password.md](01-password.md) |
 | OAuth and OIDC | Shipped-Unpublished (`@awthaq/oauth`, `packages/oauth/test`) | P0 | E2 | [02-oauth-oidc.md](02-oauth-oidc.md) |
 | Passkey and WebAuthn | Shipped-Unpublished (`@awthaq/passkey`, `packages/passkey/test`) | P1 | E2 | [03-passkey-webauthn.md](03-passkey-webauthn.md) |
-| Magic Link | Planned-Phase2 (placeholder package `@awthaq/magic-link`) | P2 | E1 | [04-magic-link.md](04-magic-link.md) |
-| Email OTP | Planned-Phase2 (no package) | P2 | E1 | [05-email-otp.md](05-email-otp.md) |
-| Two-Factor (TOTP) | Planned-Phase2 (placeholder package `@awthaq/two-factor`) | P1 | E4 | [06-two-factor-totp.md](06-two-factor-totp.md) |
+| Magic Link | Shipped-Unpublished (`@awthaq/magic-link`, `packages/magic-link/test`) | P2 | E1 | [04-magic-link.md](04-magic-link.md) |
+| Email OTP | Shipped-Unpublished (`@awthaq/magic-link`, `packages/magic-link/test`) | P2 | E1 | [05-email-otp.md](05-email-otp.md) |
+| Two-Factor (TOTP) | Shipped-Unpublished (`@awthaq/two-factor`, `packages/two-factor/test`) | P1 | E4 | [06-two-factor-totp.md](06-two-factor-totp.md) |
 | API Keys | Shipped-Unpublished (`@awthaq/api-key`, `packages/api-key/test`) | P1 | E3 | [07-api-keys.md](07-api-keys.md) |
 | JWT and Bearer | Shipped-Unpublished (`@awthaq/jwt`, `packages/jwt/test`; the Bearer half is a built-in `Authentication` scheme, not a separate plugin) | P1 | E3 | [08-jwt-bearer.md](08-jwt-bearer.md) |
 | Organization (core plugin) | Shipped-Unpublished (`@awthaq/organization`, `packages/organization/test`) | P1 | E3 (provisional — see §3's open question) | [14-organization.md](14-organization.md) |
 | Admin / Impersonation (core plugin) | Shipped-Unpublished (`@awthaq/admin`, `packages/admin/test`) | P2 | E4 (provisional — see §3's open question) | [15-admin-impersonation.md](15-admin-impersonation.md) |
-| SSO | Planned-Phase3 | P2 | E2 | [09-sso.md](09-sso.md) |
+| SSO | Implemented (the `Sso` dispatcher in `@awthaq/saml`) | P2 | E2 | [09-sso.md](09-sso.md) |
 | SAML | Implemented (SP only; `@awthaq/saml`) | P3 | E2 | [10-saml.md](10-saml.md) |
 | OIDC Provider | Planned-Phase3 | P3 | E2, E5 | [11-oidc-provider.md](11-oidc-provider.md) |
 | SCIM | Shipped-Unpublished (`@awthaq/scim`, `packages/scim/test`) | P4 | E5 | [12-scim.md](12-scim.md) |
@@ -136,12 +136,11 @@ caveat.
 
 ## 5. A note on honesty
 
-Nine entries are Shipped-Unpublished (Password, OAuth, Passkey, API Keys, JWT,
-Organization, Admin, SCIM, Device Authorization): each names its package and test directory, and its
-model file's "Verification" cell points at real tests. The others (Magic
-Link, Email OTP, Two-Factor, SSO, SAML, OIDC Provider)
-describe a shape, not a delivery. Read the two groups differently: for a
-shipped entry, the model file is an adoption record that has been reconciled
+Twelve entries are Shipped-Unpublished (Password, OAuth, Passkey, Magic Link, Email OTP,
+Two-Factor, API Keys, JWT, Organization, Admin, SCIM, Device Authorization) and two are
+Implemented inside `@awthaq/saml` (SSO, SAML): each names its package, and its model file points
+at real tests. The remaining entry (OIDC Provider) describes a shape, not a delivery. Read the
+two groups differently: for a shipped entry, the model file is an adoption record that has been reconciled
 with the package (its "What is missing" lists only what is genuinely unbuilt);
 for a planned entry, the value of the document is to fix the shape — what
 service it would expose, what enabler it depends on, what a caller's code would

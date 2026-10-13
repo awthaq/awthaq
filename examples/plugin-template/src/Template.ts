@@ -234,24 +234,17 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
       // counted and answered with `Api.RateLimited` (429). No annotation or comment is needed here.
       const limits = yield* RateLimits.budget(Notes);
 
-      // BEH-EA-090: a veto abort reaches the caller as the typed `HookAborted`, naming
-      // the point, never as a defect. Translate it where the point is run.
-      const veto = <A>(point: string, effect: Effect.Effect<A, HookPoint.HookAbort>) =>
-        effect.pipe(
-          Effect.catchTag(
-            "HookAbort",
-            (abort) =>
-              new HookPoint.HookAborted({ point, code: abort.code, message: abort.message }),
-          ),
-        );
-
       const create: NotesShape["create"] = Effect.fnUntraced(function* (caller, text) {
         yield* limits.spend("createByUser", { userId: caller.ref.id });
         if (text.length > settings.maxLength) {
           return yield* Effect.fail(new TemplateApi.NoteTooLong());
         }
         const owner = caller.ref.id;
-        const vetoed = yield* veto("notes.create.before", beforeCreate.run({ owner, text }));
+        // BEH-EA-090: a veto abort reaches the caller as the typed `HookAborted`, naming the point,
+        // never as a defect. `HookPoint.aborted` translates it right where the point is run.
+        const vetoed = yield* HookPoint.aborted(BeforeCreateNote)(
+          beforeCreate.run({ owner, text }),
+        );
         const record = yield* records.create({ owner, text: vetoed.text });
         yield* afterCreate.run({ owner, text: vetoed.text, noteId: record.id });
         return record;
