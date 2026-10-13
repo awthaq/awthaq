@@ -410,7 +410,7 @@ export const ScimGroup = HttpApiGroup.make("scim")
     HttpApiEndpoint.delete("deleteGroup", "/scim/v2/Groups/:id", {
       params: IdParams,
       success: HttpApiSchema.Empty(204),
-      error: [ScimNotFound, ScimConflict, ScimUnavailable],
+      error: [ScimNotFound, ScimConflict, ScimForbidden, ScimUnavailable],
     }),
   )
   .middleware(ScimAuthentication);

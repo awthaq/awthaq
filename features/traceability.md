@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1281 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1290; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1284 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1293; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1299,3 +1299,6 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1288 | [BEH-EA-233](../spec/behaviors/28-tenancy.md#beh-ea-233-postgres-row-level-security-is-an-opt-in-fail-closed-backstop-inside-a-tenant-scope) | [12-multi-tenancy/28-tenancy.feature](features/12-multi-tenancy/28-tenancy.feature) | A derived table is confined through its parent |
 | REQ-EA-1289 | [BEH-EA-233](../spec/behaviors/28-tenancy.md#beh-ea-233-postgres-row-level-security-is-an-opt-in-fail-closed-backstop-inside-a-tenant-scope) | [12-multi-tenancy/28-tenancy.feature](features/12-multi-tenancy/28-tenancy.feature) | A witnessed cross-tenant read still sees every tenant under row-level security |
 | REQ-EA-1290 | [BEH-EA-233](../spec/behaviors/28-tenancy.md#beh-ea-233-postgres-row-level-security-is-an-opt-in-fail-closed-backstop-inside-a-tenant-scope) | [12-multi-tenancy/28-tenancy.feature](features/12-multi-tenancy/28-tenancy.feature) | Disabling row-level security removes every policy, whatever enabled it |
+| REQ-EA-1291 | [BEH-EA-251](../spec/behaviors/30-scim.md#beh-ea-251-groups-are-organization-teams-and-a-connection-only-changes-the-users-it-provisioned) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | A veto hook that refuses team creation makes POST /Groups 403 and creates nothing |
+| REQ-EA-1292 | [BEH-EA-251](../spec/behaviors/30-scim.md#beh-ea-251-groups-are-organization-teams-and-a-connection-only-changes-the-users-it-provisioned) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | A group beyond the organization's team limit is 403 |
+| REQ-EA-1293 | [BEH-EA-251](../spec/behaviors/30-scim.md#beh-ea-251-groups-are-organization-teams-and-a-connection-only-changes-the-users-it-provisioned) | [13-enterprise-federation/30-scim.feature](features/13-enterprise-federation/30-scim.feature) | Deleting the organization's last group is 409 unless removing every team is allowed |

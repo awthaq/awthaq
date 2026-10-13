@@ -597,6 +597,32 @@ Feature: SCIM Provisioning
       Then the response is 201
       And the response names a new group
 
+    @REQ-EA-1291
+    Scenario: A veto hook that refuses team creation makes POST /Groups 403 and creates nothing
+      Given a beforeCreateTeam hook that vetoes every team creation
+      And an organization "Acme" with the SCIM connection "Okta"
+      When "Okta" creates the group "Eng"
+      Then the response is 403
+      And as seen by "Okta", 0 groups are listed
+
+    @REQ-EA-1292
+    Scenario: A group beyond the organization's team limit is 403
+      Given the organization allows at most 1 teams
+      And an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the group "Eng"
+      When "Okta" creates the group "Sales"
+      Then the response is 403
+      And as seen by "Okta", 1 groups are listed
+
+    @REQ-EA-1293
+    Scenario: Deleting the organization's last group is 409 unless removing every team is allowed
+      Given the organization does not allow removing every team
+      And an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the group "Eng"
+      When "Okta" deletes the group "Eng"
+      Then the response is 409
+      And as seen by "Okta", 1 groups are listed
+
   # BEH-EA-252 — spec/behaviors/30-scim.md; see also ADR-EA-028
   @BEH-EA-252
   Rule: The wire format follows RFC 7644: content types, filters, paging, errors and discovery

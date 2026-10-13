@@ -39,7 +39,7 @@ A SCIM **connection** is one organization's directory-sync credential. `ScimConn
 
 ## Not built
 
-`/Bulk`, `sortBy`, `/Me`, ETag concurrency, compound filters beyond the two `eq` forms, and nested-group push (a team's own hierarchy is not exposed). Group changes go straight to the team records, so the organization plugin's team *hooks* do not run for them; they publish `auth.scim.groupChanged`. There is no HTTP CRUD for connections yet — create and revoke them with `ScimConnectionStore` (or your own admin surface); directory-side rate limiting is the host's (put your usual limiter in front of `/scim`).
+`/Bulk`, `sortBy`, `/Me`, ETag concurrency, compound filters beyond the two `eq` forms, and nested-group push (a team's own hierarchy is not exposed). Group changes go through `OrganizationTeams` (with a `Directory` actor), so the organization's team hooks, quotas and events apply to a directory as to a member, and they also publish `auth.scim.groupChanged`. Groups need `OrganizationConfig.teams.enabled: true` (else `403`); set `teams.allowRemovingAllTeams: true` if your directory may delete every group (else deleting the last one is `409`). There is no HTTP CRUD for connections yet — create and revoke them with `ScimConnectionStore` (or your own admin surface); directory-side rate limiting is the host's (put your usual limiter in front of `/scim`).
 
 ## Interim recipe (no directory wired yet)
 

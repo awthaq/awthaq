@@ -46,10 +46,22 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
+/**
+ * SCIM Groups are organization teams, so they need `teams.enabled` (plan 04, BEH-EA-251). The default
+ * keeps the groups tests meaningful: teams on, no quotas, and a directory may delete every group
+ * (`allowRemovingAllTeams`); a test that checks a refusal overrides it.
+ */
+export const groupsTeams = {
+  enabled: true,
+  maximumTeams: Number.POSITIVE_INFINITY,
+  maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+  allowRemovingAllTeams: true,
+};
+
 /** The organization plugin and every records store it needs, in memory. */
 const OrganizationLive = (options: Partial<Organization.OrganizationConfigShape> = {}) =>
   Organization.Organization.layer.pipe(
-    Layer.provide(Organization.config(options)),
+    Layer.provide(Organization.config({ teams: groupsTeams, ...options })),
     Layer.provide(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
   );
@@ -66,6 +78,13 @@ export const ScimLive = (
   // P20a: a composition with a tap installed on a hook point (e.g. a `beforeDelete` veto) passes
   // `Tap.pipe(Layer.provideMerge(Hooks.HooksLive))` here.
   hooks: typeof Hooks.HooksLive = Hooks.HooksLive,
+  // Plan 04: taps on the organization hook points (a team veto, an observer counting departures),
+  // installed on the points this composition builds. A tap's layer requires its point.
+  taps: Layer.Layer<
+    never,
+    never,
+    Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+  > = Layer.empty,
 ) =>
   Scim.Scim.layer.pipe(
     Layer.provide(Scim.config(scimConfig)),
@@ -80,6 +99,7 @@ export const ScimLive = (
     Layer.provideMerge(CoreLive(users, hooks)),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(taps),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
 

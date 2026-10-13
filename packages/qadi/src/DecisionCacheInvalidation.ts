@@ -24,18 +24,20 @@ import * as Layer from "effect/Layer";
  * Taps every `OrganizationHooks` observe point that can move a
  * `RelationshipResolver` answer (`OrganizationQadi.relationships`):
  * membership add/remove/role change (incl. `leave` and invitation
- * acceptance), organization deletion, team-membership add/remove, team
- * update/deletion, and dynamic-role CRUD (a role's statements feed the
+ * acceptance), organization deletion, team-membership add/remove/role change,
+ * team update/move/deletion (a move changes `team-role:<name>`, which walks
+ * ancestors), and dynamic-role CRUD (a role's statements feed the
  * `<resource>:<action>` relations). It also taps
  * `Hooks.AfterUserAttributesChanged` (AAPS-005), so awthaq-owned user
  * attributes (`Resolvers.UserAttributes`: `emailVerified`, `name`) cannot
  * outlive a `Users.verifyEmail`/`updateProfile`.
  *
- * **Provide it once, application-wide.** `HookPoint` tap registries are
- * module-level singletons that freeze at their point's first `run()`
- * (BEH-EA-024): building this layer after an organization operation has
- * already run dies with `HookPointFrozen`. It requires the `DecisionCache`
- * it flushes, so compose it next to the `decisionCacheLayer` it guards.
+ * **Provide it with the points it taps.** Each tap's layer requires its
+ * point (ADR-EA-033), and a point's tap registry belongs to the composition
+ * that built it and freezes at that point's first `run()` (BEH-EA-024):
+ * building this layer after an organization operation has already run in that
+ * composition dies with `HookPointFrozen`. It requires the `DecisionCache` it
+ * flushes, so compose it next to the `decisionCacheLayer` it guards.
  *
  * **Coverage caveat — read before relying on it.** This only covers state
  * awthaq's own plugins own: organization/team membership and awthaq's own
@@ -59,6 +61,8 @@ export const DecisionCacheInvalidationLive = Layer.unwrap(
       OrganizationHooks.AfterAddTeamMember.tap(clear),
       OrganizationHooks.AfterRemoveTeamMember.tap(clear),
       OrganizationHooks.AfterUpdateTeam.tap(clear),
+      OrganizationHooks.AfterMoveTeam.tap(clear),
+      OrganizationHooks.AfterUpdateTeamMemberRole.tap(clear),
       OrganizationHooks.AfterDeleteTeam.tap(clear),
       OrganizationHooks.AfterCreateRole.tap(clear),
       OrganizationHooks.AfterUpdateRole.tap(clear),

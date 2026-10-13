@@ -8,7 +8,10 @@ import { Accounts, AuditLog, Erasure, Sessions, Users } from "@awthaq/core";
 import {
   InvitationRecords,
   MembershipRecords,
+  Organization,
+  OrganizationActor,
   OrganizationRecords,
+  OrganizationTeams,
   TeamRecords,
 } from "@awthaq/organization";
 import { ScimApi, ScimConnections, ScimRecords } from "@awthaq/scim";
@@ -247,6 +250,28 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* configureApp({ organization: { membershipLimit } });
   });
 
+  Given("a beforeCreateTeam hook that vetoes every team creation", function* () {
+    yield* configureApp({ vetoCreateTeam: true });
+  });
+
+  const teamsConfig = (overrides: Partial<Organization.OrganizationConfigShape["teams"]>) => ({
+    enabled: true,
+    maximumTeams: Number.POSITIVE_INFINITY,
+    maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+    allowRemovingAllTeams: true,
+    ...overrides,
+  });
+
+  Given("the organization allows at most {int} teams", function* (maximumTeams: number) {
+    yield* configureApp({ organization: { teams: teamsConfig({ maximumTeams }) } });
+  });
+
+  Given("the organization does not allow removing every team", function* () {
+    yield* configureApp({
+      organization: { teams: teamsConfig({ allowRemovingAllTeams: false }) },
+    });
+  });
+
   Given("a beforeDelete hook that vetoes every user deletion", function* () {
     yield* configureApp({ vetoDelete: true });
   });
@@ -448,11 +473,14 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       const world = yield* World;
       const connection = yield* world.connections.get(connectionName);
       const teamId = yield* withContext(
-        Effect.flatMap(TeamRecords.TeamRecords, (teams) =>
-          teams.createTeam({ organizationId: connection.organizationId, name }),
+        Effect.flatMap(OrganizationTeams.OrganizationTeams, (teams) =>
+          teams.create(OrganizationActor.application("bdd"), {
+            organizationId: connection.organizationId,
+            name,
+          }),
         ).pipe(
           Effect.orDie,
-          Effect.map((team) => team.id),
+          Effect.map((created) => created.team.id),
         ),
       );
       yield* world.groupIds.set(name, teamId);
@@ -485,8 +513,12 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (name: string, group: string) {
       const { teamId, organizationId } = yield* teamOf(group);
       yield* withContext(
-        Effect.flatMap(TeamRecords.TeamRecords, (teams) =>
-          teams.createTeam({ organizationId, name, parentId: teamId }),
+        Effect.flatMap(OrganizationTeams.OrganizationTeams, (teams) =>
+          teams.create(OrganizationActor.application("bdd"), {
+            organizationId,
+            name,
+            parentId: teamId,
+          }),
         ).pipe(Effect.orDie),
       );
     },
@@ -497,8 +529,8 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (group: string) {
       const { teamId, organizationId } = yield* teamOf(group);
       yield* withContext(
-        Effect.flatMap(TeamRecords.TeamRecords, (teams) =>
-          teams.removeTeam(organizationId, teamId),
+        Effect.flatMap(OrganizationTeams.OrganizationTeams, (teams) =>
+          teams.remove(OrganizationActor.application("bdd"), { organizationId, teamId }),
         ).pipe(Effect.orDie),
       );
     },

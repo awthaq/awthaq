@@ -42,10 +42,10 @@ import {
   Users,
 } from "@awthaq/core";
 import {
-  ActiveContextRecords,
   MembershipRecords,
   Organization,
-  TeamRecords,
+  OrganizationActor,
+  OrganizationTeams,
 } from "@awthaq/organization";
 import { Defects, SqlTransaction } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
@@ -93,6 +93,7 @@ type Connection = ScimApi.ScimConnectionIdentity;
 
 /** ADR-EA-028: a core service's infrastructure failure, the one typed error every handler maps to a SCIM 503. */
 type StoreUnavailable = Errors.StoreUnavailable;
+type Team = OrganizationTeams.Team;
 
 /**
  * RFC 7644 §3.12: an outage is a `503` with the SCIM error body, never the internal error and
@@ -178,7 +179,10 @@ export interface ScimShape {
   readonly deleteGroup: (
     connection: Connection,
     id: string,
-  ) => Effect.Effect<void, ScimApi.ScimNotFound | ScimApi.ScimConflict | StoreUnavailable>;
+  ) => Effect.Effect<
+    void,
+    ScimApi.ScimNotFound | ScimApi.ScimConflict | ScimApi.ScimForbidden | StoreUnavailable
+  >;
 }
 
 // ---- pure helpers ----------------------------------------------------------------------------
@@ -597,8 +601,8 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       const organization = yield* Organization.Organization;
       const records = yield* ScimRecords.ScimRecords;
       const members = yield* MembershipRecords.MembershipRecords;
-      const teams = yield* TeamRecords.TeamRecords;
-      const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
+      // ADR-EA-040: Groups are organization teams, reached through the exposed system module.
+      const teams = yield* OrganizationTeams.OrganizationTeams;
       const cfg = yield* ScimConfig;
 
       const locate = (kind: "Users" | "Groups", id: string): string =>
@@ -988,11 +992,30 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
 
       // ---- Groups (organization teams) --------------------------------------------------------------
 
+      /** The directory connection that acts on a team (reaches every hook input and, later, every event). */
+      const actorOf = (connection: Connection) => OrganizationActor.directory(connection.id);
+
+      /**
+       * What a team operation's refusal means to a directory (BEH-EA-251): a policy refusal (teams off, a quota, a
+       * veto, an unavailable organization) is `403`, the last team or a team with children `409`, a missing team
+       * `404`, a member who is not the organization's `400`.
+       */
+      const gateRefusals = {
+        TeamsDisabled: () =>
+          Effect.fail(ScimApi.forbidden("Teams are not enabled for this organization")),
+        OrganizationNotFound: () =>
+          Effect.fail(ScimApi.forbidden("The organization is not available")),
+        HookAborted: (aborted: { readonly message: string }) =>
+          Effect.fail(ScimApi.forbidden(aborted.message)),
+      };
+      const notAMember = () =>
+        Effect.fail(ScimApi.badRequest("Member is not an organization member", "invalidValue"));
+
       /** A group's team, or `404` (and a stale mapping dropped) when the team was removed elsewhere. */
       const ownedGroup = Effect.fnUntraced(function* (connection: Connection, id: string) {
         const link = yield* records.find(connection.id, "Group", id);
         if (Option.isNone(link)) return yield* ScimApi.notFound(`Group ${id} not found`);
-        const team = yield* teams.findTeamById(connection.organizationId, id);
+        const team = yield* teams.find(connection.organizationId, id);
         if (Option.isNone(team)) {
           yield* records.unlink(connection.id, "Group", id);
           return yield* ScimApi.notFound(`Group ${id} not found`);
@@ -1005,7 +1028,10 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         connection: Connection,
         teamId: string,
       ) {
-        const rows = yield* teams.listTeamMembers(teamId);
+        // A team removed meanwhile has no members; the caller's own check answers 404.
+        const rows = yield* teams
+          .members(connection.organizationId, teamId)
+          .pipe(Effect.catchTag("TeamNotFound", () => Effect.succeed([])));
         const owned = yield* Effect.filter(rows, (row) =>
           Effect.map(records.find(connection.id, "User", row.userId), Option.isSome),
         );
@@ -1014,7 +1040,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
 
       const groupResource = Effect.fnUntraced(function* (
         connection: Connection,
-        owned: { readonly link: ScimRecords.ResourceLink; readonly team: TeamRecords.TeamRecord },
+        owned: { readonly link: ScimRecords.ResourceLink; readonly team: Team },
       ) {
         const memberIds = yield* provisionedMembers(connection, owned.team.id);
         return {
@@ -1054,15 +1080,36 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         }
       });
 
-      const addToTeam = (teamId: string, userId: string) =>
+      /**
+       * One roster change through `OrganizationTeams.applyRoster`: every veto first, the limits against the final
+       * count, one transaction, one event and one observe point per user actually changed. Idempotent per user.
+       */
+      const applyRoster = (
+        connection: Connection,
+        teamId: string,
+        change: { readonly add: ReadonlyArray<string>; readonly remove: ReadonlyArray<string> },
+      ) =>
         teams
-          .addTeamMember({ teamId, userId: Users.UserId(userId) })
-          .pipe(Effect.catchTag("TeamMembershipRecordAlreadyExists", () => Effect.void));
-
-      const removeFromTeam = (teamId: string, userId: string) =>
-        teams
-          .removeTeamMember(teamId, Users.UserId(userId))
-          .pipe(Effect.catchTag("TeamMembershipRecordNotFound", () => Effect.void));
+          .applyRoster(actorOf(connection), {
+            organizationId: connection.organizationId,
+            teamId,
+            add: change.add.map(Users.UserId),
+            remove: change.remove.map(Users.UserId),
+            // The deployment configured this directory: the roster role is not bounded by a caller.
+            bound: OrganizationActor.Bound.Unbounded(),
+          })
+          .pipe(
+            Effect.catchTags({
+              ...gateRefusals,
+              TeamNotFound: () => Effect.fail(ScimApi.notFound()),
+              MembershipNotFound: notAMember,
+              TeamMemberLimitReached: () =>
+                Effect.fail(ScimApi.forbidden("The team's member limit is reached")),
+              UnknownTeamRole: Effect.die,
+              RolePermissionEscalation: Effect.die,
+            }),
+            Effect.asVoid,
+          );
 
       /** Sets the provisioned members of a team to exactly `wanted`; unprovisioned members are untouched. */
       const replaceProvisioned = Effect.fnUntraced(function* (
@@ -1071,16 +1118,10 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         wanted: ReadonlyArray<string>,
       ) {
         const current = yield* provisionedMembers(connection, teamId);
-        yield* Effect.forEach(
-          wanted.filter((userId) => !current.includes(userId)),
-          (userId) => addToTeam(teamId, userId),
-          { discard: true },
-        );
-        yield* Effect.forEach(
-          current.filter((userId) => !wanted.includes(userId)),
-          (userId) => removeFromTeam(teamId, userId),
-          { discard: true },
-        );
+        yield* applyRoster(connection, teamId, {
+          add: wanted,
+          remove: current.filter((userId) => !wanted.includes(userId)),
+        });
       });
 
       const listGroups: ScimShape["listGroups"] = Effect.fnUntraced(function* (connection, query) {
@@ -1089,7 +1130,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         const page = yield* records.list(connection.id, "Group", { offset: 0, limit: 10_000 });
         const owned = yield* Effect.forEach(page.items, (link) =>
           teams
-            .findTeamById(connection.organizationId, link.resourceId)
+            .find(connection.organizationId, link.resourceId)
             .pipe(Effect.map(Option.map((team) => ({ link, team })))),
         );
         const live = owned.flatMap((row) => Option.toArray(row));
@@ -1140,29 +1181,47 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           }
           const memberIds = (input.members ?? []).map((member) => member.value);
           yield* requireMembers(connection, memberIds);
-          const team = yield* teams
-            .createTeam({ organizationId: connection.organizationId, name: displayName })
-            .pipe(Effect.catchTag("TeamRecordNotFound", (error) => Effect.die(error)));
-          const link = yield* records
-            .link({
-              connectionId: connection.id,
-              kind: "Group",
-              resourceId: team.id,
-              externalId: Option.getOrUndefined(externalId),
-            })
+          // The team, its initial roster and the mapping are one unit (`attach` runs inside the
+          // team's transaction), so a link race leaves no team behind, on SQL and in memory.
+          const created = yield* teams
+            .create(
+              actorOf(connection),
+              {
+                organizationId: connection.organizationId,
+                name: displayName,
+                initialMembers: memberIds.map(Users.UserId),
+              },
+              {
+                attach: (made) =>
+                  records.link({
+                    connectionId: connection.id,
+                    kind: "Group",
+                    resourceId: made.id,
+                    externalId: Option.getOrUndefined(externalId),
+                  }),
+              },
+            )
             .pipe(
-              Effect.catchTag("ScimLinkConflict", () =>
-                teams.removeTeam(connection.organizationId, team.id).pipe(
-                  Effect.catch(() => Effect.void),
-                  Effect.andThen(
-                    Effect.fail(ScimApi.conflict("externalId is already provisioned")),
-                  ),
-                ),
-              ),
+              Effect.catchTags({
+                ...gateRefusals,
+                TeamNotFound: Effect.die,
+                MembershipNotFound: notAMember,
+                TeamLimitReached: () =>
+                  Effect.fail(ScimApi.forbidden("The organization's team limit is reached")),
+                TeamMemberLimitReached: () =>
+                  Effect.fail(ScimApi.forbidden("The team's member limit is reached")),
+                ScimLinkConflict: () =>
+                  Effect.fail(ScimApi.conflict("externalId is already provisioned")),
+              }),
             );
-          yield* Effect.forEach(memberIds, (userId) => addToTeam(team.id, userId), {
-            discard: true,
-          });
+          const team = created.team;
+          const link = created.attached;
+          if (link === undefined) {
+            return yield* Defects.invariantViolation(
+              "MissingLink",
+              "awthaq: a SCIM group was created without its mapping",
+            );
+          }
           yield* events.publish({
             _tag: "auth.scim.groupChanged",
             connectionId: connection.id,
@@ -1170,7 +1229,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             teamId: team.id,
             change: "created",
           });
-          const fresh = yield* teams.findTeamById(connection.organizationId, team.id);
+          const fresh = yield* teams.find(connection.organizationId, team.id);
           return yield* groupResource(connection, {
             link,
             team: Option.getOrElse(fresh, () => team),
@@ -1196,16 +1255,21 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           change,
         });
 
-      const renameGroup = (
-        connection: Connection,
-        team: TeamRecords.TeamRecord,
-        displayName: string,
-      ) =>
+      const renameGroup = (connection: Connection, team: Team, displayName: string) =>
         displayName === team.name
           ? Effect.succeed(team)
           : teams
-              .updateTeam(connection.organizationId, team.id, displayName)
-              .pipe(Effect.catchTag("TeamRecordNotFound", () => Effect.fail(ScimApi.notFound())));
+              .rename(actorOf(connection), {
+                organizationId: connection.organizationId,
+                teamId: team.id,
+                name: displayName,
+              })
+              .pipe(
+                Effect.catchTags({
+                  ...gateRefusals,
+                  TeamNotFound: () => Effect.fail(ScimApi.notFound()),
+                }),
+              );
 
       const replaceGroup: ScimShape["replaceGroup"] = Effect.fnUntraced(
         function* (connection, id, input) {
@@ -1302,7 +1366,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
                 yield* replaceProvisioned(connection, id, ids);
               } else if (op === "add") {
                 yield* requireMembers(connection, ids);
-                yield* Effect.forEach(ids, (userId) => addToTeam(id, userId), { discard: true });
+                yield* applyRoster(connection, id, { add: ids, remove: [] });
               } else if (op === "remove") {
                 // `remove` with no value and a bare `members` path clears the provisioned members.
                 const provisioned = yield* provisionedMembers(connection, id);
@@ -1310,9 +1374,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
                   ids.length === 0 && !/members\[/i.test(path)
                     ? provisioned
                     : ids.filter((userId) => provisioned.includes(userId));
-                yield* Effect.forEach(toRemove, (userId) => removeFromTeam(id, userId), {
-                  discard: true,
-                });
+                yield* applyRoster(connection, id, { add: [], remove: toRemove });
               }
             }
           }
@@ -1323,18 +1385,27 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
 
       const deleteGroup: ScimShape["deleteGroup"] = Effect.fnUntraced(function* (connection, id) {
         yield* ownedGroup(connection, id);
-        yield* teams.removeTeam(connection.organizationId, id).pipe(
-          Effect.catchTags({
-            TeamRecordNotFound: () => Effect.void,
-            "TeamRecords/HasChildren": () =>
-              Effect.fail(
-                ScimApi.conflict("The group still has child teams; remove or move them first"),
-              ),
-          }),
-        );
-        // No session may keep a removed team active (CWM-003/OHS-007).
-        yield* activeContext.clearTeam(id);
-        yield* records.unlink(connection.id, "Group", id);
+        // The last-team rule, the veto, the transaction (team, memberships, every session's active
+        // team) and the events are `OrganizationTeams`'; the mapping goes in the same transaction.
+        yield* teams
+          .remove(
+            actorOf(connection),
+            { organizationId: connection.organizationId, teamId: id },
+            { attach: () => records.unlink(connection.id, "Group", id) },
+          )
+          .pipe(
+            Effect.catchTags({
+              ...gateRefusals,
+              // Removed elsewhere meanwhile: the delete converges.
+              TeamNotFound: () => records.unlink(connection.id, "Group", id),
+              LastTeamCannotBeRemoved: () =>
+                Effect.fail(ScimApi.conflict("The organization's last team cannot be removed")),
+              TeamHasChildren: () =>
+                Effect.fail(
+                  ScimApi.conflict("The group still has child teams; remove or move them first"),
+                ),
+            }),
+          );
         yield* groupChanged(connection, id, "deleted");
       });
 

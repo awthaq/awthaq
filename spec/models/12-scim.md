@@ -67,7 +67,7 @@ See the design records: `.scratch/resolve-ready-for-human-findings/issues/08-sam
 ## The contract (`ScimApi`)
 `/scim/v2` per RFC 7644, bearer-token authenticated, content type `application/scim+json` (a request as `application/json` is accepted too — Okta sends that):
 
-- `GET /Users?filter=userName eq "…"|externalId eq "…"&startIndex&count`, `POST /Users`, `GET`/`PUT`/`PATCH`/`DELETE /Users/:id`; `GET /Groups`, `POST /Groups`, `GET`/`PUT`/`PATCH`/`DELETE /Groups/:id` (a SCIM Group is an organization team of the connection's organization; members are that organization's users this connection provisioned).
+- `GET /Users?filter=userName eq "…"|externalId eq "…"&startIndex&count`, `POST /Users`, `GET`/`PUT`/`PATCH`/`DELETE /Users/:id`; `GET /Groups`, `POST /Groups`, `GET`/`PUT`/`PATCH`/`DELETE /Groups/:id` (a SCIM Group is an organization team of the connection's organization, written through the exposed `OrganizationTeams` module with a `Directory` actor, ADR-EA-040; members are that organization's users this connection provisioned).
 - Discovery: `GET /ServiceProviderConfig`, `/ResourceTypes`, `/Schemas`.
 - Errors are RFC 7644 §3.12 (`schemas`, `status`, `scimType`, `detail`).
 

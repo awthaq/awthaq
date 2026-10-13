@@ -27,6 +27,7 @@ import {
   Organization,
   OrganizationHooks,
   OrganizationRecords,
+  OrganizationTeams,
   OrgRoleRecords,
   TeamRecords,
 } from "@awthaq/organization";
@@ -66,6 +67,11 @@ const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
   Layer.provideMerge(Users.layerMemory),
 );
 
+/** A `BeforeCreateTeam` tap that refuses every team (plan 04: a veto now reaches SCIM Groups). */
+const VetoCreateTeam = OrganizationHooks.BeforeCreateTeam.tap(() =>
+  Effect.fail(new HookPoint.HookAbort({ code: "TEAM_POLICY" })),
+);
+
 /** A `beforeDelete` tap that refuses every deletion, as a legal hold would (BEH-EA-095). */
 const VetoDelete = Hooks.BeforeUserDelete.tap(() =>
   Effect.fail(new HookPoint.HookAbort({ code: "LEGAL_HOLD" })),
@@ -93,6 +99,8 @@ export interface AppOptions {
   readonly scim?: Partial<Scim.ScimConfigShape>;
   readonly organization?: Partial<Organization.OrganizationConfigShape>;
   readonly vetoDelete?: boolean;
+  /** Plan 04: a `BeforeCreateTeam` tap that refuses every team, as a policy hook would (BEH-EA-251). */
+  readonly vetoCreateTeam?: boolean;
   readonly usersOutage?: boolean;
 }
 
@@ -114,7 +122,19 @@ const buildLive = (options: AppOptions) => {
     Layer.provideMerge(NodeCrypto.layer),
   );
   const OrganizationLive = Organization.Organization.layer.pipe(
-    Layer.provide(Organization.config(options.organization ?? {})),
+    // SCIM Groups are organization teams, so the world turns teams on (BEH-EA-251): no quotas, and a
+    // directory may delete every group. A scenario about a refusal overrides it.
+    Layer.provide(
+      Organization.config({
+        teams: {
+          enabled: true,
+          maximumTeams: Number.POSITIVE_INFINITY,
+          maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+          allowRemovingAllTeams: true,
+        },
+        ...options.organization,
+      }),
+    ),
     Layer.provide(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
   );
@@ -137,6 +157,7 @@ const buildLive = (options: AppOptions) => {
     Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(options.vetoCreateTeam === true ? VetoCreateTeam : Layer.empty),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
 };
@@ -149,6 +170,7 @@ export type AppServices =
   | OrganizationRecords.OrganizationRecords
   | MembershipRecords.MembershipRecords
   | TeamRecords.TeamRecords
+  | OrganizationTeams.OrganizationTeams
   | Users.Users
   | Sessions.Sessions
   | Accounts.Accounts

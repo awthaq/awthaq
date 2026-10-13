@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-023 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — SCIM and SAML (SP) implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (AOMS-009, CWM-002, SFS-003, SFS-006, SFS-007; wayfinder tickets 08 and 18). The plan proposed ADR-EA-019, which [ADR-EA-019](019-encryption-key-rotation.md) already holds. <br> 1.1 (2026-09-29): SAML is built; the port is `XmlSignature` (generic XML-DSig) rather than `SamlSigner`, verified over `xml-crypto`, with the library evaluation recorded in Decision 3 (SFS-003) <br> 1.2 (2026-10-13): `DELETE` in `erase` mode is `AccountErasure.eraseAccount`, the ADR-EA-031 cascade, not `Users.delete` (architecture plan 03) <br> 1.3 (2026-10-13): Decision 4: `Sso` is implemented, no longer "still Planned" (plan 10 item 8) |
+> | Change History | 1.0 (2026-09-29): Initial release (AOMS-009, CWM-002, SFS-003, SFS-006, SFS-007; wayfinder tickets 08 and 18). The plan proposed ADR-EA-019, which [ADR-EA-019](019-encryption-key-rotation.md) already holds. <br> 1.1 (2026-09-29): SAML is built; the port is `XmlSignature` (generic XML-DSig) rather than `SamlSigner`, verified over `xml-crypto`, with the library evaluation recorded in Decision 3 (SFS-003) <br> 1.2 (2026-10-13): `DELETE` in `erase` mode is `AccountErasure.eraseAccount`, the ADR-EA-031 cascade, not `Users.delete` (architecture plan 03) <br> 1.3 (2026-10-13): Decision 4: `Sso` is implemented, no longer "still Planned" (plan 10 item 8) <br> 1.4 (2026-10-13): SCIM Groups are organization teams written through `OrganizationTeams` (ADR-EA-040), so team invariants, hooks and events apply to a directory (architecture plan 04) |
 
 ---
 
@@ -57,3 +57,8 @@ Enterprise buyers of a self-hosted auth runtime routinely gate the purchase on S
 **Negative**: SAML depends on a third-party XML-DSig library with a real advisory history, contained by the port and its negative-test corpus (an upgrade re-runs it); SCIM's ownership rule means an organization cannot bulk-link pre-existing accounts through SCIM (it links them by having them sign in through its connection, or an application-level import); `Sso` remains a design.
 
 **Trade-off accepted**: SCIM `userName` is immutable and existing accounts are never adopted — the safe defaults — at the cost of directory features some IdPs assume (renames, adoption), which can be added behind explicit configuration once a real consumer needs them.
+
+
+## Revision 1.4 note
+
+SCIM no longer writes team records. A Group create, rename, roster change and delete call `OrganizationTeams` with a `Directory` actor ([ADR-EA-040](040-plugin-exposes-domain-services.md)), so `teams.enabled`, the team quotas, the last-team rule and the team veto and observe points apply to a directory as to a member. SCIM Groups therefore need `OrganizationConfig.teams.enabled: true`, and a deployment whose directory deletes every group sets `teams.allowRemovingAllTeams: true`.
