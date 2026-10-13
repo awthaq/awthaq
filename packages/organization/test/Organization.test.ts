@@ -1181,16 +1181,24 @@ describe("Organization", () => {
     ),
   );
 
-  it.effect("createTeam is rejected when teams is disabled", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const failure = yield* organization
-        .createTeam(owner, org.id, "Engineering")
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "TeamsDisabled");
-    }).pipe(Effect.provide(buildLayer())),
+  // PV-300 (MTI-009): the visibility gate runs before the feature gate, so a non-member learns nothing.
+  // What each team operation does once past the gates is proved at `OrganizationTeams.test.ts`.
+  it.effect(
+    "createTeam answers OrganizationNotFound to a non-member and TeamsDisabled to a member",
+    () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const outsider = yield* organization
+          .createTeam(asCaller("outsider-1"), org.id, "Engineering")
+          .pipe(Effect.flip);
+        assert.strictEqual(outsider._tag, "OrganizationNotFound");
+        const failure = yield* organization
+          .createTeam(owner, org.id, "Engineering")
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "TeamsDisabled");
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   const withTeams = (
@@ -1206,28 +1214,6 @@ describe("Organization", () => {
       },
     });
 
-  it.effect("createTeam/listTeams/updateTeam/removeTeam round-trip", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-
-      const team = yield* organization.createTeam(owner, org.id, "Engineering");
-      assert.strictEqual(team.memberCount, 0);
-
-      const listed = yield* organization.listTeams(owner, org.id);
-      assert.strictEqual(listed.length, 1);
-
-      const updated = yield* organization.updateTeam(owner, org.id, team.id, "Eng");
-      assert.strictEqual(updated.name, "Eng");
-
-      yield* organization.createTeam(owner, org.id, "Sales");
-      yield* organization.removeTeam(owner, org.id, team.id);
-      const afterRemove = yield* organization.listTeams(owner, org.id);
-      assert.strictEqual(afterRemove.length, 1);
-    }).pipe(Effect.provide(withTeams())),
-  );
-
   // OHS-001 (ticket 34): teams nest; structure changes need team:update; reads are member-only.
   describe("team hierarchy (OHS-001)", () => {
     const tree = Effect.gen(function* () {
@@ -1240,72 +1226,6 @@ describe("Organization", () => {
       const sales = yield* organization.createTeam(owner, org.id, "Sales");
       return { organization, owner, org, eng, platform, infra, sales };
     });
-    const names = (rows: ReadonlyArray<{ readonly name: string }>) => rows.map((row) => row.name);
-
-    it.effect("nested create, ancestors/descendants, and move re-parent a subtree", () =>
-      Effect.gen(function* () {
-        const { organization, owner, org, eng, platform, infra, sales } = yield* tree;
-        assert.deepStrictEqual(platform.parentId, Option.some(eng.id));
-        assert.deepStrictEqual(
-          names(yield* organization.listTeamAncestors(owner, org.id, infra.id)),
-          ["Platform", "Engineering"],
-        );
-        assert.deepStrictEqual(
-          names(yield* organization.listTeamDescendants(owner, org.id, eng.id)),
-          ["Platform", "Infra"],
-        );
-
-        const moved = yield* organization.moveTeam(
-          owner,
-          org.id,
-          platform.id,
-          Option.some(sales.id),
-        );
-        assert.deepStrictEqual(moved.parentId, Option.some(sales.id));
-        assert.deepStrictEqual(
-          names(yield* organization.listTeamAncestors(owner, org.id, infra.id)),
-          ["Platform", "Sales"],
-        );
-        yield* organization.moveTeam(owner, org.id, platform.id, Option.none());
-        assert.deepStrictEqual(
-          names(yield* organization.listTeamDescendants(owner, org.id, eng.id)),
-          [],
-        );
-      }).pipe(Effect.provide(withTeams())),
-    );
-
-    it.effect("a cycle is TeamHierarchyCycle; a parent with children cannot be removed", () =>
-      Effect.gen(function* () {
-        const { organization, owner, org, eng, platform, infra } = yield* tree;
-        const cycle = yield* organization
-          .moveTeam(owner, org.id, eng.id, Option.some(infra.id))
-          .pipe(Effect.flip);
-        assert.strictEqual(cycle._tag, "TeamHierarchyCycle");
-
-        const blocked = yield* organization
-          .removeTeam(owner, org.id, platform.id)
-          .pipe(Effect.flip);
-        assert.strictEqual(blocked._tag, "TeamHasChildren");
-        yield* organization.removeTeam(owner, org.id, infra.id);
-        yield* organization.removeTeam(owner, org.id, platform.id);
-      }).pipe(Effect.provide(withTeams())),
-    );
-
-    it.effect("a parent from another organization is TeamNotFound", () =>
-      Effect.gen(function* () {
-        const { organization, owner, org, eng } = yield* tree;
-        const other = yield* organization.create({ caller: owner, name: "Other", slug: "other" });
-        const foreign = yield* organization.createTeam(owner, other.id, "Foreign");
-        const onCreate = yield* organization
-          .createTeam(owner, org.id, "Nested", foreign.id)
-          .pipe(Effect.flip);
-        assert.strictEqual(onCreate._tag, "TeamNotFound");
-        const onMove = yield* organization
-          .moveTeam(owner, org.id, eng.id, Option.some(foreign.id))
-          .pipe(Effect.flip);
-        assert.strictEqual(onMove._tag, "TeamNotFound");
-      }).pipe(Effect.provide(withTeams())),
-    );
 
     it.effect("moving needs team:update; reading relatives is member-only", () =>
       Effect.gen(function* () {
@@ -1427,7 +1347,7 @@ describe("Organization", () => {
       }).pipe(Effect.provide(layerWith())),
     );
 
-    it.effect("team roles are canGrant-guarded and must be known", () =>
+    it.effect("team roles are canGrant-guarded", () =>
       Effect.gen(function* () {
         const { organization, org, eng, lead } = yield* setup;
         // Peer grant: the lead holds everything `lead` confers.
@@ -1436,10 +1356,6 @@ describe("Organization", () => {
           .addTeamMember(lead, org.id, eng.id, Users.UserId("worker-2"), ["chief"])
           .pipe(Effect.flip);
         assert.strictEqual(escalation._tag, "RolePermissionEscalation");
-        const unknown = yield* organization
-          .addTeamMember(lead, org.id, eng.id, Users.UserId("worker-2"), ["no-such-role"])
-          .pipe(Effect.flip);
-        assert.strictEqual(unknown._tag, "UnknownTeamRole");
         // The org owner may confer the stronger role.
         yield* organization.addTeamMember(
           asCaller("owner-1"),
@@ -1532,52 +1448,6 @@ describe("Organization", () => {
       });
       yield* organization.listTeams(outsider, org.id);
       yield* organization.listTeamMembers(outsider, org.id, team.id);
-    }).pipe(Effect.provide(withTeams())),
-  );
-
-  it.effect("addTeamMember requires the target already be an organization member", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const team = yield* organization.createTeam(owner, org.id, "Engineering");
-
-      const failure = yield* organization
-        .addTeamMember(owner, org.id, team.id, Users.UserId("not-a-member"))
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "MembershipNotFound");
-
-      yield* organization.addMember({
-        organizationId: org.id,
-        userId: Users.UserId("member-1"),
-        role: ["member"],
-      });
-      const membership = yield* organization.addTeamMember(
-        owner,
-        org.id,
-        team.id,
-        Users.UserId("member-1"),
-      );
-      assert.strictEqual(membership.userId, Users.UserId("member-1"));
-
-      const members = yield* organization.listTeamMembers(owner, org.id, team.id);
-      assert.strictEqual(members.length, 1);
-
-      yield* organization.removeTeamMember(owner, org.id, team.id, Users.UserId("member-1"));
-      const afterRemove = yield* organization.listTeamMembers(owner, org.id, team.id);
-      assert.strictEqual(afterRemove.length, 0);
-    }).pipe(Effect.provide(withTeams())),
-  );
-
-  it.effect("allowRemovingAllTeams (default false) blocks removing the last team", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const team = yield* organization.createTeam(owner, org.id, "Engineering");
-
-      const failure = yield* organization.removeTeam(owner, org.id, team.id).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "LastTeamCannotBeRemoved");
     }).pipe(Effect.provide(withTeams())),
   );
 
@@ -1718,22 +1588,6 @@ describe("Organization", () => {
           assert.strictEqual(stale.status, "canceled");
         }).pipe(Effect.provide(buildLayer())),
     );
-
-    it.effect("addTeamMember for an existing team member fails AlreadyTeamMember", () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const team = yield* organization.createTeam(owner, org.id, "Engineering");
-        yield* organization.addTeamMember(owner, org.id, team.id, Users.UserId("owner-1"));
-        const failure = yield* organization
-          .addTeamMember(owner, org.id, team.id, Users.UserId("owner-1"))
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AlreadyTeamMember");
-        const teams = yield* organization.listTeams(owner, org.id);
-        assert.strictEqual(teams[0]?.memberCount, 1);
-      }).pipe(Effect.provide(withTeams())),
-    );
   });
 
   // CWM-003/N9/OHS-007: the active-context pointers (and team memberships) never
@@ -1798,17 +1652,6 @@ describe("Organization", () => {
           assert.isTrue(Option.isNone(active.activeTeamId));
         }
       }).pipe(Effect.provide(withTeams({ allowRemovingAllTeams: true }))),
-    );
-
-    it.effect("removeTeam clears activeTeamId but keeps the active organization", () =>
-      Effect.gen(function* () {
-        const { organization, owner, member, org, team } = yield* setup;
-        yield* organization.removeTeam(owner, org.id, team.id);
-
-        const active = yield* organization.getActive(member);
-        assert.isTrue(Option.isNone(active.activeTeamId));
-        assert.deepStrictEqual(active.activeOrganizationId, Option.some(org.id));
-      }).pipe(Effect.provide(withTeams())),
     );
 
     it.effect(

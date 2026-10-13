@@ -18,6 +18,7 @@ import * as Redacted from "effect/Redacted";
 import { fakeHttpClient } from "../../oauth/test/FakeProvider.ts";
 import * as ConnectionRecords from "../src/ConnectionRecords.ts";
 import * as OrganizationConnections from "../src/OrganizationConnections.ts";
+import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import { TestAuth } from "@awthaq/test";
 import { grant } from "./support.ts";
@@ -254,7 +255,10 @@ describe("cleanupOnOrganizationDelete (BEH-EA-235)", () => {
       yield* store.create(oidcInput("org-1"));
       yield* store.create(oidcInput("org-2", { emailDomains: ["other.example"] }));
       const afterDelete = yield* OrganizationHooks.AfterDeleteOrganization;
-      yield* afterDelete.run({ organizationId: "org-1" });
+      yield* afterDelete.run({
+        actor: OrganizationActor.application("test"),
+        organizationId: "org-1",
+      });
       assert.strictEqual((yield* records.listByOrganization("org-1")).length, 0);
       assert.isTrue(Option.isNone(yield* records.findByEmailDomain(grant, "acme.example")));
       assert.strictEqual((yield* records.listByOrganization("org-2")).length, 1);

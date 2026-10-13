@@ -34,7 +34,7 @@
 // `"organizationCount"`/`"ownedOrganizationCount"`, the subject's total
 // organization footprint across every org they belong to, not scoped to
 // any one of them.
-import { Organization as OrganizationService } from "./Organization.ts";
+import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
@@ -178,7 +178,7 @@ const parseRelation = (relation: string): ParsedRelation | undefined => {
 export const relationships = Layer.effect(
   RelationshipResolver,
   Effect.gen(function* () {
-    const organization = yield* OrganizationService;
+    const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const members = yield* MembershipRecords.MembershipRecords;
     const orgs = yield* OrganizationRecords.OrganizationRecords;
     const teams = yield* TeamRecords.TeamRecords;
@@ -266,7 +266,7 @@ export const relationships = Layer.effect(
               );
 
           if (parsed._tag === "permission") {
-            const attrs = yield* organization.attributesFor(organizationId, userId);
+            const attrs = yield* authority.attributesFor(organizationId, userId);
             if (Option.isNone(attrs)) return yield* notRelated();
             return PermissionEngine.hasPermission(
               attrs.value.permissions,

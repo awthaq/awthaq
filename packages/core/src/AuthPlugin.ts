@@ -535,7 +535,7 @@ export function layer<
     readonly exposes?: Exposes<Exposed, XOut, XE, XR>;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
-  } & PortsComplete<R | HR | CR, Ports> &
+  } & PortsComplete<R | HR | CR | XR, Ports> &
     ExposesComplete<Id, XOut, Exposed>,
 ): Layer.Layer<
   Self | HttpApiGroup.ToService<"auth", Groups> | XOut,
@@ -573,7 +573,7 @@ export function layer<
     readonly contributes?: Layer.Layer<never, CE, CR>;
     readonly exposes?: Exposes<Exposed, XOut, XE, XR>;
     readonly make: Effect.Effect<Shape, E, R>;
-  } & PortsComplete<R | CR, Ports> &
+  } & PortsComplete<R | CR | XR, Ports> &
     ExposesComplete<Id, XOut, Exposed>,
 ): Layer.Layer<
   Self | XOut,

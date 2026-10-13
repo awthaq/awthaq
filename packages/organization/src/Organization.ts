@@ -34,12 +34,16 @@ import * as Option from "effect/Option";
 import * as ActiveContextRecords from "./ActiveContextRecords.ts";
 import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
+import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationApi from "./OrganizationApi.ts";
+import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import { OrganizationConfig, type OrganizationLimits } from "./OrganizationConfig.ts";
 import * as OrganizationHandlers from "./OrganizationHandlers.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import { organizationMigrations } from "./OrganizationMigrations.ts";
 import { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
+import * as OrganizationSystem from "./OrganizationSystem.ts";
+import * as OrganizationTeams from "./OrganizationTeams.ts";
 import type { OrganizationShape } from "./OrganizationShape.ts";
 import { hexOf, NO_INVITATION_TOKEN_HASH } from "./internal/tokens.ts";
 import * as OrganizationRecords from "./OrganizationRecords.ts";
@@ -127,6 +131,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 ) {
   static readonly layer = AuthPlugin.layer(Organization, {
     ports: [Mailer.Mailer, SqlTransaction.SqlTransaction],
+    exposes: { services: OrganizationSystem.services, layer: OrganizationSystem.layer },
     handlers: OrganizationHandlers.make(Organization),
     contributes: Layer.mergeAll(organizationErasure, organizationExport),
     make: Effect.gen(function* () {
@@ -137,6 +142,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const invitations = yield* InvitationRecords.InvitationRecords;
       const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
       const teams = yield* TeamRecords.TeamRecords;
+      // ADR-EA-040: the plugin's system interfaces, built beneath this `make` by `exposes`.
+      const authority = yield* OrganizationAuthority.OrganizationAuthority;
+      const teamSystem = yield* OrganizationTeams.OrganizationTeams;
       const users = yield* Users.Users;
       const mailer = yield* Mailer.Mailer;
       // OHS-002: the cascades below commit or roll back as one unit. `layerNoop`
@@ -178,88 +186,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const afterUpdateRoleHook = yield* OrganizationHooks.AfterUpdateRole;
       const beforeDeleteRole = yield* OrganizationHooks.BeforeDeleteRole;
       const afterDeleteRole = yield* OrganizationHooks.AfterDeleteRole;
-      const beforeCreateTeam = yield* OrganizationHooks.BeforeCreateTeam;
-      const afterCreateTeam = yield* OrganizationHooks.AfterCreateTeam;
-      const beforeUpdateTeam = yield* OrganizationHooks.BeforeUpdateTeam;
-      const afterUpdateTeam = yield* OrganizationHooks.AfterUpdateTeam;
-      const beforeMoveTeam = yield* OrganizationHooks.BeforeMoveTeam;
-      const afterMoveTeam = yield* OrganizationHooks.AfterMoveTeam;
-      const beforeDeleteTeam = yield* OrganizationHooks.BeforeDeleteTeam;
-      const afterDeleteTeam = yield* OrganizationHooks.AfterDeleteTeam;
-      const beforeAddTeamMember = yield* OrganizationHooks.BeforeAddTeamMember;
-      const afterAddTeamMember = yield* OrganizationHooks.AfterAddTeamMember;
-      const beforeUpdateTeamMemberRole = yield* OrganizationHooks.BeforeUpdateTeamMemberRole;
-      const afterUpdateTeamMemberRole = yield* OrganizationHooks.AfterUpdateTeamMemberRole;
-      const beforeRemoveTeamMember = yield* OrganizationHooks.BeforeRemoveTeamMember;
       const afterRemoveTeamMember = yield* OrganizationHooks.AfterRemoveTeamMember;
 
-      /** Static statements plus, when dynamic access control is enabled, every custom role this organization has defined. */
-      const statementsByRole = (organizationId: string) =>
-        Effect.flatMap(configNow, (orgConfig) =>
-          orgConfig.dynamicAccessControl.enabled
-            ? orgRoles.listByOrganization(organizationId).pipe(
-                Effect.map((rows) => {
-                  const dynamic: Record<string, PermissionEngine.Statements> = {};
-                  for (const row of rows) dynamic[row.role] = row.permission;
-                  return PermissionEngine.statementsByRoleFrom(
-                    orgConfig.permissionStatements,
-                    dynamic,
-                  );
-                }),
-              )
-            : Effect.succeed(PermissionEngine.statementsByRoleFrom(orgConfig.permissionStatements)),
-        );
-
-      const effectivePermissionsOf = (
-        organizationId: string,
-        membership: MembershipRecords.MembershipRecord,
-      ) =>
-        statementsByRole(organizationId).pipe(
-          Effect.map((byRole) => PermissionEngine.effectivePermissions(membership.role, byRole)),
-        );
-
-      /**
-       * MTI-009 (BEH-EA-147): a caller who is not a member of the organization
-       * gets `OrganizationNotFound` — byte-identical to the answer for an id that
-       * does not exist, so a denial never reveals that a tenant exists.
-       * `OrganizationPermissionDenied` (403) is reserved for a *member* who lacks
-       * the requested statement.
-       */
-      /**
-       * OHS-004: the team-role statements a `TeamMembershipRecord` may hold —
-       * `member` (nothing) plus whatever `OrganizationConfig.teamStatements` defines.
-       */
-      const teamRoleStatementsNow = Effect.map(
-        configNow,
-        (orgConfig): ReadonlyMap<string, PermissionEngine.Statements> =>
-          new Map([["member", {}], ...Object.entries(orgConfig.teamStatements)]),
-      );
-
-      /**
-       * OHS-004: what the caller's *team* roles confer on `teamId`: the statements of
-       * every role they hold on that team or any ancestor of it (authority flows down
-       * the subtree, never up or sideways).
-       */
-      const teamRoleAuthority = (callerId: Users.UserId, organizationId: string, teamId: string) =>
-        Effect.gen(function* () {
-          const teamRoleStatements = yield* teamRoleStatementsNow;
-          const ancestors = yield* teams.getAncestors(organizationId, teamId);
-          let authority: PermissionEngine.Statements = {};
-          for (const id of [teamId, ...ancestors.map((team) => team.id)]) {
-            const held = yield* teams.findTeamMembership(id, callerId);
-            if (Option.isSome(held)) {
-              authority = PermissionEngine.mergeStatements(
-                authority,
-                PermissionEngine.effectivePermissions(held.value.role, teamRoleStatements),
-              );
-            }
-          }
-          return authority;
-        });
+      const statementsByRole = authority.statementsByRole;
+      const effectivePermissionsOf = authority.effectivePermissions;
 
       /**
        * `teamId`, when given, widens the check for the `team` resource with the
-       * caller's team-scoped roles (`teamRoleAuthority`) — org-level statements are
+       * caller's team-scoped roles (`OrganizationAuthority.teamAuthority`) — org-level statements are
        * always the default, a team role only ever adds.
        */
       const requirePermission = (
@@ -290,7 +224,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             teamId !== undefined && resource === "team"
               ? PermissionEngine.mergeStatements(
                   orgEffective,
-                  yield* teamRoleAuthority(callerId, organizationId, teamId),
+                  yield* authority.teamAuthority(callerId, organizationId, teamId),
                 )
               : orgEffective;
           if (!PermissionEngine.hasPermission(effective, resource, action)) {
@@ -328,41 +262,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const held = PermissionEngine.effectivePermissions(granter.role, byRole);
           const requested = PermissionEngine.effectivePermissions(roleNames, byRole);
           if (!PermissionEngine.canGrant(requested, held)) {
-            return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
-          }
-        });
-
-      /**
-       * OHS-004: the same guards as `requireGrantable`/`requireOutranks`, for team roles —
-       * the names must be defined, and what they confer (and, when re-roling, what the
-       * target already holds) must be within the granter's authority over this team.
-       */
-      const requireGrantableTeamRole = (
-        granterId: Users.UserId,
-        organizationId: string,
-        teamId: string,
-        roleNames: ReadonlyArray<string>,
-        current?: ReadonlyArray<string>,
-      ) =>
-        Effect.gen(function* () {
-          const teamRoleStatements = yield* teamRoleStatementsNow;
-          if (roleNames.some((name) => !teamRoleStatements.has(name))) {
-            return yield* Effect.fail(new OrganizationApi.UnknownTeamRole());
-          }
-          const granter = yield* requireMembership(granterId, organizationId);
-          const held = PermissionEngine.mergeStatements(
-            yield* effectivePermissionsOf(organizationId, granter),
-            yield* teamRoleAuthority(granterId, organizationId, teamId),
-          );
-          const requested = PermissionEngine.effectivePermissions(roleNames, teamRoleStatements);
-          const outranked =
-            current === undefined
-              ? {}
-              : PermissionEngine.effectivePermissions(current, teamRoleStatements);
-          if (
-            !PermissionEngine.canGrant(requested, held) ||
-            !PermissionEngine.canGrant(outranked, held)
-          ) {
             return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
           }
         });
@@ -462,7 +361,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         }
 
         const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateOrganization)(
-          beforeCreate.run({ callerId, name, slug }),
+          beforeCreate.run({ actor: OrganizationActor.user(caller), callerId, name, slug }),
         );
 
         const record = yield* orgs
@@ -493,6 +392,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         });
 
         yield* afterCreate.run({
+          actor: OrganizationActor.user(caller),
           callerId,
           name: vetoed.name,
           slug: vetoed.slug,
@@ -547,7 +447,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           yield* requireKnownRegion(input.homeRegion);
           const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateOrganization)(
-            beforeUpdate.run({ organizationId, name: input.name, slug: input.slug }),
+            beforeUpdate.run({
+              actor: OrganizationActor.user(caller),
+              organizationId,
+              name: input.name,
+              slug: input.slug,
+            }),
           );
           const record = yield* orgs
             .update(organizationId, { ...input, name: vetoed.name, slug: vetoed.slug })
@@ -563,7 +468,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
               ),
             );
           yield* events.publish({ _tag: "auth.organization.updated", organizationId });
-          yield* afterUpdate.run({ organizationId, name: vetoed.name, slug: vetoed.slug });
+          yield* afterUpdate.run({
+            actor: OrganizationActor.user(caller),
+            organizationId,
+            name: vetoed.name,
+            slug: vetoed.slug,
+          });
           return record;
         },
       );
@@ -581,7 +491,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "delete",
           );
           yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteOrganization)(
-            beforeDelete.run({ organizationId }),
+            beforeDelete.run({ actor: OrganizationActor.user(caller), organizationId }),
           );
           // OHS-002: the five-table cascade is one transaction — a failure at any
           // step leaves every organization_* row untouched. Hooks and events stay
@@ -609,7 +519,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({ _tag: "auth.organization.deleted", organizationId });
-          yield* afterDelete.run({ organizationId });
+          yield* afterDelete.run({ actor: OrganizationActor.user(caller), organizationId });
         },
       );
 
@@ -660,6 +570,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           .pipe(Effect.catchTag("SqlError", Effect.die));
 
       const announceTeamDepartures = (
+        actor: OrganizationActor.Actor,
         organizationId: string,
         userId: Users.UserId,
         teamIds: ReadonlyArray<string>,
@@ -674,7 +585,16 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 teamId,
                 userId,
               })
-              .pipe(Effect.andThen(afterRemoveTeamMember.run({ organizationId, teamId, userId }))),
+              .pipe(
+                Effect.andThen(
+                  afterRemoveTeamMember.run({
+                    actor,
+                    organizationId,
+                    teamId,
+                    userId,
+                  }),
+                ),
+              ),
           { discard: true },
         );
 
@@ -702,7 +622,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "member", "delete");
           yield* HookPoint.aborted(OrganizationHooks.BeforeRemoveMember)(
-            beforeRemove.run({ organizationId, userId: targetUserId }),
+            beforeRemove.run({
+              actor: OrganizationActor.user(caller),
+              organizationId,
+              userId: targetUserId,
+            }),
           );
           const leftTeams = yield* dropMembership(organizationId, targetUserId);
           yield* events.publish({
@@ -710,8 +634,17 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             organizationId,
             userId: targetUserId,
           });
-          yield* announceTeamDepartures(organizationId, targetUserId, leftTeams);
-          yield* afterRemove.run({ organizationId, userId: targetUserId });
+          yield* announceTeamDepartures(
+            OrganizationActor.user(caller),
+            organizationId,
+            targetUserId,
+            leftTeams,
+          );
+          yield* afterRemove.run({
+            actor: OrganizationActor.user(caller),
+            organizationId,
+            userId: targetUserId,
+          });
         },
       );
 
@@ -742,7 +675,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "update",
           );
           const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateMemberRole)(
-            beforeUpdateRole.run({ organizationId, userId: targetUserId, role }),
+            beforeUpdateRole.run({
+              actor: OrganizationActor.user(caller),
+              organizationId,
+              userId: targetUserId,
+              role,
+            }),
           );
           // RRM-001: after the veto hook (a tap may rewrite the role), the
           // caller must hold every statement it is conferring, and must not
@@ -765,7 +703,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             userId: targetUserId,
             role: vetoed.role,
           });
-          yield* afterUpdateRole.run({ organizationId, userId: targetUserId, role: vetoed.role });
+          yield* afterUpdateRole.run({
+            actor: OrganizationActor.user(caller),
+            organizationId,
+            userId: targetUserId,
+            role: vetoed.role,
+          });
           return updated;
         },
       );
@@ -794,7 +737,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // runs the same remove-member hooks — `DecisionCacheInvalidationLive`
           // (and any other observer) must see a member leaving.
           yield* HookPoint.aborted(OrganizationHooks.BeforeRemoveMember)(
-            beforeRemove.run({ organizationId, userId: callerId }),
+            beforeRemove.run({
+              actor: OrganizationActor.user(caller),
+              organizationId,
+              userId: callerId,
+            }),
           );
           const leftTeams = yield* dropMembership(organizationId, callerId);
           yield* events.publish({
@@ -802,8 +749,17 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             organizationId,
             userId: callerId,
           });
-          yield* announceTeamDepartures(organizationId, callerId, leftTeams);
-          yield* afterRemove.run({ organizationId, userId: callerId });
+          yield* announceTeamDepartures(
+            OrganizationActor.user(caller),
+            organizationId,
+            callerId,
+            leftTeams,
+          );
+          yield* afterRemove.run({
+            actor: OrganizationActor.user(caller),
+            organizationId,
+            userId: callerId,
+          });
         },
       );
 
@@ -818,7 +774,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           return yield* Effect.fail(new OrganizationApi.MembershipLimitReached());
         }
         const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeAddMember)(
-          beforeAdd.run({ organizationId, userId, role }),
+          beforeAdd.run({
+            actor: OrganizationActor.application("organization.addMember"),
+            organizationId,
+            userId,
+            role,
+          }),
         );
         // RRM-001: a trusted, caller-less server-side primitive (SCIM/import) —
         // it bypasses the grant guard by design, but still only stores role
@@ -841,27 +802,16 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           userId,
           role: vetoed.role,
         });
-        yield* afterAdd.run({ organizationId, userId, role: vetoed.role });
+        yield* afterAdd.run({
+          actor: OrganizationActor.application("organization.addMember"),
+          organizationId,
+          userId,
+          role: vetoed.role,
+        });
         return membership;
       });
 
-      const checkRoleCeiling: OrganizationShape["checkRoleCeiling"] = Effect.fnUntraced(function* ({
-        organizationId,
-        roles,
-        ceiling,
-      }) {
-        yield* requireOrganization(organizationId);
-        const byRole = yield* statementsByRole(organizationId);
-        if (roles.some((name) => !byRole.has(name))) return Option.some("unknownRole" as const);
-        if (ceiling.some((name) => !byRole.has(name)))
-          return Option.some("unknownCeiling" as const);
-        return PermissionEngine.canGrant(
-          PermissionEngine.effectivePermissions(roles, byRole),
-          PermissionEngine.effectivePermissions(ceiling, byRole),
-        )
-          ? Option.none()
-          : Option.some("exceedsCeiling" as const);
-      });
+      const checkRoleCeiling: OrganizationShape["checkRoleCeiling"] = authority.checkRoleCeiling;
 
       const syncMemberRoles: OrganizationShape["syncMemberRoles"] = Effect.fnUntraced(function* ({
         organizationId,
@@ -909,7 +859,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
         }
         const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateMemberRole)(
-          beforeUpdateRole.run({ organizationId, userId, role: roles }),
+          beforeUpdateRole.run({
+            actor: OrganizationActor.application("organization.syncMemberRoles"),
+            organizationId,
+            userId,
+            role: roles,
+          }),
         );
         const updated = yield* members
           .updateRole(userId, organizationId, vetoed.role)
@@ -927,7 +882,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           userId,
           role: vetoed.role,
         });
-        yield* afterUpdateRole.run({ organizationId, userId, role: vetoed.role });
+        yield* afterUpdateRole.run({
+          actor: OrganizationActor.application("organization.syncMemberRoles"),
+          organizationId,
+          userId,
+          role: vetoed.role,
+        });
         return { membership: updated, change: "updated" as const };
       });
 
@@ -1062,7 +1022,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           }
 
           const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateInvitation)(
-            beforeCreateInvitation.run({ organizationId, email: input.email, role: input.role }),
+            beforeCreateInvitation.run({
+              actor: OrganizationActor.user(caller),
+              organizationId,
+              email: input.email,
+              role: input.role,
+            }),
           );
           // RRM-002: an invitation can only confer statements the inviter holds.
           yield* requireGrantable(organizationId, inviter, vetoed.role);
@@ -1167,6 +1132,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             organizationId,
           });
           yield* afterCreateInvitation.run({
+            actor: OrganizationActor.user(caller),
             organizationId,
             email: record.email,
             role: vetoed.role,
@@ -1221,7 +1187,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const acceptInvitation: OrganizationShape["acceptInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId, token) {
           yield* HookPoint.aborted(OrganizationHooks.BeforeAcceptInvitation)(
-            beforeAccept.run({ invitationId }),
+            beforeAccept.run({ actor: OrganizationActor.user(caller), invitationId }),
           );
 
           const record = yield* requirePendingInvitation(invitationId, token);
@@ -1326,6 +1292,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             }
           }
           yield* afterAccept.run({
+            actor: OrganizationActor.user(caller),
             invitationId,
             organizationId: record.organizationId,
             userId: callerId,
@@ -1337,7 +1304,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const rejectInvitation: OrganizationShape["rejectInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId, token) {
           yield* HookPoint.aborted(OrganizationHooks.BeforeRejectInvitation)(
-            beforeReject.run({ invitationId }),
+            beforeReject.run({ actor: OrganizationActor.user(caller), invitationId }),
           );
 
           const record = yield* requirePendingInvitation(invitationId, token);
@@ -1354,14 +1321,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             invitationId,
             organizationId: record.organizationId,
           });
-          yield* afterReject.run({ invitationId });
+          yield* afterReject.run({ actor: OrganizationActor.user(caller), invitationId });
         },
       );
 
       const cancelInvitation: OrganizationShape["cancelInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId) {
           yield* HookPoint.aborted(OrganizationHooks.BeforeCancelInvitation)(
-            beforeCancel.run({ invitationId }),
+            beforeCancel.run({ actor: OrganizationActor.user(caller), invitationId }),
           );
 
           // MTI-009: a non-member must not be able to tell an existing invitation
@@ -1398,7 +1365,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             invitationId,
             organizationId: record.organizationId,
           });
-          yield* afterCancel.run({ invitationId });
+          yield* afterCancel.run({ actor: OrganizationActor.user(caller), invitationId });
         },
       );
 
@@ -1507,7 +1474,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           }
 
           const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateRole)(
-            beforeCreateRole.run({ organizationId, role: input.role }),
+            beforeCreateRole.run({
+              actor: OrganizationActor.user(caller),
+              organizationId,
+              role: input.role,
+            }),
           );
 
           const record = yield* orgRoles
@@ -1522,7 +1493,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             organizationId,
             role: record.role,
           });
-          yield* afterCreateRole.run({ organizationId, role: record.role, roleId: record.id });
+          yield* afterCreateRole.run({
+            actor: OrganizationActor.user(caller),
+            organizationId,
+            role: record.role,
+            roleId: record.id,
+          });
           return record;
         },
       );
@@ -1573,7 +1549,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           }
 
           yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateRole)(
-            beforeUpdateRoleHook.run({ organizationId, roleId }),
+            beforeUpdateRoleHook.run({
+              actor: OrganizationActor.user(caller),
+              organizationId,
+              roleId,
+            }),
           );
 
           const updated = yield* orgRoles
@@ -1591,7 +1571,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             organizationId,
             role: updated.role,
           });
-          yield* afterUpdateRoleHook.run({ organizationId, roleId });
+          yield* afterUpdateRoleHook.run({
+            actor: OrganizationActor.user(caller),
+            organizationId,
+            roleId,
+          });
           return updated;
         },
       );
@@ -1603,7 +1587,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "delete");
           const existing = yield* requireOrgRole(organizationId, roleId);
           yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteRole)(
-            beforeDeleteRole.run({ organizationId, roleId }),
+            beforeDeleteRole.run({ actor: OrganizationActor.user(caller), organizationId, roleId }),
           );
           yield* orgRoles
             .remove(organizationId, roleId)
@@ -1620,15 +1604,21 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             organizationId,
             role: existing.role,
           });
-          yield* afterDeleteRole.run({ organizationId, roleId });
+          yield* afterDeleteRole.run({
+            actor: OrganizationActor.user(caller),
+            organizationId,
+            roleId,
+          });
         },
       );
 
-      // ---- teams --------------------------------------------------------------
-
-      const requireTeamsEnabled = Effect.flatMap(configNow, (orgConfig) =>
-        orgConfig.teams.enabled ? Effect.void : Effect.fail(new OrganizationApi.TeamsDisabled()),
-      );
+      // ---- teams: authorization on top of `OrganizationTeams` ------------------------
+      //
+      // Every method below is a guard plus a delegate: MTI-009 visibility, the `teams.enabled` gate
+      // in PV-300 order, `requirePermission` (with its PERS-005 denial event) and, for a roster
+      // role, the caller's grant ceiling as a `Bound`. What a team operation means (quotas, the
+      // last-team rule, vetoes, the transaction, events) lives in `OrganizationTeams`, once, for
+      // every caller (SCIM Groups included).
 
       /**
        * PV-300 (MTI-009): the membership gate comes *before* the feature gate. A
@@ -1637,7 +1627,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        * which organization ids exist.
        */
       const requireTeamsFor = (callerId: Users.UserId, organizationId: string) =>
-        requireMembership(callerId, organizationId).pipe(Effect.andThen(requireTeamsEnabled));
+        requireMembership(callerId, organizationId).pipe(Effect.andThen(teamSystem.requireEnabled));
 
       const requireTeam = (organizationId: string, teamId: string) =>
         teams.findTeamById(organizationId, teamId).pipe(
@@ -1649,57 +1639,52 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           ),
         );
 
+      /**
+       * OHS-004: what the caller may confer on a team roster is what their organization roles
+       * and their team roles on this team (or an ancestor) grant, merged.
+       */
+      const teamCeiling = Effect.fnUntraced(function* (
+        granter: MembershipRecords.MembershipRecord,
+        organizationId: string,
+        teamId: string,
+      ) {
+        return OrganizationActor.Bound.Ceiling({
+          statements: PermissionEngine.mergeStatements(
+            yield* effectivePermissionsOf(organizationId, granter),
+            yield* authority.teamAuthority(granter.userId, organizationId, teamId),
+          ),
+        });
+      });
+
       const createTeam: OrganizationShape["createTeam"] = Effect.fnUntraced(
         function* (caller, organizationId, name, parentId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requireTeamsFor(callerId, organizationId);
           // OHS-004: a nested team needs `team:create` on its parent (a team role held
           // on the parent or an ancestor suffices); a root team needs it org-level.
-          yield* requirePermission(
-            Users.UserId(caller.ref.id),
-            organizationId,
-            "team",
-            "create",
-            parentId,
-          );
-          if (parentId !== undefined) yield* requireTeam(organizationId, parentId);
-          const count = yield* teams.countTeamsByOrganization(organizationId);
-          if (count >= (yield* limitsOf(organizationId)).maximumTeams) {
-            return yield* Effect.fail(new OrganizationApi.TeamLimitReached());
-          }
-          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateTeam)(
-            beforeCreateTeam.run({ organizationId, name, parentId }),
-          );
-          const record = yield* teams
-            .createTeam({ organizationId, name: vetoed.name, parentId: vetoed.parentId })
+          yield* requirePermission(callerId, organizationId, "team", "create", parentId);
+          const { team } = yield* teamSystem
+            .create(OrganizationActor.user(caller), { organizationId, name, parentId })
             .pipe(
-              Effect.catchTag("TeamRecordNotFound", () =>
-                Effect.fail(new OrganizationApi.TeamNotFound()),
-              ),
+              // Only an `initialMembers` roster can raise these; this method has none.
+              Effect.catchTags({
+                MembershipNotFound: Effect.die,
+                TeamMemberLimitReached: Effect.die,
+              }),
             );
-          yield* events.publish({
-            _tag: "auth.organization.teamCreated",
-            organizationId,
-            teamId: record.id,
-          });
-          yield* afterCreateTeam.run({
-            organizationId,
-            name: vetoed.name,
-            parentId: vetoed.parentId,
-            teamId: record.id,
-          });
-          return record;
+          return team;
         },
       );
 
       const moveTeam: OrganizationShape["moveTeam"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, parentId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requireTeamsFor(callerId, organizationId);
           // OHS-004: authority over the team *and* over its destination — a move can
           // hand a subtree to another team's leads, so the target's own authority is
           // required too; the root is org-level.
-          const callerId = Users.UserId(caller.ref.id);
           yield* requirePermission(callerId, organizationId, "team", "update", teamId);
           yield* requirePermission(
             callerId,
@@ -1708,28 +1693,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "update",
             Option.getOrUndefined(parentId),
           );
-          yield* requireTeam(organizationId, teamId);
-          if (Option.isSome(parentId)) yield* requireTeam(organizationId, parentId.value);
-          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeMoveTeam)(
-            beforeMoveTeam.run({ organizationId, teamId, parentId: Option.getOrNull(parentId) }),
-          );
-          const moved = yield* teams
-            .moveTeam({ organizationId, id: teamId, parentId: Option.fromNullOr(vetoed.parentId) })
-            .pipe(
-              Effect.catchTags({
-                TeamRecordNotFound: () => Effect.fail(new OrganizationApi.TeamNotFound()),
-                "TeamRecords/HierarchyCycle": () =>
-                  Effect.fail(new OrganizationApi.TeamHierarchyCycle()),
-              }),
-            );
-          yield* events.publish({
-            _tag: "auth.organization.teamMoved",
+          return yield* teamSystem.move(OrganizationActor.user(caller), {
             organizationId,
             teamId,
-            parentId: vetoed.parentId,
+            parentId,
           });
-          yield* afterMoveTeam.run({ organizationId, teamId, parentId: vetoed.parentId });
-          return moved;
         },
       );
 
@@ -1738,9 +1706,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
-          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
-          yield* requireTeam(organizationId, teamId);
-          return yield* teams.getAncestors(organizationId, teamId);
+          return yield* teamSystem.ancestors(organizationId, teamId);
         },
       );
 
@@ -1748,21 +1714,17 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
-          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
-          yield* requireTeam(organizationId, teamId);
-          return yield* teams.getDescendants(organizationId, teamId);
+          return yield* teamSystem.descendants(organizationId, teamId);
         },
       );
 
       const listTeams: OrganizationShape["listTeams"] = Effect.fnUntraced(
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
+          // MTI-002: any authenticated principal could otherwise enumerate another tenant's team
+          // names and counts — `requireTeamsFor` makes the read member-only.
           yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
-          // MTI-002: any authenticated principal could otherwise enumerate
-          // another tenant's team names/counts — member-only, mirroring
-          // `getFull`'s own `requireMembership` posture for a read.
-          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
-          return yield* teams.listTeamsByOrganization(organizationId);
+          return yield* teamSystem.list(organizationId);
         },
       );
 
@@ -1770,97 +1732,40 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
-          return yield* teams.listTeamsByUser(organizationId, Users.UserId(caller.ref.id));
+          return yield* teamSystem.listForUser(organizationId, Users.UserId(caller.ref.id));
         },
       );
 
       const updateTeam: OrganizationShape["updateTeam"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, name) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
-          yield* requirePermission(
-            Users.UserId(caller.ref.id),
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requireTeamsFor(callerId, organizationId);
+          yield* requirePermission(callerId, organizationId, "team", "update", teamId);
+          return yield* teamSystem.rename(OrganizationActor.user(caller), {
             organizationId,
-            "team",
-            "update",
             teamId,
-          );
-          yield* requireTeam(organizationId, teamId);
-          const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateTeam)(
-            beforeUpdateTeam.run({ organizationId, teamId, name }),
-          );
-          const updated = yield* teams
-            .updateTeam(organizationId, teamId, vetoed.name)
-            .pipe(
-              Effect.catchTag("TeamRecordNotFound", () =>
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: team vanished between check and write",
-                ),
-              ),
-            );
-          yield* events.publish({ _tag: "auth.organization.teamUpdated", organizationId, teamId });
-          yield* afterUpdateTeam.run({ organizationId, teamId, name: vetoed.name });
-          return updated;
+            name,
+          });
         },
       );
 
       const removeTeam: OrganizationShape["removeTeam"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
-          yield* requirePermission(
-            Users.UserId(caller.ref.id),
-            organizationId,
-            "team",
-            "delete",
-            teamId,
-          );
-          yield* requireTeam(organizationId, teamId);
-          const count = yield* teams.countTeamsByOrganization(organizationId);
-          if (count <= 1 && !(yield* configNow).teams.allowRemovingAllTeams) {
-            return yield* Effect.fail(new OrganizationApi.LastTeamCannotBeRemoved());
-          }
-          // OHS-001: refuse before the veto hook runs; the records layer re-checks atomically.
-          const below = yield* teams.getDescendants(organizationId, teamId);
-          if (below.length > 0) return yield* Effect.fail(new OrganizationApi.TeamHasChildren());
-          yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteTeam)(
-            beforeDeleteTeam.run({ organizationId, teamId }),
-          );
-          yield* sqlTransaction
-            .withTransaction(
-              Effect.gen(function* () {
-                yield* teams.removeTeam(organizationId, teamId).pipe(
-                  Effect.catchTags({
-                    TeamRecordNotFound: () =>
-                      Defects.invariantViolation(
-                        "RowVanished",
-                        "awthaq: team vanished between check and write",
-                      ),
-                    "TeamRecords/HasChildren": () =>
-                      Effect.fail(new OrganizationApi.TeamHasChildren()),
-                  }),
-                );
-                // CWM-003/OHS-007: no session may keep the deleted team active.
-                yield* activeContext.clearTeam(teamId);
-              }),
-            )
-            .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({ _tag: "auth.organization.teamDeleted", organizationId, teamId });
-          yield* afterDeleteTeam.run({ organizationId, teamId });
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requireTeamsFor(callerId, organizationId);
+          yield* requirePermission(callerId, organizationId, "team", "delete", teamId);
+          yield* teamSystem.remove(OrganizationActor.user(caller), { organizationId, teamId });
         },
       );
 
       const listTeamMembers: OrganizationShape["listTeamMembers"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
+          // MTI-002: a team roster is personal data about another tenant's staff — member-only.
           yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
-          yield* requireTeam(organizationId, teamId);
-          // MTI-002: a team roster is personal data about another tenant's
-          // staff — member-only, mirroring `getFull`'s own
-          // `requireMembership` posture for a read.
-          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
-          return yield* teams.listTeamMembers(teamId);
+          return yield* teamSystem.members(organizationId, teamId);
         },
       );
 
@@ -1872,117 +1777,57 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         role = ["member"],
       ) {
         yield* requireOrganization(organizationId);
-        yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
         const callerId = Users.UserId(caller.ref.id);
-        yield* requirePermission(callerId, organizationId, "team", "update", teamId);
-        const team = yield* requireTeam(organizationId, teamId);
-        yield* requireGrantableTeamRole(callerId, organizationId, teamId, role);
-        const targetMembership = yield* members.findByUserAndOrg(targetUserId, organizationId);
-        if (Option.isNone(targetMembership)) {
-          return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
-        }
-        if (team.memberCount >= (yield* limitsOf(organizationId)).maximumMembersPerTeam) {
-          return yield* Effect.fail(new OrganizationApi.TeamMemberLimitReached());
-        }
-        yield* HookPoint.aborted(OrganizationHooks.BeforeAddTeamMember)(
-          beforeAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role }),
+        yield* requireTeamsFor(callerId, organizationId);
+        const granter = yield* requirePermission(
+          callerId,
+          organizationId,
+          "team",
+          "update",
+          teamId,
         );
-        // OHS-003: a second add is refused — it would over-count `memberCount`.
-        const onTeam = yield* teams.findTeamMembership(teamId, targetUserId);
-        if (Option.isSome(onTeam)) {
-          return yield* Effect.fail(new OrganizationApi.AlreadyTeamMember());
-        }
-        const record = yield* teams
-          .addTeamMember({ teamId, userId: targetUserId, role })
-          .pipe(
-            Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
-              Effect.fail(new OrganizationApi.AlreadyTeamMember()),
-            ),
-          );
-        yield* events.publish({
-          _tag: "auth.organization.teamMemberAdded",
+        return yield* teamSystem.addMember(OrganizationActor.user(caller), {
           organizationId,
           teamId,
           userId: targetUserId,
+          role,
+          bound: yield* teamCeiling(granter, organizationId, teamId),
         });
-        yield* afterAddTeamMember.run({ organizationId, teamId, userId: targetUserId, role });
-        return record;
       });
 
       const updateTeamMemberRole: OrganizationShape["updateTeamMemberRole"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, targetUserId, role) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           const callerId = Users.UserId(caller.ref.id);
-          yield* requirePermission(callerId, organizationId, "team", "update", teamId);
-          yield* requireTeam(organizationId, teamId);
-          const target = yield* teams.findTeamMembership(teamId, targetUserId);
-          if (Option.isNone(target)) {
-            return yield* Effect.fail(new OrganizationApi.TeamMembershipNotFound());
-          }
-          yield* requireGrantableTeamRole(
+          yield* requireTeamsFor(callerId, organizationId);
+          const granter = yield* requirePermission(
             callerId,
             organizationId,
+            "team",
+            "update",
             teamId,
-            role,
-            target.value.role,
           );
-          yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateTeamMemberRole)(
-            beforeUpdateTeamMemberRole.run({ organizationId, teamId, userId: targetUserId, role }),
-          );
-          const updated = yield* teams
-            .updateTeamMemberRole(teamId, targetUserId, role)
-            .pipe(
-              Effect.catchTag("TeamMembershipRecordNotFound", () =>
-                Effect.fail(new OrganizationApi.TeamMembershipNotFound()),
-              ),
-            );
-          yield* events.publish({
-            _tag: "auth.organization.teamMemberRoleUpdated",
+          return yield* teamSystem.setMemberRole(OrganizationActor.user(caller), {
             organizationId,
             teamId,
             userId: targetUserId,
             role,
+            bound: yield* teamCeiling(granter, organizationId, teamId),
           });
-          yield* afterUpdateTeamMemberRole.run({
-            organizationId,
-            teamId,
-            userId: targetUserId,
-            role,
-          });
-          return updated;
         },
       );
 
       const removeTeamMember: OrganizationShape["removeTeamMember"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, targetUserId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
-          yield* requirePermission(
-            Users.UserId(caller.ref.id),
-            organizationId,
-            "team",
-            "update",
-            teamId,
-          );
-          yield* requireTeam(organizationId, teamId);
-          yield* HookPoint.aborted(OrganizationHooks.BeforeRemoveTeamMember)(
-            beforeRemoveTeamMember.run({ organizationId, teamId, userId: targetUserId }),
-          );
-          yield* teams
-            .removeTeamMember(teamId, targetUserId)
-            .pipe(
-              Effect.catchTag("TeamMembershipRecordNotFound", () =>
-                Effect.fail(new OrganizationApi.TeamMembershipNotFound()),
-              ),
-            );
-          yield* events.publish({
-            _tag: "auth.organization.teamMemberRemoved",
+          const callerId = Users.UserId(caller.ref.id);
+          yield* requireTeamsFor(callerId, organizationId);
+          yield* requirePermission(callerId, organizationId, "team", "update", teamId);
+          yield* teamSystem.removeMember(OrganizationActor.user(caller), {
             organizationId,
             teamId,
             userId: targetUserId,
           });
-          yield* afterRemoveTeamMember.run({ organizationId, teamId, userId: targetUserId });
         },
       );
 
@@ -2001,20 +1846,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const attributesFor: OrganizationShape["attributesFor"] = (organizationId, userId) =>
-        members
-          .findByUserAndOrg(userId, organizationId)
-          .pipe(
-            Effect.flatMap((membership) =>
-              Option.isNone(membership)
-                ? Effect.succeed(Option.none())
-                : effectivePermissionsOf(organizationId, membership.value).pipe(
-                    Effect.map((permissions) =>
-                      Option.some({ role: membership.value.role, permissions }),
-                    ),
-                  ),
-            ),
-          );
+      const attributesFor: OrganizationShape["attributesFor"] = authority.attributesFor;
 
       return Organization.of({
         create,
