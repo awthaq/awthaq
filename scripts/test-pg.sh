@@ -26,6 +26,7 @@ suites=(
   packages/sql/test/UnitOfWork.test.ts
   packages/test/test/StoreContract.sql.test.ts
   packages/test/test/TestAuthRecords.test.ts
+  examples/plugin-template/test/Template.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
   packages/api-key/test/StoreOutage.test.ts
