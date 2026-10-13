@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-30 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-10-13): `DELETE` in `erase` mode runs `AccountErasure.eraseAccount` with a `Directory` initiator (BEH-EA-250), is announced by core's `auth.user.deleted` ahead of `auth.scim.userDeleted` (BEH-EA-253), and `@awthaq/scim` takes part in every erasure and export (architecture plan 03) <br> 1.2 (2026-10-13): a failed `POST` abandons the user through `Users.createWith` (no veto, no event) and leaves invitations to the address alone (BEH-EA-247, architecture plan 03) |
+> | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-10-13): `DELETE` in `erase` mode runs `AccountErasure.eraseAccount` with a `Directory` initiator (BEH-EA-250), is announced by core's `auth.user.deleted` ahead of `auth.scim.userDeleted` (BEH-EA-253), and `@awthaq/scim` takes part in every erasure and export (architecture plan 03) <br> 1.2 (2026-10-13): a failed `POST` abandons the user through `Users.createWith` (no veto, no event) and leaves invitations to the address alone (BEH-EA-247, architecture plan 03) <br> 1.3 (2026-10-13): provisioning is a sign-up: `BeforeSignUp` (strategy `scim:<organizationId>:<connectionId>`) can veto it with a 403, and `auth.user.created` and `AfterSignUp` follow the commit (BEH-EA-247, BEH-EA-253, ADR-EA-038, architecture plan 01) |
 ---
 
 > `@awthaq/scim` composes as `Auth.make([Organization, Scim])` (`Scim` `dependsOn: [Organization]`), serves `/scim/v2` per RFC 7644, and stands on the user status of [BEH-EA-46](06-domain-users-accounts.md) and `Sessions.revokeAll`. Everything below is what a directory service (Okta, Entra ID, OneLogin) relies on, plus the safety rules that keep an organization's directory from reaching accounts it did not create.
@@ -52,7 +52,7 @@ REQUIREMENT: `POST /Users` MUST create the user (an `Email` identity from the
              connection's, or one that was never provisioned — is `404`.
 ```
 
-A failed `POST` abandons the half-made user (`Users.createWith`): no `BeforeUserDelete` veto runs, no event is published, and invitations addressed to the same email in any organization are left alone, because abandoning a creation is not an erasure ([BEH-EA-046](06-domain-users-accounts.md)).
+Provisioning is a sign-up ([ADR-EA-038](../decisions/038-sign-in-and-sign-up-are-core-modules.md)): `SignUp.vet` consults `BeforeSignUp` with strategy `scim:<organizationId>:<connectionId>` before anything is written (a veto answers `403` with the tap's message), and the user, mapping and membership commit as one unit. A failed `POST` abandons the half-made user (`SignUp.createWith`): no `BeforeUserDelete` veto runs, no `auth.user.created` is published, and invitations addressed to the same email in any organization are left alone, because abandoning a creation is not an erasure ([BEH-EA-046](06-domain-users-accounts.md)).
 
 This is the rule that keeps SCIM safe on a global identity directory ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md) Decision 4): if a directory could name any user, one organization's token could claim, then deactivate, another organization's account by email.
 
@@ -169,8 +169,10 @@ REQUIREMENT: The plugin MUST publish `auth.scim.userProvisioned`,
              (`created`/`updated`/`deleted`), each naming the SCIM connection
              and organization, so the durable `AuditLog` ([BEH-EA-100](13-events.md))
              records who was provisioned or offboarded and by which directory.
-             A repeat `POST` that converges on an existing user MUST NOT
-             publish `userProvisioned` again.
+             A new user MUST also be announced by `auth.user.created` and
+             `AfterSignUp`, once per provisioned user. A repeat `POST` that
+             converges on an existing user MUST NOT publish `userProvisioned`
+             (or `auth.user.created`) again.
 ```
 
 An erasing `DELETE` is also announced by core's `auth.user.deleted` (`deletedBy: "directory"`, with the connection and organization ids), which precedes `auth.scim.userDeleted`; the latter is published only for a deletion this request performed.

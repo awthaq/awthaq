@@ -38,6 +38,7 @@ import {
   Errors,
   Migrations,
   Sessions,
+  SignUp,
   Users,
 } from "@awthaq/core";
 import {
@@ -46,7 +47,7 @@ import {
   Organization,
   TeamRecords,
 } from "@awthaq/organization";
-import { Defects } from "@awthaq/ports";
+import { Defects, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -468,6 +469,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
   migrations: scimMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Scim, {
+    ports: [SqlTransaction.SqlTransaction],
     dependsOn: [Organization.Organization],
     contributes: Layer.mergeAll(scimErasure, scimExport),
     handlers: HttpApiBuilder.group(
@@ -575,6 +577,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
       const users = yield* Users.Users;
+      const creation = yield* SignUp.make;
       const sessions = yield* Sessions.Sessions;
       const erasure = yield* Erasure.AccountErasure;
       const organization = yield* Organization.Organization;
@@ -763,72 +766,77 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         if (Option.isSome(email) && Option.isSome(yield* users.findByEmail(email.value))) {
           return yield* ScimApi.conflict(`An account for ${email.value} already exists`);
         }
-        // `createWith` abandons the user (no veto, no event, invitations untouched) if the mapping or
-        // the membership fails, so a failed POST leaves nothing behind (REQ-EA-926).
-        const { user: created, value: link } = yield* users
-          .createWith(
-            {
-              identity: Option.match(email, {
-                onNone: () => ({ _tag: "Anonymous" as const }),
-                onSome: (value) => ({ _tag: "Email" as const, email: value }),
-              }),
-              name: nameFromInput(input),
-            },
-            (user) =>
-              Effect.gen(function* () {
-                const link = yield* records
-                  .link({
-                    connectionId: connection.id,
-                    kind: "User",
-                    resourceId: user.id,
-                    name: userName,
-                    externalId:
-                      input.externalId?.trim() === "" ? undefined : input.externalId?.trim(),
-                  })
-                  .pipe(
-                    Effect.catchTag("ScimLinkConflict", (error) =>
-                      Effect.fail(
-                        ScimApi.conflict(
-                          error.field === "externalId"
-                            ? `externalId ${input.externalId ?? ""} is already provisioned`
-                            : `userName ${userName} is already provisioned`,
-                        ),
+        // ADR-EA-038: the directory's creation is a sign-up like any other, so `BeforeSignUp` can veto it
+        // (a directory sync answers 403 with the tap's message) before anything is written, and
+        // `auth.user.created`/`AfterSignUp` run after the unit commits. `createWith` abandons the user
+        // (invitations untouched) if the mapping or the membership fails, so a failed POST leaves nothing
+        // behind (REQ-EA-926) without the delete a legal-hold tap could veto.
+        const vetted = yield* creation
+          .vet({
+            identity: Option.match(email, {
+              onNone: () => ({ _tag: "Anonymous" as const }),
+              onSome: (value) => ({ _tag: "Email" as const, email: value }),
+            }),
+            name: nameFromInput(input),
+            strategy: `scim:${connection.organizationId}:${connection.id}`,
+          })
+          .pipe(
+            Effect.catchTag("HookAborted", (aborted) =>
+              Effect.fail(ScimApi.forbidden(aborted.message)),
+            ),
+          );
+        const { user: created, value: link } = yield* creation
+          .createWith(vetted, {}, (user) =>
+            Effect.gen(function* () {
+              const link = yield* records
+                .link({
+                  connectionId: connection.id,
+                  kind: "User",
+                  resourceId: user.id,
+                  name: userName,
+                  externalId:
+                    input.externalId?.trim() === "" ? undefined : input.externalId?.trim(),
+                })
+                .pipe(
+                  Effect.catchTag("ScimLinkConflict", (error) =>
+                    Effect.fail(
+                      ScimApi.conflict(
+                        error.field === "externalId"
+                          ? `externalId ${input.externalId ?? ""} is already provisioned`
+                          : `userName ${userName} is already provisioned`,
                       ),
                     ),
-                  );
-                yield* membershipAdded(connection, user.id).pipe(
-                  // The link was written above; abandoning the user must not leave the mapping behind.
-                  Effect.onError(() => records.unlink(connection.id, "User", user.id)),
-                  Effect.catchTags({
-                    MembershipLimitReached: () =>
-                      Effect.fail(
-                        ScimApi.forbidden("The organization's membership limit is reached"),
-                      ),
-                    HookAborted: (aborted) => Effect.fail(ScimApi.forbidden(aborted.message)),
-                    OrganizationNotFound: () =>
-                      Effect.fail(ScimApi.forbidden("The organization is not available")),
-                    UnknownOrgRole: () =>
-                      Effect.fail(ScimApi.forbidden("The configured member role is unknown")),
-                  }),
+                  ),
                 );
-                return link;
-              }),
+              yield* membershipAdded(connection, user.id).pipe(
+                // The link was written above; abandoning the user must not leave the mapping behind.
+                Effect.onError(() => records.unlink(connection.id, "User", user.id)),
+                Effect.catchTags({
+                  MembershipLimitReached: () =>
+                    Effect.fail(
+                      ScimApi.forbidden("The organization's membership limit is reached"),
+                    ),
+                  HookAborted: (aborted) => Effect.fail(ScimApi.forbidden(aborted.message)),
+                  OrganizationNotFound: () =>
+                    Effect.fail(ScimApi.forbidden("The organization is not available")),
+                  UnknownOrgRole: () =>
+                    Effect.fail(ScimApi.forbidden("The configured member role is unknown")),
+                }),
+              );
+              return link;
+            }),
           )
           .pipe(
-            Effect.catchTags({
-              "Users/EmailAlreadyExists": () =>
-                Effect.fail(
-                  ScimApi.conflict(
-                    `An account for ${Option.getOrElse(email, () => userName)} already exists`,
-                  ),
-                ),
-              // An `Email` or `Anonymous` identity never carries a phone.
-              "Users/PhoneAlreadyExists": () =>
-                Defects.invariantViolation(
-                  "scim.phoneConflict",
-                  "awthaq: a SCIM user was created with a phone",
-                ),
-            }),
+            Effect.catchTag("SignUp/IdentityTaken", (taken) =>
+              taken.kind === "Email"
+                ? Effect.fail(
+                    ScimApi.conflict(
+                      `An account for ${Option.getOrElse(email, () => userName)} already exists`,
+                    ),
+                  )
+                : // An `Email` or `Anonymous` identity never carries a phone, and a fresh user links no account.
+                  Defects.invariantViolation("scim.signUpConflict", taken.message),
+            ),
           );
         const settled = wantActive ? created : yield* applyActive(connection, created, false);
         yield* events.publish({

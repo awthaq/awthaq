@@ -1,7 +1,7 @@
 // BEH-EA-247 through 250 (spec/behaviors/30-scim.md): SCIM Users — provisioning,
 // ownership, immutability, deactivation and deletion — driven at the domain level over
 // the same layer graph an application builds (`support.ts`).
-import { Accounts, AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Accounts, AuditLog, AuthEvents, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
 import { InvitationRecords, MembershipRecords } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -247,6 +247,43 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
         assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
         assert.isTrue(Option.isSome(yield* invitations.findById(invitation.id)));
       }).pipe(Effect.provide(ScimLive({}, { membershipLimit: 1 }))),
+  );
+
+  it.effect(
+    "a BeforeSignUp veto refuses the POST with a 403 and leaves no user and no mapping (ADR-EA-038)",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const users = yield* Users.Users;
+        const scim = yield* Scim.Scim;
+        const refused = yield* provision(connection, "veto@acme.example").pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "ScimForbidden");
+        assert.isTrue(Option.isNone(yield* users.findByEmail("veto@acme.example")));
+        assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
+      }).pipe(
+        Effect.provide(
+          ScimLive(
+            {},
+            {},
+            Users.layerMemory,
+            Hooks.BeforeSignUp.tap((input) =>
+              Effect.fail(new HookPoint.HookAbort({ code: `NO_SIGNUP_${input.strategy}` })),
+            ).pipe(Layer.provideMerge(Hooks.HooksLive)),
+          ),
+        ),
+      ),
+  );
+
+  it.effect("a provisioned user is announced as auth.user.created (ADR-EA-038)", () =>
+    Effect.gen(function* () {
+      const { connection } = yield* seedConnection();
+      const auditLog = yield* AuditLog.AuditLog;
+      const created = yield* provision(connection, "new@acme.example");
+      const recorded = yield* auditLog.list({ eventTag: "auth.user.created" });
+      assert.strictEqual(recorded.length, 1);
+      const payload = recorded[0]?.payload;
+      assert.isTrue(payload?._tag === "auth.user.created" && payload.userId === created.id);
+    }).pipe(Effect.provide(ScimLive())),
   );
 
   it.effect("provisioning is audited as an event naming the connection and organization", () =>

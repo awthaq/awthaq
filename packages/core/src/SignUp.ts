@@ -35,9 +35,17 @@ import * as SignInSteps from "./internal/signInSteps.ts";
 import type * as Sessions from "./Sessions.ts";
 import type * as SignIn from "./SignIn.ts";
 
-// The two sign-up hook points `make` requires ride this namespace so a plugin whose inferred layer type
+// The services and hook points `make` requires (its own and the sign-in steps' it embeds) ride this namespace so a plugin whose inferred layer type
 // mentions them can name them through the `SignUp` import it already has (TS2883).
-export { AfterSignUp, BeforeSignUp } from "./Hooks.ts";
+export {
+  AfterSignIn,
+  AfterSignUp,
+  BeforeSessionIssue,
+  BeforeSignIn,
+  BeforeSignUp,
+} from "./Hooks.ts";
+export { Accounts } from "./Accounts.ts";
+export { SignInContinuationRegistry } from "./SignInContinuationRegistry.ts";
 import * as Users from "./Users.ts";
 
 /** What a flow knows when it wants an account to exist. */

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-033 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (ELC-001, JH-002/003/004, PERS-003, NAM-002) |
+> | Change History | 1.0 (2026-09-29): Initial release (ELC-001, JH-002/003/004, PERS-003, NAM-002) <br> 1.1 (2026-10-13): Decision 5 names `SignUp.vet` and `SignIn.clear` as the consulting call sites (ADR-EA-038, architecture plan 01) |
 
 ---
 
@@ -24,7 +24,7 @@ A hook point's tap registry lived in the closure of the module that declared it.
 2. **Ordering is the spec's three keys, as a pure function.** `TapOptions.owner` is any value with an `id` and `dependsOn` (an `AuthPlugin` class is one). `HookPoint.compareTaps` orders by dependency level (a plugin's taps run after those of every plugin it depends on; application taps last), then declared `order`, then plugin id. The same comparator drives the runtime chain, each point's `resolved` introspection, and `Auth.make(...).manifest.hooks`.
 3. **Taps are statically declarable.** `AuthPlugin.layer(Self, { taps: [Point.declareTap(handler, { order })] })` installs them with the plugin as owner and records `{ point, order }` on the plugin, so the resolved order is printable without building any layer (BEH-EA-096). The tapped points join the plugin layer's `RIn` like ports do.
 4. **Run semantics**: observe taps run one after another in resolved order, each failure caught, logged (sanitized) and counted; a veto tap's amended value and a divert tap's outcome are checked against the point's own schema with `Schema.is`, and an invalid one is a `HookTapOutputInvalid` defect that never reaches the guarded operation.
-5. **Every sign-in-completing flow consults `BeforeSignIn`** (a veto, after the credential is proven and before `BeforeSessionIssue`) and every user-creating path consults `BeforeSignUp`; `AfterSignUp` observes the commit. A veto surfaces as the typed `HookAborted` (403).
+5. **Every sign-in-completing flow consults `BeforeSignIn`** (a veto, after the credential is proven and before `BeforeSessionIssue`) and every sign-up path (password, OAuth, SAML, magic link, email OTP, SCIM) consults `BeforeSignUp` through `SignUp.vet`; `AfterSignUp` observes the commit. Operator imports (`UserImport.importUser`, `awthaq seed admin`) are not sign-ups. See ADR-EA-038. A veto surfaces as the typed `HookAborted` (403).
 
 ## Alternatives considered
 

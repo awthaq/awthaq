@@ -52,7 +52,7 @@ export const TokenReplayEvent = defineEvent(
 );
 export type TokenReplayEvent = typeof TokenReplayEvent.Type;
 
-/** Published by `@awthaq/password`'s `signUp` and `@awthaq/oauth`'s first-login creation. */
+/** Published by core's `SignUp` once a user-creating unit commits (password, OAuth, SAML, magic link, email OTP, SCIM). */
 export const UserCreatedEvent = defineEvent(
   "auth.user.created",
   { userId: UserIdSchema },
@@ -63,7 +63,7 @@ export const UserCreatedEvent = defineEvent(
 );
 export type UserCreatedEvent = typeof UserCreatedEvent.Type;
 
-/** Published by `@awthaq/password`/`oauth`/`passkey` once a sign-in has completed. */
+/** Published by core's `SignIn` once a sign-in has completed (including a sign-up's first session). */
 export const UserSignedInEvent = defineEvent(
   "auth.user.signedIn",
   {
