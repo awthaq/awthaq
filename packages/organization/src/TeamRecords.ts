@@ -24,6 +24,7 @@
 // derives the same answers by walking parent pointers. Hierarchy is structure
 // only: it grants no permission inheritance (OHS-004).
 
+import { SqlTransaction } from "@awthaq/ports";
 import { Users } from "@awthaq/core";
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
@@ -890,100 +891,96 @@ export const layerSql = Layer.effect(
     const createTeam: TeamRecordsShape["createTeam"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
-      return yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const parentId = input.parentId ?? null;
-            if (parentId !== null) {
-              const parent = yield* findTeamByIdQuery({
-                organizationId: input.organizationId,
-                id: parentId,
-              });
-              if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
-            }
-            const row = yield* insertTeam({
-              id,
-              name: input.name,
+      return yield* SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const parentId = input.parentId ?? null;
+          if (parentId !== null) {
+            const parent = yield* findTeamByIdQuery({
               organizationId: input.organizationId,
-              memberCount: 0,
-              parentId,
-              createdAt: now,
-              updatedAt: now,
+              id: parentId,
             });
-            yield* sql`INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth) VALUES (${id}, ${id}, 0)`;
-            if (parentId !== null) {
-              yield* sql`
+            if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
+          }
+          const row = yield* insertTeam({
+            id,
+            name: input.name,
+            organizationId: input.organizationId,
+            memberCount: 0,
+            parentId,
+            createdAt: now,
+            updatedAt: now,
+          });
+          yield* sql`INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth) VALUES (${id}, ${id}, 0)`;
+          if (parentId !== null) {
+            yield* sql`
                 INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth)
                 SELECT "ancestorId", ${id}, depth + 1 FROM organization_team_closure
                 WHERE "descendantId" = ${parentId}`;
-            }
-            return toTeamRecord(row);
-          }),
-        )
-        .pipe(
-          Effect.catchTags({
-            SqlError: Effect.die,
-            SchemaError: Effect.die,
-            NoSuchElementError: Effect.die,
-          }),
-        );
+          }
+          return toTeamRecord(row);
+        }),
+      ).pipe(
+        Effect.catchTags({
+          SqlError: Effect.die,
+          SchemaError: Effect.die,
+          NoSuchElementError: Effect.die,
+        }),
+      );
     });
 
     const moveTeam: TeamRecordsShape["moveTeam"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
-      return yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const team = yield* findTeamByIdQuery({
+      return yield* SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const team = yield* findTeamByIdQuery({
+            organizationId: input.organizationId,
+            id: input.id,
+          });
+          if (Option.isNone(team)) return yield* Effect.fail(teamNotFound(input.id));
+          const parentId = Option.getOrNull(input.parentId);
+          if (parentId !== null) {
+            const parent = yield* findTeamByIdQuery({
               organizationId: input.organizationId,
-              id: input.id,
+              id: parentId,
             });
-            if (Option.isNone(team)) return yield* Effect.fail(teamNotFound(input.id));
-            const parentId = Option.getOrNull(input.parentId);
-            if (parentId !== null) {
-              const parent = yield* findTeamByIdQuery({
-                organizationId: input.organizationId,
-                id: parentId,
-              });
-              if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
-              // The closure holds (id, id, 0), so this also covers "under itself".
-              const below = yield* isInSubtreeQuery({
-                ancestorId: input.id,
-                descendantId: parentId,
-              });
-              if (below.count > 0) {
-                return yield* Effect.fail(new TeamHierarchyCycle({ id: input.id, parentId }));
-              }
+            if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
+            // The closure holds (id, id, 0), so this also covers "under itself".
+            const below = yield* isInSubtreeQuery({
+              ancestorId: input.id,
+              descendantId: parentId,
+            });
+            if (below.count > 0) {
+              return yield* Effect.fail(new TeamHierarchyCycle({ id: input.id, parentId }));
             }
-            // Detach the subtree from its old ancestors, then hang it under the new parent.
-            yield* sql`
+          }
+          // Detach the subtree from its old ancestors, then hang it under the new parent.
+          yield* sql`
               DELETE FROM organization_team_closure
               WHERE "descendantId" IN (SELECT "descendantId" FROM organization_team_closure WHERE "ancestorId" = ${input.id})
                 AND "ancestorId" NOT IN (SELECT "descendantId" FROM organization_team_closure WHERE "ancestorId" = ${input.id})`;
-            if (parentId !== null) {
-              yield* sql`
+          if (parentId !== null) {
+            yield* sql`
                 INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth)
                 SELECT p."ancestorId", c."descendantId", p.depth + c.depth + 1
                 FROM organization_team_closure p
                 CROSS JOIN organization_team_closure c
                 WHERE p."descendantId" = ${parentId} AND c."ancestorId" = ${input.id}`;
-            }
-            const row = yield* setParentQuery({
-              organizationId: input.organizationId,
-              id: input.id,
-              parentId,
-              updatedAt: now,
-            });
-            return toTeamRecord(row);
-          }),
-        )
-        .pipe(
-          Effect.catchTags({
-            SqlError: Effect.die,
-            SchemaError: Effect.die,
-            NoSuchElementError: Effect.die,
-          }),
-        );
+          }
+          const row = yield* setParentQuery({
+            organizationId: input.organizationId,
+            id: input.id,
+            parentId,
+            updatedAt: now,
+          });
+          return toTeamRecord(row);
+        }),
+      ).pipe(
+        Effect.catchTags({
+          SqlError: Effect.die,
+          SchemaError: Effect.die,
+          NoSuchElementError: Effect.die,
+        }),
+      );
     });
 
     const getAncestors: TeamRecordsShape["getAncestors"] = (organizationId, id) =>
@@ -1043,76 +1040,70 @@ export const layerSql = Layer.effect(
     // Nested inside a caller's own transaction (`Organization`'s cascades) it
     // becomes a savepoint, so a records op is atomic on its own *and* composes.
     const removeTeam: TeamRecordsShape["removeTeam"] = (organizationId, id) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const children = yield* countChildrenQuery({ organizationId, id });
-            if (children.count > 0) return yield* Effect.fail(new TeamHasChildren({ id }));
-            const row = yield* deleteTeamQuery({ organizationId, id });
-            if (Option.isNone(row)) return yield* Effect.fail(teamNotFound(id));
-            yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${id}`;
-            yield* sql`DELETE FROM organization_team_closure WHERE "descendantId" = ${id} OR "ancestorId" = ${id}`;
-          }),
-        )
-        .pipe(
-          Effect.catchTags({
-            SqlError: Effect.die,
-            SchemaError: Effect.die,
-            NoSuchElementError: Effect.die,
-          }),
-        );
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const children = yield* countChildrenQuery({ organizationId, id });
+          if (children.count > 0) return yield* Effect.fail(new TeamHasChildren({ id }));
+          const row = yield* deleteTeamQuery({ organizationId, id });
+          if (Option.isNone(row)) return yield* Effect.fail(teamNotFound(id));
+          yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${id}`;
+          yield* sql`DELETE FROM organization_team_closure WHERE "descendantId" = ${id} OR "ancestorId" = ${id}`;
+        }),
+      ).pipe(
+        Effect.catchTags({
+          SqlError: Effect.die,
+          SchemaError: Effect.die,
+          NoSuchElementError: Effect.die,
+        }),
+      );
 
     const removeAllTeamsForOrganization: TeamRecordsShape["removeAllTeamsForOrganization"] = (
       organizationId,
     ) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sql`
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          yield* sql`
               DELETE FROM organization_team_membership
               WHERE "teamId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
             `;
-            yield* sql`
+          yield* sql`
               DELETE FROM organization_team_closure
               WHERE "descendantId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
                  OR "ancestorId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
             `;
-            yield* sql`DELETE FROM organization_team WHERE "organizationId" = ${organizationId}`;
-          }),
-        )
-        .pipe(Effect.orDie);
+          yield* sql`DELETE FROM organization_team WHERE "organizationId" = ${organizationId}`;
+        }),
+      ).pipe(Effect.orDie);
 
     const addTeamMember: TeamRecordsShape["addTeamMember"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
-      return yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const row = yield* insertTeamMembership({
-              id,
-              teamId: input.teamId,
-              userId: input.userId,
-              role: JSON.stringify(input.role ?? DEFAULT_TEAM_ROLE),
-              createdAt: now,
-            });
-            yield* adjustMemberCount(input.teamId, 1);
-            return toTeamMembershipRecord(row);
-          }),
-        )
-        .pipe(
-          Effect.catchTag("SqlError", (error) =>
-            error.reason._tag === "UniqueViolation"
-              ? Effect.fail(
-                  new TeamMembershipRecordAlreadyExists({
-                    teamId: input.teamId,
-                    userId: input.userId,
-                  }),
-                )
-              : Effect.die(error),
-          ),
-          Effect.catchTag("SchemaError", Effect.die),
-          Effect.catchTag("NoSuchElementError", Effect.die),
-        );
+      return yield* SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const row = yield* insertTeamMembership({
+            id,
+            teamId: input.teamId,
+            userId: input.userId,
+            role: JSON.stringify(input.role ?? DEFAULT_TEAM_ROLE),
+            createdAt: now,
+          });
+          yield* adjustMemberCount(input.teamId, 1);
+          return toTeamMembershipRecord(row);
+        }),
+      ).pipe(
+        Effect.catchTag("SqlError", (error) =>
+          error.reason._tag === "UniqueViolation"
+            ? Effect.fail(
+                new TeamMembershipRecordAlreadyExists({
+                  teamId: input.teamId,
+                  userId: input.userId,
+                }),
+              )
+            : Effect.die(error),
+        ),
+        Effect.catchTag("SchemaError", Effect.die),
+        Effect.catchTag("NoSuchElementError", Effect.die),
+      );
     });
 
     const updateTeamMemberRole: TeamRecordsShape["updateTeamMemberRole"] = (teamId, userId, role) =>
@@ -1127,46 +1118,40 @@ export const layerSql = Layer.effect(
       );
 
     const removeTeamMember: TeamRecordsShape["removeTeamMember"] = (teamId, userId) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const row = yield* deleteTeamMembershipQuery({ teamId, userId });
-            if (Option.isNone(row)) {
-              return yield* Effect.fail(teamMembershipNotFound(teamId, userId));
-            }
-            yield* adjustMemberCount(teamId, -1);
-          }),
-        )
-        .pipe(Effect.catchTags({ SqlError: Effect.die, SchemaError: Effect.die }));
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const row = yield* deleteTeamMembershipQuery({ teamId, userId });
+          if (Option.isNone(row)) {
+            return yield* Effect.fail(teamMembershipNotFound(teamId, userId));
+          }
+          yield* adjustMemberCount(teamId, -1);
+        }),
+      ).pipe(Effect.catchTags({ SqlError: Effect.die, SchemaError: Effect.die }));
 
     const removeUserFromOrganizationTeams: TeamRecordsShape["removeUserFromOrganizationTeams"] = (
       organizationId,
       userId,
     ) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const rows = yield* listOrganizationTeamIdsOfUserQuery({ organizationId, userId });
-            for (const { teamId } of rows) {
-              yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
-              yield* adjustMemberCount(teamId, -1);
-            }
-            return rows.map((row) => row.teamId);
-          }),
-        )
-        .pipe(Effect.orDie);
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const rows = yield* listOrganizationTeamIdsOfUserQuery({ organizationId, userId });
+          for (const { teamId } of rows) {
+            yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
+            yield* adjustMemberCount(teamId, -1);
+          }
+          return rows.map((row) => row.teamId);
+        }),
+      ).pipe(Effect.orDie);
 
     const removeUserFromAllTeams: TeamRecordsShape["removeUserFromAllTeams"] = (userId) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            for (const { teamId } of yield* listTeamIdsOfUserQuery({ userId })) {
-              yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
-              yield* adjustMemberCount(teamId, -1);
-            }
-          }),
-        )
-        .pipe(Effect.orDie);
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          for (const { teamId } of yield* listTeamIdsOfUserQuery({ userId })) {
+            yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
+            yield* adjustMemberCount(teamId, -1);
+          }
+        }),
+      ).pipe(Effect.orDie);
 
     const findTeamMembership: TeamRecordsShape["findTeamMembership"] = (teamId, userId) =>
       findTeamMembershipQuery({ teamId, userId }).pipe(

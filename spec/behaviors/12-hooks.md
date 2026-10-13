@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-12 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): `BeforeUserDelete` is consulted once, by `AccountErasure` only; `Users` no longer has `delete` (architecture plan 03) <br> 1.3 (2026-10-13): BEH-EA-093's as-shipped note names `Hooks.BeforeSessionIssue` and the real consumers (plan 10 item 8) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): `BeforeUserDelete` is consulted once, by `AccountErasure` only; `Users` no longer has `delete` (architecture plan 03) <br> 1.3 (2026-10-13): BEH-EA-093's as-shipped note names `Hooks.BeforeSessionIssue` and the real consumers (plan 10 item 8) <br> 1.4 (2026-10-13): BEH-EA-092: observe taps run after the enclosing unit of work commits, and not at all if it rolls back (ADR-EA-037, plan 10 item 5) |
 
 ---
 
@@ -82,7 +82,7 @@ REQUIREMENT: A failure raised by a tap on a `kind: "observe"` hook point
              operation the point observes.
 ```
 
-**As shipped (JH-002):** observe taps run inline, one after another in the resolved order (BEH-EA-091), so a later tap starts only after an earlier one completes and a slow tap adds latency to the observed operation — heavy work belongs in a forked fiber or an `AuthEvents` subscriber (BEH-EA-103). A failing tap is logged under the stable name `auth.hook.observer.error` (error level carries only a sanitized tag/message; the raw cause is debug level, EOTS-005) and counted in `awthaq_hook_observer_error_total`; later taps still run.
+**As shipped (JH-002, ADR-EA-037):** observe taps run one after another in the resolved order (BEH-EA-091), so a later tap starts only after an earlier one completes and a slow tap adds latency to the observed operation (or, inside a unit of work, to its end) — heavy work belongs in a forked fiber or an `AuthEvents` subscriber (BEH-EA-103). A failing tap is logged under the stable name `auth.hook.observer.error` (error level carries only a sanitized tag/message; the raw cause is debug level, EOTS-005) and counted in `awthaq_hook_observer_error_total`; later taps still run. Inside a unit of work (a transaction opened through `SqlTransaction`, including the tenant transaction of a Postgres RLS request) the whole chain runs once the outermost unit has committed, and not at all if it rolls back, so a host never reacts to a sign-up or sign-in that did not happen; it runs with the tenant and request context of the call. Veto and divert taps stay inline: they decide the outcome (BEH-EA-321).
 
 `archive/design/usage-examples-v4.md` §14 states this guarantee in one line: "observe: cannot fail sign-in even if it throws." `archive/PRD.md` §18 extends the same isolation to event observers generally. Without this isolation, an unrelated third-party plugin's welcome-email tap failing (a `Mailer` outage, a template bug) would fail every sign-up in the system — the opposite of what an "after the fact, side-effecting" hook is meant to be.
 

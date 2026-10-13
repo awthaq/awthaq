@@ -4,6 +4,7 @@
 // `Ref`) and `layerSql` (a real, in-memory SQLite database via
 // `@effect/sql-sqlite-node`) — per
 // spec/decisions/016-verification-sql-claiming.md (ADR-EA-016).
+import { SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -581,10 +582,10 @@ describe("Verification infrastructure failures (MA-004)", () => {
   );
 });
 
-// PV-220: a consume that fails inside the caller's transaction must not lose what a miss records.
-// Both the replay audit row and (over SQL) the spent attempt are written by `recordMiss`, which the
-// caller runs once its transaction has rolled back; `consume(..., { deferMiss: true })` records nothing.
-describe("Verification deferred miss (PV-220)", () => {
+// ADR-EA-037 (was PV-220): a consume that fails inside the caller's transaction must not lose what a
+// miss records. The replay event is an attempt event and the spent attempt runs in the unit of work's
+// `afterUnit` lane, so both survive the rollback without the caller doing anything.
+describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () => {
   const SqlAuditLayer = Verification.layerSql.pipe(
     Layer.provide(Repositories.VerificationRepositoryLive),
     Layer.provide(Repositories.VerificationReservationsRepositoryLive),
@@ -599,29 +600,23 @@ describe("Verification deferred miss (PV-220)", () => {
     log.list({ eventTag: "auth.token.replay" }),
   );
 
-  it.effect(
-    "layerSql: a miss inside a failing transaction records nothing until recordMiss runs after it",
-    () =>
-      Effect.gen(function* () {
-        const verification = yield* Verification.Verification;
-        const sql = yield* SqlClient.SqlClient;
-        const identifier = "verify-email:pv220";
-        const failed = yield* sql
-          .withTransaction(
-            verification.consume(identifier, Redacted.make("nope"), { deferMiss: true }),
-          )
-          .pipe(Effect.flip);
-        assert.strictEqual(failed._tag, "Verification/TokenConsumed");
-        assert.strictEqual((yield* replayRows).length, 0);
-        yield* verification.recordMiss(identifier);
-        const rows = yield* replayRows;
-        assert.strictEqual(rows.length, 1);
-        assert.deepStrictEqual(rows[0]?.payload, { _tag: "auth.token.replay", identifier });
-      }).pipe(Effect.provide(SqlAuditLayer)),
+  it.effect("layerSql: a miss inside a failing transaction is still audited", () =>
+    Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const sql = yield* SqlClient.SqlClient;
+      const identifier = "verify-email:pv220";
+      const failed = yield* SqlTransaction.transactional(sql)(
+        verification.consume(identifier, Redacted.make("nope")),
+      ).pipe(Effect.flip);
+      assert.strictEqual(failed._tag, "Verification/TokenConsumed");
+      const rows = yield* replayRows;
+      assert.strictEqual(rows.length, 1);
+      assert.deepStrictEqual(rows[0]?.payload, { _tag: "auth.token.replay", identifier });
+    }).pipe(Effect.provide(SqlAuditLayer)),
   );
 
   it.effect(
-    "layerSql: attempts spent by misses recorded after the rollback still burn a budgeted token",
+    "layerSql: attempts spent by misses inside a rolled-back transaction still burn a budgeted token",
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
@@ -635,28 +630,21 @@ describe("Verification deferred miss (PV-220)", () => {
         });
         const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
         for (let i = 0; i < 2; i += 1) {
-          yield* sql
-            .withTransaction(verification.consume(identifier, wrong, { deferMiss: true }))
-            .pipe(Effect.flip);
-          yield* verification.recordMiss(identifier);
+          yield* SqlTransaction.transactional(sql)(verification.consume(identifier, wrong)).pipe(
+            Effect.flip,
+          );
         }
         const late = yield* verification.consume(identifier, value).pipe(Effect.flip);
         assert.strictEqual(late._tag, "Verification/TokenConsumed");
       }).pipe(Effect.provide(SqlAuditLayer)),
   );
 
-  it.effect(
-    "layerMemory: deferMiss publishes nothing and recordMiss publishes one replay row",
-    () =>
-      Effect.gen(function* () {
-        const verification = yield* Verification.Verification;
-        const identifier = "verify-email:pv220-memory";
-        yield* verification
-          .consume(identifier, Redacted.make("nope"), { deferMiss: true })
-          .pipe(Effect.flip);
-        assert.strictEqual((yield* replayRows).length, 0);
-        yield* verification.recordMiss(identifier);
-        assert.strictEqual((yield* replayRows).length, 1);
-      }).pipe(Effect.provide(MemoryLayer)),
+  it.effect("layerMemory: a miss publishes exactly one replay row", () =>
+    Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const identifier = "verify-email:pv220-memory";
+      yield* verification.consume(identifier, Redacted.make("nope")).pipe(Effect.flip);
+      assert.strictEqual((yield* replayRows).length, 1);
+    }).pipe(Effect.provide(MemoryLayer)),
   );
 });

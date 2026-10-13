@@ -47,6 +47,7 @@ export const TokenReplayEvent = defineEvent(
   {
     actor: Actor.none,
     pii: [],
+    attempt: true,
   },
 );
 export type TokenReplayEvent = typeof TokenReplayEvent.Type;
@@ -115,6 +116,7 @@ export const UserSignInFailedEvent = defineEvent(
   {
     actor: Actor.none,
     pii: [],
+    attempt: true,
   },
 );
 export type UserSignInFailedEvent = typeof UserSignInFailedEvent.Type;
@@ -452,6 +454,7 @@ export const AdminImpersonationDeniedEvent = defineEvent(
   {
     actor: Actor.field("adminUserId"),
     pii: [],
+    attempt: true,
   },
 );
 export type AdminImpersonationDeniedEvent = typeof AdminImpersonationDeniedEvent.Type;
@@ -472,6 +475,7 @@ export const AdminActionDeniedEvent = defineEvent(
   {
     actor: Actor.field("adminUserId"),
     pii: [],
+    attempt: true,
   },
 );
 export type AdminActionDeniedEvent = typeof AdminActionDeniedEvent.Type;
@@ -1225,6 +1229,7 @@ export const OrganizationPermissionDeniedEvent = defineEvent(
   {
     actor: Actor.field("userId"),
     pii: [],
+    attempt: true,
   },
 );
 export type OrganizationPermissionDeniedEvent = typeof OrganizationPermissionDeniedEvent.Type;
@@ -1250,6 +1255,7 @@ export const AuthorizationDeniedEvent = defineEvent(
     // qadi's own subject id: only a `user:` subject names an awthaq user.
     actor: Actor.prefixed("subjectId", "user:"),
     pii: [],
+    attempt: true,
   },
 );
 export type AuthorizationDeniedEvent = typeof AuthorizationDeniedEvent.Type;
@@ -1330,6 +1336,7 @@ export const RateLimitExceededEvent = defineEvent(
   {
     actor: Actor.none,
     pii: [],
+    attempt: true,
   },
 );
 export type RateLimitExceededEvent = typeof RateLimitExceededEvent.Type;
@@ -1510,6 +1517,7 @@ export const TwoFactorChallengeFailedEvent = defineEvent(
   {
     actor: Actor.field("userId"),
     pii: [],
+    attempt: true,
   },
 );
 export type TwoFactorChallengeFailedEvent = typeof TwoFactorChallengeFailedEvent.Type;
@@ -1549,6 +1557,7 @@ export const TwoFactorLockedEvent = defineEvent(
   {
     actor: Actor.field("userId"),
     pii: [],
+    attempt: true,
   },
 );
 export type TwoFactorLockedEvent = typeof TwoFactorLockedEvent.Type;
@@ -1576,6 +1585,7 @@ export const DeviceAuthorizationDeniedEvent = defineEvent(
   {
     actor: Actor.field("userId"),
     pii: [],
+    attempt: true,
   },
 );
 export type DeviceAuthorizationDeniedEvent = typeof DeviceAuthorizationDeniedEvent.Type;
@@ -1685,6 +1695,8 @@ export const isEventTag = Registry.isTag;
 export const actorOf = Registry.actorOf;
 /** ADR-EA-029: the fields of `tag` that hold free text about a person. */
 export const piiFieldsOf = Registry.piiFieldsOf;
+/** ADR-EA-037: true for an attempt event, which is recorded and delivered whether or not its unit of work commits. */
+export const isAttemptEvent = Registry.isAttempt;
 
 export type AuthEvent = typeof AuthEventSchema.Type;
 

@@ -16,7 +16,9 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Accounts from "../src/Accounts.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
@@ -446,4 +448,37 @@ describe("AccountErasure over SQLite: atomicity", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  // ADR-EA-037: the review's example. `sessions.revokeAll` publishes `auth.session.revoked` inside
+  // the erasure transaction; when a later step fails and the transaction rolls back, no live
+  // subscriber may hear that the session was revoked, because it was not.
+  it.effect("a failure after the sessions were revoked publishes no auth.session.revoked", () => {
+    const probe = makeProbe();
+    const layer = sqlLayer(probe, Layer.empty);
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const erasure = yield* Erasure.AccountErasure;
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        const sql = yield* SqlClient.SqlClient;
+        const { user } = yield* seedUser("late-failure@example.com");
+        const stream = yield* events.subscribe;
+        yield* sql.unsafe(
+          `CREATE TRIGGER fail_user_delete BEFORE DELETE ON users BEGIN SELECT RAISE(ABORT, 'injected'); END`,
+        );
+
+        const exit = yield* Effect.exit(
+          erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self()),
+        );
+        assert.isTrue(Exit.isFailure(exit));
+        // the transaction rolled back: the session is still live, the audit trail has no revocation...
+        assert.deepStrictEqual(yield* remaining(user.id), { user: true, accounts: 1, sessions: 1 });
+        assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.session.revoked" }), []);
+        // ...and the bus agrees: the next thing a subscriber is handed is the sentinel.
+        yield* events.publish({ _tag: "auth.token.replay", identifier: "sentinel" });
+        const [first] = yield* stream.pipe(Stream.take(1), Stream.runCollect);
+        assert.strictEqual(first?._tag, "auth.token.replay");
+      }).pipe(Effect.provide(layer)),
+    );
+  });
 });

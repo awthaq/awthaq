@@ -20,8 +20,10 @@ suites=(
   packages/cli/test/Migration.postgres.test.ts
   packages/sql/test/Repositories.postgres.test.ts
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
+  packages/sql/test/UnitOfWork.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
+  packages/core/test/AuthEventsUnitOfWork.test.ts
   packages/core/test/Users.test.ts
   packages/core/test/UserFields.test.ts
   packages/core/test/UserImport.test.ts

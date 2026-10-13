@@ -16,6 +16,7 @@
 // to a connection, they do not authenticate anyone — the connection's IdP still
 // has to.
 
+import { SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -437,31 +438,29 @@ export const layerSql = Layer.effect(
       });
 
     const write = (record: ConnectionRecord) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const row = yield* upsertRow({
-              id: record.id,
-              organizationId: record.organizationId,
-              kind: record.kind,
-              name: record.name,
-              issuer: Option.getOrNull(record.issuer),
-              discoveryUrl: Option.getOrNull(record.discoveryUrl),
-              authorizationEndpoint: Option.getOrNull(record.authorizationEndpoint),
-              tokenEndpoint: Option.getOrNull(record.tokenEndpoint),
-              jwksUri: Option.getOrNull(record.jwksUri),
-              userinfoEndpoint: Option.getOrNull(record.userinfoEndpoint),
-              clientId: record.clientId,
-              clientSecret: Option.getOrNull(record.clientSecret),
-              scopes: record.scopes,
-              createdAt: record.createdAt,
-              updatedAt: record.updatedAt,
-            }).pipe(Effect.orDie);
-            yield* replaceDomains(record.organizationId, record.id, record.emailDomains);
-            return toRecord(row, record.emailDomains);
-          }),
-        )
-        .pipe(Effect.catchTag("SqlError", Effect.die));
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const row = yield* upsertRow({
+            id: record.id,
+            organizationId: record.organizationId,
+            kind: record.kind,
+            name: record.name,
+            issuer: Option.getOrNull(record.issuer),
+            discoveryUrl: Option.getOrNull(record.discoveryUrl),
+            authorizationEndpoint: Option.getOrNull(record.authorizationEndpoint),
+            tokenEndpoint: Option.getOrNull(record.tokenEndpoint),
+            jwksUri: Option.getOrNull(record.jwksUri),
+            userinfoEndpoint: Option.getOrNull(record.userinfoEndpoint),
+            clientId: record.clientId,
+            clientSecret: Option.getOrNull(record.clientSecret),
+            scopes: record.scopes,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+          }).pipe(Effect.orDie);
+          yield* replaceDomains(record.organizationId, record.id, record.emailDomains);
+          return toRecord(row, record.emailDomains);
+        }),
+      ).pipe(Effect.catchTag("SqlError", Effect.die));
 
     const create: ConnectionRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
@@ -525,28 +524,24 @@ export const layerSql = Layer.effect(
       function* (organizationId, id) {
         const existing = yield* findById(organizationId, id);
         if (Option.isNone(existing)) return yield* Effect.fail(notFound(id));
-        yield* sql
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "connectionId" = ${id}`;
-              yield* sql`DELETE FROM organization_oauth_connection WHERE id = ${id} AND "organizationId" = ${organizationId}`;
-            }),
-          )
-          .pipe(Effect.catchTag("SqlError", Effect.die));
+        yield* SqlTransaction.transactional(sql)(
+          Effect.gen(function* () {
+            yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "connectionId" = ${id}`;
+            yield* sql`DELETE FROM organization_oauth_connection WHERE id = ${id} AND "organizationId" = ${organizationId}`;
+          }),
+        ).pipe(Effect.catchTag("SqlError", Effect.die));
       },
     );
 
     const removeAllForOrganization: ConnectionRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "organizationId" = ${organizationId}`;
-            yield* sql`DELETE FROM organization_oauth_connection WHERE "organizationId" = ${organizationId}`;
-          }),
-        )
-        .pipe(Effect.catchTag("SqlError", Effect.die));
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "organizationId" = ${organizationId}`;
+          yield* sql`DELETE FROM organization_oauth_connection WHERE "organizationId" = ${organizationId}`;
+        }),
+      ).pipe(Effect.catchTag("SqlError", Effect.die));
 
     return {
       create,

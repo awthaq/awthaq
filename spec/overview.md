@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-OVERVIEW |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) <br> 1.4 (2026-10-13): the Ports table names the `SqlTransaction` unit of work (ADR-EA-037, plan 10 item 5) |
 
 ---
 
@@ -126,7 +126,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `Encryption` | `Context.Service` | `layer` (requires `KeyProvider` and `Crypto`); keyed envelopes, lazy re-encryption ([ADR-EA-019](decisions/019-encryption-key-rotation.md)) |
 | `KeyProvider` | `Context.Service` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS`, `AWTHAQ_ENCRYPTION_KEY_ID`); `layerEphemeral` (dev only, opt-in, never a fallback; refused under `NODE_ENV=production` without `AWTHAQ_ALLOW_EPHEMERAL_KEY=true`); implement the port for a KMS |
 | `RateLimiter` | `Context.Service` | `layer` over a `RateLimiterStore`, `layerMemory`, `layerStoreMemory`, `layerPermissive` (tests only); `RateLimiterConfig` reference |
-| `SqlTransaction` | `Context.Service` | `layerSql`, `layerNoop` |
+| `SqlTransaction` | `Context.Service` | `layerSql`, `layerNoop`; also the unit of work every real transaction installs ([ADR-EA-037](decisions/037-unit-of-work-releases-events-on-commit.md)): `UnitOfWork`, `onCommit`, `afterUnit`, `transactional(sql)` |
 | `ClientAddress` | `Context.Service` | `layerDirect`, `layerTrustedProxy(config)` |
 | `LegacySessionBridge` | `Context.Reference` | default resolves nothing; `@awthaq/migrate-better-auth` provides the real one |
 | `WebCrypto` | Layer | `layer`, the `Crypto` service over `globalThis.crypto` for edge runtimes |

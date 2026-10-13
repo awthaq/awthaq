@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-13 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): `auth.user.deleted` names the initiator kind and its ids (architecture plan 03) <br> 1.3 (2026-10-13): each event declares its actor and personal-data fields with its schema (`defineEvent`); `PII_FIELDS` replaced by `AuthEvents.piiFieldsOf`; `AuthEvents.eventTags`/`actorOf` (architecture plan 09) <br> 1.4 (2026-10-13): the ban note and the organization suspension note are declared personal data (plan 09 phase 4) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): `auth.user.deleted` names the initiator kind and its ids (architecture plan 03) <br> 1.3 (2026-10-13): each event declares its actor and personal-data fields with its schema (`defineEvent`); `PII_FIELDS` replaced by `AuthEvents.piiFieldsOf`; `AuthEvents.eventTags`/`actorOf` (architecture plan 09) <br> 1.4 (2026-10-13): the ban note and the organization suspension note are declared personal data (plan 09 phase 4) <br> 1.5 (2026-10-13): added BEH-EA-321: inside a unit of work a state-change event reaches live subscribers only on commit, an attempt event is recorded and delivered either way (ADR-EA-037, plan 10 item 5) |
 
 ---
 
@@ -163,6 +163,37 @@ REQUIREMENT: A subscriber failure MUST be logged as `auth.event.observer.error`,
 **As shipped (EOTS-005).** The error-level line carries only a sanitized summary (`errorTag` and a truncated message — never the error's data fields, where a token or identifier could ride); the raw `Cause` is logged only at debug level. The failure is also counted in `awthaq_event_observer_error_total{tag}` (`awthaq_hook_observer_error_total{hook}` for hook taps, BEH-EA-092).
 
 `archive/design/usage-examples-v4.md` §15 fixes the log event's name directly. This gives operators a single, stable signal to alert on for "a subscriber is broken" (distinct from `auth.token.replay`, which signals a security event in the domain itself, per BEH-EA-059) without that signal ever becoming a second path by which a broken subscriber could affect request-serving code — the isolation BEH-EA-092 and BEH-EA-099 both require is only meaningful if the failure is observable somewhere, and this is the designed place it surfaces.
+
+## BEH-EA-321: A live subscriber never observes a state-change event whose unit of work rolled back; an attempt event is recorded and delivered whether or not its unit commits
+
+> **See:** [BEH-EA-098](13-events.md#beh-ea-098-a-publisher-never-awaits-its-subscribers), [BEH-EA-100](13-events.md#beh-ea-100-the-audit-table-is-the-durable-record-of-record-independent-of-the-pubsub-stream), [ADR-EA-037](../decisions/037-unit-of-work-releases-events-on-commit.md)
+
+```ts
+yield* SqlTransaction.transactional(sql)(
+  Effect.gen(function* () {
+    yield* events.publish({ _tag: "auth.session.revoked", ... })     // state change
+    yield* events.publish({ _tag: "auth.twoFactor.challengeFailed", ... }) // attempt
+    return yield* Effect.fail(...)                                    // the unit rolls back
+  }),
+)
+// the subscriber and AuditLog saw challengeFailed only
+```
+
+```text
+REQUIREMENT: Inside a unit of work (a transaction opened through
+             `SqlTransaction`), `AuthEvents.publish` of a state-change event
+             MUST write its audit row inside the transaction and MUST hand
+             its bus copy to live subscribers only once the outermost unit
+             has committed, and never if it rolls back. `publish` of an
+             attempt event (an event whose definition declares `attempt`)
+             MUST record its audit row and hand its bus copy over after the
+             outermost unit has ended, whether or not it committed. Outside
+             any unit both run immediately. A nested unit's state-change
+             copies follow the outermost commit (a rolled-back savepoint drops
+             its own); attempt copies always survive.
+```
+
+**As shipped (ADR-EA-037, plan 10 item 5).** The attempt events are `auth.user.signInFailed`, `auth.token.replay`, `auth.twoFactor.challengeFailed`, `auth.twoFactor.locked`, `auth.rateLimit.exceeded`, `auth.admin.actionDenied`, `auth.admin.impersonationDenied`, `auth.authz.denied`, `auth.organization.permissionDenied` and `auth.deviceAuthorization.denied`; `AuthEvents.isAttemptEvent(tag)` reads the classification off the event's `defineEvent` declaration. "Never suspends" (BEH-EA-098) still holds: deferring is a push into the unit's buffer. The memory composition (`SqlTransaction.layerNoop`) has no unit, so both lanes run immediately there. A failing audit insert inside a transaction runs in a savepoint, so the `"bestEffort"` policy (ADR-EA-028) degrades the trail without aborting the surrounding Postgres transaction. Tests: `packages/core/test/AuthEventsUnitOfWork.test.ts`, `packages/sql/test/UnitOfWork.test.ts`, `packages/core/test/AccountErasure.test.ts`, `packages/two-factor/test/TwoFactor.test.ts`.
 
 _Previous: [BEH-EA-096](12-hooks.md#beh-ea-096-the-resolved-order-of-every-hook-points-taps-is-introspectable-without-running-any-code)_
 _Next: [BEH-EA-113](15-password.md#beh-ea-113-sign-up-issues-a-pending-user-and-a-verification-mail)_

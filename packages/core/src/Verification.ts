@@ -30,7 +30,7 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
-import { Defects, Hmac } from "@awthaq/ports";
+import { Defects, Hmac, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -126,15 +126,6 @@ export type IssueInput = {
     }
 );
 
-/** PV-220: see `VerificationShape.recordMiss`. */
-export interface ConsumeOptions {
-  /**
-   * The caller consumes inside its own transaction and will call `recordMiss` after it: a miss
-   * then records nothing here, because a failing transaction would roll the record back too.
-   */
-  readonly deferMiss?: boolean | undefined;
-}
-
 export interface VerificationShape {
   /** BEH-EA-057/060/061: mints a token scoped to `identifier`, hashed at rest. */
   readonly issue: (
@@ -154,16 +145,7 @@ export interface VerificationShape {
   readonly consume: (
     identifier: string,
     value: Redacted.Redacted<string>,
-    options?: ConsumeOptions,
   ) => Effect.Effect<VerificationTokenView, TokenConsumed | StoreUnavailable>;
-  /**
-   * PV-220: what a failed `consume(..., { deferMiss: true })` left unrecorded: the spent attempt
-   * (`layerSql`) and the `auth.token.replay` event, and with it the durable audit row. Run it once
-   * the caller's own transaction has ended (rolled back), so the record is not undone with it. Only
-   * for a `consume` that itself failed, never after a hit: it would spend an attempt against a live
-   * token and report a replay that did not happen.
-   */
-  readonly recordMiss: (identifier: string) => Effect.Effect<void, StoreUnavailable>;
   /**
    * BEH-EA-063: `true` only for the first reservation of `identifier` while
    * unexpired, `false` for every later one — independent of `consume`, used
@@ -317,7 +299,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
       );
 
       const consume: VerificationShape["consume"] = Effect.fnUntraced(
-        function* (identifier, value, options) {
+        function* (identifier, value) {
           const now = yield* DateTime.now;
           const presentedHash = yield* hash(Redacted.value(value));
           // BEH-EA-062: the row is removed by the same atomic step that reads
@@ -383,23 +365,15 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           );
           // BEH-EA-059: every failed consumption — expired, unknown, or
           // already-consumed — publishes the same `auth.token.replay` event,
-          // uniformly, before the caller ever sees `TokenConsumed`.
-          // PV-220: a caller consuming inside its own transaction publishes it after (`recordMiss`).
+          // uniformly, before the caller ever sees `TokenConsumed`. It is an attempt event
+          // (ADR-EA-037), so a caller consuming inside its own transaction still gets it
+          // recorded after that transaction ends, rolled back or not.
           return yield* Effect.fromResult(outcome).pipe(
-            Effect.tapError(() =>
-              options?.deferMiss === true
-                ? Effect.void
-                : events.publish({ _tag: "auth.token.replay", identifier }),
-            ),
+            Effect.tapError(() => events.publish({ _tag: "auth.token.replay", identifier })),
           );
         },
         Effect.catchTag("PlatformError", storeUnavailable("Verification.consume")),
       );
-
-      // The memory attempt budget is spent inside `consume`'s own atomic `Ref.modify` (there is no
-      // transaction here to roll it back), so only the event is left to record.
-      const recordMiss: VerificationShape["recordMiss"] = (identifier) =>
-        events.publish({ _tag: "auth.token.replay", identifier });
 
       const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
         const now = yield* DateTime.now;
@@ -448,7 +422,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           return tokens + reserved;
         });
 
-      return { issue, consume, recordMiss, reserve, deleteAllByUser, purgeExpired };
+      return { issue, consume, reserve, deleteAllByUser, purgeExpired };
     }),
   );
 
@@ -508,7 +482,7 @@ export const layerSql = Layer.effect(
     );
 
     const consume: VerificationShape["consume"] = Effect.fnUntraced(
-      function* (identifier, value, options) {
+      function* (identifier, value) {
         const now = yield* DateTime.now;
         const presentedHash = yield* hash(Redacted.value(value));
         // BEH-EA-058/062: one atomic `UPDATE ... RETURNING` decides win or
@@ -526,38 +500,35 @@ export const layerSql = Layer.effect(
           onSome: (row) => Result.succeed(toTokenView(row)),
         });
         // SOS-004: a miss against a live budgeted row spends one attempt (one atomic
-        // statement; a row with no budget, an unknown or an expired one is untouched).
-        // PV-220: a caller consuming inside its own transaction (`deferMiss`) records the spent
-        // attempt and the event itself once that transaction has ended (`recordMiss`): written
-        // here they would roll back with the failure that follows.
-        const deferred = options?.deferMiss === true;
-        if (Option.isNone(claimed) && !deferred) {
-          yield* repo.recordFailedAttempt({ identifier, now });
+        // statement; a row with no budget, an unknown or an expired one is untouched). A caller
+        // consuming inside its own transaction fails that transaction with the miss, which would
+        // roll the spend back too: so the spend runs in the unit of work's `afterUnit` lane, outside
+        // the transaction, committed or not (ADR-EA-037). Outside any unit it runs right here. It is
+        // best effort there: the miss must still answer uniformly (BEH-EA-116), so a store failure
+        // is logged and counted, never turned into a different response.
+        if (Option.isNone(claimed)) {
+          yield* SqlTransaction.afterUnit(
+            repo
+              .recordFailedAttempt({ identifier, now })
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logError(
+                    "awthaq: the failed attempt against a verification token could not be recorded",
+                    cause,
+                  ),
+                ),
+              ),
+          );
         }
-        // BEH-EA-059: every failed consumption publishes the same
-        // `auth.token.replay` event, uniformly, before the caller ever sees
-        // `TokenConsumed`.
+        // BEH-EA-059: every failed consumption publishes the same `auth.token.replay` event
+        // (an attempt event: recorded and delivered whether or not the caller's unit commits).
         return yield* Effect.fromResult(outcome).pipe(
-          Effect.tapError(() =>
-            deferred ? Effect.void : events.publish({ _tag: "auth.token.replay", identifier }),
-          ),
+          Effect.tapError(() => events.publish({ _tag: "auth.token.replay", identifier })),
         );
       },
       Effect.catchTags({
         PlatformError: storeUnavailable("Verification.consume"),
         SqlError: storeUnavailable("Verification.consume"),
-        SchemaError: Effect.die,
-      }),
-    );
-
-    const recordMiss: VerificationShape["recordMiss"] = Effect.fnUntraced(
-      function* (identifier) {
-        const now = yield* DateTime.now;
-        yield* repo.recordFailedAttempt({ identifier, now });
-        yield* events.publish({ _tag: "auth.token.replay", identifier });
-      },
-      Effect.catchTags({
-        SqlError: storeUnavailable("Verification.recordMiss"),
         SchemaError: Effect.die,
       }),
     );
@@ -598,6 +569,6 @@ export const layerSql = Layer.effect(
         ),
       ]).pipe(Effect.map(([tokens, reserved]) => tokens + reserved));
 
-    return { issue, consume, recordMiss, reserve, deleteAllByUser, purgeExpired };
+    return { issue, consume, reserve, deleteAllByUser, purgeExpired };
   }),
 );

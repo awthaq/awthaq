@@ -7,7 +7,7 @@
 // same deferral `Migrations.ts` documents for the persistence stratum
 // generally.
 
-import { PasswordHasher } from "@awthaq/ports";
+import { PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -546,7 +546,7 @@ const rowToProviderTokenSet = (row: SqlModels.Account): Option.Option<ProviderTo
  * `SqlError`'s `UniqueViolation` reason on a duplicate `link` — the same
  * shape `Users.layerSql`'s `EmailAlreadyExists` detection uses.
  * BEH-EA-045's last-credential refusal reads the sibling count and deletes
- * inside one `sql.withTransaction`, so a concurrent second `unlink` racing
+ * inside one `SqlTransaction.transactional(sql)`, so a concurrent second `unlink` racing
  * against the first cannot both observe "not the last one" and both
  * succeed (BEH-EA-035: the domain service holds this transaction
  * boundary, not the repository).
@@ -646,9 +646,9 @@ export const layerSql: Layer.Layer<
     });
 
     const unlink: AccountsShape["unlink"] = (id) =>
-      sql
-        .withTransaction(performUnlink(id))
-        .pipe(Effect.catchTag("SqlError", storeUnavailable("Accounts.unlink")));
+      SqlTransaction.transactional(sql)(performUnlink(id)).pipe(
+        Effect.catchTag("SqlError", storeUnavailable("Accounts.unlink")),
+      );
 
     const deleteAllByUser: AccountsShape["deleteAllByUser"] = (userId) =>
       repo.deleteAllByUser(userId).pipe(orStoreUnavailable("Accounts.deleteAllByUser"));

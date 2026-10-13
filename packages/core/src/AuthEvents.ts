@@ -24,6 +24,7 @@
 
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import { SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import type * as Duration from "effect/Duration";
@@ -43,6 +44,7 @@ import {
   type AuthEvent,
   type AuthEventTag,
   type EventOf,
+  isAttemptEvent,
   type Published,
 } from "./AuthEventSchemas.ts";
 import { AuthRequestContext } from "./AuthRequestContext.ts";
@@ -223,7 +225,7 @@ export const layer = Layer.effect(
           userAgent: request.userAgent,
           tenantId,
         };
-        yield* auditLog
+        const record = auditLog
           .record(published)
           .pipe(
             Effect.catchTag("StoreUnavailable", (unavailable) =>
@@ -241,17 +243,29 @@ export const layer = Layer.effect(
                   ),
             ),
           );
-        yield* countEvent(event);
-        const accepted = yield* PubSub.publish(pubsub, published);
-        if (!accepted) {
-          yield* Ref.update(dropped, (n) => n + 1);
-          yield* Metric.update(
-            Metric.withAttributes(Observability.eventsDropped, { tag: event._tag }),
-            1,
-          );
-          yield* Effect.logWarning(
-            `awthaq: AuthEvents dropped a "${event._tag}" event — subscriber(s) not keeping up`,
-          );
+        const toBus = Effect.gen(function* () {
+          yield* countEvent(event);
+          const accepted = yield* PubSub.publish(pubsub, published);
+          if (!accepted) {
+            yield* Ref.update(dropped, (n) => n + 1);
+            yield* Metric.update(
+              Metric.withAttributes(Observability.eventsDropped, { tag: event._tag }),
+              1,
+            );
+            yield* Effect.logWarning(
+              `awthaq: AuthEvents dropped a "${event._tag}" event — subscriber(s) not keeping up`,
+            );
+          }
+        });
+        // ADR-EA-037: an attempt event is recorded and delivered once the enclosing unit of work
+        // has ended, committed or not (a rollback must not erase the forensic record). A state
+        // change keeps its audit row inside the transaction, atomic with the change (the
+        // ADR-EA-030 relay tails only committed rows), and tells live subscribers on commit.
+        if (isAttemptEvent(event._tag)) {
+          yield* SqlTransaction.afterUnit(Effect.andThen(record, toBus));
+        } else {
+          yield* record;
+          yield* SqlTransaction.onCommit(toBus);
         }
       });
 

@@ -34,7 +34,10 @@ describe("defineEvent (T1)", () => {
       tag: "test.x",
       actor: { _tag: "Field", field: "userId" },
       pii: ["note"],
+      attempt: false,
     });
+    const attempt = defineEvent("test.y", {}, { actor: Actor.none, pii: [], attempt: true });
+    assert.isTrue(attempt[MetaKey].attempt);
   });
 
   it("a rebuilt schema drops the declaration (so the registry refuses it at compile time)", () => {
@@ -42,7 +45,12 @@ describe("defineEvent (T1)", () => {
     assert.isFalse(MetaKey in rebuilt);
   });
 
-  const meta = (actor: typeof EventMetaSchema.Type.actor) => ({ tag: "t", actor, pii: [] });
+  const meta = (actor: typeof EventMetaSchema.Type.actor) => ({
+    tag: "t",
+    actor,
+    pii: [],
+    attempt: false,
+  });
 
   it("a required actor field is the actor even when empty; an absent optional one is none", () => {
     const field = meta(Actor.field("userId"));
@@ -170,5 +178,33 @@ describe("the event registry (T3)", () => {
       }
     }
     assert.deepStrictEqual(undeclared, []);
+  });
+});
+
+describe("attempt events (ADR-EA-037)", () => {
+  // ADR-EA-037 Q8: these record an attempt, so they are recorded and delivered even when the
+  // surrounding unit of work rolls back. Every other event is a state change.
+  const attemptTags = [
+    "auth.user.signInFailed",
+    "auth.token.replay",
+    "auth.twoFactor.challengeFailed",
+    "auth.twoFactor.locked",
+    "auth.rateLimit.exceeded",
+    "auth.admin.actionDenied",
+    "auth.admin.impersonationDenied",
+    "auth.authz.denied",
+    "auth.organization.permissionDenied",
+    "auth.deviceAuthorization.denied",
+  ];
+
+  it("classifies exactly the documented attempt set; every other registered event is a state change", () => {
+    assert.deepStrictEqual(
+      AuthEvents.eventTags.filter((tag) => AuthEvents.isAttemptEvent(tag)).toSorted(),
+      attemptTags.toSorted(),
+    );
+  });
+
+  it("an unregistered tag is not an attempt", () => {
+    assert.isFalse(AuthEvents.isAttemptEvent("auth.nonexistent"));
   });
 });

@@ -146,3 +146,7 @@ entries:
     file: "036-saml-refusals-are-decisions.md"
     title: "IdP-Initiated SAML Login and Encrypted Assertions Are Refused, as Decisions"
     status: "Accepted — implemented (both refusals are tested)"
+  - id: "ADR-EA-037"
+    file: "037-unit-of-work-releases-events-on-commit.md"
+    title: "A Unit of Work Releases State-Change Events on Commit and Attempt Events Either Way"
+    status: "Accepted — implemented"

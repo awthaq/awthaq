@@ -10,7 +10,7 @@
 // commit together (BEH-EA-058). Every paginated query takes an opaque
 // `(createdAt, id)` cursor, never an offset (BEH-EA-036).
 
-import { Defects, Encryption, Tenant } from "@awthaq/ports";
+import { Defects, Encryption, SqlTransaction, Tenant } from "@awthaq/ports";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -2288,10 +2288,19 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
           traced("AuditLog.deleteOccurredBefore"),
         );
 
+      // ADR-EA-037: inside a transaction the insert runs in a savepoint. On Postgres a failed
+      // statement aborts the whole transaction, so without one a failed audit write would take the
+      // operation down with it even under `AuthEvents`' `"bestEffort"` policy (ADR-EA-028).
+      // Outside a transaction there is nothing to abort, so no savepoint (and no extra round trips).
+      const inSavepoint = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.flatMap(Effect.serviceOption(sql.transactionService), (open) =>
+          Option.isSome(open) ? SqlTransaction.transactional(sql)(effect) : effect,
+        );
+
       const insert: AuditLogRepositoryShape["insert"] = (input) =>
         Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
           Effect.flatMap((ambient) =>
-            insertQuery({ ...input, tenantId: input.tenantId ?? ambient }),
+            inSavepoint(insertQuery({ ...input, tenantId: input.tenantId ?? ambient })),
           ),
           traced("AuditLog.insert", { id: input.id, eventTag: input.eventTag }),
         );

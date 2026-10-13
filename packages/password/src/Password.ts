@@ -542,14 +542,6 @@ const VERIFY_TTL = Duration.hours(24);
 /** PHS-004: internal only — routed to `onUnavailable` by `isBreached`, never surfaced. */
 class MalformedBreachResponse extends Data.TaggedError("MalformedBreachResponse")<{}> {}
 
-/**
- * PV-220: internal only. A token that missed while consumed inside a transaction; the transaction
- * rolls back with it, and the miss is recorded (`Verification.recordMiss`) after that, outside it.
- */
-class TokenMissed extends Data.TaggedError("Password/TokenMissed")<{
-  readonly identifier: string;
-}> {}
-
 /** One HIBP range line: the 35-hex-character SHA-1 suffix and its breach count. */
 const HIBP_LINE = /^[0-9A-F]{35}:\d+$/i;
 
@@ -940,22 +932,17 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const accounts = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
-      // PV-220: `confirmReset`, `verifyEmail` and `confirmEmailChange` consume inside a
-      // transaction that a bad token fails, which would roll back the replay audit row (and, over
-      // SQL, the attempt a miss spends) written inline. A miss is instead reported as `TokenMissed`
-      // and recorded by `settleMiss` after the transaction has ended.
+      // `confirmReset`, `verifyEmail` and `confirmEmailChange` consume inside a transaction that a
+      // bad token fails. `consume` records the miss (the spent attempt and the `auth.token.replay`
+      // event) in the unit of work's `afterUnit` lane (ADR-EA-037), so the rollback cannot erase it.
       const consumeInTransaction = (identifier: string, value: Redacted.Redacted<string>) =>
         verification
-          .consume(identifier, value, { deferMiss: true })
+          .consume(identifier, value)
           .pipe(
             Effect.catchTag("Verification/TokenConsumed", () =>
-              Effect.fail(new TokenMissed({ identifier })),
+              Effect.fail(new PasswordApi.TokenConsumed()),
             ),
           );
-      const settleMiss = (missed: TokenMissed) =>
-        verification
-          .recordMiss(missed.identifier)
-          .pipe(Effect.andThen(Effect.fail(new PasswordApi.TokenConsumed())));
       const hasher = yield* PasswordHasher.PasswordHasher;
       const mailer = yield* Mailer.Mailer;
       const events = yield* AuthEvents.AuthEvents;
@@ -1585,16 +1572,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // `revokeOthers` trick this call site used to stand in for
               // it.
               // ESA-006/TIR-008: `Sessions.revokeAll` itself publishes the
-              // `auth.session.revoked` (reason `passwordReset`) — after this
-              // transaction's own write, like every other revocation.
+              // `auth.session.revoked` (reason `passwordReset`): its audit row joins
+              // this transaction, and its bus copy is released only when it commits
+              // (ADR-EA-037).
               yield* sessions.revokeAll(userId, "passwordReset");
               return userId;
             }),
           )
-          .pipe(
-            Effect.catchTag("SqlError", Effect.die),
-            Effect.catchTag("Password/TokenMissed", settleMiss),
-          );
+          .pipe(Effect.catchTag("SqlError", Effect.die));
         // ALF-004: published only after the transaction above has actually
         // committed — mirroring `signUp`'s own `auth.user.created`
         // placement, never inside the transaction itself.
@@ -1653,10 +1638,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               return userId;
             }),
           )
-          .pipe(
-            Effect.catchTag("SqlError", Effect.die),
-            Effect.catchTag("Password/TokenMissed", settleMiss),
-          );
+          .pipe(Effect.catchTag("SqlError", Effect.die));
         // ARF-006: after the commit, like `resetCompleted`.
         yield* events.publish({ _tag: "auth.user.emailVerified", userId: verifiedUserId });
       });
@@ -1754,10 +1736,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 return { userId, previous: Users.emailOf(before) };
               }),
             )
-            .pipe(
-              Effect.catchTag("SqlError", Effect.die),
-              Effect.catchTag("Password/TokenMissed", settleMiss),
-            );
+            .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({ _tag: "auth.user.emailChanged", userId: changed.userId });
           // The previous address learns of the change (a takeover signal) — dispatched, never
           // awaited, and carrying nothing but the template.

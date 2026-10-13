@@ -17,6 +17,7 @@ import * as TwoFactor from "../src/TwoFactor.ts";
 import * as TwoFactorStore from "../src/TwoFactorStore.ts";
 import { CHALLENGE_PURPOSE } from "../src/Challenge.ts";
 import {
+  buildDurableAuditLayer,
   buildLayer,
   codeFor,
   letForkedFibersRun,
@@ -638,6 +639,36 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
         // The new password works — it reaches the second-factor divert.
         assert.strictEqual(signedIn._tag, "TwoFactorRequired");
       }).pipe(Effect.provide(buildLayer())),
+  );
+
+  // ADR-EA-037 / BEH-EA-266: the wrong code fails the reset, which rolls its transaction back. The
+  // challengeFailed attempt used to be written inside it and so erased with it: a brute force of the
+  // second factor through the reset form left no audit row. Over a real database it now survives.
+  it.effect(
+    "a wrong second-factor code during a reset is audited and delivered although the reset rolls back",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const password = yield* Password.Password;
+          const events = yield* AuthEvents.AuthEvents;
+          const audit = yield* AuditLog.AuditLog;
+          const user = yield* enrolledUser("reset-audit@example.com");
+          const token = yield* requestResetToken(user.email);
+          const stream = yield* events.subscribe;
+          const wrong = yield* password
+            .confirmReset({ token, password: newPassword, secondFactorCode: secret("000000") })
+            .pipe(Effect.flip);
+          assert.strictEqual(wrong._tag, "HookAborted");
+          const rows = yield* audit.list({ eventTag: "auth.twoFactor.challengeFailed" });
+          assert.strictEqual(rows.length, 1);
+          const seen = yield* stream.pipe(
+            Stream.filter((event) => event._tag === "auth.twoFactor.challengeFailed"),
+            Stream.take(1),
+            Stream.runCollect,
+          );
+          assert.strictEqual(seen.length, 1);
+        }),
+      ).pipe(Effect.provide(buildDurableAuditLayer())),
   );
 
   it.effect("a recovery code carries a reset exactly once", () =>

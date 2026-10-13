@@ -19,6 +19,7 @@
 // ledger and cross-checks the read model against it, so a rewrite that bypassed
 // the triggers is reported with the exact first episode/link it touched.
 
+import { SqlTransaction } from "@awthaq/ports";
 import { AuditChain, Tenant, Users } from "@awthaq/core";
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
@@ -563,7 +564,7 @@ export const layerSql = Layer.effect(
 
     /** Chain writers are serialised (Postgres: a transaction-scoped advisory lock; SQLite is single-writer). */
     const inTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      sql.withTransaction(
+      SqlTransaction.transactional(sql)(
         Effect.andThen(
           sql.onDialectOrElse({
             pg: () => Effect.asVoid(sql`SELECT pg_advisory_xact_lock(${CHAIN_LOCK_KEY})`),

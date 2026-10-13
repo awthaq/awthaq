@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-31 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) <br> 1.3 (2026-10-13): BEH-EA-263 names `Sessions.requireFresh` as the gate (BEH-EA-320) |
+> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) <br> 1.3 (2026-10-13): BEH-EA-263 names `Sessions.requireFresh` as the gate (BEH-EA-320) <br> 1.4 (2026-10-13): BEH-EA-266: every failure is audited through `Password.confirmReset` too, because `auth.twoFactor.challengeFailed`/`locked` are attempt events (ADR-EA-037, plan 10 item 5) |
 ---
 
 > Status: the `@awthaq/two-factor` plugin is implemented and tested (`packages/two-factor/test/`). The decisions behind it are [ADR-EA-020](../decisions/020-two-factor-state.md); the credential-reset veto it taps is [BEH-EA-259](15-password.md#beh-ea-259-a-credential-reset-consults-beforecredentialreset-before-anything-is-rewritten). SMS is deliberately not part of it ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -196,6 +196,6 @@ REQUIREMENT: Failed presentations of a TOTP code or a recovery code — for any
              `auth.twoFactor.*` event, identifiers only.
 ```
 
-`RateLimiter.check` is the read half of a limit that only failures spend: it fails with the same `RateLimitExceeded` `consume` would once the bucket holds `limit` or more, without counting the call. Together with the per-challenge attempts of BEH-EA-262 and the per-source limit it bounds guessing per sign-in, per account and per origin (ADR-EA-020 decision 3). Account erasure removes the secret and every recovery code; the data-subject export reports whether a factor exists and how many codes remain, never a secret or a hash.
+`RateLimiter.check` is the read half of a limit that only failures spend: it fails with the same `RateLimitExceeded` `consume` would once the bucket holds `limit` or more, without counting the call. Together with the per-challenge attempts of BEH-EA-262 and the per-source limit it bounds guessing per sign-in, per account and per origin (ADR-EA-020 decision 3). A wrong code presented during a password reset (BEH-EA-259) fails the reset's transaction, but `auth.twoFactor.challengeFailed` (and `auth.twoFactor.locked`) are attempt events (BEH-EA-321): their audit row and bus copy are recorded after the transaction ends, so a brute force of the second factor through the reset form leaves the same trail as one through `/verify`. Account erasure removes the secret and every recovery code; the data-subject export reports whether a factor exists and how many codes remain, never a secret or a hash.
 
 _Previous: [BEH-EA-265](31-two-factor.md#beh-ea-265-a-totp-step-is-accepted-at-most-once-even-concurrently)_

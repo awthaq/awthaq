@@ -23,6 +23,7 @@ export const EventMetaSchema = Schema.Struct({
   tag: Schema.String,
   actor: ActorSpecSchema,
   pii: Schema.Array(Schema.String),
+  attempt: Schema.Boolean,
 });
 export type EventMeta = typeof EventMetaSchema.Type;
 
@@ -87,13 +88,30 @@ interface Declaration<F extends Fields> {
   readonly actor: NoActor | FieldActor<UserIdKey<F>> | PrefixedActor<StringKey<F>>;
   /** Required, usually `[]`: the fields holding free text about a person (ADR-EA-029). */
   readonly pii: ReadonlyArray<FreeTextKey<F>>;
+  /**
+   * ADR-EA-037: `true` for an event that records an *attempt* (a failed sign-in, a wrong second
+   * factor, a replayed token, a denial): its audit row and its bus copy are released after the
+   * enclosing unit of work ends, committed or not, so a rollback cannot erase the forensic
+   * record. Omitted (the default) for an event that records a *state change*: its audit row is
+   * written inside the transaction and its bus copy is released only if the transaction commits.
+   */
+  readonly attempt?: true;
 }
 
 /** Drops the write-time key types so the stamped property names only plain data. */
 const erase = <const Tag extends string>(
   tag: Tag,
-  declaration: { readonly actor: EventMeta["actor"]; readonly pii: ReadonlyArray<string> },
-) => ({ tag, actor: declaration.actor, pii: declaration.pii });
+  declaration: {
+    readonly actor: EventMeta["actor"];
+    readonly pii: ReadonlyArray<string>;
+    readonly attempt?: true;
+  },
+) => ({
+  tag,
+  actor: declaration.actor,
+  pii: declaration.pii,
+  attempt: declaration.attempt === true,
+});
 
 export const defineEvent = <const Tag extends string, const F extends Fields>(
   tag: Tag,
@@ -142,5 +160,6 @@ export const registry = <const Members extends ReadonlyArray<Schema.Constraint &
       return meta === undefined ? Option.none<string>() : actorValue(meta, event);
     },
     piiFieldsOf: (tag: string): ReadonlyArray<string> => byTag.get(tag)?.pii ?? [],
+    isAttempt: (tag: string) => byTag.get(tag)?.attempt === true,
   };
 };

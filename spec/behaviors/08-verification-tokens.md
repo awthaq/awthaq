@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-08 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) |
 
 ---
 
@@ -73,7 +73,7 @@ REQUIREMENT: A consumption attempt against a token that has already been
 
 `archive/design/usage-examples-v4.md` §6.2 documents the exact response shape (`410 TokenConsumed`) alongside the event. Without a distinguishable, queryable signal, an attacker probing stale reset or verification links is indistinguishable from ordinary user error in any downstream monitoring; publishing the event is designed to make replay attempts a first-class operational signal, independent of whatever the audit table separately records (see [13-events.md](13-events.md#beh-ea-100-the-audit-table-is-the-durable-record-of-record-independent-of-the-pubsub-stream)).
 
-**As shipped (PV-220):** an endpoint that consumes inside its own transaction (`Password.confirmReset`/`verifyEmail`/`confirmEmailChange`) fails that transaction with the replay itself, so a row written inline would roll back with it. Such a caller passes `consume(identifier, value, { deferMiss: true })` (which then records nothing) and calls `Verification.recordMiss(identifier)` after the transaction has ended; `recordMiss` writes the `auth.token.replay` event and durable audit row and, over SQL, spends the attempt a budgeted token is owed (REQ-EA-688, `packages/core/test/Verification.test.ts`).
+**As shipped (PV-220, ADR-EA-037):** an endpoint that consumes inside its own transaction (`Password.confirmReset`/`verifyEmail`/`confirmEmailChange`) fails that transaction with the replay itself, which would roll back a row written inline. `Verification.consume` therefore records a miss through the unit of work (BEH-EA-321): `auth.token.replay` is an attempt event, so its audit row and bus copy are recorded after the transaction ends, and over SQL the attempt a budgeted token is owed is spent in the same `afterUnit` lane (best effort: a store failure there is logged, never turned into a different answer). No caller does anything: the former `deferMiss` option and `recordMiss` are gone (REQ-EA-688, `packages/core/test/Verification.test.ts`).
 
 ## BEH-EA-060: A verification token is hashed at rest
 

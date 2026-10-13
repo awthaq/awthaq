@@ -303,3 +303,11 @@ Feature: Password Authentication
       When the reset of "bob" is confirmed with a new password and no second-factor code
       Then the reset succeeds
       And the new password of "bob" signs in with a session
+
+    @REQ-EA-1280
+    Scenario: A wrong second-factor code during a reset is audited although the reset is aborted (BEH-EA-266, ADR-EA-037)
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and the second-factor code "000000"
+      Then the reset fails with "HookAborted" carrying the code "SECOND_FACTOR_INVALID"
+      And the audit log holds an "auth.twoFactor.challengeFailed" event for "alice"

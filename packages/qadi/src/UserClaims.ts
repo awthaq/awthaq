@@ -23,6 +23,7 @@
 // Firebase import mapping: `role`-shaped claims -> `Roles.assign`; every other custom claim ->
 // `UserClaims.merge`/`set`. See `packages/qadi/README.md`.
 
+import { SqlTransaction } from "@awthaq/ports";
 import {
   AuthEvents,
   AuthPlugin,
@@ -209,24 +210,22 @@ const sqlMake = Effect.gen(function* () {
     );
 
   const modify: ClaimsStore["modify"] = (userId, change) =>
-    sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const before = yield* read(userId);
-          const after = change(before);
-          if (Object.keys(after).length === 0) {
-            yield* sql`DELETE FROM claims_user WHERE subject = ${userId}`;
-          } else {
-            const updated = DateTime.formatIso(yield* DateTime.now);
-            yield* sql`
+    SqlTransaction.transactional(sql)(
+      Effect.gen(function* () {
+        const before = yield* read(userId);
+        const after = change(before);
+        if (Object.keys(after).length === 0) {
+          yield* sql`DELETE FROM claims_user WHERE subject = ${userId}`;
+        } else {
+          const updated = DateTime.formatIso(yield* DateTime.now);
+          yield* sql`
               INSERT INTO claims_user (subject, claims, updated)
               VALUES (${userId}, ${JSON.stringify(after)}, ${updated})
               ON CONFLICT (subject) DO UPDATE SET claims = excluded.claims, updated = excluded.updated`;
-          }
-          return { before, after };
-        }),
-      )
-      .pipe(Effect.orDie);
+        }
+        return { before, after };
+      }),
+    ).pipe(Effect.orDie);
 
   return yield* serviceOver({ read, modify });
 });

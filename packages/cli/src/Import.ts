@@ -228,7 +228,7 @@ const processBatch = (
     const sql = yield* SqlClient.SqlClient;
     // The whole batch — its users, their accounts and their ledger rows — is one transaction.
     const exit = yield* Effect.exit(
-      sql.withTransaction(
+      SqlTransaction.transactional(sql)(
         Effect.gen(function* () {
           for (const candidate of candidates) {
             // `importUser` is itself atomic and idempotent (`createOrGet`, credentials linked only if

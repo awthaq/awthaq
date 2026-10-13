@@ -19,7 +19,7 @@
 // contribution instead), so `deleteAllByUser` is what account erasure calls.
 
 import { Migrations, Users } from "@awthaq/core";
-import { Defects, PasswordHasher } from "@awthaq/ports";
+import { Defects, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -467,16 +467,14 @@ export const layerRecoveryCodesSql: Layer.Layer<
           rows.push({ id: yield* crypto.randomUUIDv7.pipe(Effect.orDie), codeHash });
         }
         // BCR-002: delete-then-insert as one transaction, so a failure part-way keeps the old set.
-        yield* sql
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* sql`DELETE FROM two_factor_recovery_code WHERE "userId" = ${userId}`;
-              for (const row of rows) {
-                yield* insertQuery({ id: row.id, userId, codeHash: row.codeHash, createdAt: now });
-              }
-            }),
-          )
-          .pipe(Effect.orDie);
+        yield* SqlTransaction.transactional(sql)(
+          Effect.gen(function* () {
+            yield* sql`DELETE FROM two_factor_recovery_code WHERE "userId" = ${userId}`;
+            for (const row of rows) {
+              yield* insertQuery({ id: row.id, userId, codeHash: row.codeHash, createdAt: now });
+            }
+          }),
+        ).pipe(Effect.orDie);
       });
 
     const listUnused: TwoFactorRecoveryCodesShape["listUnused"] = (userId) =>

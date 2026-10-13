@@ -4,6 +4,7 @@
 // (`PubSub.dropping` reverted to `PubSub.bounded`) is that the publisher-never-awaits
 // scenarios park their publisher at event CAPACITY + 1 and fail on the poll below.
 import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { SqlTransaction } from "@awthaq/ports";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
@@ -798,6 +799,84 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
           (entry) => entry.level !== "Error" || !entry.text.includes(`"tag":"${tag}"`),
         ),
       );
+    },
+  );
+
+  // ---- BEH-EA-321: a unit of work releases state-change events on commit, attempt events either way ----
+
+  /** A fixed event for each tag the BEH-EA-321 scenarios name; anything else is a typo in the scenario. */
+  const sampleFor = (tag: string): AuthEvents.AuthEvent => {
+    switch (tag) {
+      case "auth.user.created":
+        return { _tag: "auth.user.created", userId: someUser };
+      case "auth.user.signInFailed":
+        return {
+          _tag: "auth.user.signInFailed",
+          strategy: "password",
+          reason: "invalidCredentials",
+        };
+      default:
+        throw new Error(`no sample event for "${tag}"`);
+    }
+  };
+
+  Given(
+    "a subscriber {string} handling {string} and {string}",
+    function* (name: string, first: string, second: string) {
+      yield* subscribe(name, [tagNamed(first), tagNamed(second)]);
+    },
+  );
+
+  // The unit's commit/rollback is `transactional`'s job over a real database (packages/sql/test); a
+  // pass-through `withTransaction` drives the same two lanes here.
+  const unitPublishing = (first: string, second: string, outcome: "commits" | "rolls back") =>
+    Effect.gen(function* () {
+      const { host } = yield* World;
+      yield* host.run(
+        Effect.gen(function* () {
+          const events = yield* AuthEvents.AuthEvents;
+          yield* Effect.exit(
+            SqlTransaction.transactional({ withTransaction: (effect) => effect })(
+              Effect.gen(function* () {
+                yield* events.publish(sampleFor(first));
+                yield* events.publish(sampleFor(second));
+                if (outcome === "rolls back") return yield* Effect.fail("rolled back");
+              }),
+            ),
+          );
+        }),
+      );
+      yield* letSubscribersRun;
+    });
+
+  When(
+    "a unit of work publishes {string} and {string} and then rolls back",
+    function* (first: string, second: string) {
+      yield* unitPublishing(first, second, "rolls back");
+    },
+  );
+
+  When(
+    "a unit of work publishes {string} and {string} and then commits",
+    function* (first: string, second: string) {
+      yield* unitPublishing(first, second, "commits");
+    },
+  );
+
+  const handledTags = (name: string) =>
+    Effect.gen(function* () {
+      const probe = yield* getProbe(name);
+      return (yield* Ref.get(probe.handled)).map((event) => event._tag);
+    });
+
+  Then("{string} was handed only {string}", function* (name: string, tag: string) {
+    assert.deepEqual(yield* handledTags(name), [tag]);
+  });
+
+  Then(
+    "{string} was handed {string} and {string} exactly once each",
+    function* (name: string, first: string, second: string) {
+      assert.deepEqual((yield* handledTags(name)).toSorted(), [first, second].toSorted());
     },
   );
 });

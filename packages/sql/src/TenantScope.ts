@@ -27,7 +27,7 @@
 // `enableRls` does — by the table owner. Run the application as a plain
 // non-owner role for the guarantee to hold without depending on `FORCE`.
 
-import { Tenant } from "@awthaq/ports";
+import { SqlTransaction, Tenant } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -124,7 +124,7 @@ export const withTenant =
       const scoped = Tenant.withTenant(tenantId)(effect);
       return yield* sql.onDialectOrElse({
         pg: () =>
-          sql.withTransaction(
+          SqlTransaction.transactional(sql)(
             Effect.andThen(sql`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`, scoped),
           ),
         orElse: () => scoped,

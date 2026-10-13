@@ -18,6 +18,7 @@
     "circular": "node scripts/circular.mjs",
     "check:readmes": "node scripts/check-readme-status.mjs",
     "check:error-tags": "node scripts/check-error-tags.mjs",
+    "check:transactions": "node scripts/check-transactions.mjs",
     "quality:dashboard": "node scripts/generate-quality-dashboard.mjs",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
@@ -30,7 +31,7 @@
     "workspace:sync": "node scripts/sync-workspace.mjs --write",
     "workspace:check": "node scripts/sync-workspace.mjs --check",
     "release:dry-run": "node scripts/release-dry-run.mjs",
-    "check": "pnpm workspace:check && pnpm typecheck && pnpm package:smoke && pnpm lint && pnpm knip && pnpm format:check && pnpm circular && pnpm check:readmes && pnpm check:error-tags && pnpm coverage && pnpm test:bdd && pnpm spec:verify:strict",
+    "check": "pnpm workspace:check && pnpm typecheck && pnpm package:smoke && pnpm lint && pnpm knip && pnpm format:check && pnpm circular && pnpm check:readmes && pnpm check:error-tags && pnpm check:transactions && pnpm coverage && pnpm test:bdd && pnpm spec:verify:strict",
     "changeset": "changeset",
     "changeset-version": "changeset version",
     "changeset-publish": "changeset publish"

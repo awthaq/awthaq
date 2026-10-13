@@ -7,7 +7,7 @@
 // `Migrations.ts` documents for the persistence stratum generally.
 
 import { Api } from "@awthaq/api";
-import { Hmac, LegacySessionBridge } from "@awthaq/ports";
+import { Hmac, LegacySessionBridge, SqlTransaction } from "@awthaq/ports";
 import {
   Models as SqlModels,
   ReadRouting as SqlReadRouting,
@@ -1399,7 +1399,7 @@ export const layerSql: Layer.Layer<
         } = yield* (
           input.supersedes === undefined && config.maxConcurrent === undefined
             ? persist
-            : sql.withTransaction(persist)
+            : SqlTransaction.transactional(sql)(persist)
         ).pipe(retryTransient());
         // RRS-008: see `layerMemory.issue`.
         if (superseded !== undefined) {

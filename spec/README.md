@@ -33,8 +33,8 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/traceability.md](traceability.md) | EFAUTH-RTM | The requirements traceability matrix: every `URS`/`NFR`/`MOD` row mapped to the `BEH`/`ADR`/`INV` rows that satisfy it. |
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
-| [spec/decisions/](decisions/) | `ADR-EA-001`–`034` | Thirty-two architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
-| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`320` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
+| [spec/decisions/](decisions/) | `ADR-EA-001`–`037` | Thirty-five architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
+| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`321` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -99,6 +99,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `034-*.md` | ADR-EA-034 | Before 1.0 Breaking Changes Are Allowed, Each With a Changeset That Carries a Migration Note |
 | `035-*.md` | ADR-EA-035 | A Plugin Adds Typed Scalar Fields to `users` Through One Declared Extension Point |
 | `036-*.md` | ADR-EA-036 | IdP-Initiated SAML Login and Encrypted Assertions Are Refused, as Decisions |
+| `037-*.md` | ADR-EA-037 | A Unit of Work Releases State-Change Events on Commit and Attempt Events Either Way |
 
 ### `spec/behaviors/` — thirty files, grouped by subsystem
 
@@ -116,7 +117,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `10-csrf.md` | 073–080 | CSRF Protection |
 | `11-http-error-mapping.md` | 081–088 | HTTP Serving and Error Mapping |
 | `12-hooks.md` | 089–096 | Hooks |
-| `13-events.md` | 097–104 | Events |
+| `13-events.md` | 097–104, 321 | Events |
 | `14-rate-limiting.md` | 105–112 | Rate Limiting |
 | `15-password.md` | 113–120 | Password Authentication |
 | `16-oauth.md` | 121–128 | OAuth and OIDC |

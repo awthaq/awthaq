@@ -37,7 +37,7 @@ A plugin that needs a mailer, a crypto source, a rate limiter or a transaction b
 
 ## Hooks
 
-- `HookPoint.veto` taps can amend the input or abort with `new HookPoint.HookAbort({ code })`; `observe` taps run afterwards and a failing observer can never fail the operation (BEH-EA-089 to 093).
+- `HookPoint.veto` taps can amend the input or abort with `new HookPoint.HookAbort({ code })`; `observe` taps run afterwards (inside a transaction: after it commits, and not at all if it rolls back, ADR-EA-037) and a failing observer can never fail the operation (BEH-EA-089 to 093).
 - Translate a veto abort where the point is run, into the typed `HookAborted` naming the point (BEH-EA-090). Use `HookPoint.aborted(Point)(point.run(...))`, which does exactly that and is what the core plugins and the template call.
 - The tap registry lives in the point's own built layer, so it is **per composition** (ELC-001), and it **freezes at the first run of a point** in that composition (BEH-EA-024). A tap layer built after its point has already run fails with `HookPointFrozen`; two compositions built from one module never share taps.
 - A tap's layer **requires its point**: `Point.tap(...)` is a `Layer<never, never, Point>`, so tapping a point nobody provides fails to compile (BEH-EA-094). Provide the point to the tap in the same layer graph: `Tap.pipe(Layer.provideMerge(NotesHooksLive))`.
@@ -95,7 +95,7 @@ A plugin that stores anything about a person must take part in account erasure a
 
 ## Events
 
-Events are identifiers-only (ADR-EA-029) and declared in `@awthaq/core`'s `AuthEventSchemas.ts` with `defineEvent(tag, fields, { actor, pii })`. Name the tag `auth.<plugin>.<pastTense>`. Brand user ids with the module's `UserIdSchema`. Choose the actor: `Actor.field("<userId field>")` for the user who *did* it (an administrator, not the target), `Actor.none` when no user acted (a directory, the CLI, an anonymous attempt), or `Actor.prefixed`. List every free-text field about a person in `pii` (never an email; carry an id and let subscribers join). Add the event to the registry list, add a sample to `test/support/eventSamples.ts` (the compiler asks for it), and publish with `AuthEvents.publish`. Until plugins own their events (plan 09 phase 5), a third-party plugin cannot add a tag: reuse an existing one, or contribute the definition to core.
+Events are identifiers-only (ADR-EA-029) and declared in `@awthaq/core`'s `AuthEventSchemas.ts` with `defineEvent(tag, fields, { actor, pii })`. Name the tag `auth.<plugin>.<pastTense>`. Brand user ids with the module's `UserIdSchema`. Choose the actor: `Actor.field("<userId field>")` for the user who *did* it (an administrator, not the target), `Actor.none` when no user acted (a directory, the CLI, an anonymous attempt), or `Actor.prefixed`. List every free-text field about a person in `pii` (never an email; carry an id and let subscribers join). Add the event to the registry list, add a sample to `test/support/eventSamples.ts` (the compiler asks for it), and publish with `AuthEvents.publish`. Add `attempt: true` to the declaration for an event that records an *attempt* (a failed sign-in or second factor, a replay, a denial): it is recorded and delivered after the surrounding transaction ends, committed or not. Leave it off for a state change: its audit row joins the transaction and its live-subscriber copy is released only if the transaction commits (see "Units of work" below). Until plugins own their events (plan 09 phase 5), a third-party plugin cannot add a tag: reuse an existing one, or contribute the definition to core.
 
 ## Migrations
 
@@ -108,7 +108,19 @@ Events are identifiers-only (ADR-EA-029) and declared in `@awthaq/core`'s `AuthE
 
 ## Multi-statement writes
 
-An operation that is several SQL statements runs in one `sql.withTransaction` so it is all-or-nothing, even when called directly. Composing two records services stays the domain service's job (BEH-EA-035); take the `SqlTransaction` port there.
+An operation that is several SQL statements runs in one transaction so it is all-or-nothing, even when called directly. Open it with `SqlTransaction.transactional(sql)(effect)` (or the `SqlTransaction` port's `withTransaction`, which is the same thing); never call `sql.withTransaction` directly, `pnpm check:transactions` fails the build. Composing two records services stays the domain service's job (BEH-EA-035); take the `SqlTransaction` port there.
+
+## Units of work: what may happen inside a transaction (ADR-EA-037)
+
+A transaction opened through `SqlTransaction` is a **unit of work** with two lanes. `AuthEvents.publish` and `HookPoint.observe` already use them, so ordinary plugin code needs nothing: publish a state-change event inside the transaction and live subscribers hear it only if the transaction commits; publish an attempt event (declared `attempt: true`) and it is recorded either way.
+
+If your own code has work that must follow the same rule, use the lanes directly, from `@awthaq/ports`:
+
+- `SqlTransaction.onCommit(effect)`: runs `effect` after the *outermost* enclosing unit commits, and never if it rolls back. For a reaction to a change (invalidate a cache, notify a host).
+- `SqlTransaction.afterUnit(effect)`: runs `effect` after the outermost unit ends, committed or not, outside any transaction (a write made there commits by itself). For a fact about an attempt that must survive a rollback.
+- Outside any unit (no transaction, `SqlTransaction.layerNoop`, a memory composition) both run immediately.
+- A nested `transactional` is a savepoint: its `onCommit` work is dropped if the savepoint rolls back; its `afterUnit` work always reaches the parent. Both lanes take an `Effect<void>` with no error and no requirements, so handle or `orDie` errors inside, and capture any per-request context the work needs before deferring it.
+- A host that opens its own raw `sql.withTransaction` around awthaq calls is not covered: use `SqlTransaction.transactional(sql)`.
 
 ## House rules
 

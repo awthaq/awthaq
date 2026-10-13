@@ -3,7 +3,16 @@
 // (the first factor), the real `TwoFactor` plugin with both of its gates, the real `Encryption`
 // port over a fixed test key, and argon2id at its smallest legal cost. Only the rate limiter and the
 // plugin's configuration vary per suite.
-import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  Hooks,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -15,6 +24,7 @@ import {
 } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { Authentication, Csrf } from "@awthaq/server";
+import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Crypto from "effect/Crypto";
@@ -23,6 +33,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as Migrator from "effect/unstable/sql/Migrator";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as SecondFactor from "../../src/SecondFactor.ts";
 import * as Totp from "../../src/Totp.ts";
@@ -30,6 +41,7 @@ import * as TwoFactor from "../../src/TwoFactor.ts";
 import * as TwoFactorConfig from "../../src/TwoFactorConfig.ts";
 import * as TwoFactorStore from "../../src/TwoFactorStore.ts";
 import { TestAuth } from "@awthaq/test";
+import * as TestSql from "../../../sql/test/support/TestSql.ts";
 
 export const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,
@@ -71,7 +83,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+);
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -98,31 +110,77 @@ export const Gates = Layer.mergeAll(TwoFactor.sessionGate, TwoFactor.credentialR
 /** A real limiter over the in-memory store (lockout tests need real budgets), or the permissive one. */
 export const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 
-export const buildLayer = (options?: {
+export interface BuildOptions {
   readonly config?: Partial<TwoFactorConfig.TwoFactorConfigShape>;
   readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
-}) =>
-  Layer.mergeAll(Password.Password.layer, TwoFactor.TwoFactor.layer).pipe(
-    Layer.provideMerge(Gates),
-    Layer.provideMerge(SecondFactor.layer),
-    Layer.provideMerge(Stores),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        TestHasher,
-        Mailer.layerMemory,
-        options?.limiter ?? RateLimiter.layerPermissive,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
-    ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(NoBreachHttpClient),
-    Layer.provide(SqlTransaction.layerNoop),
-    Layer.provide(ClientAddress.layerDirect),
-    Layer.provideMerge(TwoFactorConfig.config(options?.config ?? {})),
+}
+
+/** The plugins over the shared stores, gates and in-memory domain services (the foundation is added by the caller). */
+const plugins = Layer.mergeAll(Password.Password.layer, TwoFactor.TwoFactor.layer).pipe(
+  Layer.provideMerge(Gates),
+  Layer.provideMerge(SecondFactor.layer),
+  Layer.provideMerge(Stores),
+  Layer.provideMerge(EncryptionLive),
+  Layer.provideMerge(AuthenticationLive),
+  Layer.provide(CsrfProtectionLive),
+  Layer.provideMerge(CoreLive),
+);
+
+/** Everything beneath the foundation: ports, rate limits, the transaction port and the plugin's configuration. */
+const beneath =
+  (options: BuildOptions | undefined) =>
+  <TransactionError>(transaction: Layer.Layer<SqlTransaction.SqlTransaction, TransactionError>) =>
+  <A, E, R>(layer: Layer.Layer<A, E, R>) =>
+    layer.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          TestHasher,
+          Mailer.layerMemory,
+          options?.limiter ?? RateLimiter.layerPermissive,
+        ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+      ),
+      Layer.provideMerge(RateLimits.layer),
+      Layer.provide(NoBreachHttpClient),
+      Layer.provide(transaction),
+      Layer.provide(ClientAddress.layerDirect),
+      Layer.provideMerge(TwoFactorConfig.config(options?.config ?? {})),
+    );
+
+export interface BuildOptions {
+  readonly config?: Partial<TwoFactorConfig.TwoFactorConfigShape>;
+  readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
+}
+
+export const buildLayer = (options?: BuildOptions) =>
+  plugins.pipe(
+    Layer.provideMerge(TestAuth.memoryFoundation),
+    beneath(options)(SqlTransaction.layerNoop),
   );
+
+const SqlLive = TestSql.layer("two_factor_harness");
+
+/**
+ * The same composition with a real database under the audit log and the transaction port
+ * (SQLite in memory, the real core migrations), so a rolled-back transaction really erases what
+ * was written inside it. Users, sessions and tokens stay in memory.
+ */
+export const buildDurableAuditLayer = (options?: BuildOptions) => {
+  const durableFoundation = AuthEvents.layer.pipe(
+    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(Hooks.HooksLive),
+    Layer.provideMerge(NodeCrypto.layer),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(
+      Layer.effectDiscard(Migrator.make({})({ loader: CoreMigrations.coreMigrations })).pipe(
+        Layer.provide(SqlLive),
+      ),
+    ),
+  );
+  return plugins.pipe(
+    Layer.provideMerge(durableFoundation),
+    beneath(options)(SqlTransaction.layerSql.pipe(Layer.provide(SqlLive))),
+  );
+};
 
 /** Lets fibers the plugins fork (mail dispatch) run before a test reads their result. */
 export const letForkedFibersRun = Effect.gen(function* () {
