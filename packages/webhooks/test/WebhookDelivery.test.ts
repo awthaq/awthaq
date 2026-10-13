@@ -23,6 +23,7 @@ import {
   published,
   seedEndpoint,
   signedIn,
+  relay,
 } from "./support.ts";
 
 // One receiver per test that inspects it (a receiver records everything it is sent).
@@ -257,7 +258,7 @@ describe("retry, backoff and dead-letter", () => {
       Effect.gen(function* () {
         const records = yield* WebhookRecords.WebhookRecords;
         const { endpoint } = yield* seedEndpoint();
-        yield* records.bumpDead(endpoint.id);
+        yield* records.bumpDead(relay, endpoint.id);
         yield* enqueueAndDrain(yield* published(signedIn()));
         yield* TestClock.adjust(Duration.seconds(10));
         yield* WebhookDelivery.drainDue;

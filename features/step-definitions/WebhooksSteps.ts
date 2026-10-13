@@ -8,7 +8,7 @@
 // an endpoint the gate then refuses to show; endpoints a scenario is *about* are registered through
 // the service.
 import { Auth, AuthEvents, DataExport, Erasure, EventRelay, Sessions, Users } from "@awthaq/core";
-import { Encryption } from "@awthaq/ports";
+import { Encryption, Tenant } from "@awthaq/ports";
 import {
   WebhookDelivery,
   WebhookPayload,
@@ -49,6 +49,7 @@ import {
   updateReplies,
   World,
   type SentRequest,
+  anyTenant,
 } from "./WebhooksWorld.ts";
 import { isRecord, parseJson } from "./shared/WireJson.ts";
 import { isNumber, isString } from "./shared/Outcomes.ts";
@@ -109,14 +110,15 @@ export const seedEndpoint = Effect.fn("features.webhooks.seedEndpoint")(function
     Effect.gen(function* () {
       const records = yield* WebhookRecords.WebhookRecords;
       const encryption = yield* Encryption.Encryption;
-      yield* records.createEndpoint({
+      const create = records.createEndpoint({
         id: name,
         url,
         eventTags: [filter],
         secret: yield* encryption.encrypt(secret, aad(name, "secret")),
         createdBy: "admin-1",
-        tenantId,
       });
+      // The store stamps the ambient tenant, so a tenant's endpoint is registered under it.
+      yield* tenantId === undefined ? create : Tenant.withTenant(tenantId)(create);
     }),
   );
   yield* world.endpoints.set(name, { id: name, url, secret: Redacted.value(secret) });
@@ -126,7 +128,9 @@ export const urlFor = (name: string) => `https://hooks.example.com/${name}`;
 
 const endpointRow = Effect.fn("features.webhooks.endpointRow")(function* (name: string) {
   const row = yield* run(
-    Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.findEndpoint(name)),
+    Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+      records.findEndpointForDelivery(anyTenant, name),
+    ),
   );
   if (Option.isNone(row)) return yield* Effect.die(new Error(`no endpoint row "${name}"`));
   return row.value;
@@ -570,7 +574,7 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* run(
       Effect.gen(function* () {
         const records = yield* WebhookRecords.WebhookRecords;
-        const claimed = yield* records.claimDue({
+        const claimed = yield* records.claimDue(anyTenant, {
           now: yield* DateTime.now,
           limit: 50,
           lease: Duration.minutes(1),
@@ -965,7 +969,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
   Then("no endpoint exists", function* () {
     const rows = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.listEndpoints),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.listEnabledEndpoints(anyTenant),
+      ),
     );
     assert.deepEqual(rows, []);
   });
@@ -1105,7 +1111,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     const endpoint = yield* world.endpoints.get(name).pipe(Effect.orElseSucceed(() => undefined));
     const id = endpoint?.id ?? name;
     const row = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.findEndpoint(id)),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.findEndpointForDelivery(anyTenant, id),
+      ),
     );
     assert.ok(Option.isSome(row));
   });
@@ -1357,7 +1365,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
   Then("endpoint {string} no longer exists", function* (name: string) {
     const row = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.findEndpoint(name)),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.findEndpointForDelivery(anyTenant, name),
+      ),
     );
     assert.ok(Option.isNone(row));
   });
@@ -1374,7 +1384,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("{string} holds no delivery row about {string}", function* (name: string, user: string) {
     const rows = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.listBySubject(user)),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.listBySubject(anyTenant, user),
+      ),
     );
     assert.equal(rows.filter((row) => row.endpointId === name).length, 0);
   });
@@ -1382,7 +1394,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     "{string} still holds the delivery row about {string}",
     function* (name: string, user: string) {
       const rows = yield* run(
-        Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.listBySubject(user)),
+        Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+          records.listBySubject(anyTenant, user),
+        ),
       );
       assert.equal(rows.filter((row) => row.endpointId === name).length, 1);
     },

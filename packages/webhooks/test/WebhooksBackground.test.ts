@@ -2,6 +2,7 @@
 // the relay tailing the audit log into the queue and the worker sending it, driven by the test clock,
 // with an endpoint that fails once (retry).
 import { AuthEvents, EventRelay, Users } from "@awthaq/core";
+import { Tenant } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -73,6 +74,47 @@ describe("Webhooks.background: relay + worker", () => {
           Layer.merge(deliveryLayer({ receiver: flaky.layer }), EventRelay.layerCursorMemory),
         ),
       ),
+  );
+});
+
+describe("Webhooks.background: tenants", () => {
+  // Plan 05 phase 2: the store confines `findEndpoint` to the ambient tenant, and the relay and the
+  // worker run with none; without their witness a tenant's delivery would be marked `endpointGone`.
+  it.effect(
+    "a tenant's endpoint receives its delivery when the relay runs with no ambient tenant",
+    () => {
+      const receiver = fakeReceiver();
+      return Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const records = yield* WebhookRecords.WebhookRecords;
+        const { endpoint } = yield* seedEndpoint({
+          eventTags: ["auth.user.signedIn"],
+          tenantId: "org-a",
+        });
+        yield* tick(Duration.millis(1));
+        yield* Layer.build(
+          Webhooks.Webhooks.background({
+            settleDelay: Duration.seconds(1),
+            pollInterval: Duration.seconds(1),
+          }),
+        );
+        yield* events.publish(signedIn("in-a")).pipe(Tenant.withTenant("org-a"));
+        yield* tick(Duration.seconds(3));
+        assert.strictEqual(receiver.sent.length, 1);
+        const rows = yield* records
+          .listDeliveries({ endpointId: endpoint.id, limit: 10 })
+          .pipe(Tenant.withTenant("org-a"));
+        assert.deepStrictEqual(
+          rows.map((row) => [row.status, row.lastError._tag]),
+          [["succeeded", "None"]],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.merge(deliveryLayer({ receiver: receiver.layer }), EventRelay.layerCursorMemory),
+        ),
+      );
+    },
   );
 });
 

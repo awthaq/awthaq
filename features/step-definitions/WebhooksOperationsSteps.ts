@@ -26,6 +26,7 @@ import {
   publishedEvent,
   run,
   World,
+  anyTenant,
 } from "./WebhooksWorld.ts";
 import {
   bodyOf,
@@ -159,7 +160,9 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
   Then("event {string} is queued only for {string}", function* (eventName: string, only: string) {
     const event = yield* eventNamed(eventName);
     const endpoints = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.listEndpoints),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.listEnabledEndpoints(anyTenant),
+      ),
     );
     assert.ok(endpoints.length > 1, "the scenario has several endpoints to tell apart");
     for (const endpoint of endpoints) {
@@ -187,7 +190,9 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
   Then("endpoint {string} belongs to tenant {string}", function* (name: string, tenant: string) {
     const endpoint = yield* endpointNamed(name);
     const row = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.findEndpoint(endpoint.id)),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.findEndpointForDelivery(anyTenant, endpoint.id),
+      ),
     );
     assert.ok(Option.isSome(row));
     assert.deepEqual(row.value.tenantId, Option.some(tenant));
@@ -248,7 +253,9 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
   Then("endpoint {string} is untouched and enabled", function* (name: string) {
     const endpoint = yield* endpointNamed(name);
     const row = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.findEndpoint(endpoint.id)),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.findEndpointForDelivery(anyTenant, endpoint.id),
+      ),
     );
     assert.ok(Option.isSome(row));
     assert.ok(Option.isNone(row.value.disabledAt));
@@ -449,7 +456,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
       const endpoint = yield* endpointNamed(name);
       const row = yield* run(
         Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
-          records.findEndpoint(endpoint.id),
+          records.findEndpointForDelivery(anyTenant, endpoint.id),
         ),
       );
       assert.ok(Option.isSome(row) && Option.isSome(row.value.headers));

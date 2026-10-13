@@ -26,6 +26,7 @@
 
 import { type AuditLog, EventRelay } from "@awthaq/core";
 import { Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { TenantScoped } from "@awthaq/sql";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -52,6 +53,12 @@ export const deliveries = Metric.counter("awthaq_webhook_deliveries_total", {
   incremental: true,
 });
 
+/**
+ * The relay and the worker serve every tenant's endpoints and run with no ambient tenant (BEH-EA-309:
+ * `tenantRoutes` decides who hears what), so they present one witness for the whole module.
+ */
+const relay = TenantScoped.crossTenant("webhooks relay: tenantRoutes decides delivery");
+
 // ---- enqueue: the EventTransport ---------------------------------------------------------------
 
 /** Turns a relayed batch into queued deliveries. Requires the records, `Crypto` (ids) and the plugin config. */
@@ -60,7 +67,7 @@ export const enqueue = (events: ReadonlyArray<Parameters<typeof WebhookPayload.t
     const records = yield* WebhookRecords.WebhookRecords;
     const crypto = yield* Crypto.Crypto;
     const settings = yield* WebhooksConfig.WebhooksConfig;
-    const endpoints = (yield* records.listEndpoints).filter((row) => Option.isNone(row.disabledAt));
+    const endpoints = yield* records.listEnabledEndpoints(relay);
     if (endpoints.length === 0 || events.length === 0) return 0;
     const now = yield* DateTime.now;
     const rows: Array<WebhookRecords.NewDelivery> = [];
@@ -151,9 +158,9 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
     const settings = yield* WebhooksConfig.WebhooksConfig;
     const now = yield* DateTime.now;
 
-    const endpointOpt = yield* records.findEndpoint(delivery.endpointId);
+    const endpointOpt = yield* records.findEndpointForDelivery(relay, delivery.endpointId);
     if (Option.isNone(endpointOpt)) {
-      yield* records.markDead(delivery.id, { at: now, error: "endpointGone" });
+      yield* records.markDead(relay, delivery.id, { at: now, error: "endpointGone" });
       return "dead" satisfies Outcome;
     }
     const endpoint = endpointOpt.value;
@@ -172,7 +179,11 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
         ),
       );
     if (Option.isSome(budget)) {
-      yield* records.defer(delivery.id, DateTime.addDuration(now, Duration.millis(budget.value)));
+      yield* records.defer(
+        relay,
+        delivery.id,
+        DateTime.addDuration(now, Duration.millis(budget.value)),
+      );
       return "deferred" satisfies Outcome;
     }
 
@@ -181,26 +192,24 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
         const made = delivery.attempts + 1;
         // BEH-EA-310: a test ping is one attempt, and a receiver that is down is not evidence against the endpoint.
         if (delivery.eventTag === WebhookPayload.TEST_EVENT_TAG) {
-          yield* records.markDead(delivery.id, { at: now, ...info });
+          yield* records.markDead(relay, delivery.id, { at: now, ...info });
           return "dead" satisfies Outcome;
         }
         if (made >= settings.maxAttempts) {
-          yield* records.markDead(delivery.id, { at: now, ...info });
-          const consecutive = yield* records.bumpDead(endpoint.id);
+          yield* records.markDead(relay, delivery.id, { at: now, ...info });
+          const consecutive = yield* records.bumpDead(relay, endpoint.id);
           if (
             settings.disableAfterConsecutiveDead > 0 &&
             consecutive >= settings.disableAfterConsecutiveDead
           ) {
-            yield* records
-              .setDisabled(endpoint.id, { at: now, reason: "failing" })
-              .pipe(Effect.ignore);
+            yield* records.disableFailing(relay, endpoint.id, now);
             yield* Effect.logWarning(
               `awthaq/webhooks: endpoint ${endpoint.id} disabled after ${consecutive} consecutive dead-lettered deliveries`,
             );
           }
           return "dead" satisfies Outcome;
         }
-        yield* records.reschedule(delivery.id, {
+        yield* records.reschedule(relay, delivery.id, {
           at: now,
           nextAttemptAt: DateTime.addDuration(now, WebhooksConfig.retryDelay(settings, made)),
           ...info,
@@ -255,8 +264,8 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
     if (sent._tag === "failed") return yield* failed({ error: sent.error });
     const status = sent.status;
     if (status >= 200 && status < 300) {
-      yield* records.markSucceeded(delivery.id, { at: now, statusCode: status });
-      yield* records.clearDead(endpoint.id);
+      yield* records.markSucceeded(relay, delivery.id, { at: now, statusCode: status });
+      yield* records.clearDead(relay, endpoint.id);
       return "succeeded" satisfies Outcome;
     }
     return yield* failed({ statusCode: status, error: "status" });
@@ -283,7 +292,7 @@ export const drainDue = Effect.gen(function* () {
   const records = yield* WebhookRecords.WebhookRecords;
   const settings = yield* WebhooksConfig.WebhooksConfig;
   const now = yield* DateTime.now;
-  const claimed = yield* records.claimDue({
+  const claimed = yield* records.claimDue(relay, {
     now,
     limit: settings.batchSize,
     lease: settings.lease,
@@ -300,7 +309,10 @@ export const pruneOnce = Effect.gen(function* () {
   const records = yield* WebhookRecords.WebhookRecords;
   const settings = yield* WebhooksConfig.WebhooksConfig;
   const now = yield* DateTime.now;
-  return yield* records.pruneFinished(DateTime.subtractDuration(now, settings.deliveryRetention));
+  return yield* records.pruneFinished(
+    relay,
+    DateTime.subtractDuration(now, settings.deliveryRetention),
+  );
 });
 
 /**

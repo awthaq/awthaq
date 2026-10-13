@@ -18,7 +18,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as Webhooks from "../src/Webhooks.ts";
-import { CoreLive, deliveryLayer, seedEndpoint } from "./support.ts";
+import { CoreLive, deliveryLayer, relay, seedEndpoint } from "./support.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 
 const allow = () => Effect.succeed(true);
@@ -321,7 +321,11 @@ describe("the delivery log", () => {
             nextAttemptAt: yield* nowUtc,
           },
         ]);
-        yield* records.markDead("d1", { at: yield* nowUtc, statusCode: 500, error: "status" });
+        yield* records.markDead(relay, "d1", {
+          at: yield* nowUtc,
+          statusCode: 500,
+          error: "status",
+        });
         const all = yield* webhooks.listDeliveries(admin, endpoint.id, {});
         assert.deepStrictEqual(
           all.map((row) => [row.id, row.status]),
@@ -482,8 +486,8 @@ describe("privacy: erasure and export", () => {
       for (const contribution of yield* registry.contributions) {
         yield* contribution.erase({ userId: Users.UserId("me") });
       }
-      assert.deepStrictEqual(yield* records.listBySubject("me"), []);
-      assert.strictEqual((yield* records.listBySubject("them")).length, 1);
+      assert.deepStrictEqual(yield* records.listBySubject(relay, "me"), []);
+      assert.strictEqual((yield* records.listBySubject(relay, "them")).length, 1);
     }).pipe(Effect.scoped, Effect.provide(PrivacyLayer)),
   );
 });

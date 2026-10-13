@@ -2,6 +2,9 @@
 // `layerSql` is migrated through the plugin's own real `migrations` (and, under `pnpm run test:pg`,
 // runs on Postgres), so the unique (endpoint, event) pair is a real database constraint.
 import { Migrations } from "@awthaq/core";
+import { TenantScoped } from "@awthaq/sql";
+import { Tenant } from "@awthaq/ports";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -9,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
+import { relay } from "./support.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as Webhooks from "../src/Webhooks.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
@@ -87,28 +91,6 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    // BEH-EA-309: the tenant is stored once, at registration, and survives every later write.
-    it.effect(
-      "an endpoint keeps the tenant it was registered under, and none means the platform's",
-      () =>
-        Effect.gen(function* () {
-          const records = yield* WebhookRecords.WebhookRecords;
-          yield* records.createEndpoint({ ...endpointInput("t"), tenantId: "org-a" });
-          yield* records.createEndpoint(endpointInput("p"));
-          const tenantOf = (id: string) =>
-            records.findEndpoint(id).pipe(Effect.map((row) => Option.getOrThrow(row).tenantId));
-          assert.deepStrictEqual(yield* tenantOf("t"), Option.some("org-a"));
-          assert.deepStrictEqual(yield* tenantOf("p"), Option.none());
-          yield* records.updateEndpoint("t", { url: "https://moved.example.com/hook" });
-          yield* records.setDisabled("t", { at: at(1), reason: "manual" });
-          assert.deepStrictEqual(yield* tenantOf("t"), Option.some("org-a"));
-          assert.deepStrictEqual(
-            (yield* records.listEndpoints).map((row) => Option.getOrNull(row.tenantId)).sort(),
-            [null, "org-a"],
-          );
-        }).pipe(Effect.provide(layer)),
-    );
-
     // BEH-EA-313: the sealed header object and its names are stored with the endpoint and replaced or cleared whole.
     it.effect(
       "custom headers round-trip, are replaced whole, cleared with null, and left alone when omitted",
@@ -160,16 +142,16 @@ const suite = (
           });
           assert.isTrue(Option.isNone(cleared.previousSecret));
 
-          assert.strictEqual(yield* records.bumpDead("a"), 1);
-          assert.strictEqual(yield* records.bumpDead("a"), 2);
+          assert.strictEqual(yield* records.bumpDead(relay, "a"), 1);
+          assert.strictEqual(yield* records.bumpDead(relay, "a"), 2);
           const off = yield* records.setDisabled("a", { at: at(2_000), reason: "failing" });
           assert.deepStrictEqual(off.disabledReason, Option.some("failing"));
           assert.strictEqual(off.consecutiveDead, 2);
           const on = yield* records.setDisabled("a", null);
           assert.isTrue(Option.isNone(on.disabledAt));
           assert.strictEqual(on.consecutiveDead, 0);
-          yield* records.bumpDead("a");
-          yield* records.clearDead("a");
+          yield* records.bumpDead(relay, "a");
+          yield* records.clearDead(relay, "a");
           assert.strictEqual(
             (yield* records.findEndpoint("a")).pipe(
               Option.map((row) => row.consecutiveDead),
@@ -220,21 +202,32 @@ const suite = (
             newDelivery("d4", "off", "e1", at(0)), // endpoint switched off
           ]);
           const lease = Duration.seconds(60);
-          const first = yield* records.claimDue({ now: at(2_000), limit: 10, lease });
+          const first = yield* records.claimDue(relay, { now: at(2_000), limit: 10, lease });
           assert.deepStrictEqual(
             first.map((row) => row.id),
             ["d2", "d1"],
           );
           // A second worker finds nothing: the rows are leased.
-          assert.deepStrictEqual(yield* records.claimDue({ now: at(2_001), limit: 10, lease }), []);
+          assert.deepStrictEqual(
+            yield* records.claimDue(relay, { now: at(2_001), limit: 10, lease }),
+            [],
+          );
           // The lease lapses (a worker that died): the rows are due again.
-          const again = yield* records.claimDue({ now: at(2_000 + 60_000), limit: 10, lease });
+          const again = yield* records.claimDue(relay, {
+            now: at(2_000 + 60_000),
+            limit: 10,
+            lease,
+          });
           assert.deepStrictEqual(
             again.map((row) => row.id),
             ["d1", "d2"],
           );
           // limit is honoured.
-          const limited = yield* records.claimDue({ now: at(2_000 + 200_000), limit: 1, lease });
+          const limited = yield* records.claimDue(relay, {
+            now: at(2_000 + 200_000),
+            limit: 1,
+            lease,
+          });
           assert.strictEqual(limited.length, 1);
         }).pipe(Effect.provide(layer)),
     );
@@ -248,7 +241,7 @@ const suite = (
           newDelivery("retry", "a", "e2"),
           newDelivery("dead", "a", "e3"),
         ]);
-        yield* records.markSucceeded("ok", { at: at(2_000), statusCode: 204 });
+        yield* records.markSucceeded(relay, "ok", { at: at(2_000), statusCode: 204 });
         const ok = yield* records.findDelivery("ok");
         assert.isTrue(Option.isSome(ok));
         if (Option.isSome(ok)) {
@@ -258,13 +251,13 @@ const suite = (
           assert.isTrue(Option.isSome(ok.value.completedAt));
         }
 
-        yield* records.reschedule("retry", {
+        yield* records.reschedule(relay, "retry", {
           at: at(2_000),
           nextAttemptAt: at(12_000),
           statusCode: 503,
           error: "status",
         });
-        yield* records.defer("retry", at(13_000));
+        yield* records.defer(relay, "retry", at(13_000));
         const retry = yield* records.findDelivery("retry");
         if (Option.isSome(retry)) {
           assert.strictEqual(retry.value.status, "pending");
@@ -274,7 +267,7 @@ const suite = (
           assert.deepStrictEqual(retry.value.lastError, Option.some("status"));
         }
 
-        yield* records.markDead("dead", { at: at(3_000), error: "timeout" });
+        yield* records.markDead(relay, "dead", { at: at(3_000), error: "timeout" });
         // Only a dead delivery can be redriven.
         const notDead = yield* records.redrive("retry", at(4_000)).pipe(Effect.flip);
         assert.strictEqual(notDead._tag, "WebhookRecordNotFound");
@@ -297,7 +290,7 @@ const suite = (
           newDelivery("d3", "a", "e3"),
           newDelivery("d4", "b", "e1"),
         ]);
-        yield* records.markDead("d2", { at: at(2_000), error: "status" });
+        yield* records.markDead(relay, "d2", { at: at(2_000), error: "status" });
         const page1 = yield* records.listDeliveries({ endpointId: "a", limit: 2 });
         assert.deepStrictEqual(
           page1.map((row) => row.id),
@@ -331,10 +324,10 @@ const suite = (
           newDelivery("old-dead", "a", "e3"),
           newDelivery("pending", "a", "e4"),
         ]);
-        yield* records.markSucceeded("old-ok", { at: at(1_000) });
-        yield* records.markSucceeded("new-ok", { at: at(9_000) });
-        yield* records.markDead("old-dead", { at: at(1_500) });
-        assert.strictEqual(yield* records.pruneFinished(at(5_000)), 2);
+        yield* records.markSucceeded(relay, "old-ok", { at: at(1_000) });
+        yield* records.markSucceeded(relay, "new-ok", { at: at(9_000) });
+        yield* records.markDead(relay, "old-dead", { at: at(1_500) });
+        assert.strictEqual(yield* records.pruneFinished(relay, at(5_000)), 2);
         assert.deepStrictEqual(
           (yield* records.listDeliveries({ endpointId: "a", limit: 10 }))
             .map((row) => row.id)
@@ -357,12 +350,12 @@ const suite = (
             newDelivery("d3", "b", "e2", at(1_000), "user-2"),
           ]);
           assert.deepStrictEqual(
-            (yield* records.listBySubject("user-1")).map((row) => row.id).sort(),
+            (yield* records.listBySubject(relay, "user-1")).map((row) => row.id).sort(),
             ["d1", "d2"],
           );
-          yield* records.deleteBySubject("user-1");
-          assert.deepStrictEqual(yield* records.listBySubject("user-1"), []);
-          assert.strictEqual((yield* records.listBySubject("user-2")).length, 1);
+          yield* records.deleteBySubject(relay, "user-1");
+          assert.deepStrictEqual(yield* records.listBySubject(relay, "user-1"), []);
+          assert.strictEqual((yield* records.listBySubject(relay, "user-2")).length, 1);
 
           yield* records.deleteEndpoint("b");
           assert.deepStrictEqual(yield* records.listDeliveries({ endpointId: "b", limit: 10 }), []);
@@ -379,3 +372,326 @@ const TestClockTick = TestClock.adjust(Duration.millis(5));
 
 suite("WebhookRecords (layerMemory)", WebhookRecords.layerMemory);
 suite("WebhookRecords (layerSql)", SqlLayer);
+
+// ---- BEH-EA-309 / plan 05: tenant isolation, once, by the store ------------------------------------
+//
+// Every records method is classified (the map is keyed by `keyof WebhookRecordsShape`, so a new method
+// that is not classified does not compile). `webhooks_endpoint` is Partitioned by "tenantId";
+// `webhooks_delivery` is Derived through its endpoint.
+
+interface Row {
+  readonly endpoint: string;
+  readonly delivery: string;
+  readonly subject: string;
+  /** The tenant the row was inserted under, so a probe can observe it as its owner. */
+  readonly tenant: Option.Option<string>;
+}
+
+let sequence = 0;
+
+/** One endpoint with one pending delivery, under the ambient tenant. */
+const insertRow = Effect.gen(function* () {
+  const records = yield* WebhookRecords.WebhookRecords;
+  sequence += 1;
+  const endpoint = `iso-ep-${sequence}`;
+  const delivery = `iso-d-${sequence}`;
+  const subject = `iso-user-${sequence}`;
+  const tenant = yield* Tenant.TenantContext;
+  yield* records.createEndpoint(endpointInput(endpoint));
+  yield* records.enqueue([
+    newDelivery(delivery, endpoint, `iso-e-${sequence}`, at(1_000), subject),
+  ]);
+  return { endpoint, delivery, subject, tenant } satisfies Row;
+});
+
+/** Observes a row as its owner, whatever tenant the probe itself runs under. */
+const asOwner = <A, E, R>(row: Row, effect: Effect.Effect<A, E, R>) =>
+  Effect.provideService(effect, Tenant.TenantContext, row.tenant);
+
+const witness = TenantScoped.crossTenant("webhooks isolation suite: relay and worker methods");
+
+const found = <A, E, R>(effect: Effect.Effect<A, E | WebhookRecords.WebhookRecordNotFound, R>) =>
+  effect.pipe(
+    Effect.as(true),
+    Effect.catchTag("WebhookRecordNotFound", () => Effect.succeed(false)),
+  );
+
+const withRecords = <A, E>(
+  use: (records: WebhookRecords.WebhookRecordsShape) => Effect.Effect<A, E>,
+) => Effect.flatMap(WebhookRecords.WebhookRecords, use);
+
+const endpointOf = (row: Row) =>
+  asOwner(
+    row,
+    withRecords((records) => records.findEndpoint(row.endpoint)),
+  ).pipe(Effect.map(Option.getOrThrow));
+const deliveryOf = (row: Row) =>
+  asOwner(
+    row,
+    withRecords((records) => records.findDelivery(row.delivery)),
+  ).pipe(Effect.map(Option.getOrThrow));
+
+const otherTable = (table: string) => ({
+  derived: `this method operates on ${table}; its case is classified there`,
+});
+
+const endpointMethods: TestAuth.TableCase<
+  WebhookRecords.WebhookRecordsShape,
+  Row,
+  WebhookRecords.WebhookRecords
+>["methods"] = {
+  createEndpoint: { insert: true },
+  enqueue: { insert: true },
+  findEndpoint: {
+    scoped: {
+      run: (row) =>
+        withRecords((r) => r.findEndpoint(row.endpoint)).pipe(Effect.map(Option.isSome)),
+    },
+  },
+  listEndpoints: {
+    scoped: {
+      run: (row) =>
+        withRecords((r) => r.listEndpoints).pipe(
+          Effect.map((rows) => rows.some((endpoint) => endpoint.id === row.endpoint)),
+        ),
+    },
+  },
+  updateEndpoint: {
+    scoped: {
+      run: (row) =>
+        found(
+          withRecords((r) =>
+            r.updateEndpoint(row.endpoint, { url: "https://moved.example.com/x" }),
+          ),
+        ),
+    },
+  },
+  setSecrets: {
+    scoped: {
+      run: (row) =>
+        found(
+          withRecords((r) =>
+            r.setSecrets(row.endpoint, {
+              secret: "s",
+              previousSecret: null,
+              previousSecretExpiresAt: null,
+            }),
+          ),
+        ),
+    },
+  },
+  setDisabled: {
+    scoped: { run: (row) => found(withRecords((r) => r.setDisabled(row.endpoint, null))) },
+  },
+  deleteEndpoint: {
+    scoped: { run: (row) => found(withRecords((r) => r.deleteEndpoint(row.endpoint))) },
+  },
+  listEnabledEndpoints: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.listEnabledEndpoints(witness)).pipe(
+          Effect.map((rows) => rows.some((endpoint) => endpoint.id === row.endpoint)),
+        ),
+    },
+  },
+  findEndpointForDelivery: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.findEndpointForDelivery(witness, row.endpoint)).pipe(
+          Effect.map(Option.isSome),
+        ),
+    },
+  },
+  disableFailing: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.disableFailing(witness, row.endpoint, at(5_000))).pipe(
+          Effect.andThen(endpointOf(row)),
+          Effect.map((endpoint) => Option.isSome(endpoint.disabledAt)),
+        ),
+    },
+  },
+  bumpDead: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.bumpDead(witness, row.endpoint)).pipe(Effect.map((n) => n > 0)),
+    },
+  },
+  clearDead: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.bumpDead(witness, row.endpoint)).pipe(
+          Effect.andThen(withRecords((r) => r.clearDead(witness, row.endpoint))),
+          Effect.andThen(endpointOf(row)),
+          Effect.map((endpoint) => endpoint.consecutiveDead === 0),
+        ),
+    },
+  },
+  claimDue: otherTable("webhooks_delivery"),
+  findDelivery: otherTable("webhooks_delivery"),
+  markSucceeded: otherTable("webhooks_delivery"),
+  reschedule: otherTable("webhooks_delivery"),
+  defer: otherTable("webhooks_delivery"),
+  markDead: otherTable("webhooks_delivery"),
+  redrive: otherTable("webhooks_delivery"),
+  listDeliveries: otherTable("webhooks_delivery"),
+  pruneFinished: otherTable("webhooks_delivery"),
+  deleteBySubject: otherTable("webhooks_delivery"),
+  listBySubject: otherTable("webhooks_delivery"),
+};
+
+const deliveryMethods: TestAuth.TableCase<
+  WebhookRecords.WebhookRecordsShape,
+  Row,
+  WebhookRecords.WebhookRecords
+>["methods"] = {
+  createEndpoint: { insert: true },
+  enqueue: { insert: true },
+  findEndpoint: otherTable("webhooks_endpoint"),
+  listEndpoints: otherTable("webhooks_endpoint"),
+  updateEndpoint: otherTable("webhooks_endpoint"),
+  setSecrets: otherTable("webhooks_endpoint"),
+  setDisabled: otherTable("webhooks_endpoint"),
+  deleteEndpoint: otherTable("webhooks_endpoint"),
+  listEnabledEndpoints: otherTable("webhooks_endpoint"),
+  findEndpointForDelivery: otherTable("webhooks_endpoint"),
+  disableFailing: otherTable("webhooks_endpoint"),
+  bumpDead: otherTable("webhooks_endpoint"),
+  clearDead: otherTable("webhooks_endpoint"),
+  // Derived through the endpoint: the join confines them to the ambient tenant.
+  findDelivery: {
+    scoped: {
+      run: (row) =>
+        withRecords((r) => r.findDelivery(row.delivery)).pipe(Effect.map(Option.isSome)),
+    },
+  },
+  listDeliveries: {
+    scoped: {
+      run: (row) =>
+        withRecords((r) => r.listDeliveries({ endpointId: row.endpoint, limit: 10 })).pipe(
+          Effect.map((rows) => rows.length > 0),
+        ),
+    },
+  },
+  redrive: {
+    scoped: {
+      run: (row) =>
+        // Only a dead delivery can be redriven, so the probe kills it first (as the worker would).
+        withRecords((r) =>
+          r.markDead(witness, row.delivery, { at: at(2_000), error: "status" }),
+        ).pipe(Effect.andThen(found(withRecords((r) => r.redrive(row.delivery, at(3_000)))))),
+    },
+  },
+  claimDue: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) =>
+          r.claimDue(witness, { now: at(10_000), limit: 100, lease: Duration.seconds(60) }),
+        ).pipe(Effect.map((rows) => rows.some((delivery) => delivery.id === row.delivery))),
+    },
+  },
+  markSucceeded: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) =>
+          r.markSucceeded(witness, row.delivery, { at: at(2_000), statusCode: 204 }),
+        ).pipe(
+          Effect.andThen(deliveryOf(row)),
+          Effect.map((delivery) => delivery.status === "succeeded"),
+        ),
+    },
+  },
+  reschedule: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) =>
+          r.reschedule(witness, row.delivery, {
+            at: at(2_000),
+            nextAttemptAt: at(9_000),
+            error: "status",
+          }),
+        ).pipe(
+          Effect.andThen(deliveryOf(row)),
+          Effect.map((delivery) => delivery.attempts === 1),
+        ),
+    },
+  },
+  defer: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.defer(witness, row.delivery, at(7_000))).pipe(
+          Effect.andThen(deliveryOf(row)),
+          Effect.map((delivery) => DateTime.toEpochMillis(delivery.nextAttemptAt) === 7_000),
+        ),
+    },
+  },
+  markDead: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) =>
+          r.markDead(witness, row.delivery, { at: at(2_000), error: "status" }),
+        ).pipe(
+          Effect.andThen(deliveryOf(row)),
+          Effect.map((delivery) => delivery.status === "dead"),
+        ),
+    },
+  },
+  pruneFinished: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.markSucceeded(witness, row.delivery, { at: at(1_000) })).pipe(
+          Effect.andThen(withRecords((r) => r.pruneFinished(witness, at(5_000)))),
+          Effect.map((pruned) => pruned >= 1),
+        ),
+    },
+  },
+  listBySubject: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.listBySubject(witness, row.subject)).pipe(
+          Effect.map((rows) => rows.some((delivery) => delivery.id === row.delivery)),
+        ),
+    },
+  },
+  deleteBySubject: {
+    crossTenant: {
+      run: (row) =>
+        withRecords((r) => r.deleteBySubject(witness, row.subject)).pipe(
+          Effect.andThen(
+            asOwner(
+              row,
+              withRecords((r) => r.findDelivery(row.delivery)),
+            ),
+          ),
+          Effect.map(Option.isNone),
+        ),
+    },
+  },
+};
+
+const vitestFramework: TestAuth.TestFramework = {
+  describe: (name, body) => describe(name, body),
+  it: (name, body) => it(name, body),
+  fail: (message) => {
+    throw new Error(message);
+  },
+};
+
+TestAuth.runTenantIsolationTests(vitestFramework, {
+  plugin: {
+    id: "webhooks",
+    tenancy: {
+      webhooks_endpoint: { tenancy: TenantScoped.partitioned() },
+      webhooks_delivery: { tenancy: TenantScoped.derived("webhooks_endpoint", "endpointId") },
+    },
+  },
+  adapters: [
+    { name: "layerMemory", layer: WebhookRecords.layerMemory },
+    { name: "layerSql", layer: SqlLayer },
+  ],
+  cases: [
+    { table: "webhooks_endpoint", insert: insertRow, methods: endpointMethods },
+    { table: "webhooks_delivery", insert: insertRow, methods: deliveryMethods },
+  ],
+  rls: { layer: SqlLayer },
+});

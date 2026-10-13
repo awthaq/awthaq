@@ -11,7 +11,14 @@ import * as Http from "node:http";
 import * as WebhookDelivery from "../src/WebhookDelivery.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as WebhookTransport from "../src/WebhookTransport.ts";
-import { deliveryLayer, fakeTransport, published, seedEndpoint, signedIn } from "./support.ts";
+import {
+  deliveryLayer,
+  fakeTransport,
+  published,
+  relay,
+  seedEndpoint,
+  signedIn,
+} from "./support.ts";
 
 /** A resolver that answers from a script, one answer per lookup, and counts the lookups. */
 const scriptedResolver = (answers: ReadonlyArray<ReadonlyArray<string>>) => {
@@ -79,7 +86,7 @@ describe("an attempt pins the connection to the address it checked", () => {
         // The retry: the name now answers with the cloud metadata address.
         const [row] = yield* records.listDeliveries({ endpointId: endpoint.id, limit: 5 });
         if (row === undefined) return assert.fail("no delivery");
-        yield* records.defer(row.id, row.createdAt);
+        yield* records.defer(relay, row.id, row.createdAt);
         yield* WebhookDelivery.drainDue;
         assert.strictEqual(transport.sent.length, 1, "the rebound address was never contacted");
         const after = Option.getOrThrow(yield* records.findDelivery(row.id));
@@ -103,7 +110,7 @@ describe("an attempt pins the connection to the address it checked", () => {
         yield* WebhookDelivery.drainDue;
         const [row] = yield* records.listDeliveries({ endpointId: endpoint.id, limit: 5 });
         if (row === undefined) return assert.fail("no delivery");
-        yield* records.defer(row.id, row.createdAt);
+        yield* records.defer(relay, row.id, row.createdAt);
         yield* WebhookDelivery.drainDue;
         assert.deepStrictEqual(
           transport.sent.map((request) => Option.getOrUndefined(request.pin)?.address),

@@ -1489,3 +1489,34 @@ Phase 1 can only be reverted after every consumer phase.
 - **Q7 — Admin chain under RLS.** `admin_impersonation_chain` is declared Global, so it never gets RLS. Its rows
   carry tenant ids in `payload`, readable by any tenant-scoped connection with table access. Acceptable, or should
   the chain split per tenant (a new ledger design, out of this plan's scope)?
+
+---
+
+## 11. Decisions taken (implementation)
+
+Open questions (section 10), taken at the plan's recommended default:
+
+- **Q1** AAD: canonicalise to `<table>:<rowKey>:<column>` with `legacyAad` read fallbacks, lazy re-seal and `SealedColumn.sweep`.
+- **Q2** Keyed tables keep explicit organization keys; no `key = ambient` requirement.
+- **Q3** RLS for Keyed (organization) tables is opt-in (`includeKeyed`).
+- **Q4** `device_authorization_grant`, `passkey_challenge`, `apikey_key`, `apikey_client` stay Global; no new tenant columns.
+- **Q5** `SealedColumn.sweep` is a library effect only; no `awthaq migration reseal` CLI.
+- **Q6** The `SqlSyntaxError`/`AuthorizationError` defect classification applies to core as well.
+- **Q7** `admin_impersonation_chain` stays Global (the chain is one append-only ledger over every tenant).
+
+Phase 1:
+
+- The tenant-stamp rule is `Tenant.stamp` in `@awthaq/ports` (README reconciliation, plan 02's placement). `TenantScoped.stamp` is `Tenant.stamp`; `Repositories.ts` uses `Tenant.stamp` directly. `StoreFailure` lives in `@awthaq/sql`, `core/src/Errors.ts` re-exports it.
+- ADR revisions are one higher than the plan wrote where a plan before this one already bumped them: ADR-EA-028 is revision 1.3 (1.2 was plan 10 item 2); ADR-EA-018 1.2; ADR-EA-019 1.1. New behaviors are BEH-EA-324..328 (highest before this plan was 323); they are appended at the end of `05-persistence-stratum.md` and `28-tenancy.md` the way BEH-EA-322/323 were, so `spec/README.md`'s per-file ranges list them.
+- The plan's `SealedColumn.postgres.test.ts` is not a separate file: `SealedColumn.test.ts` and `TenantScoped.test.ts` build their database with `TestSql.layer`, so the same suites run on Postgres under `pnpm test:pg` (both are added to `scripts/test-pg.sh`). `TenantScope.postgres.test.ts` is Postgres-only.
+- `lift` opens its savepoint with `SqlTransaction.transactional` (the repo's `check:transactions` forbids a bare `sql.withTransaction`).
+- `server`: `CredentialResolverContribution.resolve` was already widened by plan 10 item 0; this phase adds the outage recording in `resolveClaimed`.
+- Conformance suites: `TestFramework` moved to `packages/test/src/TestFramework.ts` (a cycle with `TestAuth.ts` otherwise); `runTenantIsolationTests` takes `covers` (the declared tables one records interface is responsible for, since a plugin makes one call per `Shape`) and a structural `plugin` (`AuthPlugin.Any` satisfies it once phase 3 adds `tenancy`); the `rls` option is `{ layer }`, a SQL adapter that also provides `SqlClient`. `runSealedColumnTests` adapter layers require `Encryption` (the suite supplies a rotatable key) and take a `plant` effect to write a raw stored value.
+- No Postgres or Docker was available: every Postgres-only path (RLS policies, `lift`, `disableRls` via `pg_policies`, the `rls` conformance cases) is typechecked and lint-clean but was never executed.
+
+Phase 2:
+
+- The relay and worker also needed one method the plan did not list: `disableFailing(grant, id, at)`. The worker auto-disables an endpoint after `disableAfterConsecutiveDead` dead deliveries, and the old call (`setDisabled`, now ambient-scoped) would have silently done nothing for a tenant's endpoint with no ambient tenant.
+- `listEnabledEndpoints` pushes the `"disabledAt" IS NULL` filter into SQL; `findEndpointForDelivery` is the worker's by-id lookup; `bumpDead` and `clearDead` take the witness too. One module-level witness (`relay`) serves the whole delivery module; erasure and export mint their own.
+- The plan's conformance call needs a `plugin.tenancy`; `Webhooks` has none until phase 3, so `WebhookRecords.test.ts` passes the two declarations inline and phase 3 switches it to `Webhooks.Webhooks`. Both tables share one `WebhookRecordsShape`, so each case classifies the other table's methods as `derived` ("operates on the other table").
+- Deleted tests are named in `.scratch/plugin-table-substrate/issues/03-*.md`. BEH-EA-309's file is 34-webhooks.md revision 1.5 (not 1.2); traceability revision 1.12.

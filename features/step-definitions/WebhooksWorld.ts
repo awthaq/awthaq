@@ -18,7 +18,8 @@ import {
   Sessions,
   Users,
 } from "@awthaq/core";
-import { Encryption, HostResolver, KeyProvider, RateLimiter } from "@awthaq/ports";
+import { Encryption, HostResolver, KeyProvider, RateLimiter, Tenant } from "@awthaq/ports";
+import { TenantScoped } from "@awthaq/sql";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import {
   WebhookDelivery,
@@ -556,11 +557,20 @@ export const deliver = (events: ReadonlyArray<AuthEvents.Published>) =>
     return { queued, attempted };
   });
 
+/** The steps read the store the way an operator of every tenant would: through a witness. */
+export const anyTenant = TenantScoped.crossTenant("feature steps: read every tenant's endpoints");
+
+/** An endpoint's deliveries, read under the tenant the endpoint belongs to (the store scopes by it). */
 export const deliveriesOf = (endpointId: string) =>
   run(
-    Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
-      records.listDeliveries({ endpointId, limit: 100 }),
-    ),
+    Effect.gen(function* () {
+      const records = yield* WebhookRecords.WebhookRecords;
+      const endpoint = yield* records.findEndpointForDelivery(anyTenant, endpointId);
+      const read = records.listDeliveries({ endpointId, limit: 100 });
+      return yield* Option.isSome(endpoint) && Option.isSome(endpoint.value.tenantId)
+        ? Tenant.withTenant(endpoint.value.tenantId.value)(read)
+        : read;
+    }),
   );
 
 export const requestsTo = (endpoint: NamedEndpoint) =>

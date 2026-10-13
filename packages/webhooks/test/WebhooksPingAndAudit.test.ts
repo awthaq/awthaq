@@ -98,7 +98,9 @@ describe("the test ping", () => {
       const queued = yield* webhooks
         .testEndpoint(admin, created.endpoint.id)
         .pipe(Tenant.withTenant("org-a"));
-      const stored = Option.getOrThrow(yield* records.findDelivery(queued.id));
+      const stored = Option.getOrThrow(
+        yield* records.findDelivery(queued.id).pipe(Tenant.withTenant("org-a")),
+      );
       assert.strictEqual(JSON.parse(stored.body).tenantId, "org-a");
       yield* webhooks
         .updateEndpoint(admin, created.endpoint.id, { enabled: false })

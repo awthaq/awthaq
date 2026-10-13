@@ -36,6 +36,7 @@ import {
   Users,
 } from "@awthaq/core";
 import { Defects, Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { TenantScoped } from "@awthaq/sql";
 import { makeSubject } from "@qadi/core";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -285,12 +286,20 @@ const webhooksMigrations: Migrations.Migrations = [
 
 // ---- erasure and export ------------------------------------------------------------------------
 
+const erasureWitness = TenantScoped.crossTenant(
+  "webhooks erasure: a subject's deliveries in every tenant",
+);
+const exportWitness = TenantScoped.crossTenant(
+  "webhooks export: a subject's deliveries in every tenant",
+);
+
 /** ADR-EA-031: the delivery rows about an erased user go with them (the delivery of `auth.user.deleted` itself is queued afterwards and is the consumer's cue to erase). */
 export const webhooksErasure = Erasure.contribute({
   id: "webhooks",
   make: Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
-    return (subject: Erasure.ErasureSubject) => records.deleteBySubject(subject.userId);
+    return (subject: Erasure.ErasureSubject) =>
+      records.deleteBySubject(erasureWitness, subject.userId);
   }),
 });
 
@@ -300,7 +309,7 @@ export const webhooksExport = DataExport.contribute({
   make: Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
     return (subject: DataExport.DataExportSubject) =>
-      records.listBySubject(subject.userId).pipe(
+      records.listBySubject(exportWitness, subject.userId).pipe(
         Effect.map((rows) => ({
           deliveries: rows.map((row) => ({
             eventId: row.eventId,
@@ -476,36 +485,19 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       });
 
       /**
-       * BEH-EA-309: administration is scoped to the ambient tenant. An endpoint of another tenant (or of the
-       * platform, from inside a tenant, and the reverse) is answered exactly like an id that does not exist.
+       * BEH-EA-309: administration is scoped to the ambient tenant, and the store does it: an
+       * endpoint of another tenant (or of the platform, from inside a tenant, and the reverse) is
+       * answered exactly like an id that does not exist.
        */
-      const inScope = (record: WebhookRecords.EndpointRecord) =>
-        Effect.map(
-          Tenant.TenantContext,
-          (tenant) => Option.getOrNull(record.tenantId) === Option.getOrNull(tenant),
-        );
-
       const existing = (endpointId: string) =>
         records.findEndpoint(endpointId).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.fail(new WebhooksApi.WebhookEndpointNotFound()),
-              onSome: (record) =>
-                Effect.flatMap(inScope(record), (visible) =>
-                  visible
-                    ? Effect.succeed(record)
-                    : Effect.fail(new WebhooksApi.WebhookEndpointNotFound()),
-                ),
+              onSome: Effect.succeed,
             }),
           ),
         );
-
-      /** The endpoints the ambient tenant may administer. */
-      const scopedEndpoints = Effect.gen(function* () {
-        const tenant = yield* Tenant.TenantContext;
-        const all = yield* records.listEndpoints;
-        return all.filter((row) => Option.getOrNull(row.tenantId) === Option.getOrNull(tenant));
-      });
 
       const adminId = (caller: Api.UserPrincipal) => Users.UserId(caller.ref.id);
 
@@ -563,8 +555,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       const createEndpoint: WebhooksShape["createEndpoint"] = Effect.fnUntraced(
         function* (caller, input) {
           const settings = yield* authorize(caller, "createEndpoint");
-          const tenant = yield* Tenant.TenantContext;
-          const current = yield* scopedEndpoints;
+          const current = yield* records.listEndpoints;
           if (current.length >= settings.maxEndpoints) {
             return yield* Effect.fail(
               new WebhooksApi.WebhookEndpointLimitReached({ limit: settings.maxEndpoints }),
@@ -585,7 +576,6 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             eventTags: input.eventTags,
             secret: sealed,
             createdBy: caller.ref.id,
-            tenantId: Option.getOrUndefined(tenant),
             headers:
               input.headers === undefined || Object.keys(input.headers).length === 0
                 ? undefined
@@ -606,7 +596,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
 
       const listEndpoints: WebhooksShape["listEndpoints"] = Effect.fnUntraced(function* (caller) {
         yield* authorize(caller, "listEndpoints");
-        return (yield* scopedEndpoints).map(toEndpointDto);
+        return (yield* records.listEndpoints).map(toEndpointDto);
       });
 
       const getEndpoint: WebhooksShape["getEndpoint"] = Effect.fnUntraced(

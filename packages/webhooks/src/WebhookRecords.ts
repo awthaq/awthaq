@@ -18,8 +18,14 @@
 // (another process, a tick that overlaps) finds nothing due. A worker that dies mid-attempt leaves
 // the row leased, and it becomes due again when the lease lapses — at-least-once, not exactly-once,
 // which is why the receiver deduplicates on `webhook-id`.
+//
+// Tenancy (plan 05, ADR-EA-018 decision 10, BEH-EA-309): `webhooks_endpoint` is Partitioned by
+// `"tenantId"` and `webhooks_delivery` is Derived through its endpoint. The store itself stamps
+// an endpoint with the ambient tenant and confines the administrative methods to it; the relay
+// and the worker, which run with no tenant and serve every tenant's endpoints, present a
+// `TenantScoped.CrossTenant` witness, so a method that spans tenants says so in its signature.
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -115,14 +121,23 @@ export interface WebhookRecordsShape {
     readonly eventTags: ReadonlyArray<string>;
     readonly secret: string;
     readonly createdBy: string;
-    readonly tenantId?: string | undefined;
     readonly headers?:
       | { readonly sealed: string; readonly names: ReadonlyArray<string> }
       | undefined;
   }) => Effect.Effect<EndpointRecord>;
+  /** The ambient tenant's endpoint (`None` for another tenant's, exactly like an unknown id). */
   readonly findEndpoint: (id: string) => Effect.Effect<Option.Option<EndpointRecord>>;
-  /** Oldest first. The set is bounded by `WebhooksConfig.maxEndpoints`. */
+  /** The ambient tenant's endpoints, oldest first. The set is bounded by `WebhooksConfig.maxEndpoints`. */
   readonly listEndpoints: Effect.Effect<ReadonlyArray<EndpointRecord>>;
+  /** Relay: every tenant's enabled endpoints, oldest first. */
+  readonly listEnabledEndpoints: (
+    grant: TenantScoped.CrossTenant,
+  ) => Effect.Effect<ReadonlyArray<EndpointRecord>>;
+  /** Worker: an endpoint of any tenant, by id, for a delivery being attempted. */
+  readonly findEndpointForDelivery: (
+    grant: TenantScoped.CrossTenant,
+    id: string,
+  ) => Effect.Effect<Option.Option<EndpointRecord>>;
   readonly updateEndpoint: (
     id: string,
     patch: {
@@ -150,30 +165,53 @@ export interface WebhookRecordsShape {
     id: string,
     disabled: { readonly at: DateTime.Utc; readonly reason: DisabledReason } | null,
   ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound>;
+  /** Worker: switches an endpoint of any tenant off after too many dead-lettered deliveries in a row. */
+  readonly disableFailing: (
+    grant: TenantScoped.CrossTenant,
+    id: string,
+    at: DateTime.Utc,
+  ) => Effect.Effect<void>;
   /** Adds one to `consecutiveDead` and returns the new count. */
-  readonly bumpDead: (id: string) => Effect.Effect<number>;
-  readonly clearDead: (id: string) => Effect.Effect<void>;
+  readonly bumpDead: (grant: TenantScoped.CrossTenant, id: string) => Effect.Effect<number>;
+  readonly clearDead: (grant: TenantScoped.CrossTenant, id: string) => Effect.Effect<void>;
   /** Removes the endpoint and every delivery row of it. */
   readonly deleteEndpoint: (id: string) => Effect.Effect<void, WebhookRecordNotFound>;
   // ---- deliveries
   /** Inserts the rows not already present for their (endpointId, eventId); returns how many were new. */
   readonly enqueue: (rows: ReadonlyArray<NewDelivery>) => Effect.Effect<number>;
   /** Pending rows due at `now` whose endpoint is enabled, oldest due first; each is leased until `now + lease`. */
-  readonly claimDue: (input: {
-    readonly now: DateTime.Utc;
-    readonly limit: number;
-    readonly lease: Duration.Duration;
-  }) => Effect.Effect<ReadonlyArray<DeliveryRecord>>;
+  readonly claimDue: (
+    grant: TenantScoped.CrossTenant,
+    input: {
+      readonly now: DateTime.Utc;
+      readonly limit: number;
+      readonly lease: Duration.Duration;
+    },
+  ) => Effect.Effect<ReadonlyArray<DeliveryRecord>>;
+  /** A delivery of the ambient tenant's endpoint. */
   readonly findDelivery: (id: string) => Effect.Effect<Option.Option<DeliveryRecord>>;
-  readonly markSucceeded: (id: string, outcome: Outcome) => Effect.Effect<void>;
+  readonly markSucceeded: (
+    grant: TenantScoped.CrossTenant,
+    id: string,
+    outcome: Outcome,
+  ) => Effect.Effect<void>;
   /** A failed attempt that will be retried: counts the attempt and schedules the next. */
   readonly reschedule: (
+    grant: TenantScoped.CrossTenant,
     id: string,
     next: { readonly nextAttemptAt: DateTime.Utc } & Outcome,
   ) => Effect.Effect<void>;
   /** A postponement that is not an attempt (the endpoint's own outbound rate limit): nothing is counted. */
-  readonly defer: (id: string, nextAttemptAt: DateTime.Utc) => Effect.Effect<void>;
-  readonly markDead: (id: string, outcome: Outcome) => Effect.Effect<void>;
+  readonly defer: (
+    grant: TenantScoped.CrossTenant,
+    id: string,
+    nextAttemptAt: DateTime.Utc,
+  ) => Effect.Effect<void>;
+  readonly markDead: (
+    grant: TenantScoped.CrossTenant,
+    id: string,
+    outcome: Outcome,
+  ) => Effect.Effect<void>;
   /** A dead delivery goes back to `pending`, due now, with its attempts reset. */
   readonly redrive: (
     id: string,
@@ -187,9 +225,18 @@ export interface WebhookRecordsShape {
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<DeliveryRecord>>;
   /** Removes finished (`succeeded`/`dead`) rows completed before `cutoff`; returns how many. */
-  readonly pruneFinished: (cutoff: DateTime.Utc) => Effect.Effect<number>;
-  readonly deleteBySubject: (userId: string) => Effect.Effect<void>;
-  readonly listBySubject: (userId: string) => Effect.Effect<ReadonlyArray<DeliveryRecord>>;
+  readonly pruneFinished: (
+    grant: TenantScoped.CrossTenant,
+    cutoff: DateTime.Utc,
+  ) => Effect.Effect<number>;
+  readonly deleteBySubject: (
+    grant: TenantScoped.CrossTenant,
+    userId: string,
+  ) => Effect.Effect<void>;
+  readonly listBySubject: (
+    grant: TenantScoped.CrossTenant,
+    userId: string,
+  ) => Effect.Effect<ReadonlyArray<DeliveryRecord>>;
 }
 
 export class WebhookRecords extends Context.Service<WebhookRecords, WebhookRecordsShape>()(
@@ -221,17 +268,27 @@ export const layerMemory = Layer.effect(
   Effect.gen(function* () {
     const state = yield* Ref.make<State>({ endpoints: [], deliveries: [] });
 
-    /** Applies `change` to one endpoint; `NotFound` when there is none. */
+    const seenTenant = (row: EndpointRecord, seen: TenantScoped.Visibility) =>
+      TenantScoped.matches(Option.getOrNull(row.tenantId), seen);
+
+    /** Whether the ambient tenant sees the endpoint `endpointId` (a delivery is visible through its endpoint). */
+    const endpointVisible = (s: State, endpointId: string, seen: TenantScoped.Visibility) => {
+      const endpoint = s.endpoints.find((row) => row.id === endpointId);
+      return endpoint !== undefined && seenTenant(endpoint, seen);
+    };
+
+    /** Applies `change` to one of the ambient tenant's endpoints; `NotFound` when there is none. */
     const modifyEndpoint = (
       id: string,
       change: (row: EndpointRecord, now: DateTime.Utc) => EndpointRecord,
     ) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
+        const seen = yield* TenantScoped.visibility();
         const outcome = yield* Ref.modify(
           state,
           (s): readonly [Result.Result<EndpointRecord, WebhookRecordNotFound>, State] => {
-            const existing = s.endpoints.find((row) => row.id === id);
+            const existing = s.endpoints.find((row) => row.id === id && seenTenant(row, seen));
             if (existing === undefined) return [Result.fail(notFound(id)), s] as const;
             const updated = { ...change(existing, now), updatedAt: now };
             return [
@@ -243,15 +300,24 @@ export const layerMemory = Layer.effect(
         return yield* Effect.fromResult(outcome);
       });
 
-    const modifyDelivery = (id: string, change: (row: DeliveryRecord) => DeliveryRecord) =>
-      Ref.update(state, (s) => ({
-        ...s,
-        deliveries: s.deliveries.map((row) => (row.id === id ? change(row) : row)),
-      }));
+    /** A relay/worker write to one delivery of any tenant: the witness is the signature's proof. */
+    const witnessed = (
+      grant: TenantScoped.CrossTenant,
+      id: string,
+      change: (row: DeliveryRecord) => DeliveryRecord,
+    ) =>
+      Effect.andThen(
+        TenantScoped.visibility(grant),
+        Ref.update(state, (s) => ({
+          ...s,
+          deliveries: s.deliveries.map((row) => (row.id === id ? change(row) : row)),
+        })),
+      );
 
     const createEndpoint: WebhookRecordsShape["createEndpoint"] = (input) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
+        const { tenantId } = yield* TenantScoped.stamp({ tenantId: null });
         const record: EndpointRecord = {
           id: input.id,
           url: input.url,
@@ -264,7 +330,7 @@ export const layerMemory = Layer.effect(
           disabledReason: Option.none(),
           consecutiveDead: 0,
           createdBy: input.createdBy,
-          tenantId: Option.fromNullishOr(input.tenantId),
+          tenantId: Option.fromNullishOr(tenantId),
           headers: Option.fromNullishOr(input.headers?.sealed),
           headerNames: input.headers?.names ?? [],
           createdAt: now,
@@ -311,42 +377,87 @@ export const layerMemory = Layer.effect(
         });
       });
 
-    const claimDue: WebhookRecordsShape["claimDue"] = ({ now, limit, lease }) =>
-      Ref.modify(state, (s) => {
-        const enabled = new Set(
-          s.endpoints.filter((row) => Option.isNone(row.disabledAt)).map((row) => row.id),
-        );
-        const due = s.deliveries
-          .filter(
-            (row) =>
-              row.status === "pending" &&
-              enabled.has(row.endpointId) &&
-              millis(row.nextAttemptAt) <= millis(now),
-          )
-          .sort(
-            (a, b) => millis(a.nextAttemptAt) - millis(b.nextAttemptAt) || a.id.localeCompare(b.id),
-          )
-          .slice(0, limit);
-        const leasedUntil = DateTime.addDuration(now, lease);
-        const claimed = new Set(due.map((row) => row.id));
-        return [
-          due,
-          {
-            ...s,
-            deliveries: s.deliveries.map((row) =>
-              claimed.has(row.id) ? { ...row, nextAttemptAt: leasedUntil } : row,
-            ),
-          },
-        ] as const;
-      });
+    const claimDue: WebhookRecordsShape["claimDue"] = (grant, { now, limit, lease }) =>
+      Effect.andThen(
+        TenantScoped.visibility(grant),
+        Ref.modify(state, (s) => {
+          const enabled = new Set(
+            s.endpoints.filter((row) => Option.isNone(row.disabledAt)).map((row) => row.id),
+          );
+          const due = s.deliveries
+            .filter(
+              (row) =>
+                row.status === "pending" &&
+                enabled.has(row.endpointId) &&
+                millis(row.nextAttemptAt) <= millis(now),
+            )
+            .sort(
+              (a, b) =>
+                millis(a.nextAttemptAt) - millis(b.nextAttemptAt) || a.id.localeCompare(b.id),
+            )
+            .slice(0, limit);
+          const leasedUntil = DateTime.addDuration(now, lease);
+          const claimed = new Set(due.map((row) => row.id));
+          return [
+            due,
+            {
+              ...s,
+              deliveries: s.deliveries.map((row) =>
+                claimed.has(row.id) ? { ...row, nextAttemptAt: leasedUntil } : row,
+              ),
+            },
+          ] as const;
+        }),
+      );
 
     return {
       createEndpoint,
       findEndpoint: (id) =>
-        Ref.get(state).pipe(
-          Effect.map((s) => Option.fromNullishOr(s.endpoints.find((row) => row.id === id))),
+        Effect.gen(function* () {
+          const seen = yield* TenantScoped.visibility();
+          const s = yield* Ref.get(state);
+          return Option.fromNullishOr(
+            s.endpoints.find((row) => row.id === id && seenTenant(row, seen)),
+          );
+        }),
+      listEndpoints: Effect.gen(function* () {
+        const seen = yield* TenantScoped.visibility();
+        const s = yield* Ref.get(state);
+        return byCreation(s.endpoints.filter((row) => seenTenant(row, seen)));
+      }),
+      listEnabledEndpoints: (grant) =>
+        Effect.andThen(
+          TenantScoped.visibility(grant),
+          Ref.get(state).pipe(
+            Effect.map((s) =>
+              byCreation(s.endpoints.filter((row) => Option.isNone(row.disabledAt))),
+            ),
+          ),
         ),
-      listEndpoints: Ref.get(state).pipe(Effect.map((s) => byCreation(s.endpoints))),
+      findEndpointForDelivery: (grant, id) =>
+        Effect.andThen(
+          TenantScoped.visibility(grant),
+          Ref.get(state).pipe(
+            Effect.map((s) => Option.fromNullishOr(s.endpoints.find((row) => row.id === id))),
+          ),
+        ),
+      disableFailing: (grant, id, at) =>
+        Effect.andThen(
+          TenantScoped.visibility(grant),
+          Ref.update(state, (s) => ({
+            ...s,
+            endpoints: s.endpoints.map((row) =>
+              row.id === id
+                ? {
+                    ...row,
+                    disabledAt: Option.some(at),
+                    disabledReason: Option.some<DisabledReason>("failing"),
+                    updatedAt: at,
+                  }
+                : row,
+            ),
+          })),
+        ),
       updateEndpoint: (id, patch) =>
         modifyEndpoint(id, (row) => ({
           ...row,
@@ -376,32 +487,40 @@ export const layerMemory = Layer.effect(
           disabledReason: Option.fromNullOr(disabled?.reason ?? null),
           consecutiveDead: disabled === null ? 0 : row.consecutiveDead,
         })),
-      bumpDead: (id) =>
-        Ref.modify(state, (s) => {
-          const existing = s.endpoints.find((row) => row.id === id);
-          if (existing === undefined) return [0, s] as const;
-          const count = existing.consecutiveDead + 1;
-          return [
-            count,
-            {
-              ...s,
-              endpoints: s.endpoints.map((row) =>
-                row.id === id ? { ...row, consecutiveDead: count } : row,
-              ),
-            },
-          ] as const;
-        }),
-      clearDead: (id) =>
-        Ref.update(state, (s) => ({
-          ...s,
-          endpoints: s.endpoints.map((row) =>
-            row.id === id ? { ...row, consecutiveDead: 0 } : row,
-          ),
-        })),
+      bumpDead: (grant, id) =>
+        Effect.andThen(
+          TenantScoped.visibility(grant),
+          Ref.modify(state, (s) => {
+            const existing = s.endpoints.find((row) => row.id === id);
+            if (existing === undefined) return [0, s] as const;
+            const count = existing.consecutiveDead + 1;
+            return [
+              count,
+              {
+                ...s,
+                endpoints: s.endpoints.map((row) =>
+                  row.id === id ? { ...row, consecutiveDead: count } : row,
+                ),
+              },
+            ] as const;
+          }),
+        ),
+      clearDead: (grant, id) =>
+        Effect.andThen(
+          TenantScoped.visibility(grant),
+          Ref.update(state, (s) => ({
+            ...s,
+            endpoints: s.endpoints.map((row) =>
+              row.id === id ? { ...row, consecutiveDead: 0 } : row,
+            ),
+          })),
+        ),
       deleteEndpoint: (id) =>
         Effect.gen(function* () {
+          const seen = yield* TenantScoped.visibility();
           const removed = yield* Ref.modify(state, (s) => {
-            if (!s.endpoints.some((row) => row.id === id)) return [false, s] as const;
+            if (!s.endpoints.some((row) => row.id === id && seenTenant(row, seen)))
+              return [false, s] as const;
             return [
               true,
               {
@@ -415,11 +534,15 @@ export const layerMemory = Layer.effect(
       enqueue,
       claimDue,
       findDelivery: (id) =>
-        Ref.get(state).pipe(
-          Effect.map((s) => Option.fromNullishOr(s.deliveries.find((row) => row.id === id))),
-        ),
-      markSucceeded: (id, outcome) =>
-        modifyDelivery(id, (row) => ({
+        Effect.gen(function* () {
+          const seen = yield* TenantScoped.visibility();
+          const s = yield* Ref.get(state);
+          return Option.fromNullishOr(
+            s.deliveries.find((row) => row.id === id && endpointVisible(s, row.endpointId, seen)),
+          );
+        }),
+      markSucceeded: (grant, id, outcome) =>
+        witnessed(grant, id, (row) => ({
           ...row,
           status: "succeeded",
           attempts: row.attempts + 1,
@@ -428,8 +551,8 @@ export const layerMemory = Layer.effect(
           lastError: Option.none(),
           completedAt: Option.some(outcome.at),
         })),
-      reschedule: (id, next) =>
-        modifyDelivery(id, (row) => ({
+      reschedule: (grant, id, next) =>
+        witnessed(grant, id, (row) => ({
           ...row,
           attempts: row.attempts + 1,
           nextAttemptAt: next.nextAttemptAt,
@@ -437,9 +560,10 @@ export const layerMemory = Layer.effect(
           lastStatusCode: Option.fromNullishOr(next.statusCode),
           lastError: Option.fromNullishOr(next.error),
         })),
-      defer: (id, nextAttemptAt) => modifyDelivery(id, (row) => ({ ...row, nextAttemptAt })),
-      markDead: (id, outcome) =>
-        modifyDelivery(id, (row) => ({
+      defer: (grant, id, nextAttemptAt) =>
+        witnessed(grant, id, (row) => ({ ...row, nextAttemptAt })),
+      markDead: (grant, id, outcome) =>
+        witnessed(grant, id, (row) => ({
           ...row,
           status: "dead",
           attempts: row.attempts + 1,
@@ -450,10 +574,16 @@ export const layerMemory = Layer.effect(
         })),
       redrive: (id, now) =>
         Effect.gen(function* () {
+          const seen = yield* TenantScoped.visibility();
           const outcome = yield* Ref.modify(
             state,
             (s): readonly [Result.Result<DeliveryRecord, WebhookRecordNotFound>, State] => {
-              const existing = s.deliveries.find((row) => row.id === id && row.status === "dead");
+              const existing = s.deliveries.find(
+                (row) =>
+                  row.id === id &&
+                  row.status === "dead" &&
+                  endpointVisible(s, row.endpointId, seen),
+              );
               if (existing === undefined) return [Result.fail(notFound(id)), s] as const;
               const revived: DeliveryRecord = {
                 ...existing,
@@ -471,39 +601,51 @@ export const layerMemory = Layer.effect(
           return yield* Effect.fromResult(outcome);
         }),
       listDeliveries: ({ endpointId, status, before, limit }) =>
-        Ref.get(state).pipe(
-          Effect.map((s) =>
-            s.deliveries
-              .filter(
-                (row) =>
-                  row.endpointId === endpointId &&
-                  (status === undefined || row.status === status) &&
-                  (before === undefined || row.id < before),
-              )
-              .sort((a, b) => b.id.localeCompare(a.id))
-              .slice(0, limit),
-          ),
-        ),
-      pruneFinished: (cutoff) =>
-        Ref.modify(state, (s) => {
-          const keep = s.deliveries.filter(
-            (row) =>
-              row.status === "pending" ||
-              Option.isNone(row.completedAt) ||
-              millis(row.completedAt.value) >= millis(cutoff),
-          );
-          return [s.deliveries.length - keep.length, { ...s, deliveries: keep }] as const;
+        Effect.gen(function* () {
+          const seen = yield* TenantScoped.visibility();
+          const s = yield* Ref.get(state);
+          return s.deliveries
+            .filter(
+              (row) =>
+                row.endpointId === endpointId &&
+                endpointVisible(s, row.endpointId, seen) &&
+                (status === undefined || row.status === status) &&
+                (before === undefined || row.id < before),
+            )
+            .sort((a, b) => b.id.localeCompare(a.id))
+            .slice(0, limit);
         }),
-      deleteBySubject: (userId) =>
-        Ref.update(state, (s) => ({
-          ...s,
-          deliveries: s.deliveries.filter((row) => Option.getOrNull(row.subjectUserId) !== userId),
-        })),
-      listBySubject: (userId) =>
-        Ref.get(state).pipe(
-          Effect.map((s) =>
-            byCreation(
-              s.deliveries.filter((row) => Option.getOrNull(row.subjectUserId) === userId),
+      pruneFinished: (grant, cutoff) =>
+        Effect.andThen(
+          TenantScoped.visibility(grant),
+          Ref.modify(state, (s) => {
+            const keep = s.deliveries.filter(
+              (row) =>
+                row.status === "pending" ||
+                Option.isNone(row.completedAt) ||
+                millis(row.completedAt.value) >= millis(cutoff),
+            );
+            return [s.deliveries.length - keep.length, { ...s, deliveries: keep }] as const;
+          }),
+        ),
+      deleteBySubject: (grant, userId) =>
+        Effect.andThen(
+          TenantScoped.visibility(grant),
+          Ref.update(state, (s) => ({
+            ...s,
+            deliveries: s.deliveries.filter(
+              (row) => Option.getOrNull(row.subjectUserId) !== userId,
+            ),
+          })),
+        ),
+      listBySubject: (grant, userId) =>
+        Effect.andThen(
+          TenantScoped.visibility(grant),
+          Ref.get(state).pipe(
+            Effect.map((s) =>
+              byCreation(
+                s.deliveries.filter((row) => Option.getOrNull(row.subjectUserId) === userId),
+              ),
             ),
           ),
         ),
@@ -561,6 +703,25 @@ export const layerSql = Layer.effect(
     /** An instant as a raw statement parameter (the schemas above do this for the typed ones). */
     const wireDate = (instant: DateTime.Utc) =>
       dialect === "pg" ? DateTime.toDate(instant) : DateTime.formatIso(instant);
+    /** A relay/worker statement over every tenant: the witness annotates the span and lifts RLS. */
+    const witnessed =
+      (grant: TenantScoped.CrossTenant) =>
+      <A, E>(effect: Effect.Effect<A, E>) =>
+        Effect.andThen(TenantScoped.visibility(grant), effect).pipe(
+          TenantScoped.lift(grant),
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
+    /** The ambient tenant's rows of `webhooks_endpoint` (alias `qualifier` for joins). */
+    const endpointScope = (qualifier?: string) =>
+      Effect.map(TenantScoped.visibility(), (seen) =>
+        TenantScoped.predicate(sql, "tenantId", seen, qualifier),
+      );
+    /** A delivery belongs to the tenant of its endpoint. */
+    const deliveryScope = Effect.map(
+      endpointScope("e"),
+      (scope) =>
+        sql`EXISTS (SELECT 1 FROM webhooks_endpoint e WHERE e.id = webhooks_delivery."endpointId" AND ${scope})`,
+    );
     const EndpointRow = makeEndpointRow(wire);
     const DeliveryRow = makeDeliveryRow(wire);
 
@@ -613,12 +774,31 @@ export const layerSql = Layer.effect(
     const endpointById = SqlSchema.findOneOption({
       Request: Schema.String,
       Result: EndpointRow,
+      execute: (id) =>
+        Effect.flatMap(
+          endpointScope(),
+          (scope) => sql`SELECT * FROM webhooks_endpoint WHERE id = ${id} AND ${scope}`,
+        ),
+    });
+    const endpointByIdAnyTenant = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: EndpointRow,
       execute: (id) => sql`SELECT * FROM webhooks_endpoint WHERE id = ${id}`,
     });
     const allEndpoints = SqlSchema.findAll({
       Request: Schema.Struct({}),
       Result: EndpointRow,
-      execute: () => sql`SELECT * FROM webhooks_endpoint ORDER BY "createdAt", id`,
+      execute: () =>
+        Effect.flatMap(
+          endpointScope(),
+          (scope) => sql`SELECT * FROM webhooks_endpoint WHERE ${scope} ORDER BY "createdAt", id`,
+        ),
+    });
+    const enabledEndpoints = SqlSchema.findAll({
+      Request: Schema.Struct({}),
+      Result: EndpointRow,
+      execute: () =>
+        sql`SELECT * FROM webhooks_endpoint WHERE "disabledAt" IS NULL ORDER BY "createdAt", id`,
     });
     // Read-modify-write over the mutable columns: an administrator's edit, not a hot path.
     const writeMutable = SqlSchema.findOneOption({
@@ -632,12 +812,16 @@ export const layerSql = Layer.effect(
         updatedAt: wire.dateTime,
       }),
       Result: EndpointRow,
-      execute: (r) => sql`
+      execute: (r) =>
+        Effect.flatMap(
+          endpointScope(),
+          (scope) => sql`
         UPDATE webhooks_endpoint SET url = ${r.url}, description = ${r.description},
           "eventTags" = ${r.eventTags}, headers = ${r.headers}, "headerNames" = ${r.headerNames},
           "updatedAt" = ${r.updatedAt}
-        WHERE id = ${r.id}
+        WHERE id = ${r.id} AND ${scope}
         RETURNING *`,
+        ),
     });
     const writeSecrets = SqlSchema.findOneOption({
       Request: Schema.Struct({
@@ -648,11 +832,15 @@ export const layerSql = Layer.effect(
         updatedAt: wire.dateTime,
       }),
       Result: EndpointRow,
-      execute: (r) => sql`
+      execute: (r) =>
+        Effect.flatMap(
+          endpointScope(),
+          (scope) => sql`
         UPDATE webhooks_endpoint SET secret = ${r.secret}, "previousSecret" = ${r.previousSecret},
           "previousSecretExpiresAt" = ${r.previousSecretExpiresAt}, "updatedAt" = ${r.updatedAt}
-        WHERE id = ${r.id}
+        WHERE id = ${r.id} AND ${scope}
         RETURNING *`,
+        ),
     });
     const writeDisabled = SqlSchema.findOneOption({
       Request: Schema.Struct({
@@ -663,11 +851,15 @@ export const layerSql = Layer.effect(
         updatedAt: wire.dateTime,
       }),
       Result: EndpointRow,
-      execute: (r) => sql`
+      execute: (r) =>
+        Effect.flatMap(
+          endpointScope(),
+          (scope) => sql`
         UPDATE webhooks_endpoint SET "disabledAt" = ${r.disabledAt}, "disabledReason" = ${r.disabledReason},
           "consecutiveDead" = ${r.consecutiveDead}, "updatedAt" = ${r.updatedAt}
-        WHERE id = ${r.id}
+        WHERE id = ${r.id} AND ${scope}
         RETURNING *`,
+        ),
     });
     const bump = SqlSchema.findOneOption({
       Request: Schema.String,
@@ -680,7 +872,11 @@ export const layerSql = Layer.effect(
     const deliveryById = SqlSchema.findOneOption({
       Request: Schema.String,
       Result: DeliveryRow,
-      execute: (id) => sql`SELECT * FROM webhooks_delivery WHERE id = ${id}`,
+      execute: (id) =>
+        Effect.flatMap(
+          deliveryScope,
+          (scope) => sql`SELECT * FROM webhooks_delivery WHERE id = ${id} AND ${scope}`,
+        ),
     });
     const dueIds = SqlSchema.findAll({
       Request: Schema.Struct({ now: wire.dateTime, limit: Schema.Int }),
@@ -710,13 +906,17 @@ export const layerSql = Layer.effect(
         limit: Schema.Int,
       }),
       Result: DeliveryRow,
-      execute: (r) => sql`
+      execute: (r) =>
+        Effect.flatMap(
+          deliveryScope,
+          (scope) => sql`
         SELECT * FROM webhooks_delivery
-        WHERE "endpointId" = ${r.endpointId}
+        WHERE "endpointId" = ${r.endpointId} AND ${scope}
           ${r.status === null ? sql`` : sql`AND status = ${r.status}`}
           ${r.before === null ? sql`` : sql`AND id < ${r.before}`}
         ORDER BY id DESC
         LIMIT ${r.limit}`,
+        ),
     });
     const bySubject = SqlSchema.findAll({
       Request: Schema.String,
@@ -727,10 +927,14 @@ export const layerSql = Layer.effect(
     const redriveOne = SqlSchema.findOneOption({
       Request: Schema.Struct({ id: Schema.String, now: wire.dateTime }),
       Result: DeliveryRow,
-      execute: (r) => sql`
+      execute: (r) =>
+        Effect.flatMap(
+          deliveryScope,
+          (scope) => sql`
         UPDATE webhooks_delivery SET status = 'pending', attempts = 0, "nextAttemptAt" = ${r.now}, "completedAt" = NULL
-        WHERE id = ${r.id} AND status = 'dead'
+        WHERE id = ${r.id} AND status = 'dead' AND ${scope}
         RETURNING *`,
+        ),
     });
 
     const sealed = <A, E>(effect: Effect.Effect<A, E>) => Effect.orDie(effect);
@@ -741,8 +945,8 @@ export const layerSql = Layer.effect(
 
     return {
       createEndpoint: (input) =>
-        DateTime.now.pipe(
-          Effect.flatMap((now) =>
+        Effect.all([DateTime.now, TenantScoped.stamp({ tenantId: null })]).pipe(
+          Effect.flatMap(([now, stamped]) =>
             insertEndpoint({
               id: input.id,
               url: input.url,
@@ -755,7 +959,7 @@ export const layerSql = Layer.effect(
               disabledReason: null,
               consecutiveDead: 0,
               createdBy: input.createdBy,
-              tenantId: input.tenantId ?? null,
+              tenantId: stamped.tenantId,
               headers: input.headers?.sealed ?? null,
               headerNames: input.headers?.names ?? [],
               createdAt: now,
@@ -770,6 +974,23 @@ export const layerSql = Layer.effect(
         Effect.map((rows) => rows.map(toEndpoint)),
         sealed,
       ),
+      listEnabledEndpoints: (grant) =>
+        enabledEndpoints({}).pipe(
+          Effect.map((rows) => rows.map(toEndpoint)),
+          witnessed(grant),
+          sealed,
+        ),
+      findEndpointForDelivery: (grant, id) =>
+        endpointByIdAnyTenant(id).pipe(
+          Effect.map(Option.map(toEndpoint)),
+          witnessed(grant),
+          sealed,
+        ),
+      disableFailing: (grant, id, at) =>
+        witnessed(grant)(
+          sql`UPDATE webhooks_endpoint SET "disabledAt" = ${wireDate(at)}, "disabledReason" = 'failing',
+            "updatedAt" = ${wireDate(at)} WHERE id = ${id}`,
+        ).pipe(sealed, Effect.asVoid),
       updateEndpoint: (id, patch) =>
         Effect.gen(function* () {
           const current = yield* sealed(endpointById(id)).pipe(Effect.flatMap(requireRow(id)));
@@ -812,19 +1033,21 @@ export const layerSql = Layer.effect(
           ).pipe(Effect.flatMap(requireRow(id)));
           return toEndpoint(updated);
         }),
-      bumpDead: (id) =>
+      bumpDead: (grant, id) =>
         bump(id).pipe(
           Effect.map((row) => (Option.isSome(row) ? row.value.consecutiveDead : 0)),
+          witnessed(grant),
           sealed,
         ),
-      clearDead: (id) =>
-        sealed(sql`UPDATE webhooks_endpoint SET "consecutiveDead" = 0 WHERE id = ${id}`).pipe(
-          Effect.asVoid,
-        ),
+      clearDead: (grant, id) =>
+        witnessed(grant)(
+          sql`UPDATE webhooks_endpoint SET "consecutiveDead" = 0 WHERE id = ${id}`,
+        ).pipe(sealed, Effect.asVoid),
       deleteEndpoint: (id) =>
         Effect.gen(function* () {
+          const scope = yield* endpointScope();
           const removed = yield* sealed(
-            sql`DELETE FROM webhooks_endpoint WHERE id = ${id} RETURNING id`,
+            sql`DELETE FROM webhooks_endpoint WHERE id = ${id} AND ${scope} RETURNING id`,
           );
           if (removed.length === 0) return yield* Effect.fail(notFound(id));
           yield* sealed(sql`DELETE FROM webhooks_delivery WHERE "endpointId" = ${id}`);
@@ -845,40 +1068,48 @@ export const layerSql = Layer.effect(
           }
           return inserted;
         }),
-      claimDue: ({ now, limit, lease }) =>
+      claimDue: (grant, { now, limit, lease }) =>
         Effect.gen(function* () {
-          const ids = yield* sealed(dueIds({ now, limit }));
+          const ids = yield* dueIds({ now, limit });
           const leasedUntil = DateTime.addDuration(now, lease);
           const claimed: Array<DeliveryRecord> = [];
           for (const { id } of ids) {
-            const row = yield* sealed(leaseOne({ id, now, leasedUntil }));
+            const row = yield* leaseOne({ id, now, leasedUntil });
             if (Option.isSome(row)) claimed.push(toDelivery(row.value));
           }
           return claimed;
-        }),
+        }).pipe(witnessed(grant), sealed),
       findDelivery: (id) => deliveryById(id).pipe(Effect.map(Option.map(toDelivery)), sealed),
-      markSucceeded: (id, outcome) =>
-        sealed(sql`
+      markSucceeded: (grant, id, outcome) =>
+        sealed(
+          witnessed(grant)(sql`
           UPDATE webhooks_delivery SET status = 'succeeded', attempts = attempts + 1,
             "lastAttemptAt" = ${wireDate(outcome.at)}, "lastStatusCode" = ${outcome.statusCode ?? null},
             "lastError" = NULL, "completedAt" = ${wireDate(outcome.at)}
-          WHERE id = ${id}`).pipe(Effect.asVoid),
-      reschedule: (id, next) =>
-        sealed(sql`
+          WHERE id = ${id}`),
+        ).pipe(Effect.asVoid),
+      reschedule: (grant, id, next) =>
+        sealed(
+          witnessed(grant)(sql`
           UPDATE webhooks_delivery SET attempts = attempts + 1, "nextAttemptAt" = ${wireDate(next.nextAttemptAt)},
             "lastAttemptAt" = ${wireDate(next.at)}, "lastStatusCode" = ${next.statusCode ?? null},
             "lastError" = ${next.error ?? null}
-          WHERE id = ${id}`).pipe(Effect.asVoid),
-      defer: (id, nextAttemptAt) =>
-        sealed(
-          sql`UPDATE webhooks_delivery SET "nextAttemptAt" = ${wireDate(nextAttemptAt)} WHERE id = ${id}`,
+          WHERE id = ${id}`),
         ).pipe(Effect.asVoid),
-      markDead: (id, outcome) =>
-        sealed(sql`
+      defer: (grant, id, nextAttemptAt) =>
+        sealed(
+          witnessed(grant)(
+            sql`UPDATE webhooks_delivery SET "nextAttemptAt" = ${wireDate(nextAttemptAt)} WHERE id = ${id}`,
+          ),
+        ).pipe(Effect.asVoid),
+      markDead: (grant, id, outcome) =>
+        sealed(
+          witnessed(grant)(sql`
           UPDATE webhooks_delivery SET status = 'dead', attempts = attempts + 1,
             "lastAttemptAt" = ${wireDate(outcome.at)}, "lastStatusCode" = ${outcome.statusCode ?? null},
             "lastError" = ${outcome.error ?? null}, "completedAt" = ${wireDate(outcome.at)}
-          WHERE id = ${id}`).pipe(Effect.asVoid),
+          WHERE id = ${id}`),
+        ).pipe(Effect.asVoid),
       redrive: (id, now) =>
         redriveOne({ id, now }).pipe(
           sealed,
@@ -890,18 +1121,21 @@ export const layerSql = Layer.effect(
           Effect.map((rows) => rows.map(toDelivery)),
           sealed,
         ),
-      pruneFinished: (cutoff) =>
-        sealed(sql`
+      pruneFinished: (grant, cutoff) =>
+        sealed(
+          witnessed(grant)(sql`
           DELETE FROM webhooks_delivery
           WHERE status IN ('succeeded', 'dead') AND "completedAt" < ${wireDate(cutoff)}
-          RETURNING id`).pipe(Effect.map((rows) => rows.length)),
-      deleteBySubject: (userId) =>
-        sealed(sql`DELETE FROM webhooks_delivery WHERE "subjectUserId" = ${userId}`).pipe(
-          Effect.asVoid,
-        ),
-      listBySubject: (userId) =>
+          RETURNING id`),
+        ).pipe(Effect.map((rows) => rows.length)),
+      deleteBySubject: (grant, userId) =>
+        sealed(
+          witnessed(grant)(sql`DELETE FROM webhooks_delivery WHERE "subjectUserId" = ${userId}`),
+        ).pipe(Effect.asVoid),
+      listBySubject: (grant, userId) =>
         bySubject(userId).pipe(
           Effect.map((rows) => rows.map(toDelivery)),
+          witnessed(grant),
           sealed,
         ),
     } satisfies WebhookRecordsShape;
