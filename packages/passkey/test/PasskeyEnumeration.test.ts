@@ -12,7 +12,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Passkey from "../src/Passkey.ts";
 import { assertionCredential, mockWebAuthn } from "./passkeyTestFixtures.ts";
-import { buildLayer, realRateLimiter, registerNewUser } from "./passkeyTestLayers.ts";
+import { buildLayer, registerNewUser } from "./passkeyTestLayers.ts";
 
 const decoysFor = (email: string) =>
   Effect.gen(function* () {
@@ -149,7 +149,7 @@ describe("TSS-004: an unknown credential id costs one signature verification, li
 });
 
 describe("WPS-005/TC-001: the anonymous ceremony is rate-limited", () => {
-  const limited = buildLayer(mockWebAuthn(), undefined, { rateLimiter: realRateLimiter });
+  const limited = buildLayer(mockWebAuthn(), undefined, { rateLimiter: "enforcing" });
 
   it.effect("authenticate/options is throttled per email", () =>
     Effect.gen(function* () {

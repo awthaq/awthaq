@@ -9,35 +9,16 @@
 // `WebAuthn` is still mocked (`Layer.mock`, BEH-EA-195) — this proves the
 // wire contract, not the cryptography (ticket 02's own job).
 import { Api, SessionContract } from "@awthaq/api";
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-} from "@awthaq/core";
-import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Sessions, Users } from "@awthaq/core";
+import type { WebAuthn } from "@awthaq/ports";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyApi from "../src/PasskeyApi.ts";
-import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
-import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
 import {
   ORIGIN,
   RP_ID,
@@ -46,108 +27,39 @@ import {
   mockWebAuthn,
 } from "./passkeyTestFixtures.ts";
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(RateLimiter.layerPermissive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
 /**
- * CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `PasskeyGroup`,
- * `PasskeyAuthenticateGroup` (public/anonymous, BEH-EA-131), and
- * `PasskeyCredentialsGroup` all now carry `.middleware(Api.CsrfProtection)`
- * (`PasskeyApi.ts`) — this file calls the composed app's real HTTP handler
- * directly, never through `@awthaq/client`'s generated `CsrfClientLive`, so
- * every unsafe-method request built below (including the anonymous
- * authenticate-ceremony ones) has to play the double-submit role a real
- * browser client would. A reference HMAC computed independently of
- * `Csrf.ts`'s own implementation (Node's `node:crypto`), mirroring
- * `packages/server/test/Csrf.test.ts`'s own `validCookieValue()`.
- *
- * Plain `Layer.provide`, not `Layer.provideMerge` — this file's composed
- * layer already carries the most services of any file in this migration;
- * `provideMerge` exposing `Api.CsrfProtection` in its own output type
- * triggers a real `TS2883` portability error under this repo's `tsc -b`
- * composite project-reference build (see `PasskeyWorld.ts`'s own comment
- * on the identical issue).
+ * `PasskeyGroup`, `PasskeyAuthenticateGroup` (public/anonymous, BEH-EA-131) and `PasskeyCredentialsGroup` all
+ * carry `.middleware(Api.CsrfProtection)`, and this file calls the composed app's real HTTP handler directly,
+ * never through `@awthaq/client`'s `CsrfClientLive`, so every unsafe-method request below (including the
+ * anonymous authenticate-ceremony ones) plays the double-submit role a browser client would, with a pair minted
+ * against the harness's own `CsrfConfig` (the handler runs on the real clock, so it is stamped now).
  */
-const CSRF_TEST_SECRET = "passkey-authhttp-test-csrf-secret";
-const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The handler under test runs on the real clock here (a web handler).
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
-  return `${signed}.${signature}`;
-})();
+const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
 
 const withCsrfCookie = (cookie?: string): string =>
   cookie
     ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
     : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
 
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_TEST_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const buildAppLayer = (
+const buildApp = (
   webAuthn: Layer.Layer<WebAuthn.WebAuthn>,
   configOverrides?: Partial<Passkey.PasskeyConfigShape>,
 ) =>
-  Layer.mergeAll(
-    AuthHttp.routes(PasskeyApi.PasskeyApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Passkey.Passkey.layer),
-      Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN], ...configOverrides })),
-      Layer.provide(AuthenticationLive),
-    ),
-    AuthHttp.docs(PasskeyApi.PasskeyApi),
-  ).pipe(
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(
+  TestAuth.app(
+    TestAuth.layer(Auth.make([Passkey.Passkey]), {
+      services: Layer.mergeAll(
         webAuthn,
-        ChallengeStore.layerMemory,
-        PasskeyCredentials.layerMemory,
-        PasskeyUserHandles.layerMemory,
-        ClientAddress.layerDirect,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
-    ),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
+        Passkey.config({ rpId: RP_ID, origins: [ORIGIN], ...configOverrides }),
+      ),
+      openapiPath: "/openapi.json",
+      docsPath: "/docs",
+    }),
+    { baseUrl: ORIGIN },
   );
 
-const AppLayer = buildAppLayer(mockWebAuthn());
-
-/**
- * A shared `MemoMap` so a session issued directly against `Sessions` (below)
- * and the real HTTP `handler`'s own internal layer build resolve to the
- * *same* running `Users.layerMemory`/`Sessions.layerMemory` instances,
- * rather than each independently constructing its own, disjoint state —
- * `HttpRouter.toWebHandler`'s own layer build and `Layer.buildWithMemoMap`
- * below are two separate call sites into the identical `AppLayer` value.
- */
-const memoMap = Layer.makeMemoMapUnsafe();
-const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+/** One running app for the file: a session issued directly against its `Sessions` authenticates a request through its `handler`. */
+const app = buildApp(mockWebAuthn());
+const { handler } = app;
 
 const post = (
   handler: (request: Request) => Promise<Response>,
@@ -185,20 +97,14 @@ const cookieFrom = (response: Response): string => {
  * `@awthaq/test`'s own `signInAs` documents using.
  */
 const issueSessionCookieHeader = (email: string): Promise<string> =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const scope = yield* Effect.scope;
-        const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-        return yield* Effect.gen(function* () {
-          const users = yield* Users.Users;
-          const sessions = yield* Sessions.Sessions;
-          const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
-          const issued = yield* sessions.issue({ userId: user.id });
-          return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-        }).pipe(Effect.provide(context));
-      }),
-    ),
+  app.run(
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
+      const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
+      const issued = yield* sessions.issue({ userId: user.id });
+      return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+    }),
   );
 
 describe("AuthHttp + Passkey (real HTTP)", () => {
@@ -675,12 +581,9 @@ describe("GET /.well-known/webauthn (TC-008)", () => {
 
   it.effect("serves the configured related origins as JSON, anonymously", () =>
     Effect.gen(function* () {
-      const related = HttpRouter.toWebHandler(
-        buildAppLayer(mockWebAuthn(), {
-          relatedOrigins: ["https://example.co.uk", "https://example.de"],
-        }),
-        { memoMap: Layer.makeMemoMapUnsafe() },
-      );
+      const related = buildApp(mockWebAuthn(), {
+        relatedOrigins: ["https://example.co.uk", "https://example.de"],
+      });
       const response = yield* Effect.promise(() =>
         related.handler(new Request(`${ORIGIN}/.well-known/webauthn`)),
       );
