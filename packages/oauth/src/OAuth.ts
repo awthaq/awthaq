@@ -34,6 +34,7 @@ import {
   SessionCookie,
   Sessions,
   SignIn,
+  SignUp,
   Tenant,
   Users,
   Verification,
@@ -821,14 +822,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // userinfo); `httpClient` stays plain for the single-use code exchange.
       const readClient = ProviderHttp.retrying(httpClient, config_.retry);
       const jwksCaches = yield* IdToken.makeJwksCaches;
-      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const encryption = yield* Encryption.Encryption;
       // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement, consulted at
       // the sign-in-completing path of `callback` only (never `flow.link`, which issues no new session).
       const completion = yield* SignIn.make;
       // NAM-002: the sign-up veto/observer for the first-login user creation below.
-      const beforeSignUp = yield* Hooks.BeforeSignUp;
-      const afterSignUp = yield* Hooks.AfterSignUp;
+      const creation = yield* SignUp.make;
 
       // The table above is registered (introspectable) and spent through one budget. The numbers in force
       // come from the configuration of the operation (EP-007), so a tenant's `OAuth.config(...)` provided
@@ -1169,112 +1168,67 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 return existing.value.id;
               }
 
-              // BEH-EA-113-adjacent silent sign-up (research/05-oauth-oidc.md
-              // Q55): the ecosystem norm for a first-time, non-conflicting
-              // OAuth sign-in — no separate "confirm sign-up" step in v1.
-              // Shipping-gap map (.scratch/shipping-gaps), ticket 16: `create`
-              // and `link` now commit together via `SqlTransaction` — the
-              // clearest atomicity gap this codebase had (a failure between
-              // the two previously left a real, unlinked, orphaned `User`
-              // row with no way back in). `Effect.orDie` on the whole
-              // transaction, not just `link`'s own failure — a `SqlError`
-              // rolling back the transaction is a defect here the same way
-              // every other `.pipe(Effect.orDie)` in this codebase already
-              // treats an unexpected persistence failure.
+              // BEH-EA-113-adjacent silent sign-up (research/05-oauth-oidc.md Q55): the ecosystem norm
+              // for a first-time, non-conflicting OAuth sign-in, with no separate "confirm sign-up"
+              // step in v1. ADR-EA-038: creation via OAuth is still a sign-up, so `SignUp` vets it
+              // (`BeforeSignUp`, whose `strategy` is the provider id) before anything is written, then
+              // creates, verifies and links in one unit and announces after it commits. The session
+              // follows below through `SignIn`, like every other flow.
               const name = profile.name ?? profile.email ?? profile.subject;
-              // NAM-002/SCP-008: creation via OAuth is still a sign-up, so the
-              // same `BeforeSignUp` veto guards it (its `strategy` is the
-              // provider id), before anything is written.
-              const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
-                beforeSignUp.run({
-                  ...(profile.email === undefined ? {} : { email: profile.email }),
-                  name,
-                  strategy: providerId,
-                }),
-              );
-              const created = yield* sqlTransaction
-                .withTransaction(
-                  Effect.gen(function* () {
-                    // FAMS-002: a profile with no email creates an Anonymous
-                    // user (upgradeable through `Users.promoteIdentity`) — the
-                    // synthetic `${providerId}:${subject}` placeholder email
-                    // this used to fabricate is gone.
-                    const user = yield* users
-                      .create({
-                        identity:
-                          vetoedSignUp.email === undefined
-                            ? { _tag: "Anonymous" }
-                            : { _tag: "Email", email: vetoedSignUp.email },
-                        name: vetoedSignUp.name,
-                        // NAM-009: an http(s) avatar only — see `OAuthProfile.image`.
-                        ...(profile.image !== undefined && isImageUrl(profile.image)
-                          ? { image: profile.image }
-                          : {}),
-                      })
-                      .pipe(
-                        Effect.catchTag("Users/EmailAlreadyExists", () =>
-                          // A concurrent sign-up claimed the address between
-                          // our lookup and this insert: report whatever the
-                          // winner has, or nothing if it isn't visible yet.
-                          (profile.email === undefined
-                            ? Effect.succeed(Option.none())
-                            : users.findByEmail(profile.email)
-                          ).pipe(
-                            Effect.flatMap((winner) =>
-                              Option.isSome(winner)
-                                ? conflictingProviders(
-                                    winner.value.id,
-                                    profile.emailVerified === true,
-                                  )
-                                : Effect.succeed([]),
-                            ),
-                            Effect.flatMap(
-                              (providers) => new OAuthApi.AccountExists({ providers }),
-                            ),
-                          ),
-                        ),
-                        // FAMS-002: no phone identity is created here.
-                        Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
-                      );
-                    // AOMS-007: a *trusted* provider's `email_verified` claim
-                    // is proof enough to mark the new local user verified, in
-                    // the same transaction. Deliberately not for an untrusted
-                    // provider — that claim must not flip local state TMS-007's
-                    // auto-link gate later relies on — and never on the
-                    // auto-link/explicit-link paths, whose local account keeps
-                    // its own verification state.
-                    if (
-                      profile.email !== undefined &&
-                      profile.emailVerified === true &&
-                      trustedProvidersOf(config).includes(providerId)
-                    ) {
-                      yield* users.verifyEmail(user.id).pipe(Effect.orDie);
-                    }
-                    yield* accounts
-                      .link({
-                        userId: user.id,
-                        providerId,
-                        subject: profile.subject,
-                        tokens: toProviderTokenSet(tokens, exchangedAt),
-                        ...issuerField(provider.issuer),
-                      })
-                      .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
-                    return user;
-                  }),
-                )
-                // Only the transaction's own `SqlError` dies here — a
-                // rolled-back commit is an unexpected persistence failure,
-                // the same posture every other `Effect.orDie` in this
-                // codebase already takes. `OAuthApi.AccountExists` (from
-                // `EmailAlreadyExists` above) is a real, expected outcome
-                // and must still reach the caller as itself.
-                .pipe(Effect.catchTag("SqlError", Effect.die));
-              yield* events.publish({ _tag: "auth.user.created", userId: created.id });
-              yield* afterSignUp.run({
-                userId: created.id,
-                ...(vetoedSignUp.email === undefined ? {} : { email: vetoedSignUp.email }),
+              const vetted = yield* creation.vet({
+                // FAMS-002: a profile with no email creates an Anonymous user (upgradeable through
+                // `Users.promoteIdentity`).
+                identity:
+                  profile.email === undefined
+                    ? { _tag: "Anonymous" }
+                    : { _tag: "Email", email: profile.email },
+                name,
                 strategy: providerId,
               });
+              const created = yield* creation
+                .create(vetted, {
+                  // AOMS-007: a *trusted* provider's `email_verified` claim is proof enough to mark the
+                  // new local user verified, in the same unit. Deliberately not for an untrusted
+                  // provider (that claim must not flip local state TMS-007's auto-link gate later relies
+                  // on) and never on the auto-link/explicit-link paths.
+                  verified:
+                    profile.email !== undefined &&
+                    profile.emailVerified === true &&
+                    trustedProvidersOf(config).includes(providerId),
+                  // NAM-009: an http(s) avatar only, see `OAuthProfile.image`.
+                  ...(profile.image !== undefined && isImageUrl(profile.image)
+                    ? { image: profile.image }
+                    : {}),
+                  link: {
+                    providerId,
+                    subject: profile.subject,
+                    tokens: toProviderTokenSet(tokens, exchangedAt),
+                    ...issuerField(provider.issuer),
+                  },
+                })
+                .pipe(
+                  Effect.catchTag("SignUp/IdentityTaken", (taken) =>
+                    taken.kind === "Email"
+                      ? // A concurrent sign-up claimed the address between our lookup and this insert:
+                        // report whatever the winner has, or nothing if it isn't visible yet.
+                        (profile.email === undefined
+                          ? Effect.succeed(Option.none())
+                          : users.findByEmail(profile.email)
+                        ).pipe(
+                          Effect.flatMap((winner) =>
+                            Option.isSome(winner)
+                              ? conflictingProviders(
+                                  winner.value.id,
+                                  profile.emailVerified === true,
+                                )
+                              : Effect.succeed([]),
+                          ),
+                          Effect.flatMap((providers) => new OAuthApi.AccountExists({ providers })),
+                        )
+                      : // A fresh user has no phone, and a fresh user's subject is not yet linked.
+                        Defects.invariantViolation("OAuthSignUpConflict", taken.message),
+                  ),
+                );
               return created.id;
             }),
         });
