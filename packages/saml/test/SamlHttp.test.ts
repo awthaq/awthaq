@@ -1,18 +1,12 @@
 // BEH-EA-238 through 245 over real HTTP, through `HttpRouter.toWebHandler`: the login redirect and its
 // `__Host-saml-request` cookie (SameSite=None: the IdP's POST is cross-site), the ACS form post that answers 302 with
 // a session cookie, the metadata document, and the uniform 400 for everything the chain refuses.
-import { AuthHttp } from "@awthaq/server";
 import { Auth } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { inflateRawSync } from "node:zlib";
+import { TestAuth } from "@awthaq/test";
 import * as Saml from "../src/Saml.ts";
 import * as SamlApi from "../src/SamlApi.ts";
 import * as SamlConnections from "../src/SamlConnections.ts";
@@ -32,19 +26,8 @@ const around = () => ({
   notOnOrAfter: new Date(Date.now() + 300_000).toISOString().replace(/\.\d+Z$/, "Z"),
 });
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
 const buildApp = () => {
-  const Live = SamlLive();
-  const AppLayer = AuthHttp.routes(SamlApi.SamlApi).pipe(
-    Layer.provide(Live),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+  const app = TestAuth.app(SamlLive());
   /** Runs `effect` against the very same service instances the web handler uses. */
   const inside = <A, E>(
     effect: Effect.Effect<
@@ -52,17 +35,8 @@ const buildApp = () => {
       E,
       Saml.Saml | SamlConnections.SamlConnectionStore | Organization.Organization
     >,
-  ) =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(Live, memoMap, scope);
-          return yield* effect.pipe(Effect.provide(context));
-        }),
-      ),
-    );
-  return { handler, inside };
+  ) => app.run(effect);
+  return { handler: app.handler, inside };
 };
 
 const acsForm = (response: string, cookie?: string) =>

@@ -3,30 +3,11 @@
 // same layer graph an application builds — plus helpers that play the two other parties: the IdP (a signed
 // response for a given AuthnRequest) and the browser (the state cookie).
 import { Api } from "@awthaq/api";
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, type Sessions, type Users } from "@awthaq/core";
+import { Organization, type OrganizationHooks } from "@awthaq/organization";
+import { RateLimiter } from "@awthaq/ports";
+import { TestAuth } from "@awthaq/test";
 import { inflateRawSync } from "node:zlib";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -51,52 +32,10 @@ import {
 export const BASE_URL = "https://sp.example.com";
 export const IDP_ENTITY_ID = "https://idp.example.com/metadata";
 
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Verification.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("saml-test-csrf-secret-padded-to-thirty-two-bytes-long"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 /** A real `Encryption` over a fixed test key: the SP signing keys are sealed with it, as in production. */
-export const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+export const EncryptionLive = TestAuth.encryption;
 
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
+const built = Auth.make([Organization.Organization, Saml.Saml]);
 
 /** A metadata fetcher over a fixed table: what a URL "serves", and (for a failing URL) the class it fails as. */
 export const fakeFetcher = (
@@ -124,45 +63,38 @@ export const fakeFetcher = (
   return { layer, requested };
 };
 
-const OrganizationLive = Organization.Organization.layer.pipe(
-  Layer.provide(Organization.config({})),
-  Layer.provide(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-);
-
+/**
+ * `Saml` over in-memory storage through `TestAuth.layer(Auth.make([Organization, Saml]))`: the organization plugin
+ * (`Saml` `dependsOn: [Organization]`), the SAML records and connection store, and the Node `XmlSignature`
+ * adapter. `limiter` and `fetcher` are the plugin's own substitutions; `coreOverride` wraps a core service
+ * (`TestAuth.layer`'s `decorate`) the plugin captures at construction (for example to simulate a store outage);
+ * `taps` are application taps on the organization hook points (an observer that records the actor of a role mapping).
+ */
 export const SamlLive = <Wrapped extends Sessions.Sessions | Users.Users = never>(
   samlConfig: Partial<Omit<Saml.SamlConfigInput, "baseUrl">> = {},
   limiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
   fetcher: Layer.Layer<SamlMetadataFetcher.SamlMetadataFetcher> = fakeFetcher({}).layer,
-  /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
   coreOverride?: Layer.Layer<Wrapped, never, Wrapped>,
-  /** Plan 04: taps on the organization hook points (an observer that records the actor of a role mapping). */
   taps: Layer.Layer<
     never,
     never,
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = Layer.empty,
 ) =>
-  Saml.Saml.layer.pipe(
-    Layer.provide(coreOverride ?? Layer.empty),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(fetcher),
-    Layer.provideMerge(OrganizationLive),
-    Layer.provideMerge(SamlRecords.layerMemory),
-    Layer.provideMerge(XmlSignatureNode.layer),
-    Layer.provideMerge(limiter),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(taps),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-    Layer.provideMerge(Saml.config({ baseUrl: BASE_URL, ...samlConfig })),
-  );
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Saml.config({ baseUrl: BASE_URL, ...samlConfig }),
+      Organization.config({}),
+      XmlSignatureNode.layer,
+      fetcher,
+      limiter,
+      // The same layer the bundle projects `SamlRecords` from (one instance), plus its `MemoryEnvelopes` test seam
+      // (what `SamlSigning.test.ts` plants), which a bundle does not provide.
+      SamlRecords.layerMemory,
+    ),
+    ...(coreOverride === undefined ? {} : { decorate: coreOverride }),
+    taps,
+  });
 
 export const ownerPrincipal = new Api.UserPrincipal({
   ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
