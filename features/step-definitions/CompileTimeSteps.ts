@@ -173,6 +173,26 @@ export const numericValueTypeSteps = defineSteps(({ When, Then }) => {
   );
 });
 
+/** BEH-EA-058 (08-verification-tokens.feature). */
+export const verificationRedeemTypeSteps = defineSteps(({ When, Then }) => {
+  When(
+    "a caller tries to defer a miss, record one, or settle a redeem some other way",
+    function* () {
+      yield* Effect.void;
+    },
+  );
+
+  Then(
+    "the interface rejects each by the type",
+    gate("verification-miss-protocol-is-internal", [
+      "@ts-expect-error",
+      "{ deferMiss: true }",
+      "verification.recordMiss",
+      'onFailure: () => "burn"',
+    ]),
+  );
+});
+
 /** BEH-EA-108 (14-rate-limiting.feature). */
 export const rateLimitKeyTypeSteps = defineSteps(({ Given, When, Then }) => {
   Given(

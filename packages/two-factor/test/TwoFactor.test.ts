@@ -689,11 +689,11 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
           .pipe(Effect.flip);
         if (wrong._tag !== "HookAborted") return assert.fail(wrong._tag);
         assert.strictEqual(wrong.code, "SECOND_FACTOR_INVALID");
-        // The wrong code spent the (in-memory, non-transactional) reset token, so request another.
-        const second = yield* requestResetToken(user.email);
+        // ADR-EA-039: the refusal gave the reset token back (memory and SQL alike), so the SAME
+        // token carries the reset once the right code is presented (BEH-EA-259).
         yield* nextStep;
         yield* password.confirmReset({
-          token: second,
+          token,
           password: newPassword,
           secondFactorCode: secret(yield* codeFor(user.secret)),
         });

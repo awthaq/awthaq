@@ -18,6 +18,7 @@ import { PublicEndpoint } from "@qadi/http";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
@@ -73,6 +74,24 @@ export const callerChosenValue = (verification: Verification.VerificationShape) 
     maxAttempts: 3,
     // @ts-expect-error - `IssueInput` has no field through which a caller could choose the value
     value: "123456",
+  });
+
+// ---- 08-verification-tokens.feature: BEH-EA-058 (REQ-EA-1282) ----
+
+// type-gate: verification-miss-protocol-is-internal
+export const deferredMiss = (verification: Verification.VerificationShape) =>
+  // @ts-expect-error - `consume` takes no options: a caller that needs a transaction uses `redeem`
+  verification.consume("verify-email:gate", Redacted.make("v"), { deferMiss: true });
+export const recordedMiss = (verification: Verification.VerificationShape) =>
+  // @ts-expect-error - there is no `recordMiss`: `redeem` records a miss itself
+  verification.recordMiss("verify-email:gate");
+export const unknownSettlement = (verification: Verification.VerificationShape) =>
+  verification.redeem({
+    identifier: "verify-email:gate",
+    value: Redacted.make("v"),
+    use: () => Effect.void,
+    // @ts-expect-error - a settlement is "rollback" or "commit"
+    onFailure: () => "burn",
   });
 
 // ---- 14-rate-limiting.feature: BEH-EA-108 (REQ-EA-292) ----

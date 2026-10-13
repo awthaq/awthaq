@@ -274,8 +274,8 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("both effects commit under one SQL transaction", function* () {
     const { probes } = yield* World;
     const sightings = yield* Ref.get(probes.sightings);
-    // One `SqlTransaction.withTransaction` saw the token consumed, the password written and
-    // the sessions revoked: same non-zero transaction id for all three.
+    // One real SQL transaction (`Verification.redeem`'s, ADR-EA-039) saw the token claimed, the
+    // password written and the sessions revoked: same non-zero transaction id for all three.
     const byTransaction = new Map<number, Set<string>>();
     for (const sighting of sightings) {
       if (sighting.transaction === 0) continue;
@@ -286,13 +286,13 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
     }
     const together = [...byTransaction.values()].some(
       (operations) =>
-        operations.has("Verification.consume") &&
+        operations.has("Verification.redeem") &&
         operations.has("Accounts.updateCredentialHash") &&
         operations.has("Sessions.revokeAll"),
     );
     assert.ok(
       together,
-      `consume, the credential write and the session revocation must share one transaction; saw ${JSON.stringify(sightings)}`,
+      `redeem, the credential write and the session revocation must share one transaction; saw ${JSON.stringify(sightings)}`,
     );
     const outside = sightings.filter(
       (sighting) =>
@@ -516,8 +516,8 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
     "this publication happens regardless of whatever the audit table separately records as the durable record of record",
     function* () {
       // The bus copy is published exactly once for the presented identifier whatever the audit
-      // table holds: the transaction the replayed consume ran in rolled back with the failure
-      // (PV-220), yet the subscriber still saw the event.
+      // table holds: the replay is an attempt event (ADR-EA-037), so a transaction that
+      // rolled back with the failure cannot hide it from the subscriber.
       const { strings, probes } = yield* World;
       const identifier = yield* strings.get("presented");
       yield* awaitEvent(REPLAY, identifier);

@@ -65,14 +65,9 @@ import {
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
-/** Which SQL transaction (if any) the fiber is running in — set by the probed `SqlTransaction`, read by the probed services. `0` is "none". */
-const CurrentTransaction = Context.Reference<number>("features/DomainWorld/CurrentTransaction", {
-  defaultValue: () => 0,
-});
-
 export interface TransactionSighting {
   readonly operation: string;
-  /** `0`: the operation ran outside any `SqlTransaction.withTransaction`. */
+  /** `0`: the operation ran outside any SQL transaction. Savepoints share their connection's number. */
   readonly transaction: number;
 }
 
@@ -156,37 +151,39 @@ const switchableLimiter = (probes: Probes) =>
     }),
   ).pipe(Layer.provide(RateLimiter.layerMemory));
 
-const sighting = (probes: Probes, operation: string) =>
-  Effect.gen(function* () {
-    const transaction = yield* CurrentTransaction;
-    yield* Ref.update(probes.sightings, (seen) => [...seen, { operation, transaction }]);
-  });
+/**
+ * Which real SQL transaction the fiber is in, read off the SQL client itself (ADR-EA-039: `redeem`
+ * opens its own transaction, not through the `SqlTransaction` port). A savepoint shares its
+ * connection with the transaction it nests in, so it counts as the same transaction.
+ */
+const makeSighting = (probes: Probes, sql: SqlClient.SqlClient) => {
+  const numbers = new WeakMap<object, number>();
+  let issued = 0;
+  return (operation: string) =>
+    Effect.gen(function* () {
+      const current = yield* Effect.serviceOption(sql.transactionService);
+      let transaction = 0;
+      if (Option.isSome(current)) {
+        const [connection] = current.value;
+        transaction = numbers.get(connection) ?? ++issued;
+        numbers.set(connection, transaction);
+      }
+      yield* Ref.update(probes.sightings, (seen) => [...seen, { operation, transaction }]);
+    });
+};
 
 /** Observes (never alters) which transaction each of the three effects of `confirmReset` runs in, and lets a scenario crash the credential write. */
 const probesLayer = (probes: Probes) => {
-  let nextTransaction = 0;
-  const TransactionProbe = Layer.effect(
-    SqlTransaction.SqlTransaction,
-    Effect.gen(function* () {
-      const real = yield* SqlTransaction.SqlTransaction;
-      return SqlTransaction.SqlTransaction.of({
-        withTransaction: (effect) =>
-          Effect.suspend(() => {
-            const id = ++nextTransaction;
-            return real.withTransaction(Effect.provideService(effect, CurrentTransaction, id));
-          }),
-      });
-    }),
-  );
   const AccountsProbe = Layer.effect(
     Accounts.Accounts,
     Effect.gen(function* () {
       const real = yield* Accounts.Accounts;
+      const sighting = makeSighting(probes, yield* SqlClient.SqlClient);
       return Accounts.Accounts.of({
         ...real,
         updateCredentialHash: (id, hash) =>
           Effect.gen(function* () {
-            yield* sighting(probes, "Accounts.updateCredentialHash");
+            yield* sighting("Accounts.updateCredentialHash");
             if ((yield* Ref.get(probes.faults)).failCredentialUpdate) {
               return yield* Effect.die(
                 new Error("injected: crash while applying the new password"),
@@ -201,12 +198,15 @@ const probesLayer = (probes: Probes) => {
     Verification.Verification,
     Effect.gen(function* () {
       const real = yield* Verification.Verification;
+      const sighting = makeSighting(probes, yield* SqlClient.SqlClient);
       return Verification.Verification.of({
         ...real,
-        consume: (identifier, value) =>
-          sighting(probes, "Verification.consume").pipe(
-            Effect.andThen(real.consume(identifier, value)),
-          ),
+        // Recorded inside `use`, so the number is the claim's own transaction.
+        redeem: (input) =>
+          real.redeem({
+            ...input,
+            use: (token) => sighting("Verification.redeem").pipe(Effect.andThen(input.use(token))),
+          }),
       });
     }),
   );
@@ -214,16 +214,15 @@ const probesLayer = (probes: Probes) => {
     Sessions.Sessions,
     Effect.gen(function* () {
       const real = yield* Sessions.Sessions;
+      const sighting = makeSighting(probes, yield* SqlClient.SqlClient);
       return Sessions.Sessions.of({
         ...real,
         revokeAll: (userId, reason) =>
-          sighting(probes, "Sessions.revokeAll").pipe(
-            Effect.andThen(real.revokeAll(userId, reason)),
-          ),
+          sighting("Sessions.revokeAll").pipe(Effect.andThen(real.revokeAll(userId, reason))),
       });
     }),
   );
-  return { TransactionProbe, AccountsProbe, VerificationProbe, SessionsProbe };
+  return { AccountsProbe, VerificationProbe, SessionsProbe };
 };
 
 /** The one `AuthEvents` subscriber a scenario reads back: registered before anything can publish (`startImmediately`, the AdminWorld lesson). */
@@ -251,7 +250,7 @@ const makeProbes = () => ({
 
 const buildStack = (probes: Probes) => {
   const mailer = makeCapturingMailer();
-  const { TransactionProbe, AccountsProbe, VerificationProbe, SessionsProbe } = probesLayer(probes);
+  const { AccountsProbe, VerificationProbe, SessionsProbe } = probesLayer(probes);
 
   const RealStores = Layer.mergeAll(
     Accounts.layerSql.pipe(
@@ -266,7 +265,6 @@ const buildStack = (probes: Probes) => {
         ),
       ),
     ),
-    SqlTransaction.layerSql,
   );
 
   // The probes wrap the real services under the same tags (provide, never merge, so the
@@ -276,8 +274,12 @@ const buildStack = (probes: Probes) => {
       Layer.provide(Repositories.UsersRepositoryLive),
       Layer.provide(auth.userFieldsLayer),
     ),
-    Layer.mergeAll(AccountsProbe, VerificationProbe, SessionsProbe, TransactionProbe).pipe(
-      Layer.provide(RealStores),
+    Layer.mergeAll(
+      Layer.mergeAll(AccountsProbe, VerificationProbe, SessionsProbe).pipe(
+        Layer.provide(RealStores),
+      ),
+      // `Password` still declares the port; nothing probes it any more (`redeem` opens its own transaction).
+      SqlTransaction.layerSql,
     ),
   );
 

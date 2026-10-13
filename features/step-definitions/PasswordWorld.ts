@@ -94,8 +94,9 @@ const memoryCore = (fault: Ref.Ref<Fault>) =>
     Accounts.layerMemory,
     faultInjectingSessions(fault).pipe(Layer.provide(Sessions.layerMemory)),
     Verification.layerMemory,
-    // ARF-001: `confirmReset` runs inside a `SqlTransaction` — a no-op wrapper for this
-    // in-memory composition, same as `SessionWorld.ts`'s own precedent.
+    // `Password` still declares the `SqlTransaction` port (sign-up goes through `SignUp`); here it
+    // is a no-op wrapper. `confirmReset` itself redeems through `Verification.redeem`, which gives a
+    // failed reset's token back in memory too (ADR-EA-039).
     SqlTransaction.layerNoop,
   ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 

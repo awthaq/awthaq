@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-08 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) <br> 1.4 (2026-10-13): `Verification.redeem` owns the claim-and-use transaction in both adapters; BEH-EA-058 "as shipped" text, BEH-EA-059 and BEH-EA-062 notes (ADR-EA-039, plan 07) |
 
 ---
 
@@ -53,6 +53,8 @@ REQUIREMENT: Marking a verification token consumed and applying the state
              remains replayable.
 ```
 
+**As shipped (ADR-EA-039):** `Verification.redeem({ identifier, value, use, onFailure })` claims the token and runs `use` in one transaction. `layerSql` uses one transaction (a savepoint inside an outer one, such as the RLS tenant transaction). `layerMemory` holds the claimed row and gives it back on rollback (unless a newer `issue` or a `deleteAllByUser` got there first), so a failed `use` leaves the token live **in both adapters**. A typed failure settles as `"rollback"` (the default) or `"commit"` (`onFailure`, for a refusal that is itself the outcome the token paid for: a second-factor divert, a veto after a valid presentation; `Verification.commitUnlessUnavailable` spends the token on any refusal and gives it back on an outage). A defect or an interruption always rolls back. A `SqlError` from the transaction is `StoreUnavailable("Verification.redeem")`. `consume` remains for burn-first tokens (OAuth/SAML request state, the native exchange code): never for a token that authorises a state change.
+
 `archive/PRD.md` §13 and §18 both require tokens to be "single-use in-transaction." `archive/design/usage-examples-v4.md` §6.1 is the worked confirmation of this for password reset: `confirmReset` both consumes the token and rotates the password (and, per BEH-EA-053, issues a fresh session while revoking others) as one operation, so a race between two requests bearing the same token cannot apply the change twice or leave it applied with the token still valid.
 
 ## BEH-EA-059: Replaying an already-consumed or unknown token publishes `auth.token.replay`
@@ -73,7 +75,9 @@ REQUIREMENT: A consumption attempt against a token that has already been
 
 `archive/design/usage-examples-v4.md` §6.2 documents the exact response shape (`410 TokenConsumed`) alongside the event. Without a distinguishable, queryable signal, an attacker probing stale reset or verification links is indistinguishable from ordinary user error in any downstream monitoring; publishing the event is designed to make replay attempts a first-class operational signal, independent of whatever the audit table separately records (see [13-events.md](13-events.md#beh-ea-100-the-audit-table-is-the-durable-record-of-record-independent-of-the-pubsub-stream)).
 
-**As shipped (PV-220, ADR-EA-037):** an endpoint that consumes inside its own transaction (`Password.confirmReset`/`verifyEmail`/`confirmEmailChange`) fails that transaction with the replay itself, which would roll back a row written inline. `Verification.consume` therefore records a miss through the unit of work (BEH-EA-321): `auth.token.replay` is an attempt event, so its audit row and bus copy are recorded after the transaction ends, and over SQL the attempt a budgeted token is owed is spent in the same `afterUnit` lane (best effort: a store failure there is logged, never turned into a different answer). No caller does anything: the former `deferMiss` option and `recordMiss` are gone (REQ-EA-688, `packages/core/test/Verification.test.ts`).
+**As shipped (PV-220, ADR-EA-037):** an endpoint that consumes inside its own transaction (`Password.confirmReset`/`verifyEmail`/`confirmEmailChange`) fails that transaction with the replay itself, which would roll back a row written inline. `Verification.consume` therefore records a miss through the unit of work (BEH-EA-321): `auth.token.replay` is an attempt event, so its audit row and bus copy are recorded after the transaction ends, and over SQL the attempt a budgeted token is owed is spent in the same `afterUnit` lane (best effort: a store failure there is logged, never turned into a different answer). No caller does anything: the former `deferMiss` option and `recordMiss` are gone, and a type gate keeps them gone (REQ-EA-688, REQ-EA-1282, `packages/core/test/Verification.test.ts`).
+
+A miss inside `redeem` is an outcome, not a failure: `use` never runs, the transaction commits having written nothing, and the replay event and the budgeted token's spent attempt go through the same lane (ADR-EA-039). A `use` that fails and rolls back publishes no replay: the token is live, not replayed.
 
 ## BEH-EA-060: A verification token is hashed at rest
 
@@ -108,6 +112,8 @@ REQUIREMENT: When multiple callers race to consume the same token
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as the `consume-verification-value` operation's core guarantee, with an explicit blame rule alongside it: a caller that proceeds with a state change without gating on a non-null consume result is responsible for the resulting violation — the race-safety guarantee protects only callers that actually check the result. awthaq's plan carries the same operation and the same blame assignment into its own `Verification` domain service.
+
+**Memory concurrency (ADR-EA-039, TRBS-005).** While a `redeem`'s `use` runs, `layerMemory` holds the claimed row, so a *concurrent* redeem of the same identifier misses at once (and publishes `auth.token.replay`). Over SQL the second claim's `UPDATE` waits on the row lock and then wins if the first rolled back. At most one succeeds in both; only the loser's timing differs.
 
 **Bounded guesses (SOS-004).** An issued token may carry a `maxAttempts` budget. A wrong presentation against the *live* row spends one attempt — in the same atomic step as the consume (`layerMemory`'s `Ref.modify`; `layerSql`'s single `UPDATE attempts = attempts + 1, consumedAt = CASE WHEN attempts + 1 >= maxAttempts ...`, core migration 28) — and the row is burned at the budget, so the right value no longer works. The failure is still the uniform `TokenConsumed`; a token with no budget, an unknown identifier and an expired row are untouched, exactly as before.
 

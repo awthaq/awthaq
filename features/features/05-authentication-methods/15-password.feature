@@ -155,6 +155,16 @@ Feature: Password Authentication
       And session "s1" is still valid
       And the reset token is still redeemable
 
+    # ADR-EA-039: the memory twin of REQ-EA-693. With no transaction to roll back, `Verification.redeem`
+    # itself gives the token back, so a failed reset does not burn it in an in-memory composition either.
+    @REQ-EA-1281
+    Scenario: A failed reset in an in-memory composition leaves the token redeemable
+      Given an in-memory composition with a live password-reset token for "alice" and an existing session "s1" for "alice"
+      And the reset fails after the credential hash update
+      When "alice" confirms the reset with that token and a new password
+      Then the request fails with a server error
+      And the reset token is still redeemable
+
     @REQ-EA-318
     Scenario: A session obtained before the reset does not survive it
       Given an attacker holding a session "s-attacker" for "alice" obtained before she resets her password

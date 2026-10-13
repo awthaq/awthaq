@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-00 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed 11 stale filenames in the behaviors table; updated models count/table for MOD-EA-014/015; added decisions-table rows for ADR-EA-013/014/015 (CCR-EA-002) <br> 1.2 (2026-09-12): Added a "`features/` is the acceptance suite" section noting the new Gherkin suite and its REQ-EA allocation (CCR-EA-003) <br> 1.3 (2026-09-29): Replaced the "planned system, no source tree, no CI" banner with the shipped state; refreshed every count and table (decisions, behaviors, models); described the wired BDD suite and the mechanical drift checks in `spec/scripts/` (DTWS-001, DTWS-006, AVS-008, CCR-EA-006) <br> 1.4 (2026-10-13): ADR-EA-038 and BEH-EA-322/323 are listed (architecture plan 01) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed 11 stale filenames in the behaviors table; updated models count/table for MOD-EA-014/015; added decisions-table rows for ADR-EA-013/014/015 (CCR-EA-002) <br> 1.2 (2026-09-12): Added a "`features/` is the acceptance suite" section noting the new Gherkin suite and its REQ-EA allocation (CCR-EA-003) <br> 1.3 (2026-09-29): Replaced the "planned system, no source tree, no CI" banner with the shipped state; refreshed every count and table (decisions, behaviors, models); described the wired BDD suite and the mechanical drift checks in `spec/scripts/` (DTWS-001, DTWS-006, AVS-008, CCR-EA-006) <br> 1.4 (2026-10-13): ADR-EA-038 and BEH-EA-322/323 are listed (architecture plan 01) <br> 1.5 (2026-10-13): ADR-EA-039 is listed (architecture plan 07) |
 
 ---
 
@@ -33,7 +33,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/traceability.md](traceability.md) | EFAUTH-RTM | The requirements traceability matrix: every `URS`/`NFR`/`MOD` row mapped to the `BEH`/`ADR`/`INV` rows that satisfy it. |
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
-| [spec/decisions/](decisions/) | `ADR-EA-001`–`038` | Thirty-six architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
+| [spec/decisions/](decisions/) | `ADR-EA-001`–`039` | Thirty-seven architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
 | [spec/behaviors/](behaviors/) | `BEH-EA-001`–`323` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
@@ -101,6 +101,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `036-*.md` | ADR-EA-036 | IdP-Initiated SAML Login and Encrypted Assertions Are Refused, as Decisions |
 | `037-*.md` | ADR-EA-037 | A Unit of Work Releases State-Change Events on Commit and Attempt Events Either Way |
 | `038-*.md` | ADR-EA-038 | Sign-In Completion and Sign-Up Are Core Modules; a Session for a Proven Credential Is Minted Only From a Clearance |
+| `039-*.md` | ADR-EA-039 | `Verification.redeem` Owns the Consume-in-Transaction Protocol |
 
 ### `spec/behaviors/` — thirty files, grouped by subsystem
 

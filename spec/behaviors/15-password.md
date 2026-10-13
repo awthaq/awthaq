@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-15 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): `POST /password/reauthenticate` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.4 (2026-10-13): `POST /change-email` requires a fresh session (`PasswordReauthRequired`, `PasswordConfig.reauthMaxAge`, BEH-EA-320; plan 10 item 4) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): `POST /password/reauthenticate` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.4 (2026-10-13): `POST /change-email` requires a fresh session (`PasswordReauthRequired`, `PasswordConfig.reauthMaxAge`, BEH-EA-320; plan 10 item 4) <br> 1.5 (2026-10-13): `confirmReset`, `verifyEmail` and `confirmEmailChange` redeem through `Verification.redeem`; BEH-EA-259 no longer says "(on SQL)" (ADR-EA-039, plan 07) |
 ---
 
 > Implemented in `@awthaq/password` (`packages/password/src`; tests `packages/password/test`, wired scenarios in `features/`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -110,8 +110,8 @@ yield* client.password.confirmReset({ payload: { token, password: newPassword } 
 
 ```text
 REQUIREMENT: `password.requestReset` MUST respond identically for a known and
-             an unknown email; `password.confirmReset` MUST consume the reset
-             token and revoke every other session for the account in the same
+             an unknown email; `password.confirmReset` MUST redeem the reset
+             token (`Verification.redeem`, ADR-EA-039) and revoke every other session for the account in the same
              transaction that sets the new password. `confirmReset` MUST
              evaluate the password policy before consuming the token (a weak
              password never burns it, and no breach-check network call runs

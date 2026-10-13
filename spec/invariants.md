@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-INV |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) <br> 1.4 (2026-09-29): Replaced the pre-implementation banner and the "(planned)" runtime section; every INV-EA-007..016 Enforcement cell now names the test that exists (or says plainly that none does); the check that keeps them honest is in `spec/scripts/check-drift.mjs` (TMS-009, DTWS-007, DTWS-001, IDS-009, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) <br> 1.4 (2026-09-29): Replaced the pre-implementation banner and the "(planned)" runtime section; every INV-EA-007..016 Enforcement cell now names the test that exists (or says plainly that none does); the check that keeps them honest is in `spec/scripts/check-drift.mjs` (TMS-009, DTWS-007, DTWS-001, IDS-009, CCR-EA-006) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) |
 
 ---
 
@@ -106,7 +106,7 @@ These are properties that hold at runtime through the domain services, persisten
 
 **Implication**: Without atomicity, a race between two concurrent requests bearing the same token could apply the state change twice, or apply it once while leaving the token marked unconsumed and replayable. With it, replay is structurally impossible rather than merely checked-for.
 
-**Enforcement**: `packages/core/test/Verification.test.ts` — "BEH-EA-058/062: consuming succeeds exactly once, and a replay is refused" and the concurrent-consumption race case (MLO-006), against `layerMemory` and `layerSql` (one atomic `UPDATE ... RETURNING`, ADR-EA-016). Wrapping `consume` and the caller's own state change in one SQL transaction is the calling plugin's job (`packages/password/test/Password.test.ts` covers `confirmReset`).
+**Enforcement**: `packages/core/test/Verification.test.ts` — "BEH-EA-058/062: consuming succeeds exactly once, and a replay is refused" and the concurrent-consumption race case (MLO-006), against `layerMemory` and `layerSql` (one atomic `UPDATE ... RETURNING`, ADR-EA-016). `Verification.redeem` owns the transaction (ADR-EA-039): the redeem cases in `Verification.test.ts` prove the claim, the state change and the give-back of a failed one for both adapters, and `packages/password/test/Password.test.ts` covers `confirmReset`.
 
 **Related**: [BEH-EA-057 through 064](behaviors/08-verification-tokens.md).
 
