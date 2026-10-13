@@ -95,7 +95,7 @@ export interface TwoFactorSecretsShape {
 }
 
 export class TwoFactorSecrets extends Context.Service<TwoFactorSecrets, TwoFactorSecretsShape>()(
-  "awthaq/two-factor/TwoFactorSecrets",
+  "awthaq/two-factor/records/TwoFactorSecrets",
 ) {}
 
 // ---- the recovery codes ----------------------------------------------------------------
@@ -127,7 +127,7 @@ export interface TwoFactorRecoveryCodesShape {
 export class TwoFactorRecoveryCodes extends Context.Service<
   TwoFactorRecoveryCodes,
   TwoFactorRecoveryCodesShape
->()("awthaq/two-factor/TwoFactorRecoveryCodes") {}
+>()("awthaq/two-factor/records/TwoFactorRecoveryCodes") {}
 
 // ---- layerMemory -----------------------------------------------------------------------
 
@@ -590,6 +590,20 @@ export const layerRecoveryCodesSql: Layer.Layer<
     return { replaceAll, listUnused, markUsed, countUnused, deleteAllByUser };
   }),
 );
+
+/**
+ * Plan 08 (BEH-EA-T4): the plugin's record stores as two matched layers, `TwoFactor.records`. `layerSecretsMemory`
+ * also provides `MemoryEnvelopes`, a test seam that is not a store; a bundle provides record stores only, so it is
+ * projected away (a suite that plants envelopes uses `layerSecretsMemory` directly).
+ */
+const secretsMemory = Layer.effect(TwoFactorSecrets, Effect.service(TwoFactorSecrets)).pipe(
+  Layer.provide(layerSecretsMemory),
+);
+
+export const records = {
+  memory: Layer.mergeAll(secretsMemory, layerRecoveryCodesMemory),
+  sql: Layer.mergeAll(layerSecretsSql, layerRecoveryCodesSql),
+};
 
 // ---- migrations ------------------------------------------------------------------------
 

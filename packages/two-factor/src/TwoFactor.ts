@@ -36,7 +36,7 @@ import {
   SignIn,
   Users,
 } from "@awthaq/core";
-import { ClientAddress, Defects, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, Defects, type Encryption, RateLimiter } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -52,7 +52,12 @@ import { type TwoFactorMethodUsed, type VerifiedChallenge, verified } from "./Ch
 import { SecondFactor, failureRule, type Purpose } from "./SecondFactor.ts";
 import { TwoFactorConfig } from "./TwoFactorConfig.ts";
 import * as TwoFactorApi from "./TwoFactorApi.ts";
-import { TwoFactorRecoveryCodes, TwoFactorSecrets, migrations } from "./TwoFactorStore.ts";
+import {
+  TwoFactorRecoveryCodes,
+  TwoFactorSecrets,
+  migrations,
+  records as twoFactorRecords,
+} from "./TwoFactorStore.ts";
 
 // ---- the markers: what makes forgetting a gate a compile error --------------------------------
 
@@ -73,6 +78,9 @@ export class TwoFactorResetGuard extends Context.Service<
  * plugin, or a host that disables reset). Provides the marker without tapping anything.
  */
 export const noCredentialReset = Layer.succeed(TwoFactorResetGuard, { guard: "notApplicable" });
+
+/** Named so the class's inferred `records` type can be emitted (TS2883 needs the `Encryption` namespace in scope). */
+export type RecordsEncryption = Encryption.Encryption;
 
 // ---- the service shape ---------------------------------------------------------------------------
 
@@ -467,6 +475,8 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
     two_factor_recovery_code: AuthPlugin.Table.global("per-user codes; the directory is global"),
   },
   migrations,
+  // Plan 08 (BEH-EA-T4): the secret and recovery-code stores, memory and SQL, matched.
+  records: twoFactorRecords,
   // ECS-008/BEH-EA-229: the default issuer is the classic thing left in production — the label users see in their authenticator app.
   config: [
     ConfigDescriptor.make(TwoFactorConfig, {
