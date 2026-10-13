@@ -16,7 +16,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Saml from "../src/Saml.ts";
 import * as SamlRecords from "../src/SamlRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import { idp, idpNext, NOT_AFTER, NOT_BEFORE } from "./samlFixtures.ts";
 import { EncryptionLive } from "./support.ts";
 import { vitestFramework } from "./vitestFramework.ts";

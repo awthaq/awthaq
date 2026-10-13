@@ -13,7 +13,7 @@ import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Users from "../src/Users.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import * as TestSql from "../../test/src/TestSql.ts";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));

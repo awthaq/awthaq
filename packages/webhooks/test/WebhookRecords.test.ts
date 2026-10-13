@@ -17,7 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { EncryptionLive, relay } from "./support.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as Webhooks from "../src/Webhooks.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const SqlLive = TestSql.layer("webhooks_WebhookRecords");
 

@@ -36,26 +36,17 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as Migrator from "effect/unstable/sql/Migrator";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as SecondFactor from "../../src/SecondFactor.ts";
 import * as Totp from "../../src/Totp.ts";
 import * as TwoFactor from "../../src/TwoFactor.ts";
 import * as TwoFactorConfig from "../../src/TwoFactorConfig.ts";
 import * as TwoFactorStore from "../../src/TwoFactorStore.ts";
 import { TestAuth } from "@awthaq/test";
-import * as TestSql from "../../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
-
-export const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
-  ),
-);
 
 /** A real hasher (real algorithm, salt and PHC format) at the smallest legal cost, so recovery-code suites stay fast. */
 const TestHasher = PasswordHasher.layerArgon2id.pipe(
@@ -173,7 +164,7 @@ const beneath =
         ).pipe(Layer.provideMerge(NodeCrypto.layer)),
       ),
       Layer.provideMerge(RateLimits.layer),
-      Layer.provide(NoBreachHttpClient),
+      Layer.provide(TestAuth.httpClient.noBreach),
       Layer.provide(transaction),
       Layer.provide(ClientAddress.layerDirect),
       Layer.provideMerge(TwoFactorConfig.config(options?.config ?? {})),

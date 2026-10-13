@@ -13,7 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Organization from "../src/Organization.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import { ambientOrganization, vitestFramework } from "./support.ts";
 
 const MemoryLayer = OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));

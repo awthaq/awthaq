@@ -721,6 +721,8 @@ export class DeviceAuthorization extends AuthPlugin.Service<
     device_authorization_client: AuthPlugin.Table.global("deployment-wide client registry"),
   },
   migrations: deviceAuthorizationMigrations,
+  // Plan 08: the two hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.
+  hookPoints: DeviceAuthorizationHooksLive,
   // PV-241: the typed rule table at the default configuration (`DeviceAuthorizationConfig` tunes it at build).
   rateLimitRules: rules,
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.

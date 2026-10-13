@@ -13,16 +13,14 @@
 // `Csrf.ts`'s own implementation), so a passing scenario run exercises RFC
 // 2104 compatibility, not just self-consistency with the code under test.
 
+import { TestAuth } from "@awthaq/test";
 import * as Redacted from "effect/Redacted";
-import { createHmac, randomBytes } from "node:crypto";
 
-const CSRF_TEST_SECRET = "features-bdd-csrf-test-secret-padded-to-thirty-two-bytes";
-
-/** The `CsrfConfig` every world's `CsrfProtectionLive` is built against. */
-export const CsrfConfigForTests = {
-  secret: Redacted.make(CSRF_TEST_SECRET),
-  allowedOrigins: [] as ReadonlyArray<string>,
-};
+/**
+ * The `CsrfConfig` every world's `CsrfProtectionLive` is built against: `TestAuth`'s own default, so a world
+ * that still hand-builds the middleware and a composition `TestAuth.layer` derives it for agree on the secret.
+ */
+export const CsrfConfigForTests = TestAuth.TestCsrfConfig;
 
 export const CSRF_COOKIE_NAME = "__Host-csrf";
 export const CSRF_HEADER_NAME = "x-csrf-token";
@@ -34,12 +32,9 @@ export const CSRF_HEADER_NAME = "x-csrf-token";
  * reused across every request in every scenario is exactly what a real
  * client that bootstrapped the cookie once would also do.
  */
-export const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The handler under test runs on the real clock here (a web handler).
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
-  return `${signed}.${signature}`;
-})();
+export const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(
+  Redacted.value(CsrfConfigForTests.secret),
+);
 
 /** Appends the double-submit CSRF cookie to an existing `cookie` header value, if any. */
 export const withCsrfCookie = (cookie?: string): string =>

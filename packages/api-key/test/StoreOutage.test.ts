@@ -6,7 +6,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import * as ApiKey from "../src/ApiKey.ts";
 import * as ApiKeyRecords from "../src/ApiKeyRecords.ts";
 

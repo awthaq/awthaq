@@ -23,7 +23,7 @@ import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as TenantResolver from "../src/TenantResolver.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import { grant } from "./support.ts";
 
 /** Reports the ambient tenant the handler's fiber sees. */

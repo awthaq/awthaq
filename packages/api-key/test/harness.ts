@@ -34,7 +34,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import * as ApiKey from "../src/ApiKey.ts";
 import * as ApiKeyApi from "../src/ApiKeyApi.ts";
 import * as ApiKeyClientRecords from "../src/ApiKeyClientRecords.ts";

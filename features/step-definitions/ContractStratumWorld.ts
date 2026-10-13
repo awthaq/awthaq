@@ -31,7 +31,6 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./CsrfTestSupport.ts";
 import { PasswordFixture } from "./PluginFixtures.ts";
-import { services } from "./ServeComposition.ts";
 import { TestServices } from "./shared/Harness.ts";
 
 /** BEH-EA-028: the same two schemes declared in the opposite order — only the record differs, the handlers are `Authentication`'s own. */
@@ -157,16 +156,15 @@ const NoBreachHttpClient = Layer.succeed(
 
 const buildPasswordApp = () => {
   // `requireVerifiedEmail: false`: BEH-EA-027 is about credential errors, not the verification gate.
-  const appLayer = TestAuth.layer(
-    Auth.make([Password.Password]),
-    Layer.mergeAll(services, NoBreachHttpClient, Password.config({ requireVerifiedEmail: false })),
-  );
+  const appLayer = TestAuth.layer(Auth.make([Password.Password]), {
+    services: Layer.mergeAll(NoBreachHttpClient, Password.config({ requireVerifiedEmail: false })),
+  });
   const { handler } = HttpRouter.toWebHandler(appLayer);
   return { handler };
 };
 
 const buildCoreOnlyApp = () => {
-  const appLayer = TestAuth.layer(Auth.make([PasswordFixture]), services);
+  const appLayer = TestAuth.layer(Auth.make([PasswordFixture]));
   const memoMap = Layer.makeMemoMapUnsafe();
   const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
   const withServices = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof appLayer>>) =>

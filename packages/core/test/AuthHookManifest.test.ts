@@ -39,6 +39,8 @@ const BetaApi = HttpApi.make("auth").add(
 class Alpha extends AuthPlugin.Service<Alpha, {}>()("alpha", {
   apiVersion: 1,
   contract: AlphaApi,
+  // Plan 08: the point both plugins tap belongs to this fixture; declaring it is what lets a layer that taps it compile.
+  hookPoints: Normalize.layer,
 }) {
   static readonly layer = AuthPlugin.layer(Alpha, {
     make: Effect.succeed({}),

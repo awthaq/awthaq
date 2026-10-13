@@ -13,9 +13,7 @@
 // `RateLimited`"). `failureNamed` maps the Gherkin's word onto the level each step is at.
 import { AuditLog, Auth, AuthEvents, AuthPlugin, Persistence, RateLimits } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -30,7 +28,6 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { type Host, jsonPost, makeHost } from "./CrossCuttingApp.ts";
 import { AcmeAudit, AcmeGate, AcmeNormalize, PRE } from "./HooksWorld.ts";
 
@@ -81,14 +78,6 @@ export class InvitePlugin extends AuthPlugin.Service<InvitePlugin, Record<string
   });
 }
 
-const FixtureAuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const FixtureCsrfLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
-
 /** What composing the Invite plugin came to: the rules it registered, or why it was refused. */
 export type Composition =
   | {
@@ -102,14 +91,9 @@ export const composeInvite = (group: string) =>
     const exit = yield* Effect.exit(
       Effect.gen(function* () {
         const context = yield* Layer.build(
-          TestAuth.layer(
-            Auth.make([InvitePlugin]),
-            Layer.mergeAll(
-              FixtureAuthenticationLive,
-              FixtureCsrfLive,
-              Layer.succeed(InviteRuleGroup, group),
-            ),
-          ),
+          TestAuth.layer(Auth.make([InvitePlugin]), {
+            services: Layer.succeed(InviteRuleGroup, group),
+          }),
         );
         const registry = yield* RateLimits.RateLimitsRegistry.pipe(Effect.provide(context));
         return yield* registry.registered;
@@ -173,12 +157,7 @@ export class ForgetfulPlugin extends AuthPlugin.Service<ForgetfulPlugin, Record<
 /** What composing the forgetful plugin came to: `never-opened` with the plugin and its rules, or `composed`. */
 export const composeForgetful = Effect.gen(function* () {
   const exit = yield* Effect.exit(
-    Layer.build(
-      TestAuth.layer(
-        Auth.make([ForgetfulPlugin]),
-        Layer.mergeAll(FixtureAuthenticationLive, FixtureCsrfLive),
-      ),
-    ).pipe(Effect.scoped),
+    Layer.build(TestAuth.layer(Auth.make([ForgetfulPlugin]))).pipe(Effect.scoped),
   );
   if (Exit.isSuccess(exit)) return ["composed"];
   const failure = Cause.squash(exit.cause);

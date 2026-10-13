@@ -441,10 +441,10 @@ export type UserFieldsOf<P extends ReadonlyArray<AuthPlugin.Any>> = Types.UnionT
 type CoreGroups = GroupsOf<{ readonly contract: typeof AuthCore.AuthCoreApi }>;
 
 /** MW-002: every group of the one served `api`: core's, the host's `extraGroups`, then each plugin's. */
-type AllGroups<P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint> =
-  | CoreGroups
-  | Extra
-  | GroupsOf<P[number]>;
+export type AllGroups<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint,
+> = CoreGroups | Extra | GroupsOf<P[number]>;
 
 /**
  * `Layer.provideMerge(self, that)`'s own type, restated so `FoldLayer` can
@@ -511,6 +511,12 @@ export interface Built<
   Extra extends HttpApiGroup.Constraint = never,
 > {
   readonly api: HttpApi.HttpApi<"auth", AllGroups<P, Extra>>;
+  /**
+   * Plan 08: the plugin tuple as given to `make`. It lets a harness (or a host) read each plugin's static
+   * `records` and `hookPoints` without depending on any plugin package; the type is `P`, so
+   * `AuthPlugin.RecordsOut<P[number]>` is exact.
+   */
+  readonly plugins: P;
   /**
    * AR-003: `api` minus the admin-tier groups (`AuthPlugin.isAdminTier`) — what a host
    * serves on its public listener when it firewalls the admin surface separately.
@@ -1059,6 +1065,7 @@ export function make(
   checkTenancy(order);
   const extraGroups = options?.extraGroups ?? [];
   return {
+    plugins,
     api: composeApi(order, extraGroups),
     publicApi: composeTier(order, extraGroups, false),
     adminApi: composeTier(order, extraGroups, true),

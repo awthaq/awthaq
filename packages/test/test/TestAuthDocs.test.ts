@@ -2,11 +2,8 @@
 // document and the Scalar docs page on the composition's own router, over the same `built.api`
 // the routes are registered from — and mount nothing when they are not given.
 import { Auth, AuthPlugin } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -37,20 +34,9 @@ class PingPlugin extends AuthPlugin.Service<PingPlugin, Record<string, never>>()
 
 const built = Auth.make([PingPlugin]);
 
-const services = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(
-    Layer.provide(
-      Layer.succeed(Csrf.CsrfConfig, {
-        secret: Redacted.make("test-auth-docs-test-csrf-secret-padded-to-thirty-two-bytes"),
-        allowedOrigins: [],
-      }),
-    ),
-  ),
-);
-
-const serve = (options?: TestAuth.LayerOptions) =>
-  HttpRouter.toWebHandler(TestAuth.layer(built, services, options)).handler;
+const serve = (
+  options?: Omit<TestAuth.CommonOptions<never, never, never, never, never>, "services">,
+) => HttpRouter.toWebHandler(TestAuth.layer(built, options)).handler;
 
 describe("TestAuth.layer options (BEH-EA-084)", () => {
   it.effect("openapiPath and docsPath serve the document and the page derived from built.api", () =>

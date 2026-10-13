@@ -167,6 +167,8 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
       "layer",
       "manifest",
       "migrations",
+      // Plan 08: the plugin tuple as given, so a harness reads each plugin's `records` and `hookPoints`.
+      "plugins",
       "publicApi",
       // Plan 05: every plugin table's declared tenancy.
       "tenancy",

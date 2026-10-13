@@ -13,7 +13,7 @@ import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
 import { assertionCredential, mockWebAuthn, registrationPayload } from "./passkeyTestFixtures.ts";
 import { buildLayer } from "./passkeyTestLayers.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const newUserSession = (email: string) =>
   Effect.gen(function* () {

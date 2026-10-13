@@ -315,6 +315,9 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
     notes_note: AuthPlugin.Table.partitioned(),
   },
   migrations: notesMigrations,
+  // The hook points this plugin owns (`BeforeCreateNote`/`AfterCreateNote`): a plugin layer that requires a
+  // point it does not declare here does not compile, and `TestAuth.layer` provides the declared ones.
+  hookPoints: NotesHooksLive,
 }) {
   static readonly layer = AuthPlugin.layer(Notes, {
     // The port the budget consumes through: declared, and checked for completeness by the compiler.

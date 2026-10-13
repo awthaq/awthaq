@@ -15,7 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as Organization from "../src/Organization.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import { ambientOrganization, grant, vitestFramework } from "./support.ts";
 
 const MemoryLayer = InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));

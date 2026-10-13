@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as TestSql from "./support/TestSql.ts";
+import * as TestSql from "../../test/src/TestSql.ts";
 
 const Live = TestSql.layer("sql_UnitOfWork");
 

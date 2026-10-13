@@ -7,15 +7,11 @@
 // plugins each prove one specific check actually catches its violation.
 import { Password } from "@awthaq/password";
 import { Auth, AuthPlugin, HookPoint, Hooks } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as RedactionGuard from "../src/RedactionGuard.ts";
 import * as TestAuth from "../src/TestAuth.ts";
@@ -284,30 +280,9 @@ describe("runPluginContractTests — migration ownership (PV-252, INV-EA-016)", 
 
 // ---- BEH-EA-199: the redaction half ---------------------------------------------
 
-const NoBreachHttpClient = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(request, new Response(`${"F".repeat(35)}:1`, { status: 200 })),
-    ),
-  ),
-);
-
-/** The support layers `Password` needs beyond `TestAuth`'s memory bundle (which already carries `Verification` and a hasher). */
-const PasswordServices = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(
-    Layer.provide(
-      Layer.succeed(Csrf.CsrfConfig, {
-        secret: Redacted.make("redaction-guard-test-csrf-secret-padded-to-32-bytes"),
-        allowedOrigins: [],
-      }),
-    ),
-  ),
-  NoBreachHttpClient,
-).pipe(Layer.provide(NodeCrypto.layer));
-
-const passwordApp = TestAuth.layer(Auth.make([Password.Password]), PasswordServices);
+const passwordApp = TestAuth.layer(Auth.make([Password.Password]), {
+  services: TestAuth.httpClient.noBreach,
+});
 
 describe("runPluginContractTests — the redaction check (EOTS-002, BEH-EA-199)", () => {
   const PASSWORD_CANARY = "canary-Passw0rd-correct-horse";

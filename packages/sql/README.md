@@ -78,7 +78,7 @@ const PgLive = PgClient.layerConfig({
   // PgClient.layerConfig({ url, types })
   ```
 
-  `test/Repositories.postgres.test.ts` proves a re-run applies nothing with it; the plugin store suites use the same codec (`test/support/TestSql.ts`).
+  `test/Repositories.postgres.test.ts` proves a re-run applies nothing with it; the plugin store suites use the same codec (`TestSql` in `@awthaq/test`, `packages/test/src/TestSql.ts`).
 
 - **Timeouts.** Set `statement_timeout` at the role level (`ALTER ROLE app SET statement_timeout = '5s'`), which works regardless of pooler. Pool exhaustion surfaces as the driver's own error; distinguishing it is an upstream `@effect/sql-pg` concern.
 
@@ -231,7 +231,7 @@ pnpm run test:pg                  # + the real-Postgres suites, against a throwa
 
 `test/contract.ts` holds the dialect-neutral contract cases as one function, run by the `:memory:`, file-backed and real-Postgres suites, so a case added there runs on every dialect. `AWTHAQ_POSTGRES_URL` points the Postgres suites at an existing server instead; they drop and recreate the core tables, so use a scratch database. Without it the `*.postgres.test.ts` files skip.
 
-The plugin record-store suites (admin, jwt, organization, passkey, roles, qadi claims, migrate-better-auth) build their database through `test/support/TestSql.ts`: `:memory:` SQLite normally, but under `AWTHAQ_POSTGRES_URL` the _same tests_ run on Postgres, each suite in its own schema, which is what `pnpm run test:pg` does. `TestSql.injectFailure` makes an atomicity test fail a statement for real on either dialect.
+The plugin record-store suites (admin, jwt, organization, passkey, roles, qadi claims, migrate-better-auth) build their database through `TestSql` (`import { TestSql } from "@awthaq/test"`, `packages/test/src/TestSql.ts`): `:memory:` SQLite normally, but under `AWTHAQ_POSTGRES_URL` the _same tests_ run on Postgres, each suite in its own schema, which is what `pnpm run test:pg` does. `TestSql.injectFailure` makes an atomicity test fail a statement for real on either dialect.
 
 ## Migrating from another auth system
 

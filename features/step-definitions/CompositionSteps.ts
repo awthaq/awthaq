@@ -31,7 +31,6 @@ import {
   outOfOrderComposition,
   outOfOrderDiagnostic,
 } from "./PluginTypeGates.ts";
-import { services } from "./ServeComposition.ts";
 import { cheapArgon2id } from "./shared/Harness.ts";
 
 const GATES = "PluginTypeGates.ts";
@@ -194,9 +193,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const before = describeComposition(Auth.make([PasswordFixture]));
     yield* put(baseline, before);
     // Before: the added plugin's route does not exist.
-    const handler = HttpRouter.toWebHandler(
-      TestAuth.layer(Auth.make([PasswordFixture]), services),
-    ).handler;
+    const handler = HttpRouter.toWebHandler(TestAuth.layer(Auth.make([PasswordFixture]))).handler;
     yield* put(statuses, [yield* getStatus(handler, probePath("passkey"))]);
   });
 
@@ -204,7 +201,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     "a plugin contributing a new contract group and its handler is added to the tuple",
     function* () {
       const built = Auth.make([PasswordFixture, PasskeyFixture]);
-      const handler = HttpRouter.toWebHandler(TestAuth.layer(built, services)).handler;
+      const handler = HttpRouter.toWebHandler(TestAuth.layer(built)).handler;
       const [before] = yield* take(statuses);
       yield* put(statuses, [before ?? -1, yield* getStatus(handler, probePath("passkey"))]);
       yield* put(outcome, { kind: "grown", composition: describeComposition(built) });
@@ -422,7 +419,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     "{string}'s groups are compared against {string}'s {string}",
     function* (_api: string, _layer: string, _rout: string) {
       const built = Auth.make([PasswordFixture, PasskeyFixture]);
-      const handler = HttpRouter.toWebHandler(TestAuth.layer(built, services)).handler;
+      const handler = HttpRouter.toWebHandler(TestAuth.layer(built)).handler;
       const groupIds = Object.keys(built.api.groups).filter(
         (id) => id !== "session" && id !== "account",
       );
@@ -444,7 +441,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     "{string}'s {string} is compared against {string}'s groups",
     function* (_layer: string, _rout: string, _api: string) {
       const built = Auth.make([PasswordFixture, PasskeyFixture]);
-      const handler = HttpRouter.toWebHandler(TestAuth.layer(built, services)).handler;
+      const handler = HttpRouter.toWebHandler(TestAuth.layer(built)).handler;
       // A route nobody's group declares is not served: a handler cannot exist without a group.
       yield* put(statuses, [
         yield* getStatus(handler, probePath("password")),

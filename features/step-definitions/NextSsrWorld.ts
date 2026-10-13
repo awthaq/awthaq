@@ -8,9 +8,8 @@ import { Api } from "@awthaq/api";
 import { Auth } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { SubjectResolver } from "@awthaq/qadi";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Authentication } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -20,7 +19,6 @@ import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { makeOutcomes, type Outcomes } from "./shared/Outcomes.ts";
 
 const NoBreachHttpClient = Layer.succeed(
@@ -30,13 +28,9 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-// The CSRF secret every BDD World shares (CsrfTestSupport.ts), so a cookie pair minted there is
-// accepted by this composition's `CsrfProtection`.
-const NextServices = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests))),
-  NoBreachHttpClient,
-).pipe(Layer.provide(NodeCrypto.layer));
+// `TestAuth.layer` derives `Authentication` and `CsrfProtection` over `TestAuth.TestCsrfConfig`, the secret
+// every BDD World shares (CsrfTestSupport.ts), so a cookie pair minted there is accepted by this composition.
+const NextServices = NoBreachHttpClient;
 
 const nextTuple = Auth.make([Password.Password]);
 
@@ -86,7 +80,7 @@ const countingResolver = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<
 const appLayer = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<number>) =>
   countingResolver(roles, calls).pipe(
     Layer.provideMerge(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(TestAuth.layer(nextTuple, NextServices)),
+    Layer.provideMerge(TestAuth.layer(nextTuple, { services: NextServices })),
   );
 
 /**

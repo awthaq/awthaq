@@ -39,7 +39,7 @@ import * as JwtConfig from "../src/JwtConfig.ts";
 import * as Jwt from "../src/Jwt.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import { SigningKeyRecordsLive } from "./support.ts";
 
 const TestConfig = JwtConfig.config({ issuer: "https://issuer.test" });

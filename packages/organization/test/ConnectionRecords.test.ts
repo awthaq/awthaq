@@ -13,7 +13,7 @@ import * as Redacted from "effect/Redacted";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ConnectionRecords from "../src/ConnectionRecords.ts";
 import * as Organization from "../src/Organization.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import { EncryptionLive, ambientOrganization, grant, vitestFramework } from "./support.ts";
 
 const SqlLive = TestSql.layer("organization_ConnectionRecords");

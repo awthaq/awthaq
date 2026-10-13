@@ -7,7 +7,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import * as DeviceAuthorization from "../src/DeviceAuthorization.ts";
 import * as DeviceGrantRecords from "../src/DeviceGrantRecords.ts";
 

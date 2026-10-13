@@ -23,7 +23,7 @@ import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrganizationSystem from "../src/OrganizationSystem.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const application = OrganizationActor.application("OrganizationDeletion.test");
 

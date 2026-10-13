@@ -8,15 +8,14 @@
 
 import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { Mailer, RateLimiter } from "@awthaq/ports";
+import { Mailer } from "@awthaq/ports";
 import { Auth, HookPoint, Hooks, Retention, SecuritySignals, Slots, Users } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
-import { AuthHttp, Authentication, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
+import { AuthHttp, Authentication, BodyLimit, RequestContext } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import { EvaluationServicesNone, role } from "@qadi/core";
 import { RequirePermissionLive } from "@qadi/http";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { createServer } from "node:http";
 import * as Effect from "effect/Effect";
@@ -64,36 +63,14 @@ const GuardLive = RequirePermissionLive.pipe(
   Layer.provide(Roles.Roles.layer),
 );
 
-// 2. `Authentication` is `@awthaq/test`'s own required second parameter
-//    (see `TestAuth.layer`'s own doc comment) — every plugin below that
-//    guards an endpoint with `Api.Authentication` needs it. `TestAuth`'s
-//    own bundled memory ports (`Users`/`Accounts`/`Sessions`/`Mailer`/a
-//    permissive rate limiter) are deliberately lean — real, but not the
-//    whole set either plugin's own `make` resolves — so Organization's
-//    record services and Password's own `Verification`/`PasswordHasher`/
-//    `AuthEvents`/`HttpClient` (the breach-check transport, unused since
-//    `breachCheck` defaults `false`, but still a required service) are
-//    supplied here, in the same position, for the identical reason.
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-// CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every mutating group
-// `Password`/`Organization` compose now carries `Api.CsrfProtection`
-// (see each plugin's own `*Api.ts`), so this composition must supply its
-// implementation the same way it supplies `Authentication`'s. The secret
-// below is a fixed, checked-in placeholder fit only for this local demo —
-// `CsrfConfig`'s own doc comment is explicit that a real deployment must
-// never default it.
+// 2. `TestAuth.layer` derives the host middleware the composed groups declare (`Authentication`,
+//    `CsrfProtection`); only the CSRF secret is this app's own. The secret below is a fixed,
+//    checked-in placeholder fit only for this local demo: `CsrfConfig`'s own doc comment is
+//    explicit that a real deployment must never default it.
+//    `TestAuth`'s own bundled memory ports (`Users`/`Accounts`/`Sessions`/`Mailer`/a
+//    permissive rate limiter) are real but deliberately lean, so Organization's record
+//    services and `Password`'s `HttpClient` (the breach-check transport) are supplied here.
 export const demoCsrfSecret = "memory-server-example-dev-only-csrf-secret";
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(demoCsrfSecret),
-      allowedOrigins: [],
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
 const OrganizationStores = Layer.mergeAll(
   OrganizationMemory.layer,
   // Every lifecycle-hook point's own default (no-tap) layer — required
@@ -129,27 +106,25 @@ const SignUpAllowList = Hooks.BeforeSignUp.tap((input) =>
 //    own BDD suite already exercise for real, just not previously
 //    packaged as something runnable on its own.
 const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
-  TestAuth.layer(
-    built,
-    Layer.mergeAll(
-      // `TestAuth`'s bundled limiter is the permissive test one; this example serves real
-      // HTTP, so it swaps in the real single-process limiter (RBS-007) through the same param.
-      // CSD-010: enforcing, so the sign-in budget (5 per account per 15 minutes) answers 429.
-      // It is one `Ref` per process: a deployment with several instances swaps in a shared
-      // store (`RateLimiter.layer` over `RateLimiterStoreSql.layerStoreSql`).
-      RateLimiter.layerMemory,
+  TestAuth.layer(built, {
+    // `TestAuth`'s bundled limiter is the permissive test one; this example serves real
+    // HTTP, so it asks for the real single-process limiter (RBS-007).
+    // CSD-010: enforcing, so the sign-in budget (5 per account per 15 minutes) answers 429.
+    // It is one `Ref` per process: a deployment with several instances swaps in a shared
+    // store (`RateLimiter.layer` over `RateLimiterStoreSql.layerStoreSql`).
+    rateLimiter: "enforcing",
+    csrf: { secret: Redacted.make(demoCsrfSecret) },
+    services: Layer.mergeAll(
       // DESS-002: a development mailer that prints every message, including the
       // verification token, to the log, so a sign-up can be finished without an inbox. Never
       // for production: a real deployment provides its own `Mailer` here.
       Mailer.layerConsole,
-      AuthenticationLive,
-      CsrfProtectionLive,
       OrganizationStores,
       httpClient,
       GuardLive,
       SignUpAllowList,
     ).pipe(Layer.provideMerge(RolesConfigLive)),
-  );
+  });
 
 const AppLayer = makeAppLayer(FetchHttpClient.layer);
 

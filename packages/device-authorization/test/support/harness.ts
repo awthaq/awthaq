@@ -29,7 +29,7 @@ import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as TestSql from "../../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import * as DeviceAuthorization from "../../src/DeviceAuthorization.ts";
 import * as DeviceAuthorizationApi from "../../src/DeviceAuthorizationApi.ts";
 import * as DeviceClientRecords from "../../src/DeviceClientRecords.ts";

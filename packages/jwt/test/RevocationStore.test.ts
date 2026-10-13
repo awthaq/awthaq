@@ -16,7 +16,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Jwt from "../src/Jwt.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const SqlLive = TestSql.layer("jwt_RevocationStore");
 

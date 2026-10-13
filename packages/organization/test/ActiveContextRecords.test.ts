@@ -21,7 +21,7 @@ import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import { ambientOrganization, grant, vitestFramework } from "./support.ts";
 
 const MemoryLayer = ActiveContextRecords.layerMemory;

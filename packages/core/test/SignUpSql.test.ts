@@ -1,7 +1,7 @@
 // ADR-EA-038, BEH-EA-323: `SignUp`'s rollback is only real on a SQL transaction. The same
 // guarantees `SignUp.test.ts` proves over memory (a conflict, a failing `within`, a vetoed or
 // failed first session all leave nothing behind) run here over SQLite, and over Postgres under
-// `pnpm test:pg` (`packages/sql/test/support/TestSql.ts`).
+// `pnpm test:pg` (`packages/test/src/TestSql.ts`).
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
@@ -23,7 +23,7 @@ import * as Hooks from "../src/Hooks.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as SignUp from "../src/SignUp.ts";
 import * as Users from "../src/Users.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import * as TestSql from "../../test/src/TestSql.ts";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));

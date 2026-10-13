@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TenantScope from "../src/TenantScope.ts";
 import * as TenantScoped from "../src/TenantScoped.ts";
-import * as TestSql from "./support/TestSql.ts";
+import * as TestSql from "../../test/src/TestSql.ts";
 
 const rows: ReadonlyArray<{ readonly id: string; readonly tenantId: string | null }> = [
   { id: "a", tenantId: "t1" },

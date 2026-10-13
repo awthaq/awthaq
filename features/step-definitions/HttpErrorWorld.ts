@@ -12,7 +12,7 @@ import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
 import { Auth, AuthPlugin, Sessions, Users } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { Password } from "@awthaq/password";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Authentication } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,8 +30,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
-import { EncryptionLive } from "./shared/TestEncryption.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./CsrfTestSupport.ts";
 
 // ---- the World's own plugins ------------------------------------------------------------
 
@@ -120,12 +119,8 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-/** The layers that are genuinely the host's own: middleware and the outbound client. */
-export const hostServices = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests))),
-  NoBreachHttpClient,
-);
+/** What is genuinely the host's own: the outbound client (`TestAuth.layer` derives the middleware). */
+export const hostServices = NoBreachHttpClient;
 
 /**
  * A plugin from a separate package with existence-sensitive endpoints (REQ-EA-237): `@awthaq/api-key`
@@ -134,7 +129,6 @@ export const hostServices = Layer.mergeAll(
 export const builtApiKey = Auth.make([Jwt.Jwt, ApiKey.ApiKey]);
 const apiKeyServices = Layer.mergeAll(
   hostServices,
-  Authentication.CredentialResolversLive,
   RevocationStore.layerMemory,
   ApiKeyRecords.layerMemory,
   ApiKeyClientRecords.layerMemory,
@@ -142,7 +136,6 @@ const apiKeyServices = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(KeyRing.KeyRing.layer),
   Layer.provideMerge(SigningKeyRecords.layerMemory),
-  Layer.provideMerge(EncryptionLive),
   Layer.provideMerge(
     JwtConfig.config({ issuer: "https://issuer.test", audience: "https://api.test" }),
   ),
@@ -200,31 +193,34 @@ const makeApp = <A, E>(appLayer: Layer.Layer<A, E>) => {
 
 export const GROUP_KEY_PREFIX = "effect/httpapi/HttpApiGroup/";
 
-export const passwordRoutes = TestAuth.layer(builtPassword, hostServices, {
+export const passwordRoutes = TestAuth.layer(builtPassword, {
+  services: hostServices,
   openapiPath: OPENAPI_PATH,
   docsPath: DOCS_PATH,
 });
 export const passwordApp = () => makeApp(passwordRoutes);
-export const inviteApp = () => makeApp(TestAuth.layer(builtInvite, hostServices));
+export const inviteApp = () => makeApp(TestAuth.layer(builtInvite, { services: hostServices }));
 export const passwordInviteApp = () =>
   makeApp(
-    TestAuth.layer(builtPasswordInvite, hostServices, {
+    TestAuth.layer(builtPasswordInvite, {
+      services: hostServices,
       openapiPath: OPENAPI_PATH,
       docsPath: DOCS_PATH,
     }),
   );
-export const errorsApp = () => makeApp(TestAuth.layer(builtErrors, hostServices));
+export const errorsApp = () => makeApp(TestAuth.layer(builtErrors, { services: hostServices }));
 export const passwordWithAppApp = () =>
   makeApp(
-    TestAuth.layer(builtPasswordWithApp, Layer.mergeAll(hostServices, WidgetHandlers), {
+    TestAuth.layer(builtPasswordWithApp, {
+      services: Layer.mergeAll(hostServices, WidgetHandlers),
       openapiPath: OPENAPI_PATH,
     }),
   );
-export const apiKeyApp = () => makeApp(TestAuth.layer(builtApiKey, apiKeyServices));
+export const apiKeyApp = () => makeApp(TestAuth.layer(builtApiKey, { services: apiKeyServices }));
 
 /** BEH-EA-087: `ManagedRuntime.make(AuthLive)` over the same layer the routed composition serves. */
 export const makeRuntimeAndRouted = () => {
-  const authLive = TestAuth.layer(builtPassword, hostServices);
+  const authLive = TestAuth.layer(builtPassword, { services: hostServices });
   const runtime = ManagedRuntime.make(authLive);
   const { handler } = HttpRouter.toWebHandler(authLive, { memoMap: runtime.memoMap });
   return { runtime, routed: handler };

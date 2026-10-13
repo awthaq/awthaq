@@ -22,9 +22,7 @@ import {
 } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { Mailer, RateLimiter } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { createHmac, randomBytes } from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -71,15 +69,6 @@ const makeLogCapture = () => {
   return { records: Ref.get(records), layer };
 };
 
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
-
 /** BEH-EA-119: a corpus nothing ever matches (and `breachCheck` is off below anyway) — the app never reaches the network. */
 const NoBreachHttpClient = Layer.succeed(
   HttpClient.HttpClient,
@@ -120,17 +109,14 @@ export const emptySpec: AppSpec = {
 };
 
 const appLayer = (spec: AppSpec) =>
-  TestAuth.layer(
-    Auth.make([Password.Password]),
-    Layer.mergeAll(
-      AuthenticationLive,
-      CsrfProtectionLive,
+  TestAuth.layer(Auth.make([Password.Password]), {
+    services: Layer.mergeAll(
       NoBreachHttpClient,
       Password.config(spec.passwordConfig),
       ...(spec.rateLimiter === undefined ? [] : [spec.rateLimiter]),
       ...spec.contributions,
     ),
-  );
+  });
 
 /**
  * What a step may `yield*` inside the built app. Spelled out from the package entry points

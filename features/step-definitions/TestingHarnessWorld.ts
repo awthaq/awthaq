@@ -8,9 +8,8 @@ import { Auth, AuthPlugin } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { AuthorizedSubject, SubjectApi, SubjectExtractor } from "@awthaq/qadi";
 import { Roles } from "@awthaq/roles";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Authentication } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { EvaluationServicesNone, hasPermission, permission, role } from "@qadi/core";
 import {
   RequirePermission,
@@ -21,7 +20,6 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -43,24 +41,13 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-/** The support layers `Password` needs beyond `TestAuth`'s memory bundle — exactly the ones a suite passes as `services`. */
-export const HarnessServices = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(
-    Layer.provide(
-      Layer.succeed(Csrf.CsrfConfig, {
-        secret: Redacted.make("features-testing-harness-csrf-secret-32-bytes!"),
-        allowedOrigins: [],
-      }),
-    ),
-  ),
-  NoBreachHttpClient,
-).pipe(Layer.provide(NodeCrypto.layer));
+/** The support `Password` needs beyond `TestAuth`'s memory bundle: only the outbound client is the suite's own (`TestAuth.layer` derives the middleware). */
+export const HarnessServices = NoBreachHttpClient;
 
 /** BEH-EA-193: the application's own tuple, as `Auth.make` sees it. */
 export const passwordTuple = Auth.make([Password.Password]);
 
-export const passwordApp = TestAuth.layer(passwordTuple, HarnessServices);
+export const passwordApp = TestAuth.layer(passwordTuple, { services: HarnessServices });
 
 // ---- a small authenticated plugin, for the signInAs / TestClock scenarios -------------------
 
@@ -92,7 +79,7 @@ class WhoamiPlugin extends AuthPlugin.Service<WhoamiPlugin, Record<string, never
 
 export const whoamiTuple = Auth.make([WhoamiPlugin]);
 
-export const whoamiApp = TestAuth.layer(whoamiTuple, HarnessServices);
+export const whoamiApp = TestAuth.layer(whoamiTuple, { services: HarnessServices });
 
 // ---- an HTTP-level authorization test: RequirePermission over TestAuth.signInAs (PV-261) ----
 
@@ -143,10 +130,9 @@ const GatedServices = RequirePermissionLive.pipe(
 );
 
 // Core's own session/account groups ride in every `TestAuth.layer`, so their `Authentication`/CSRF middleware is provided too.
-export const gatedApp = TestAuth.layer(
-  Auth.make([Roles.Roles, GatedPlugin]),
-  Layer.mergeAll(GatedServices, HarnessServices),
-);
+export const gatedApp = TestAuth.layer(Auth.make([Roles.Roles, GatedPlugin]), {
+  services: Layer.mergeAll(GatedServices, HarnessServices),
+});
 
 // ---- qadi's GET /subject over the same harness (REQ-EA-063) ----
 
@@ -155,17 +141,12 @@ const SubjectServices = SubjectApi.SubjectHandlers.pipe(
   Layer.provide(AuthorizedSubject.AuthorizedSubjectLive),
   Layer.provideMerge(Roles.Roles.layer),
   Layer.provide(Roles.config([memberRole, adminRole])),
-  // `GET /subject` is served behind the optional-authentication middleware.
-  Layer.provideMerge(
-    Authentication.OptionalAuthenticationLive.pipe(
-      Layer.provide(Authentication.PrincipalResolverLive),
-    ),
-  ),
+  // `GET /subject` is served behind the optional-authentication middleware, which `TestAuth.layer` derives.
 );
 
 export const subjectApp = TestAuth.layer(
   Auth.make([Roles.Roles], { extraGroups: [SubjectApi.SubjectGroup] }),
-  Layer.mergeAll(SubjectServices, HarnessServices),
+  { services: Layer.mergeAll(SubjectServices, HarnessServices) },
 );
 
 /** Signs in with exactly `roles` and reads the caller's own `GET /subject`, decoded as the wire `SubjectDto`. */

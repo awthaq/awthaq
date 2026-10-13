@@ -168,10 +168,10 @@ export const buildApp = (
   const services = makeServices(hits, originChecks, extraConfig);
   const handler =
     composition === "app"
-      ? HttpRouter.toWebHandler(TestAuth.layer(builtApp, services)).handler
+      ? HttpRouter.toWebHandler(TestAuth.layer(builtApp, { services })).handler
       : composition === "billing"
-        ? HttpRouter.toWebHandler(TestAuth.layer(builtBilling, services)).handler
-        : HttpRouter.toWebHandler(TestAuth.layer(builtBoth, services)).handler;
+        ? HttpRouter.toWebHandler(TestAuth.layer(builtBilling, { services })).handler
+        : HttpRouter.toWebHandler(TestAuth.layer(builtBoth, { services })).handler;
   return { handler, hits, originChecks };
 };
 

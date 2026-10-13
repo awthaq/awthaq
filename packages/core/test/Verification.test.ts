@@ -31,7 +31,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import * as TestSql from "../../test/src/TestSql.ts";
 import { StoreUnavailable } from "../src/Errors.ts";
 import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";

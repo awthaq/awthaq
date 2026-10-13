@@ -21,7 +21,7 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { expectTypeOf } from "vitest";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import * as TestSql from "../../test/src/TestSql.ts";
 import * as Auth from "../src/Auth.ts";
 import * as AuthPlugin from "../src/AuthPlugin.ts";
 import * as Migrations from "../src/Migrations.ts";

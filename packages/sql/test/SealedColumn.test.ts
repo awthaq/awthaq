@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SealedColumn from "../src/SealedColumn.ts";
 import { rotatingKeys } from "./support/RotatingKeys.ts";
-import * as TestSql from "./support/TestSql.ts";
+import * as TestSql from "../../test/src/TestSql.ts";
 
 const declared = SealedColumn.column({
   table: "sealed_probe",

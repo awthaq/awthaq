@@ -32,7 +32,7 @@ import * as Option from "effect/Option";
 import * as AttributeResolvers from "../src/AttributeResolvers.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import * as UserClaims from "../src/UserClaims.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),

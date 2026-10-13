@@ -28,7 +28,7 @@ import { permission, role } from "@qadi/core";
 import { Api } from "@awthaq/api";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Roles from "../src/Roles.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const SqlLive = TestSql.layer("roles_RolesSql");
 

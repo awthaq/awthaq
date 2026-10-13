@@ -6,9 +6,8 @@
 // independently re-created ones) actually wires together for a real plugin,
 // and that `signInAs`'s cookie really authenticates a subsequent request.
 //
-// `Authentication.AuthenticationLive` is passed as `TestAuth.layer`'s own
-// `services` argument (not merged in afterward) — see that function's own
-// doc comment for why any other composition fails to type-check.
+// `TestAuth.layer` derives `Authentication` and `CsrfProtection` from the composed groups, so the
+// layer is built from `Auth.make(...)` alone.
 // `@effect/vitest`'s own `layer(...)` builds the runtime once (only a
 // genuinely closed layer — `RIn` really `never` — type-checks here) and
 // shares it across every `it.effect` below — dispatching each request
@@ -20,15 +19,10 @@
 import { Api } from "@awthaq/api";
 import { Auth, AuthPlugin, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -71,25 +65,9 @@ class WhoamiPlugin extends AuthPlugin.Service<WhoamiPlugin, Record<string, never
 
 const built = Auth.make([WhoamiPlugin]);
 
-// MW-002: the composed api always carries core's `session`/`account` groups, whose
-// handlers `TestAuth.layer` adds itself; their `CsrfProtection` middleware is the host's.
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("test-auth-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const TestLayer = TestAuth.layer(
-  built,
-  Layer.mergeAll(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-    CsrfProtectionLive,
-  ),
-);
+// MW-002/BEH-EA-T1: the composed api always carries core's `session`/`account` groups and the plugin's own
+// declares `Api.Authentication`: `TestAuth.layer` derives the host middleware itself, so no `services` at all.
+const TestLayer = TestAuth.layer(built);
 
 const dispatch = (request: Request) =>
   Effect.gen(function* () {
@@ -152,48 +130,26 @@ layer(TestLayer)("TestAuth.layer (BEH-EA-193)", (it) => {
   );
 });
 
-// ETVS-004: the memory bundle is complete for a password-style composition — `Verification`
+// ETVS-004: the memory bundle is complete for a password-style composition: `Verification`
 // and a (low-cost, real) `PasswordHasher` ride in it, so a suite passes only the layers that
-// are genuinely its own (`Authentication`, `CsrfProtection`, an `HttpClient` for the breach
-// check) in `services`, never a second `Verification`/`PasswordHasher`.
-const PasswordLayer = TestAuth.layer(
-  Auth.make([Password.Password]),
-  Layer.mergeAll(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-    Csrf.CsrfProtectionLive.pipe(
-      Layer.provide(
-        Layer.succeed(Csrf.CsrfConfig, {
-          secret: Redacted.make("test-auth-memory-bundle-csrf-secret-32-bytes!!"),
-          allowedOrigins: [],
-        }),
-      ),
-    ),
-    Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make((request) =>
-        Effect.succeed(
-          HttpClientResponse.fromWeb(request, new Response(`${"F".repeat(35)}:1`, { status: 200 })),
-        ),
-      ),
-    ),
-  ),
-);
+// are genuinely its own (an `HttpClient` for the breach check) in `services`.
+const PasswordLayer = TestAuth.layer(Auth.make([Password.Password]), {
+  services: TestAuth.httpClient.noBreach,
+});
 
 layer(PasswordLayer)(
   "TestAuth.layer — the memory bundle serves Password with no extra layers",
   (it) => {
-    it.effect(
-      "signUp then signIn work with only Authentication, CSRF and an HttpClient supplied",
-      () =>
-        Effect.gen(function* () {
-          const password = yield* Password.Password;
-          const users = yield* Users.Users;
-          const secret = Redacted.make("a sufficiently long test password");
-          const issued = yield* password.signUp({ email: "bundle@example.com", password: secret });
-          yield* users.verifyEmail(issued.session.userId);
-          const again = yield* password.signIn({ email: "bundle@example.com", password: secret });
-          assert.strictEqual(again.session.userId, issued.session.userId);
-        }),
+    it.effect("signUp then signIn work with only an HttpClient supplied", () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const users = yield* Users.Users;
+        const secret = Redacted.make("a sufficiently long test password");
+        const issued = yield* password.signUp({ email: "bundle@example.com", password: secret });
+        yield* users.verifyEmail(issued.session.userId);
+        const again = yield* password.signIn({ email: "bundle@example.com", password: secret });
+        assert.strictEqual(again.session.userId, issued.session.userId);
+      }),
     );
   },
 );

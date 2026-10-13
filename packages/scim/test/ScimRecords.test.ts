@@ -12,7 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Scim from "../src/Scim.ts";
 import * as ScimRecords from "../src/ScimRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 /** The witness these tests present where a bearer token, erasure or export would. */
 const grant = TenantScoped.crossTenant("scim records test: a cross-organization caller");

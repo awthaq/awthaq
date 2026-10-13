@@ -23,7 +23,7 @@ import * as Models from "../src/Models.ts";
 import * as ReadRouting from "../src/ReadRouting.ts";
 import * as Repositories from "../src/Repositories.ts";
 import { contractCases, repositoriesLayer } from "./contract.ts";
-import { regclassTypes } from "./support/TestSql.ts";
+import { regclassTypes } from "../../test/src/TestSql.ts";
 
 const M = Models.makeModels("pg");
 

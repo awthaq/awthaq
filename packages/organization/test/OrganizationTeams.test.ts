@@ -24,7 +24,7 @@ import * as OrganizationSystem from "../src/OrganizationSystem.ts";
 import * as OrganizationTeams from "../src/OrganizationTeams.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { grant } from "./support.ts";
 

@@ -10,7 +10,7 @@
 #   * `*.postgres.test.ts` in @awthaq/sql (skipped without AWTHAQ_POSTGRES_URL);
 #   * every plugin record-store suite (admin, jwt, organization, passkey, roles,
 #     qadi claims, migrate-better-auth), which builds its database through
-#     `packages/sql/test/support/TestSql.ts`: the same tests, on Postgres instead
+#     `packages/test/src/TestSql.ts`: the same tests, on Postgres instead
 #     of `:memory:` SQLite, each suite in its own schema.
 #
 # The suites `DROP TABLE`/`DROP SCHEMA` — point the URL at a scratch database.
@@ -25,6 +25,7 @@ suites=(
   packages/sql/test/SealedColumn.test.ts
   packages/sql/test/UnitOfWork.test.ts
   packages/test/test/StoreContract.sql.test.ts
+  packages/test/test/TestAuthRecords.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
   packages/api-key/test/StoreOutage.test.ts

@@ -22,7 +22,7 @@ import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import { TestAuth } from "@awthaq/test";
 
 const CoreLive = Layer.mergeAll(
