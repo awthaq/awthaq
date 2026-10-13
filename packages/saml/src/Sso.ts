@@ -77,7 +77,7 @@ export const SsoGroup = HttpApiGroup.make("sso")
     HttpApiEndpoint.post("start", "/auth/sso/start", {
       payload: StartPayload,
       success: StartResponse,
-      error: [SsoNotFound, Api.RateLimited],
+      error: [SsoNotFound, Api.RateLimited, Api.StoreUnavailable],
     }),
   )
   // BEH-EA-201: a pre-authentication lookup (which login does this address route to?) that reads no credential and changes
@@ -109,18 +109,18 @@ export interface SsoShape {
     readonly email?: string | undefined;
     readonly organizationId?: string | undefined;
     readonly callbackURL?: string | undefined;
-  }) => Effect.Effect<ReadonlyArray<SsoRoute>>;
+  }) => Effect.Effect<ReadonlyArray<SsoRoute>, Api.StoreUnavailable>;
   /** The route the hint resolves to: the preferred protocol's, else the other's; `None` when nothing routes. */
   readonly discover: (hint: {
     readonly email?: string | undefined;
     readonly organizationId?: string | undefined;
     readonly callbackURL?: string | undefined;
-  }) => Effect.Effect<Option.Option<SsoRoute>>;
+  }) => Effect.Effect<Option.Option<SsoRoute>, Api.StoreUnavailable>;
   /** The HTTP operation: rate limited per source address, then `discover`. */
   readonly start: (
     input: StartPayload,
     ip: string | undefined,
-  ) => Effect.Effect<SsoRoute, SsoNotFound | Api.RateLimited>;
+  ) => Effect.Effect<SsoRoute, SsoNotFound | Api.RateLimited | Api.StoreUnavailable>;
 }
 
 const withCallback = (path: string, callbackURL: string | undefined, hasQuery: boolean) =>

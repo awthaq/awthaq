@@ -6,7 +6,7 @@
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
 import { Defects, Users } from "@awthaq/core";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -65,32 +65,49 @@ export interface MembershipRecordsShape {
     readonly userId: Users.UserId;
     readonly organizationId: string;
     readonly role: ReadonlyArray<string>;
-  }) => Effect.Effect<MembershipRecord, MembershipRecordAlreadyExists>;
+  }) => Effect.Effect<
+    MembershipRecord,
+    MembershipRecordAlreadyExists | StoreFailure.StoreUnavailable
+  >;
   /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findByUserAndOrg: (
     userId: Users.UserId,
     organizationId: string,
-  ) => Effect.Effect<Option.Option<MembershipRecord>>;
+  ) => Effect.Effect<Option.Option<MembershipRecord>, StoreFailure.StoreUnavailable>;
   readonly listByOrganization: (
     organizationId: string,
     input?: ListMembersInput,
-  ) => Effect.Effect<ReadonlyArray<MembershipRecord>>;
-  readonly listByUser: (userId: Users.UserId) => Effect.Effect<ReadonlyArray<MembershipRecord>>;
-  readonly countByOrganization: (organizationId: string) => Effect.Effect<number>;
-  readonly countOwners: (organizationId: string) => Effect.Effect<number>;
+  ) => Effect.Effect<ReadonlyArray<MembershipRecord>, StoreFailure.StoreUnavailable>;
+  readonly listByUser: (
+    grant: TenantScoped.CrossTenant,
+
+    userId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<MembershipRecord>, StoreFailure.StoreUnavailable>;
+  readonly countByOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
+  readonly countOwners: (
+    organizationId: string,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   readonly updateRole: (
     userId: Users.UserId,
     organizationId: string,
     role: ReadonlyArray<string>,
-  ) => Effect.Effect<MembershipRecord, MembershipRecordNotFound>;
+  ) => Effect.Effect<MembershipRecord, MembershipRecordNotFound | StoreFailure.StoreUnavailable>;
   readonly remove: (
     userId: Users.UserId,
     organizationId: string,
-  ) => Effect.Effect<void, MembershipRecordNotFound>;
+  ) => Effect.Effect<void, MembershipRecordNotFound | StoreFailure.StoreUnavailable>;
   /** Deletes every membership row for an organization — used by `Organization.delete`'s cascade. */
-  readonly removeAllForOrganization: (organizationId: string) => Effect.Effect<void>;
+  readonly removeAllForOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** CSG-001/DRS-002 (.issues/high): deletes every membership row for a user across every organization — the erasure cascade's own `Hooks.BeforeUserDelete` tap needs (`Organization.ts`'s own `layer`). */
-  readonly deleteAllByUser: (userId: Users.UserId) => Effect.Effect<void>;
+  readonly deleteAllByUser: (
+    grant: TenantScoped.CrossTenant,
+
+    userId: Users.UserId,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class MembershipRecords extends Context.Service<MembershipRecords, MembershipRecordsShape>()(
@@ -121,6 +138,10 @@ const applyPage = (
   return limit === undefined ? sliced : sliced.slice(0, limit);
 };
 
+/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
+const mintId = <E>(operation: string, minted: Effect.Effect<string, E>) =>
+  Effect.catch(minted, StoreFailure.storeUnavailable(`MembershipRecords.${operation}`));
+
 // ---- layerMemory ------------------------------------------------------------
 
 type State = HashMap.HashMap<string, MembershipRecord>;
@@ -134,7 +155,7 @@ export const layerMemory = Layer.effect(
     const crypto = yield* Crypto.Crypto;
 
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const record = brandMembership({
         id,
@@ -175,7 +196,7 @@ export const layerMemory = Layer.effect(
         Effect.map((rows) => applyPage(applySort(rows, input), input)),
       );
 
-    const listByUser: MembershipRecordsShape["listByUser"] = (userId) =>
+    const listByUser: MembershipRecordsShape["listByUser"] = (_grant, userId) =>
       Ref.get(state).pipe(
         Effect.map((s) => Array.from(HashMap.values(s)).filter((row) => row.userId === userId)),
       );
@@ -232,7 +253,7 @@ export const layerMemory = Layer.effect(
         ),
       );
 
-    const deleteAllByUser: MembershipRecordsShape["deleteAllByUser"] = (userId) =>
+    const deleteAllByUser: MembershipRecordsShape["deleteAllByUser"] = (_grant, userId) =>
       Ref.update(state, (s) =>
         Array.from(HashMap.entries(s)).reduce(
           (acc, [key, row]) => (row.userId === userId ? HashMap.remove(acc, key) : acc),
@@ -283,6 +304,8 @@ export const layerSql = Layer.effect(
   MembershipRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`MembershipRecords.${operation}`);
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const MembershipRow = makeMembershipRow(wire);
@@ -375,7 +398,7 @@ export const layerSql = Layer.effect(
     });
 
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const row = yield* insert({
         id,
@@ -384,18 +407,14 @@ export const layerSql = Layer.effect(
         role: JSON.stringify(input.role),
         createdAt: now,
       }).pipe(
-        Effect.catchTag("SqlError", (error) =>
-          error.reason._tag === "UniqueViolation"
-            ? Effect.fail(
-                new MembershipRecordAlreadyExists({
-                  userId: input.userId,
-                  organizationId: input.organizationId,
-                }),
-              )
-            : Effect.die(error),
+        StoreFailure.orConflict(
+          "MembershipRecords.create",
+          () =>
+            new MembershipRecordAlreadyExists({
+              userId: input.userId,
+              organizationId: input.organizationId,
+            }),
         ),
-        Effect.catchTag("SchemaError", Effect.die),
-        Effect.catchTag("NoSuchElementError", Effect.die),
       );
       return toRecord(row);
     });
@@ -403,7 +422,7 @@ export const layerSql = Layer.effect(
     const findByUserAndOrg: MembershipRecordsShape["findByUserAndOrg"] = (userId, organizationId) =>
       findByUserAndOrgQuery({ userId, organizationId }).pipe(
         Effect.map(Option.map(toRecord)),
-        Effect.orDie,
+        unavailable("findByUserAndOrg"),
       );
 
     const listByOrganization: MembershipRecordsShape["listByOrganization"] = (
@@ -412,25 +431,26 @@ export const layerSql = Layer.effect(
     ) =>
       listByOrganizationQuery(organizationId).pipe(
         Effect.map((rows) => applyPage(rows.map(toRecord), input)),
-        Effect.orDie,
+        unavailable("listByOrganization"),
       );
 
-    const listByUser: MembershipRecordsShape["listByUser"] = (userId) =>
+    const listByUser: MembershipRecordsShape["listByUser"] = (grant, userId) =>
       listByUserQuery(userId).pipe(
         Effect.map((rows) => rows.map(toRecord)),
-        Effect.orDie,
+        TenantScoped.liftOn(sql, grant),
+        unavailable("listByUser"),
       );
 
     const countByOrganization: MembershipRecordsShape["countByOrganization"] = (organizationId) =>
       countByOrganizationQuery(organizationId).pipe(
         Effect.map((row) => row.count),
-        Effect.orDie,
+        unavailable("countByOrganization"),
       );
 
     const countOwners: MembershipRecordsShape["countOwners"] = (organizationId) =>
       countOwnersQuery(organizationId).pipe(
         Effect.map((row) => row.count),
-        Effect.orDie,
+        unavailable("countOwners"),
       );
 
     const updateRole: MembershipRecordsShape["updateRole"] = Effect.fnUntraced(
@@ -439,7 +459,7 @@ export const layerSql = Layer.effect(
           userId,
           organizationId,
           role: JSON.stringify(role),
-        }).pipe(Effect.orDie);
+        }).pipe(unavailable("updateRole"));
         if (Option.isNone(row)) return yield* Effect.fail(notFound(userId, organizationId));
         return toRecord(row.value);
       },
@@ -447,7 +467,7 @@ export const layerSql = Layer.effect(
 
     const remove: MembershipRecordsShape["remove"] = Effect.fnUntraced(
       function* (userId, organizationId) {
-        const row = yield* removeQuery({ userId, organizationId }).pipe(Effect.orDie);
+        const row = yield* removeQuery({ userId, organizationId }).pipe(unavailable("remove"));
         if (Option.isNone(row)) return yield* Effect.fail(notFound(userId, organizationId));
       },
     );
@@ -456,13 +476,14 @@ export const layerSql = Layer.effect(
       organizationId,
     ) =>
       sql`DELETE FROM organization_membership WHERE "organizationId" = ${organizationId}`.pipe(
-        Effect.orDie,
+        unavailable("removeAllForOrganization"),
         Effect.asVoid,
       );
 
-    const deleteAllByUser: MembershipRecordsShape["deleteAllByUser"] = (userId) =>
+    const deleteAllByUser: MembershipRecordsShape["deleteAllByUser"] = (grant, userId) =>
       sql`DELETE FROM organization_membership WHERE "userId" = ${userId}`.pipe(
-        Effect.orDie,
+        TenantScoped.liftOn(sql, grant),
+        unavailable("deleteAllByUser"),
         Effect.asVoid,
       );
 

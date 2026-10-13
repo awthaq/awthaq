@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-35 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-014](../models/14-organization.md) as `@awthaq/organization`; MTI-011) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-014](../models/14-organization.md) as `@awthaq/organization`; MTI-011) <br> 1.1 (2026-10-13): BEH-EA-284: the records are Keyed by organization id, every cross-organization method takes a witness, and the stores fail with StoreUnavailable (plan 05 phase 6) |
 ---
 
 > `@awthaq/organization` composes as `Auth.make([Organization])` and serves the `organization` HTTP group at `/organization/...`, all behind `Api.Authentication` and `Api.CsrfProtection`. It is the multi-tenant membership plugin ([MOD-EA-014](../models/14-organization.md)): the behaviors below are what an application relies on to treat an organization as a tenant boundary. Roles and statements are the plugin's own `PermissionEngine` ([ADR-EA-025](../decisions/025-global-roles-vs-organization-roles.md)), never a qadi round trip; tenancy resolution and tenant-stamped rows are [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none) through [BEH-EA-237](28-tenancy.md#beh-ea-237-a-suspended-organization-refuses-organization-scoped-access), and the qadi relationship grammar is [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership).
@@ -51,6 +51,8 @@ REQUIREMENT: Every `/organization/:organizationId/...` endpoint MUST answer
 ```
 
 This is the tenant boundary at the HTTP surface: a `403` would confirm the organization exists, so the plugin spends it only on people who are already inside. Every scenario for this rule is adversarial by construction: a fully authenticated caller from tenant A aims at tenant B's identifiers and must learn nothing and change nothing. Cross-tenant ids inside a path (a team of B under A's id) are the classic confused-deputy shape and are refused by scoping every lookup to the organization in the path.
+
+Implementation (plan 05): the organization tables are Keyed ([BEH-EA-328](28-tenancy.md#beh-ea-328-every-plugin-table-declares-its-tenancy-and-authmake-validates-the-declarations)): every records method takes the organization id it is scoped by, an update of an invitation, a connection's domains and a team's member count included, so a statement that names only another table's key cannot reach another organization's row. A method that must read or erase across organizations (a caller's own memberships, the platform listing and suspension, home-realm discovery, the invitation id or emailed token as capability, the invitee's and inviter's own invitations, the per-inviter quota, the erasure and export sweeps) takes a `TenantScoped.CrossTenant` witness minted next to the call with the reason it is sound ([BEH-EA-327](28-tenancy.md#beh-ea-327-a-cross-tenant-statement-presents-a-witness-and-the-witness-lifts-rls)); `TestAuth.runTenantIsolationTests` classifies every method of every records interface, which replaces the static allowlist that used to pin this. A connection's client secret is a sealed column of `ConnectionRecords` ([ADR-EA-019](../decisions/019-encryption-key-rotation.md) decision 6). A store outage is `StoreUnavailable` ([BEH-EA-325](05-persistence-stratum.md#beh-ea-325-a-plugin-records-module-fails-with-storeunavailable-never-a-defect-when-its-store-is-down)), never a defect; the tenant middleware answers it `503`.
 
 _Previous: [BEH-EA-283](35-organization.md#beh-ea-283-an-organization-has-a-unique-slug-its-creator-becomes-its-first-member-and-creating-one-is-bounded-by-policy-and-quota) | Next: [BEH-EA-285](35-organization.md#beh-ea-285-an-organization-always-keeps-an-owner-and-only-an-owner-may-delete-it)_
 

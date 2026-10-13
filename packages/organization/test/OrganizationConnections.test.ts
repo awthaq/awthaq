@@ -20,6 +20,7 @@ import * as ConnectionRecords from "../src/ConnectionRecords.ts";
 import * as OrganizationConnections from "../src/OrganizationConnections.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import { TestAuth } from "@awthaq/test";
+import { grant } from "./support.ts";
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -77,7 +78,7 @@ const oauth2Input = (organizationId: string): OrganizationConnections.Connection
 });
 
 describe("OrganizationConnectionStore (BEH-EA-235)", () => {
-  it.effect("the client secret is ciphertext at rest and never shown back", () =>
+  it.effect("the client secret is stored sealed and never shown back", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
       const records = yield* ConnectionRecords.ConnectionRecords;
@@ -86,13 +87,8 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
       assert.strictEqual(view.providerId, `org:org-1:${view.id}`);
       const stored = yield* records.findById("org-1", view.id);
       assert.isTrue(Option.isSome(stored));
-      if (Option.isSome(stored) && Option.isSome(stored.value.clientSecret)) {
-        const envelope = stored.value.clientSecret.value;
-        assert.notInclude(envelope, "super-secret");
-        assert.isTrue(Encryption.looksLikeEnvelope(envelope));
-      } else {
-        assert.fail("the secret should have been stored");
-      }
+      // That it is an envelope at rest, bound to its row, is `runSealedColumnTests`' (ConnectionRecords.test.ts).
+      assert.isTrue(Option.isSome(stored) && Option.isSome(stored.value.clientSecret));
       assert.notProperty(view, "clientSecret");
     }).pipe(Effect.provide(ConnectionsLive)),
   );
@@ -238,11 +234,11 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
   it.effect("a connection whose secret no longer decrypts is dropped alone", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
-      const records = yield* ConnectionRecords.ConnectionRecords;
+      const envelopes = yield* ConnectionRecords.MemoryEnvelopes;
       const resolver = Option.getOrThrow(yield* OAuthConnections.OAuthConnectionResolver);
       const good = yield* store.create(oidcInput("org-1", { emailDomains: [] }));
       const bad = yield* store.create(oidcInput("org-1", { emailDomains: ["bad.example"] }));
-      yield* records.update("org-1", bad.id, { clientSecret: "not-an-envelope" });
+      yield* envelopes.plant(bad.id, "not-an-envelope");
       yield* OrganizationConnections.OrganizationConnections.invalidate("org-1");
       assert.isTrue(Option.isSome(yield* resolver.find(good.providerId)));
       assert.isTrue(Option.isNone(yield* resolver.find(bad.providerId)));
@@ -260,7 +256,7 @@ describe("cleanupOnOrganizationDelete (BEH-EA-235)", () => {
       const afterDelete = yield* OrganizationHooks.AfterDeleteOrganization;
       yield* afterDelete.run({ organizationId: "org-1" });
       assert.strictEqual((yield* records.listByOrganization("org-1")).length, 0);
-      assert.isTrue(Option.isNone(yield* records.findByEmailDomain("acme.example")));
+      assert.isTrue(Option.isNone(yield* records.findByEmailDomain(grant, "acme.example")));
       assert.strictEqual((yield* records.listByOrganization("org-2")).length, 1);
     }).pipe(
       Effect.provide(

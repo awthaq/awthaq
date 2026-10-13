@@ -26,7 +26,7 @@ import * as SamlMetadataFetcher from "./SamlMetadataFetcher.ts";
 import * as SamlRecords from "./SamlRecords.ts";
 import * as SamlSpKeys from "./SamlSpKeys.ts";
 
-type Gate = SamlApi.SamlActionDenied | Api.RateLimited;
+type Gate = SamlApi.SamlActionDenied | Api.RateLimited | Api.StoreUnavailable;
 
 export interface SamlAdminShape {
   readonly createConnection: (

@@ -27,6 +27,7 @@ import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 import { TestAuth } from "@awthaq/test";
+import { grant } from "./support.ts";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -314,7 +315,7 @@ describe("OrganizationQadi", () => {
         "Related",
       ]);
 
-      yield* records.setSuspended(record.id, Option.some(yield* DateTime.now));
+      yield* records.setSuspended(grant, record.id, Option.some(yield* DateTime.now));
       assert.deepStrictEqual(yield* relations(), [
         "Unrelated",
         "Unrelated",
@@ -323,7 +324,7 @@ describe("OrganizationQadi", () => {
         "Unrelated",
       ]);
 
-      yield* records.setSuspended(record.id, Option.none());
+      yield* records.setSuspended(grant, record.id, Option.none());
       assert.strictEqual(yield* check("member", record.id, "owner-1"), "Related");
     }).pipe(Effect.provide(QadiLive)),
   );

@@ -18,6 +18,10 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Scim from "../src/Scim.ts";
 import * as ScimApi from "../src/ScimApi.ts";
 import { ScimLive, seedConnection } from "./support.ts";
+import { TenantScoped } from "@awthaq/sql";
+
+/** The witness these tests present where a cross-organization caller would. */
+const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const LegalHold = Hooks.BeforeUserDelete.tap(() =>
   Effect.fail(new HookPoint.HookAbort({ code: "LEGAL_HOLD" })),
@@ -46,7 +50,7 @@ describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
         // Still the connection's user: the refused erasure did not orphan it from its directory.
         assert.isTrue((yield* scim.getUser(connection, created.id)).active);
         assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 1);
-        assert.strictEqual((yield* members.listByUser(id)).length, 1);
+        assert.strictEqual((yield* members.listByUser(grant, id)).length, 1);
         assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.deleted" }), []);
         assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.scim.userDeleted" }), []);
       }).pipe(

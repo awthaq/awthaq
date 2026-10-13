@@ -27,7 +27,7 @@
 //   inside one composition.
 
 import { Tenant } from "@awthaq/ports";
-import { TenantScope } from "@awthaq/sql";
+import { type StoreFailure, TenantScope } from "@awthaq/sql";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type * as LayerMap from "effect/LayerMap";
@@ -65,6 +65,16 @@ const unavailableResponse = (cause: unknown) =>
     ),
   );
 
+/**
+ * ADR-EA-028: the organization lookup that resolves the tenant could not run. `StoreUnavailable`
+ * already carries its static operation label and was logged where it happened.
+ */
+const storeUnavailableResponse = (error: StoreFailure.StoreUnavailable) =>
+  HttpServerResponse.jsonUnsafe(
+    { _tag: "StoreUnavailable", operation: error.operation },
+    { status: 503 },
+  );
+
 /** Resolves the request's organization; fails `"unknown-tenant"` when the resolver names none that exists. */
 const resolveTenant = Effect.gen(function* () {
   const resolver = yield* TenantResolver.TenantResolver;
@@ -92,7 +102,12 @@ export const layer = HttpRouter.middleware(
           onNone: () => app,
           onSome: (id) => Tenant.withTenant(id)(app),
         });
-      }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
+      }).pipe(
+        Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())),
+        Effect.catchTag("StoreUnavailable", (error) =>
+          Effect.succeed(storeUnavailableResponse(error)),
+        ),
+      );
   }),
   { global: true },
 );
@@ -115,7 +130,12 @@ export const layerWithRls = HttpRouter.middleware(
               Effect.catchTag("SqlError", unavailableResponse),
             ),
         });
-      }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
+      }).pipe(
+        Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())),
+        Effect.catchTag("StoreUnavailable", (error) =>
+          Effect.succeed(storeUnavailableResponse(error)),
+        ),
+      );
   }),
   { global: true },
 );
@@ -134,7 +154,12 @@ export const layerWithConfig = <Self>(tenantConfig: TenantConfigTag<Self>) =>
             onNone: () => app,
             onSome: (id) => Tenant.withTenant(id)(app).pipe(Effect.provide(configs.get(id))),
           });
-        }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
+        }).pipe(
+          Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())),
+          Effect.catchTag("StoreUnavailable", (error) =>
+            Effect.succeed(storeUnavailableResponse(error)),
+          ),
+        );
     }),
     { global: true },
   );
@@ -159,7 +184,12 @@ export const layerWithConfigAndRls = <Self>(tenantConfig: TenantConfigTag<Self>)
                 Effect.catchTag("SqlError", unavailableResponse),
               ),
           });
-        }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
+        }).pipe(
+          Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())),
+          Effect.catchTag("StoreUnavailable", (error) =>
+            Effect.succeed(storeUnavailableResponse(error)),
+          ),
+        );
     }),
     { global: true },
   );

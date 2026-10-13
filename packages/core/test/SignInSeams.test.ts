@@ -6,7 +6,7 @@
 // shipping as a second, drifting copy of "gate, veto, divert, mint, announce".
 //
 // Reads `packages/*/src/**/*.ts` from the filesystem (no cross-package import: the dependency
-// direction forbids one from core), in the style of `organization/test/TenantScoping.test.ts`.
+// direction forbids one from core), in the style of the static guard `organization/test/TenantScoping.test.ts` used to be.
 import { readdirSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { fileURLToPath } from "node:url";

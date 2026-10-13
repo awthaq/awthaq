@@ -11,7 +11,7 @@ import {
 } from "@awthaq/organization";
 import { AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
-import { Models, Repositories, TenantScope } from "@awthaq/sql";
+import { Models, Repositories, TenantScope, TenantScoped } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
 import { makeResourceId, makeSubjectId, RelationshipResolver } from "@qadi/core";
 import assert from "node:assert/strict";
@@ -38,6 +38,11 @@ import {
   World,
   type GatewayVariant,
 } from "./TenancyWorld.ts";
+
+/** A platform administrator's suspension of an organization reads and writes across organizations. */
+const platformGrant = TenantScoped.crossTenant(
+  "feature step: platform suspension of an organization",
+);
 
 /** Reads a top-level property of a decoded JSON body without asserting its shape. */
 const field = (body: unknown, key: string): unknown =>
@@ -792,7 +797,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* organization(
       Effect.gen(function* () {
         const records = yield* OrganizationRecords.OrganizationRecords;
-        return yield* records.setSuspended(id, Option.some(yield* DateTime.now));
+        return yield* records.setSuspended(platformGrant, id, Option.some(yield* DateTime.now));
       }),
     );
   });
@@ -990,7 +995,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       ).pipe(Effect.orDie);
       assert.ok(Option.isSome(row), "the connection row must exist");
       const envelope = Option.getOrThrowWith(
-        row.value.clientSecret,
+        row.value.secretRevision,
         () => new Error("the secret was not stored"),
       );
       assert.ok(Encryption.looksLikeEnvelope(envelope));

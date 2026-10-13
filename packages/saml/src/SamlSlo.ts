@@ -96,7 +96,7 @@ export interface SloDeps {
   readonly settings: SamlConfig.SamlConfigShape;
   readonly usableConnection: (
     connectionId: string,
-  ) => Effect.Effect<Option.Option<SamlRecords.ConnectionRecord>>;
+  ) => Effect.Effect<Option.Option<SamlRecords.ConnectionRecord>, Api.StoreUnavailable>;
   readonly records: SamlRecords.SamlRecordsShape;
   readonly sessions: Sessions.SessionsShape;
   readonly verification: Verification.VerificationShape;

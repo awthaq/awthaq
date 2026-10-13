@@ -6,7 +6,7 @@
 // `effect/unstable/sql`'s `SqlSchema`, owned by this plugin rather than the
 // shared persistence stratum.
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -58,9 +58,16 @@ export interface OrganizationRecordsShape {
     readonly logo?: string | undefined;
     readonly metadata?: string | undefined;
     readonly homeRegion?: string | undefined;
-  }) => Effect.Effect<OrganizationRecord, OrganizationRecordSlugTaken>;
-  readonly findById: (id: string) => Effect.Effect<Option.Option<OrganizationRecord>>;
-  readonly findBySlug: (slug: string) => Effect.Effect<Option.Option<OrganizationRecord>>;
+  }) => Effect.Effect<
+    OrganizationRecord,
+    OrganizationRecordSlugTaken | StoreFailure.StoreUnavailable
+  >;
+  readonly findById: (
+    id: string,
+  ) => Effect.Effect<Option.Option<OrganizationRecord>, StoreFailure.StoreUnavailable>;
+  readonly findBySlug: (
+    slug: string,
+  ) => Effect.Effect<Option.Option<OrganizationRecord>, StoreFailure.StoreUnavailable>;
   readonly update: (
     id: string,
     input: {
@@ -70,21 +77,35 @@ export interface OrganizationRecordsShape {
       readonly metadata?: string | null | undefined;
       readonly homeRegion?: string | null | undefined;
     },
-  ) => Effect.Effect<OrganizationRecord, OrganizationRecordNotFound | OrganizationRecordSlugTaken>;
-  /** EP-003: suspends (`Some(at)`) or reinstates (`None`) the organization. */
+  ) => Effect.Effect<
+    OrganizationRecord,
+    OrganizationRecordNotFound | OrganizationRecordSlugTaken | StoreFailure.StoreUnavailable
+  >;
+  /** EP-003: suspends (`Some(at)`) or reinstates (`None`) the organization. Platform state: the caller presents a witness. */
   readonly setSuspended: (
+    grant: TenantScoped.CrossTenant,
     id: string,
     at: Option.Option<DateTime.Utc>,
-  ) => Effect.Effect<OrganizationRecord, OrganizationRecordNotFound>;
+  ) => Effect.Effect<
+    OrganizationRecord,
+    OrganizationRecordNotFound | StoreFailure.StoreUnavailable
+  >;
   /** EP-003: every organization, keyset-paginated on `(createdAt, id)` ascending — the platform administrator's listing, never a tenant-scoped read. */
-  readonly listPage: (input: {
-    readonly after: Option.Option<{ readonly createdAt: DateTime.Utc; readonly id: string }>;
-    readonly limit: number;
-  }) => Effect.Effect<ReadonlyArray<OrganizationRecord>>;
-  readonly delete: (id: string) => Effect.Effect<void, OrganizationRecordNotFound>;
+  readonly listPage: (
+    grant: TenantScoped.CrossTenant,
+    input: {
+      readonly after: Option.Option<{ readonly createdAt: DateTime.Utc; readonly id: string }>;
+      readonly limit: number;
+    },
+  ) => Effect.Effect<ReadonlyArray<OrganizationRecord>, StoreFailure.StoreUnavailable>;
+  readonly delete: (
+    id: string,
+  ) => Effect.Effect<void, OrganizationRecordNotFound | StoreFailure.StoreUnavailable>;
+  /** The organizations of a caller's own memberships: ids resolved across organizations, so a witness. */
   readonly listByIds: (
+    grant: TenantScoped.CrossTenant,
     ids: ReadonlyArray<string>,
-  ) => Effect.Effect<ReadonlyArray<OrganizationRecord>>;
+  ) => Effect.Effect<ReadonlyArray<OrganizationRecord>, StoreFailure.StoreUnavailable>;
 }
 
 export class OrganizationRecords extends Context.Service<
@@ -95,6 +116,10 @@ export class OrganizationRecords extends Context.Service<
 const notFound = (id: string): OrganizationRecordNotFound => new OrganizationRecordNotFound({ id });
 const slugTaken = (slug: string): OrganizationRecordSlugTaken =>
   new OrganizationRecordSlugTaken({ slug });
+
+/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
+const mintId = <E>(minted: Effect.Effect<string, E>) =>
+  Effect.catch(minted, StoreFailure.storeUnavailable("OrganizationRecords.create"));
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -110,7 +135,7 @@ export const layerMemory = Layer.effect(
       Option.fromNullishOr(Array.from(HashMap.values(records)).find((row) => row.slug === slug));
 
     const create: OrganizationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId(crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const outcome = yield* Ref.modify(
         state,
@@ -176,7 +201,7 @@ export const layerMemory = Layer.effect(
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
 
-    const setSuspended: OrganizationRecordsShape["setSuspended"] = (id, at) =>
+    const setSuspended: OrganizationRecordsShape["setSuspended"] = (_grant, id, at) =>
       Ref.modify(
         state,
         (s): readonly [Result.Result<OrganizationRecord, OrganizationRecordNotFound>, State] => {
@@ -187,7 +212,7 @@ export const layerMemory = Layer.effect(
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
 
-    const listPage: OrganizationRecordsShape["listPage"] = ({ after, limit }) =>
+    const listPage: OrganizationRecordsShape["listPage"] = (_grant, { after, limit }) =>
       Ref.get(state).pipe(
         Effect.map((s) =>
           Array.from(HashMap.values(s))
@@ -217,7 +242,7 @@ export const layerMemory = Layer.effect(
         return [Result.succeed(undefined), HashMap.remove(s, id)] as const;
       }).pipe(Effect.flatMap(Effect.fromResult));
 
-    const listByIds: OrganizationRecordsShape["listByIds"] = (ids) =>
+    const listByIds: OrganizationRecordsShape["listByIds"] = (_grant, ids) =>
       Ref.get(state).pipe(
         Effect.map((s) => ids.flatMap((id) => Option.toArray(HashMap.get(s, id)))),
       );
@@ -270,6 +295,8 @@ export const layerSql = Layer.effect(
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const OrganizationRow = makeOrganizationRow(wire);
     const crypto = yield* Crypto.Crypto;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`OrganizationRecords.${operation}`);
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -321,7 +348,7 @@ export const layerSql = Layer.effect(
       });
 
     const create: OrganizationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId(crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const row = yield* insert({
         id,
@@ -331,26 +358,18 @@ export const layerSql = Layer.effect(
         metadata: input.metadata ?? null,
         homeRegion: input.homeRegion ?? null,
         createdAt: now,
-      }).pipe(
-        Effect.catchTag("SqlError", (error) =>
-          error.reason._tag === "UniqueViolation"
-            ? Effect.fail(slugTaken(input.slug))
-            : Effect.die(error),
-        ),
-        Effect.catchTag("SchemaError", Effect.die),
-        Effect.catchTag("NoSuchElementError", Effect.die),
-      );
+      }).pipe(StoreFailure.orConflict("OrganizationRecords.create", () => slugTaken(input.slug)));
       return toRecord(row);
     });
 
     const findById: OrganizationRecordsShape["findById"] = (id) =>
-      findByIdQuery(id).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+      findByIdQuery(id).pipe(Effect.map(Option.map(toRecord)), unavailable("findById"));
 
     const findBySlug: OrganizationRecordsShape["findBySlug"] = (slug) =>
-      findBySlugQuery(slug).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+      findBySlugQuery(slug).pipe(Effect.map(Option.map(toRecord)), unavailable("findBySlug"));
 
     const update: OrganizationRecordsShape["update"] = Effect.fnUntraced(function* (id, input) {
-      const existing = yield* findByIdQuery(id).pipe(Effect.orDie);
+      const existing = yield* findByIdQuery(id).pipe(unavailable("update"));
       if (Option.isNone(existing)) return yield* Effect.fail(notFound(id));
       const current = existing.value;
       const nextSlug = input.slug ?? current.slug;
@@ -380,14 +399,7 @@ export const layerSql = Layer.effect(
         logo: nextLogo,
         metadata: nextMetadata,
         homeRegion: nextHomeRegion,
-      }).pipe(
-        Effect.catchTag("SqlError", (error) =>
-          error.reason._tag === "UniqueViolation"
-            ? Effect.fail(slugTaken(nextSlug))
-            : Effect.die(error),
-        ),
-        Effect.catchTag("SchemaError", Effect.die),
-      );
+      }).pipe(StoreFailure.orConflict("OrganizationRecords.update", () => slugTaken(nextSlug)));
       if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
       return toRecord(row.value);
     });
@@ -401,9 +413,10 @@ export const layerSql = Layer.effect(
     });
 
     const setSuspended: OrganizationRecordsShape["setSuspended"] = Effect.fnUntraced(
-      function* (id, at) {
+      function* (grant, id, at) {
         const row = yield* setSuspendedQuery({ id, suspendedAt: Option.getOrNull(at) }).pipe(
-          Effect.orDie,
+          TenantScoped.liftOn(sql, grant),
+          unavailable("setSuspended"),
         );
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
         return toRecord(row.value);
@@ -425,25 +438,27 @@ export const layerSql = Layer.effect(
                 ORDER BY "createdAt", id LIMIT ${r.limit}`,
     });
 
-    const listPage: OrganizationRecordsShape["listPage"] = ({ after, limit }) =>
+    const listPage: OrganizationRecordsShape["listPage"] = (grant, { after, limit }) =>
       listPageQuery({
         afterCreatedAt: Option.match(after, { onNone: () => null, onSome: (c) => c.createdAt }),
         afterId: Option.match(after, { onNone: () => null, onSome: (c) => c.id }),
         limit,
       }).pipe(
+        TenantScoped.liftOn(sql, grant),
         Effect.map((rows) => rows.map(toRecord)),
-        Effect.orDie,
+        unavailable("listPage"),
       );
 
     const delete_: OrganizationRecordsShape["delete"] = Effect.fnUntraced(function* (id) {
-      const row = yield* deleteQuery(id).pipe(Effect.orDie);
+      const row = yield* deleteQuery(id).pipe(unavailable("delete"));
       if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
     });
 
-    const listByIds: OrganizationRecordsShape["listByIds"] = (ids) =>
+    const listByIds: OrganizationRecordsShape["listByIds"] = (grant, ids) =>
       listByIdsQuery(ids).pipe(
+        TenantScoped.liftOn(sql, grant),
         Effect.map((rows) => rows.map(toRecord)),
-        Effect.orDie,
+        unavailable("listByIds"),
       );
 
     return {

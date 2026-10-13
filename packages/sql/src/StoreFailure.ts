@@ -18,6 +18,7 @@
 
 import { Api } from "@awthaq/api";
 import { Defects } from "@awthaq/ports";
+import type * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
@@ -60,12 +61,31 @@ export const storeUnavailable = (operation: string) => (cause: unknown) =>
  */
 export const orStoreUnavailable =
   (operation: string) =>
-  <A, R>(self: Effect.Effect<A, SqlError | Schema.SchemaError, R>) =>
+  <A, R>(self: Effect.Effect<A, SqlError | Schema.SchemaError | Cause.NoSuchElementError, R>) =>
     self.pipe(
       Effect.catchTags({
         SqlError: storeUnavailable(operation),
         SchemaError: Effect.die,
+        NoSuchElementError: Effect.die,
       }),
+    );
+
+/**
+ * `orStoreUnavailable` for an insert or update that can hit a unique constraint: a `UniqueViolation`
+ * is the domain outcome `onUnique()` makes (in the Shape's `E`), anything else is an outage or a
+ * defect exactly as `orStoreUnavailable` classifies it. (`NoSuchElementError` is a `RETURNING`
+ * that returned no row: a defect.)
+ */
+export const orConflict =
+  <Conflict extends { readonly _tag: string }>(operation: string, onUnique: () => Conflict) =>
+  <A, R>(self: Effect.Effect<A, SqlError | Schema.SchemaError | Cause.NoSuchElementError, R>) =>
+    self.pipe(
+      Effect.mapError((error) =>
+        isSqlError(error) && error.reason._tag === "UniqueViolation" ? onUnique() : error,
+      ),
+      Effect.catchTag("SqlError", storeUnavailable(operation)),
+      Effect.catchTag("SchemaError", Effect.die),
+      Effect.catchTag("NoSuchElementError", Effect.die),
     );
 
 /**

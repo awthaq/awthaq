@@ -15,6 +15,7 @@
 // (`OrganizationRecords`, ADR-EA-018) all authenticate as the same generic 401 an
 // unknown token gets — nothing reveals which.
 
+import type { Api } from "@awthaq/api";
 import { OrganizationRecords } from "@awthaq/organization";
 import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
@@ -120,7 +121,7 @@ export const ScimAuthenticationLive = Layer.effect(
     const bearer: HttpApiMiddleware.HttpApiMiddlewareSecurity<
       { readonly bearer: typeof HttpApiSecurity.bearer },
       ScimApi.CurrentScimConnection,
-      typeof ScimApi.ScimUnauthorized,
+      typeof ScimApi.ScimUnauthorized | typeof Api.StoreUnavailable,
       never
     >["bearer"] = (httpEffect, { credential }) =>
       Effect.gen(function* () {

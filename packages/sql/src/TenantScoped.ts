@@ -133,3 +133,12 @@ export const lift =
         }),
       );
     });
+
+/**
+ * `lift` for a records layer that captured its `SqlClient` at build: the statement's own requirement
+ * is provided here, so a witnessed method stays a plain `Effect<A, E>` for its callers.
+ */
+export const liftOn =
+  (sql: SqlClient.SqlClient, grant: CrossTenant) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.provideService(lift(grant)(effect), SqlClient.SqlClient, sql);

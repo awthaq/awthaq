@@ -22,6 +22,7 @@
 // the metadata arrived by (TLS from the IdP's own URL, through the SSRF-safe pinned fetcher, or pasted from its administrator);
 // what gets pinned afterwards is the fingerprint, not the document.
 
+import type { Api } from "@awthaq/api";
 import { Organization, OrganizationRecords } from "@awthaq/organization";
 import { OutboundUrl } from "@awthaq/ports";
 import type { XmlSignature } from "@awthaq/ports";
@@ -130,12 +131,14 @@ export interface SamlConnectionStoreShape {
     readonly roleMapping?: SamlRecords.RoleMapping | undefined;
   }) => Effect.Effect<
     SamlRecords.ConnectionRecord,
-    InvalidSamlConnection | SamlRecords.SamlDomainTaken
+    InvalidSamlConnection | SamlRecords.SamlDomainTaken | Api.StoreUnavailable
   >;
-  readonly get: (id: string) => Effect.Effect<SamlRecords.ConnectionRecord, SamlConnectionNotFound>;
+  readonly get: (
+    id: string,
+  ) => Effect.Effect<SamlRecords.ConnectionRecord, SamlConnectionNotFound | Api.StoreUnavailable>;
   readonly list: (
     organizationId: string,
-  ) => Effect.Effect<ReadonlyArray<SamlRecords.ConnectionRecord>>;
+  ) => Effect.Effect<ReadonlyArray<SamlRecords.ConnectionRecord>, Api.StoreUnavailable>;
   /** Fields left out are unchanged; `certificates`, when given, REPLACES the trust set (that is how a rotation retires the old key). */
   readonly update: (
     id: string,
@@ -155,7 +158,10 @@ export interface SamlConnectionStoreShape {
     },
   ) => Effect.Effect<
     SamlRecords.ConnectionRecord,
-    InvalidSamlConnection | SamlConnectionNotFound | SamlRecords.SamlDomainTaken
+    | InvalidSamlConnection
+    | SamlConnectionNotFound
+    | SamlRecords.SamlDomainTaken
+    | Api.StoreUnavailable
   >;
   /**
    * BEH-EA-318: re-reads the IdP's metadata (fetched by the caller) into the connection: the trust set is REPLACED by the
@@ -165,8 +171,13 @@ export interface SamlConnectionStoreShape {
   readonly refreshMetadata: (
     id: string,
     metadataXml: string,
-  ) => Effect.Effect<SamlRecords.ConnectionRecord, InvalidSamlConnection | SamlConnectionNotFound>;
-  readonly remove: (id: string) => Effect.Effect<void, SamlConnectionNotFound>;
+  ) => Effect.Effect<
+    SamlRecords.ConnectionRecord,
+    InvalidSamlConnection | SamlConnectionNotFound | Api.StoreUnavailable
+  >;
+  readonly remove: (
+    id: string,
+  ) => Effect.Effect<void, SamlConnectionNotFound | Api.StoreUnavailable>;
   /**
    * Home-realm discovery: the connection an organization id (its first-created one) or an email's domain routes
    * to. `None` when there is none — the caller falls back to another way in.
@@ -174,7 +185,7 @@ export interface SamlConnectionStoreShape {
   readonly discover: (hint: {
     readonly organizationId?: string | undefined;
     readonly email?: string | undefined;
-  }) => Effect.Effect<Option.Option<string>>;
+  }) => Effect.Effect<Option.Option<string>, Api.StoreUnavailable>;
 }
 
 export class SamlConnectionStore extends Context.Service<

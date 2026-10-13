@@ -3,6 +3,8 @@
 import { Defects } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
+import * as Data from "effect/Data";
 import * as Exit from "effect/Exit";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -12,6 +14,7 @@ import {
   ConstraintError,
   SqlError,
   SqlSyntaxError,
+  UniqueViolation,
 } from "effect/unstable/sql/SqlError";
 import * as StoreFailure from "../src/StoreFailure.ts";
 
@@ -101,6 +104,40 @@ describe("StoreFailure.retryTransient", () => {
       const outcome = yield* attempts(undefined, 3);
       assert.strictEqual(outcome.calls, 1);
       assert.isTrue(Exit.isSuccess(outcome.exit));
+    }),
+  );
+});
+
+class Taken extends Data.TaggedError("Taken")<{ readonly key: string }> {}
+
+describe("StoreFailure.orConflict", () => {
+  it.effect(
+    "a unique violation is the domain outcome, anything else is classified as an outage",
+    () =>
+      Effect.gen(function* () {
+        const unique = sqlError(new UniqueViolation({ cause: new Error("dup"), constraint: "k" }));
+        const conflict = yield* Effect.fail(unique).pipe(
+          StoreFailure.orConflict("Probe.create", () => new Taken({ key: "a" })),
+          Effect.flip,
+        );
+        assert.instanceOf(conflict, Taken);
+        const outage = yield* Effect.fail(connection()).pipe(
+          StoreFailure.orConflict("Probe.create", () => new Taken({ key: "a" })),
+          Effect.flip,
+        );
+        assert.instanceOf(outage, StoreFailure.StoreUnavailable);
+      }),
+  );
+
+  it.effect("a RETURNING that returned no row is a defect, never an outage", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        Effect.fail(new Cause.NoSuchElementError("no row")).pipe(
+          StoreFailure.orStoreUnavailable("Probe.insert"),
+        ),
+      );
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) assert.isTrue(exit.cause.reasons.some((r) => r._tag === "Die"));
     }),
   );
 });

@@ -25,6 +25,7 @@ import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import { TestAuth } from "@awthaq/test";
+import { grant } from "./support.ts";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents` (session
@@ -2208,7 +2209,7 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
         const now = yield* DateTime.now;
-        yield* records.setSuspended(org.id, Option.some(now));
+        yield* records.setSuspended(grant, org.id, Option.some(now));
 
         const read = yield* organization.get(owner, org.id).pipe(Effect.flip);
         assert.strictEqual(read._tag, "OrganizationNotFound");
@@ -2225,7 +2226,7 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         assert.strictEqual(listed.length, 1);
         assert.isTrue(Option.isSome(listed[0]?.suspendedAt ?? Option.none()));
 
-        yield* records.setSuspended(org.id, Option.none());
+        yield* records.setSuspended(grant, org.id, Option.none());
         const restored = yield* organization.get(owner, org.id);
         assert.strictEqual(restored.id, org.id);
       }).pipe(Effect.provide(buildLayer())),

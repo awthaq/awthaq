@@ -105,14 +105,14 @@ export interface SamlShape {
   /** BEH-EA-241: the SP metadata document for one connection. */
   readonly metadata: (
     connectionId: string,
-  ) => Effect.Effect<string, SamlApi.SamlConnectionNotFound>;
+  ) => Effect.Effect<string, SamlApi.SamlConnectionNotFound | ServerError>;
   /** SP-initiated login: reserves the AuthnRequest id and returns the IdP redirect and the state the browser cookie must carry. */
   readonly authnRequest: (
     connectionId: string,
     input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
   ) => Effect.Effect<
     { readonly location: string; readonly state: Redacted.Redacted<string> },
-    SamlApi.SamlConnectionNotFound | Api.RateLimited | ServerError
+    SamlApi.SamlConnectionNotFound | Api.RateLimited | ServerError | ServerError
   >;
   /** The Assertion Consumer Service. `cookieState` is the value of the request cookie, if the browser sent one. */
   readonly acs: (input: {
@@ -128,6 +128,7 @@ export interface SamlShape {
     | Hooks.TwoFactorRequired
     | Api.RateLimited
     | ServerError
+    | ServerError
   >;
   /**
    * BEH-EA-315: a Single Logout message delivered by the IdP's browser (a `LogoutRequest` to end sessions, or the
@@ -137,13 +138,13 @@ export interface SamlShape {
     input: SamlSlo.SloInput,
   ) => Effect.Effect<
     SamlSlo.SloOutcome,
-    SamlApi.SamlLogoutRejected | Api.RateLimited | ServerError
+    SamlApi.SamlLogoutRejected | Api.RateLimited | ServerError | ServerError
   >;
   /** BEH-EA-315: the signed-in user's own SP-initiated logout: ends their session and, when the connection has a logout endpoint, sends the IdP a `LogoutRequest`. */
   readonly logout: (
     caller: Api.UserPrincipal,
     input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
-  ) => Effect.Effect<SamlSlo.LogoutStart, ServerError>;
+  ) => Effect.Effect<SamlSlo.LogoutStart, ServerError | ServerError>;
   /** BEH-EA-318: the administrator's operations (the `saml.admin` group). */
   readonly admin: SamlAdmin.SamlAdminShape;
 }

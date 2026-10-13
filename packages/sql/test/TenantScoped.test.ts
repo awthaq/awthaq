@@ -121,6 +121,14 @@ describe("TenantScoped", () => {
       assert.isFalse(inScope);
     }).pipe(Effect.provide(TestSql.layer("tenant_scoped_lift"))),
   );
+
+  it.effect("liftOn provides the captured client, so a witnessed method needs no SqlClient", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const value = yield* Effect.succeed(7).pipe(TenantScoped.liftOn(sql, grant));
+      assert.strictEqual(value, 7);
+    }).pipe(Effect.provide(TestSql.layer("tenant_scoped_lift_on"))),
+  );
 });
 
 describe("TenantScope.coverage", () => {

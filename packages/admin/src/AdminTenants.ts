@@ -17,6 +17,7 @@
 import { Api } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, Defects, Tenant, Users } from "@awthaq/core";
 import { Organization, OrganizationRecords } from "@awthaq/organization";
+import { type StoreFailure, TenantScoped } from "@awthaq/sql";
 import { makeSubject } from "@qadi/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -45,13 +46,15 @@ export interface AdminTenantsShape {
       readonly cursor?: OrganizationCursor | undefined;
       readonly limit?: number | undefined;
     },
-  ) => Effect.Effect<OrganizationPage, AdminApi.AdminActionDenied>;
+  ) => Effect.Effect<OrganizationPage, AdminApi.AdminActionDenied | StoreFailure.StoreUnavailable>;
   readonly getOrganization: (
     caller: Api.UserPrincipal,
     organizationId: string,
   ) => Effect.Effect<
     OrganizationRecords.OrganizationRecord,
-    AdminApi.AdminActionDenied | AdminTenantsApi.AdminOrganizationNotFound
+    | AdminApi.AdminActionDenied
+    | AdminTenantsApi.AdminOrganizationNotFound
+    | StoreFailure.StoreUnavailable
   >;
   /**
    * Suspends the organization: every organization-scoped operation and qadi relationship
@@ -64,14 +67,18 @@ export interface AdminTenantsShape {
     input: { readonly reason?: string | undefined },
   ) => Effect.Effect<
     OrganizationRecords.OrganizationRecord,
-    AdminApi.AdminActionDenied | AdminTenantsApi.AdminOrganizationNotFound
+    | AdminApi.AdminActionDenied
+    | AdminTenantsApi.AdminOrganizationNotFound
+    | StoreFailure.StoreUnavailable
   >;
   readonly unsuspendOrganization: (
     caller: Api.UserPrincipal,
     organizationId: string,
   ) => Effect.Effect<
     OrganizationRecords.OrganizationRecord,
-    AdminApi.AdminActionDenied | AdminTenantsApi.AdminOrganizationNotFound
+    | AdminApi.AdminActionDenied
+    | AdminTenantsApi.AdminOrganizationNotFound
+    | StoreFailure.StoreUnavailable
   >;
 }
 
@@ -198,6 +205,11 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
           });
           return yield* Effect.fail(new AdminApi.AdminActionDenied());
         }
+        // The platform listing and suspension read and write across organizations: the witness is
+        // minted only here, after the gate said yes.
+        return TenantScoped.crossTenant(
+          "admin tenants: platform administration (canAdministerTenants)",
+        );
       });
 
       const existing = (organizationId: string) =>
@@ -212,9 +224,9 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
 
       const listOrganizations: AdminTenantsShape["listOrganizations"] = Effect.fnUntraced(
         function* (caller, input) {
-          yield* authorize(caller, "listOrganizations", Option.none());
+          const grant = yield* authorize(caller, "listOrganizations", Option.none());
           const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
-          const rows = yield* orgs.listPage({
+          const rows = yield* orgs.listPage(grant, {
             after: Option.fromNullishOr(input?.cursor),
             limit: limit + 1,
           });
@@ -239,12 +251,16 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
 
       const suspendOrganization: AdminTenantsShape["suspendOrganization"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
-          yield* authorize(caller, "suspendOrganization", Option.some(organizationId));
+          const grant = yield* authorize(
+            caller,
+            "suspendOrganization",
+            Option.some(organizationId),
+          );
           const current = yield* existing(organizationId);
           const suspended = Option.isSome(current.suspendedAt)
             ? current
             : yield* DateTime.now.pipe(
-                Effect.flatMap((now) => orgs.setSuspended(organizationId, Option.some(now))),
+                Effect.flatMap((now) => orgs.setSuspended(grant, organizationId, Option.some(now))),
                 Effect.catchTag("OrganizationRecordNotFound", () =>
                   Effect.fail(new AdminTenantsApi.AdminOrganizationNotFound()),
                 ),
@@ -261,10 +277,14 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
 
       const unsuspendOrganization: AdminTenantsShape["unsuspendOrganization"] = Effect.fnUntraced(
         function* (caller, organizationId) {
-          yield* authorize(caller, "unsuspendOrganization", Option.some(organizationId));
+          const grant = yield* authorize(
+            caller,
+            "unsuspendOrganization",
+            Option.some(organizationId),
+          );
           yield* existing(organizationId);
           const reinstated = yield* orgs
-            .setSuspended(organizationId, Option.none())
+            .setSuspended(grant, organizationId, Option.none())
             .pipe(
               Effect.catchTag("OrganizationRecordNotFound", () =>
                 Effect.fail(new AdminTenantsApi.AdminOrganizationNotFound()),

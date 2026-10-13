@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { TenantScoped } from "@awthaq/sql";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import {
@@ -30,6 +31,15 @@ import {
 } from "./ScimWorld.ts";
 import { letForkedFibersRun } from "./shared/Harness.ts";
 import { isRecord, objectOf, type Snapshot } from "./shared/WireJson.ts";
+
+/** A platform administrator's suspension of an organization reads and writes across organizations. */
+const platformGrant = TenantScoped.crossTenant(
+  "feature step: platform suspension of an organization",
+);
+/** The step looks for an invitation addressed to an email, whichever organization sent it. */
+const stepGrant = TenantScoped.crossTenant(
+  "feature step: invitations addressed to an email, across organizations",
+);
 
 const USERS = "/scim/v2/Users";
 const GROUPS = "/scim/v2/Groups";
@@ -271,6 +281,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       Effect.gen(function* () {
         const organizations = yield* OrganizationRecords.OrganizationRecords;
         yield* organizations.setSuspended(
+          platformGrant,
           connection.organizationId,
           Option.some(yield* DateTime.now),
         );
@@ -284,7 +295,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* withContext(
       Effect.gen(function* () {
         const organizations = yield* OrganizationRecords.OrganizationRecords;
-        yield* organizations.setSuspended(connection.organizationId, Option.none());
+        yield* organizations.setSuspended(platformGrant, connection.organizationId, Option.none());
       }).pipe(Effect.orDie),
     );
   });
@@ -1104,7 +1115,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (email: string) {
       const rows = yield* withContext(
         Effect.flatMap(InvitationRecords.InvitationRecords, (invitations) =>
-          invitations.listByEmail(email),
+          invitations.listByEmail(stepGrant, email),
         ),
       );
       assert.equal(

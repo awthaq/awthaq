@@ -16,6 +16,10 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Scim from "../src/Scim.ts";
 import * as ScimApi from "../src/ScimApi.ts";
 import { ScimLive, seedConnection } from "./support.ts";
+import { TenantScoped } from "@awthaq/sql";
+
+/** The witness these tests present where a cross-organization caller would. */
+const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const provision = (
   connection: ScimApi.ScimConnectionIdentity,
@@ -245,7 +249,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
         assert.strictEqual(refused._tag, "ScimForbidden");
         assert.isTrue(Option.isNone(yield* users.findByEmail("extra@acme.example")));
         assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
-        assert.isTrue(Option.isSome(yield* invitations.findById(invitation.id)));
+        assert.isTrue(Option.isSome(yield* invitations.findById(grant, invitation.id)));
       }).pipe(Effect.provide(ScimLive({}, { membershipLimit: 1 }))),
   );
 
@@ -553,12 +557,12 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
         const id = Users.UserId(created.id);
         const session = yield* sessions.issue({ userId: id });
         yield* accounts.link({ userId: id, providerId: "saml:x", subject: "nameid-1" });
-        assert.strictEqual((yield* members.listByUser(id)).length, 1);
+        assert.strictEqual((yield* members.listByUser(grant, id)).length, 1);
 
         yield* scim.deleteUser(connection, created.id);
 
         assert.strictEqual((yield* users.findById(id).pipe(Effect.flip))._tag, "UserNotFound");
-        assert.deepStrictEqual(yield* members.listByUser(id), []);
+        assert.deepStrictEqual(yield* members.listByUser(grant, id), []);
         assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("saml:x", "nameid-1")));
         assert.strictEqual(
           (yield* sessions.verify(session.token).pipe(Effect.flip))._tag,

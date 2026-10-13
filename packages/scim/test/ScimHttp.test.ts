@@ -20,6 +20,10 @@ import * as ScimApi from "../src/ScimApi.ts";
 import * as ScimConnections from "../src/ScimConnections.ts";
 import * as ScimRecords from "../src/ScimRecords.ts";
 import { ScimLive, seedConnection } from "./support.ts";
+import { TenantScoped } from "@awthaq/sql";
+
+/** The witness these tests present where a cross-organization caller would. */
+const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const ORIGIN = "http://localhost:3000";
 
@@ -187,6 +191,7 @@ describe("SCIM over HTTP: what the token is checked against (BEH-EA-246)", () =>
                 const orgs = yield* OrganizationRecords.OrganizationRecords;
                 const now = yield* DateTime.now;
                 yield* orgs.setSuspended(
+                  grant,
                   seeded.organizationId,
                   suspended ? Option.some(now) : Option.none(),
                 );

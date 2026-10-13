@@ -39,7 +39,17 @@ import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
+
+/** The qadi team-member relation asks whether a team exists in any organization (RZS-005). */
+const teamExistenceGrant = TenantScoped.crossTenant(
+  "organization qadi: existence-only team lookup for the team-member relation (RZS-005)",
+);
+/** A subject's own organization counts, whichever organizations they belong to. */
+const ownMembershipsGrant = TenantScoped.crossTenant(
+  "organization qadi: a subject's own memberships across organizations, keyed by their identity",
+);
 import { Users } from "@awthaq/core";
+import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -195,7 +205,7 @@ export const relationships = Layer.effect(
               );
 
           if (parsed._tag === "team") {
-            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
+            const team = yield* teams.findTeamByIdAnyOrg(teamExistenceGrant, resourceId);
             if (Option.isSome(team) && (yield* isSuspended(team.value.organizationId))) {
               return "Unrelated" as const;
             }
@@ -205,7 +215,7 @@ export const relationships = Layer.effect(
           }
 
           if (parsed._tag === "team-role") {
-            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
+            const team = yield* teams.findTeamByIdAnyOrg(teamExistenceGrant, resourceId);
             if (Option.isNone(team)) return "Unknown" as const;
             if (yield* isSuspended(team.value.organizationId)) return "Unrelated" as const;
             const ancestors = yield* teams.getAncestors(team.value.organizationId, resourceId);
@@ -274,6 +284,10 @@ export const relationships = Layer.effect(
             ? ("Related" as const)
             : ("Unrelated" as const);
         }).pipe(
+          // A store outage fails closed as the resolver's own typed error (the policy engine denies).
+          Effect.catchTag("StoreUnavailable", (cause) =>
+            Effect.fail(new RelationshipResolveError({ relation, resourceId, cause })),
+          ),
           Effect.catchDefect((cause) =>
             Effect.fail(new RelationshipResolveError({ relation, resourceId, cause })),
           ),
@@ -319,7 +333,7 @@ export const attributes = Layer.effect(
         const userId = userIdFromSubject(subjectId);
         if (userId === undefined) return Effect.succeed(undefined);
 
-        return members.listByUser(userId).pipe(
+        return members.listByUser(ownMembershipsGrant, userId).pipe(
           Effect.map((memberships): unknown => {
             switch (attribute) {
               case "organizationCount":
@@ -330,6 +344,9 @@ export const attributes = Layer.effect(
                 return undefined;
             }
           }),
+          Effect.catchTag("StoreUnavailable", (cause) =>
+            Effect.fail(new AttributeResolveError({ attribute, cause })),
+          ),
           Effect.catchDefect((cause) =>
             Effect.fail(new AttributeResolveError({ attribute, cause })),
           ),

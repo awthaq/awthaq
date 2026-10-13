@@ -39,6 +39,10 @@ import {
   startLogin,
   type Started,
 } from "./support.ts";
+import { TenantScoped } from "@awthaq/sql";
+
+/** The witness these tests present where a cross-organization caller would. */
+const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const acs = (samlResponse: string, cookieState: string | undefined, ip?: string) =>
   Effect.flatMap(Saml.Saml, (saml) => saml.acs({ samlResponse, cookieState, ip }));
@@ -503,7 +507,7 @@ describe("the chain refuses, uniformly", () => {
         const orgs = yield* OrganizationRecords.OrganizationRecords;
         const { connection, organizationId } = yield* seedConnection();
         const started = yield* startLogin(connection.id);
-        yield* orgs.setSuspended(organizationId, Option.some(yield* DateTime.now));
+        yield* orgs.setSuspended(grant, organizationId, Option.some(yield* DateTime.now));
         assert.strictEqual(
           yield* rejectedAs(idpResponse(started, connection.id), started.state),
           "SamlAssertionRejected",

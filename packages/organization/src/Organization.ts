@@ -26,6 +26,7 @@ import {
   Users,
 } from "@awthaq/core";
 import { Defects, Hmac, Mailer, SqlTransaction } from "@awthaq/ports";
+import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -44,6 +45,42 @@ import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
+
+// ---- cross-organization witnesses (plan 05, ADR-EA-018 decision 10) ----------------------
+//
+// Every records method that reads or writes across organizations takes a `CrossTenant` witness,
+// minted here with the reason it is sound, so the justification lives next to the call (the regex
+// guard `TenantScoping.test.ts` kept it in an allowlist far from the code). A method keyed by an
+// organization id takes no witness: the key is the scope.
+
+/** A caller's own memberships, whichever organizations they are in. */
+const ownMembershipsGrant = TenantScoped.crossTenant(
+  "organization: a user's own memberships across organizations, keyed by the caller's identity",
+);
+/** The erasure cascade removes a user everywhere. */
+const erasureGrant = TenantScoped.crossTenant(
+  "organization erasure (CSG-001/DRS-002/DRS-008): deleting a user removes them from every organization",
+);
+/** The data-subject export reads a user's rows everywhere. */
+const exportGrant = TenantScoped.crossTenant(
+  "organization data-subject export (CSG-005): a user's memberships, teams and invitations across organizations",
+);
+/** The invitation id alone is the capability. */
+const invitationIdGrant = TenantScoped.crossTenant(
+  "organization: the invitation id is the capability; acceptance re-checks the invitee's email",
+);
+/** The emailed token's hash is the capability. */
+const invitationTokenGrant = TenantScoped.crossTenant(
+  "organization: the emailed token's hash is the capability; the landing lookup then checks the invitee's email",
+);
+/** An invitee's own pending invitations, whichever organizations sent them. */
+const inviteeGrant = TenantScoped.crossTenant(
+  "organization: the invitee's own pending invitations, keyed by their verified email",
+);
+/** The per-inviter quota is deployment-wide. */
+const inviterQuotaGrant = TenantScoped.crossTenant(
+  "organization: per-inviter invitation quota, deployment-wide by design (invitationLimit)",
+);
 
 // ---- config -------------------------------------------------------------------
 
@@ -187,16 +224,23 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationLimitReached
     | OrganizationApi.UnknownRegion
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
-  readonly checkSlug: (slug: string) => Effect.Effect<boolean>;
+  readonly checkSlug: (slug: string) => Effect.Effect<boolean, Errors.StoreUnavailable>;
   readonly list: (
     caller: Api.UserPrincipal,
-  ) => Effect.Effect<ReadonlyArray<OrganizationRecords.OrganizationRecord>>;
+  ) => Effect.Effect<
+    ReadonlyArray<OrganizationRecords.OrganizationRecord>,
+    Errors.StoreUnavailable
+  >;
   /** MTI-008: member-only — a non-member gets the same `OrganizationNotFound` an unknown id gets. */
   readonly get: (
     caller: Api.UserPrincipal,
     organizationId: string,
-  ) => Effect.Effect<OrganizationRecords.OrganizationRecord, OrganizationApi.OrganizationNotFound>;
+  ) => Effect.Effect<
+    OrganizationRecords.OrganizationRecord,
+    OrganizationApi.OrganizationNotFound | Errors.StoreUnavailable
+  >;
   readonly getFull: (
     caller: Api.UserPrincipal,
     organizationId: string,
@@ -210,7 +254,9 @@ export interface OrganizationShape {
       readonly members: ReadonlyArray<MembershipRecords.MembershipRecord>;
       readonly invitations: ReadonlyArray<InvitationRecords.InvitationRecord>;
     },
-    OrganizationApi.OrganizationNotFound | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.OrganizationPermissionDenied
+    | Errors.StoreUnavailable
   >;
   readonly update: (
     caller: Api.UserPrincipal,
@@ -229,6 +275,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.UnknownRegion
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly delete: (
     caller: Api.UserPrincipal,
@@ -239,6 +286,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OrganizationDeletionDisabled
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly listMembers: (
     caller: Api.UserPrincipal,
@@ -246,7 +294,9 @@ export interface OrganizationShape {
     input?: MembershipRecords.ListMembersInput,
   ) => Effect.Effect<
     ReadonlyArray<MembershipRecords.MembershipRecord>,
-    OrganizationApi.OrganizationNotFound | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.OrganizationPermissionDenied
+    | Errors.StoreUnavailable
   >;
   readonly removeMember: (
     caller: Api.UserPrincipal,
@@ -259,6 +309,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OwnerInvariantViolation
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly updateMemberRole: (
     caller: Api.UserPrincipal,
@@ -274,6 +325,7 @@ export interface OrganizationShape {
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.UnknownOrgRole
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly leave: (
     caller: Api.UserPrincipal,
@@ -284,6 +336,7 @@ export interface OrganizationShape {
     | OrganizationApi.MembershipNotFound
     | OrganizationApi.OwnerInvariantViolation
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** Server-only: no invitation round-trip, no HTTP endpoint — a trusted, app-driven direct add. */
   readonly addMember: (input: {
@@ -297,6 +350,7 @@ export interface OrganizationShape {
     | OrganizationApi.AlreadyMember
     | OrganizationApi.UnknownOrgRole
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /**
    * BEH-EA-316 (the SAML role mapping's guard, RRM-001's `canGrant` rule with a role ceiling standing in for the caller): why
@@ -310,7 +364,7 @@ export interface OrganizationShape {
     readonly ceiling: ReadonlyArray<string>;
   }) => Effect.Effect<
     Option.Option<"unknownRole" | "unknownCeiling" | "exceedsCeiling">,
-    OrganizationApi.OrganizationNotFound
+    OrganizationApi.OrganizationNotFound | Errors.StoreUnavailable
   >;
   /**
    * BEH-EA-316: makes `userId`'s roles in the organization exactly `roles`, on behalf of a source (an identity provider's
@@ -336,21 +390,31 @@ export interface OrganizationShape {
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.OwnerInvariantViolation
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly getActiveMember: (
     caller: Api.UserPrincipal,
-  ) => Effect.Effect<MembershipRecords.MembershipRecord, OrganizationApi.NoActiveOrganization>;
+  ) => Effect.Effect<
+    MembershipRecords.MembershipRecord,
+    OrganizationApi.NoActiveOrganization | Errors.StoreUnavailable
+  >;
   readonly getActiveMemberRole: (
     caller: Api.UserPrincipal,
-  ) => Effect.Effect<ReadonlyArray<string>, OrganizationApi.NoActiveOrganization>;
+  ) => Effect.Effect<
+    ReadonlyArray<string>,
+    OrganizationApi.NoActiveOrganization | Errors.StoreUnavailable
+  >;
   /** Upserts the caller's own session's active organization; `organizationId: null` unsets it. Rejects if the caller isn't a member of the named organization. */
   readonly setActive: (
     caller: Api.UserPrincipal,
     organizationId: string | null,
-  ) => Effect.Effect<ActiveContextRecords.ActiveContextRecord, OrganizationApi.MembershipNotFound>;
+  ) => Effect.Effect<
+    ActiveContextRecords.ActiveContextRecord,
+    OrganizationApi.MembershipNotFound | Errors.StoreUnavailable
+  >;
   readonly getActive: (
     caller: Api.UserPrincipal,
-  ) => Effect.Effect<ActiveContextRecords.ActiveContextRecord>;
+  ) => Effect.Effect<ActiveContextRecords.ActiveContextRecord, Errors.StoreUnavailable>;
   readonly invite: (
     caller: Api.UserPrincipal,
     organizationId: string,
@@ -391,6 +455,7 @@ export interface OrganizationShape {
     | OrganizationApi.EmailVerificationRequired
     | OrganizationApi.TeamMemberLimitReached
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly rejectInvitation: (
     caller: Api.UserPrincipal,
@@ -402,6 +467,7 @@ export interface OrganizationShape {
     | OrganizationApi.InvitationNotPending
     | OrganizationApi.InvitationEmailMismatch
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly cancelInvitation: (
     caller: Api.UserPrincipal,
@@ -412,6 +478,7 @@ export interface OrganizationShape {
     | OrganizationApi.InvitationNotPending
     | OrganizationApi.OrganizationPermissionDenied
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /**
    * MTI-010: readable only by the invitee (email match) or a member holding
@@ -437,11 +504,13 @@ export interface OrganizationShape {
     organizationId: string,
   ) => Effect.Effect<
     ReadonlyArray<InvitationRecords.InvitationRecord>,
-    OrganizationApi.OrganizationNotFound | OrganizationApi.OrganizationPermissionDenied
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.OrganizationPermissionDenied
+    | Errors.StoreUnavailable
   >;
   readonly listInvitationsForUser: (
     caller: Api.UserPrincipal,
-  ) => Effect.Effect<ReadonlyArray<InvitationRecords.InvitationRecord>>;
+  ) => Effect.Effect<ReadonlyArray<InvitationRecords.InvitationRecord>, Errors.StoreUnavailable>;
   readonly createRole: (
     caller: Api.UserPrincipal,
     organizationId: string,
@@ -456,6 +525,7 @@ export interface OrganizationShape {
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.RoleLimitReached
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly listRoles: (
     caller: Api.UserPrincipal,
@@ -465,6 +535,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.DynamicAccessControlDisabled
     | OrganizationApi.OrganizationPermissionDenied
+    | Errors.StoreUnavailable
   >;
   readonly getRole: (
     caller: Api.UserPrincipal,
@@ -476,6 +547,7 @@ export interface OrganizationShape {
     | OrganizationApi.DynamicAccessControlDisabled
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OrgRoleNotFound
+    | Errors.StoreUnavailable
   >;
   readonly updateRole: (
     caller: Api.UserPrincipal,
@@ -490,6 +562,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrgRoleNotFound
     | OrganizationApi.RolePermissionEscalation
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly deleteRole: (
     caller: Api.UserPrincipal,
@@ -502,6 +575,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OrgRoleNotFound
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** OHS-001: with a `parentId`, the team is created under that parent (`TeamNotFound` when it is not in this organization). */
   readonly createTeam: (
@@ -517,6 +591,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamNotFound
     | OrganizationApi.TeamLimitReached
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** OHS-001: re-parents a team with its whole subtree; `None` moves it to the root. Needs `team:update`. */
   readonly moveTeam: (
@@ -532,6 +607,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamNotFound
     | OrganizationApi.TeamHierarchyCycle
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** OHS-001: member-only, nearest first. */
   readonly listTeamAncestors: (
@@ -544,6 +620,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.TeamNotFound
+    | Errors.StoreUnavailable
   >;
   /** OHS-001: member-only, nearest first. */
   readonly listTeamDescendants: (
@@ -556,6 +633,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.TeamNotFound
+    | Errors.StoreUnavailable
   >;
   /** MTI-002: member-only — a full team roster/directory is confidential to the organization, not deployment-public. */
   readonly listTeams: (
@@ -566,13 +644,14 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.OrganizationPermissionDenied
+    | Errors.StoreUnavailable
   >;
   readonly listUserTeams: (
     caller: Api.UserPrincipal,
     organizationId: string,
   ) => Effect.Effect<
     ReadonlyArray<TeamRecords.TeamRecord>,
-    OrganizationApi.OrganizationNotFound | OrganizationApi.TeamsDisabled
+    OrganizationApi.OrganizationNotFound | OrganizationApi.TeamsDisabled | Errors.StoreUnavailable
   >;
   readonly updateTeam: (
     caller: Api.UserPrincipal,
@@ -586,6 +665,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.TeamNotFound
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly removeTeam: (
     caller: Api.UserPrincipal,
@@ -600,6 +680,7 @@ export interface OrganizationShape {
     | OrganizationApi.LastTeamCannotBeRemoved
     | OrganizationApi.TeamHasChildren
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** MTI-002: member-only — a team roster is personal data about the organization's own staff, not deployment-public. */
   readonly listTeamMembers: (
@@ -612,6 +693,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.TeamNotFound
     | OrganizationApi.OrganizationPermissionDenied
+    | Errors.StoreUnavailable
   >;
   readonly addTeamMember: (
     caller: Api.UserPrincipal,
@@ -631,6 +713,7 @@ export interface OrganizationShape {
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.UnknownTeamRole
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** OHS-004: needs `team:update` on the team (org-level, or a team role held on it or an ancestor); `canGrant`-guarded like org roles. */
   readonly updateTeamMemberRole: (
@@ -649,6 +732,7 @@ export interface OrganizationShape {
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.UnknownTeamRole
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   readonly removeTeamMember: (
     caller: Api.UserPrincipal,
@@ -663,6 +747,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamNotFound
     | OrganizationApi.TeamMembershipNotFound
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** Upserts the caller's own session's active team; `teamId: null` unsets it. Rejects if the caller isn't a member of the named team. */
   readonly setActiveTeam: (
@@ -670,7 +755,7 @@ export interface OrganizationShape {
     teamId: string | null,
   ) => Effect.Effect<
     ActiveContextRecords.ActiveContextRecord,
-    OrganizationApi.TeamMembershipNotFound
+    OrganizationApi.TeamMembershipNotFound | Errors.StoreUnavailable
   >;
   /**
    * A user's role(s) and effective permission set within an organization —
@@ -687,7 +772,8 @@ export interface OrganizationShape {
     Option.Option<{
       readonly role: ReadonlyArray<string>;
       readonly permissions: PermissionEngine.Statements;
-    }>
+    }>,
+    Errors.StoreUnavailable
   >;
 }
 
@@ -1737,10 +1823,10 @@ export const organizationErasure = Erasure.contribute({
     return (subject: Erasure.ErasureSubject) =>
       Effect.all(
         [
-          teams.removeUserFromAllTeams(subject.userId),
-          members.deleteAllByUser(subject.userId),
-          activeContext.deleteAllByUser(subject.userId),
-          invitations.removeAllForUser(subject.userId, subject.email),
+          teams.removeUserFromAllTeams(erasureGrant, subject.userId),
+          members.deleteAllByUser(erasureGrant, subject.userId),
+          activeContext.deleteAllByUser(erasureGrant, subject.userId),
+          invitations.removeAllForUser(erasureGrant, subject.userId, subject.email),
         ],
         { discard: true },
       );
@@ -1768,7 +1854,7 @@ export const organizationExport = DataExport.contribute({
     });
     return (subject: DataExport.DataExportSubject) =>
       Effect.gen(function* () {
-        const memberships = yield* members.listByUser(subject.userId);
+        const memberships = yield* members.listByUser(exportGrant, subject.userId);
         const teamRows = yield* Effect.forEach(memberships, (membership) =>
           teams.listTeamsByUser(membership.organizationId, subject.userId),
         );
@@ -1783,10 +1869,12 @@ export const organizationExport = DataExport.contribute({
             organizationId: team.organizationId,
             name: team.name,
           })),
-          invitationsSent: (yield* invitations.listByInviter(subject.userId)).map(invitationView),
+          invitationsSent: (yield* invitations.listByInviter(exportGrant, subject.userId)).map(
+            invitationView,
+          ),
           invitationsReceived: (subject.email === undefined
             ? []
-            : yield* invitations.listByEmail(subject.email)
+            : yield* invitations.listByEmail(exportGrant, subject.email)
           ).map(invitationView),
         };
       });
@@ -2168,7 +2256,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         if (!allowed)
           return yield* Effect.fail(new OrganizationApi.OrganizationCreationNotAllowed());
 
-        const ownedOrgs = yield* members.listByUser(callerId);
+        const ownedOrgs = yield* members.listByUser(ownMembershipsGrant, callerId);
         const ownedCount = ownedOrgs.filter((m) => m.role.includes(orgConfig.creatorRole)).length;
         if (ownedCount >= orgConfig.organizationLimit) {
           return yield* Effect.fail(new OrganizationApi.OrganizationLimitReached());
@@ -2220,9 +2308,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         orgs.findBySlug(slug).pipe(Effect.map(Option.isNone));
 
       const list: OrganizationShape["list"] = (caller) =>
-        members
-          .listByUser(Users.UserId(caller.ref.id))
-          .pipe(Effect.flatMap((rows) => orgs.listByIds(rows.map((r) => r.organizationId))));
+        members.listByUser(ownMembershipsGrant, Users.UserId(caller.ref.id)).pipe(
+          Effect.flatMap((rows) =>
+            orgs.listByIds(
+              ownMembershipsGrant,
+              rows.map((r) => r.organizationId),
+            ),
+          ),
+        );
 
       const get: OrganizationShape["get"] = Effect.fnUntraced(function* (caller, organizationId) {
         const record = yield* requireOrganization(organizationId);
@@ -2759,7 +2852,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "create",
           );
 
-          const pendingCount = yield* invitations.countPendingByInviter(callerId);
+          const pendingCount = yield* invitations.countPendingByInviter(
+            inviterQuotaGrant,
+            callerId,
+          );
           if (pendingCount >= (yield* limitsOf(organizationId)).invitationLimit) {
             return yield* Effect.fail(new OrganizationApi.InvitationLimitReached());
           }
@@ -2796,7 +2892,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // any pending invitation for them is stale, so cancel it first.
           if (Option.isSome(alreadyMember)) {
             if (Option.isSome(existing)) {
-              yield* invitations.updateStatus(existing.value.id, "canceled").pipe(Effect.orDie);
+              yield* invitations
+                .updateStatus(existing.value.organizationId, existing.value.id, "canceled")
+                .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
             }
             return yield* Effect.fail(new OrganizationApi.AlreadyMember());
           }
@@ -2835,14 +2933,16 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
           if (Option.isNone(alreadyMember) && Option.isSome(existing)) {
             if (orgConfig.cancelPendingInvitationsOnReInvite) {
-              yield* invitations.updateStatus(existing.value.id, "canceled").pipe(Effect.orDie);
+              yield* invitations
+                .updateStatus(existing.value.organizationId, existing.value.id, "canceled")
+                .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
             } else if (input.resend) {
               // A resend mints a new token (only the hash is kept, so the old
               // mail cannot be re-sent) and retires the previous one.
               const fresh = yield* mintInvitationToken;
               const rotated = yield* invitations
-                .setTokenHash(existing.value.id, fresh.tokenHash)
-                .pipe(Effect.orDie);
+                .setTokenHash(existing.value.organizationId, existing.value.id, fresh.tokenHash)
+                .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
               yield* sendInvite(rotated, fresh.token);
               yield* events.publish({
                 _tag: "auth.organization.invitationCreated",
@@ -2903,7 +3003,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        */
       const requireInvitationToken = (invitationId: string, token: string) =>
         Effect.gen(function* () {
-          const found = yield* invitations.findById(invitationId);
+          const found = yield* invitations.findById(invitationIdGrant, invitationId);
           const presented = yield* hashInvitationToken(token);
           const stored = Option.flatMap(found, (record) => record.tokenHash);
           const matches = Hmac.constantTimeEqualString(
@@ -2933,7 +3033,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
           const now = yield* DateTime.now;
           if (DateTime.isGreaterThan(now, record.expiresAt)) {
-            yield* invitations.updateStatus(invitationId, "expired").pipe(Effect.orDie);
+            yield* invitations
+              .updateStatus(record.organizationId, invitationId, "expired")
+              .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
             return yield* Effect.fail(new OrganizationApi.InvitationExpired());
           }
 
@@ -2954,7 +3056,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // is canceled and the existing roles stay untouched.
           const alreadyMember = yield* members.findByUserAndOrg(callerId, record.organizationId);
           if (Option.isSome(alreadyMember)) {
-            yield* invitations.updateStatus(invitationId, "canceled").pipe(Effect.orDie);
+            yield* invitations
+              .updateStatus(record.organizationId, invitationId, "canceled")
+              .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
             return yield* Effect.fail(new OrganizationApi.AlreadyMember());
           }
 
@@ -2994,7 +3098,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 Effect.fail(new OrganizationApi.AlreadyMember()),
               ),
             );
-          yield* invitations.updateStatus(invitationId, "accepted").pipe(Effect.orDie);
+          yield* invitations
+            .updateStatus(record.organizationId, invitationId, "accepted")
+            .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
           yield* events.publish({
             _tag: "auth.organization.invitationAccepted",
             invitationId,
@@ -3043,7 +3149,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (!ownsEmail(user, record.email)) {
             return yield* Effect.fail(new OrganizationApi.InvitationEmailMismatch());
           }
-          yield* invitations.updateStatus(invitationId, "rejected").pipe(Effect.orDie);
+          yield* invitations
+            .updateStatus(record.organizationId, invitationId, "rejected")
+            .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
           yield* events.publish({
             _tag: "auth.organization.invitationRejected",
             invitationId,
@@ -3061,7 +3169,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // (or its status) from an unknown one, so membership is checked before
           // the pending check and answers the unknown-invitation error.
           const callerId = Users.UserId(caller.ref.id);
-          const found = yield* invitations.findById(invitationId).pipe(
+          const found = yield* invitations.findById(invitationIdGrant, invitationId).pipe(
             Effect.flatMap(
               Option.match({
                 onNone: () => Effect.fail(new OrganizationApi.InvitationNotFound()),
@@ -3083,7 +3191,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
               Effect.fail(new OrganizationApi.InvitationNotFound()),
             ),
           );
-          yield* invitations.updateStatus(invitationId, "canceled").pipe(Effect.orDie);
+          yield* invitations
+            .updateStatus(record.organizationId, invitationId, "canceled")
+            .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
           yield* events.publish({
             _tag: "auth.organization.invitationCanceled",
             invitationId,
@@ -3115,7 +3225,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const getInvitation: OrganizationShape["getInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId) {
-          const found = yield* invitations.findById(invitationId);
+          const found = yield* invitations.findById(invitationIdGrant, invitationId);
           if (Option.isNone(found))
             return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           const allowed = yield* mayReadInvitation(Users.UserId(caller.ref.id), found.value);
@@ -3126,7 +3236,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const getInvitationByToken: OrganizationShape["getInvitationByToken"] = Effect.fnUntraced(
         function* (caller, token) {
-          const found = yield* invitations.findByTokenHash(yield* hashInvitationToken(token));
+          const found = yield* invitations.findByTokenHash(
+            invitationTokenGrant,
+            yield* hashInvitationToken(token),
+          );
           if (Option.isNone(found))
             return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           const user = yield* users
@@ -3155,7 +3268,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // FAMS-002: a Phone/Anonymous user has no email, so no invitation can name them.
           return yield* Option.match(Users.emailOf(user), {
             onNone: () => Effect.succeed([]),
-            onSome: (email) => invitations.listByEmail(email),
+            onSome: (email) => invitations.listByEmail(inviteeGrant, email),
           });
         },
       );

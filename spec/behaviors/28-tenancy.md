@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-28 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) <br> 1.3 (2026-10-13): BEH-EA-328: Keyed tables take their organization id explicitly, and BEH-EA-235: a connection's client secret is a sealed column (plan 05 phase 6) |
 ---
 
 > A tenant is an `Organization` row ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)); everything below is opt-in and zero-cost for a single-tenant deployment.
@@ -97,7 +97,8 @@ REQUIREMENT: `OAuth.authorize` and `OAuth.callback` MUST resolve a provider id
              installed connection resolver; a connection's provider id is
              namespaced `org:<organizationId>:<connectionId>` so it can never
              shadow a static provider. A connection's client secret MUST be
-             ciphertext at rest.
+             ciphertext at rest, a sealed column of `ConnectionRecords` that
+             opens only where the provider config is built.
 ```
 
 The resolver is a port-shaped callback so `@awthaq/oauth` never imports the organization plugin. Home-realm discovery passes an `organization` id or the sign-in email's domain as the hint. Role mapping stays in qadi.
@@ -185,4 +186,4 @@ REQUIREMENT: A plugin MUST declare every table it owns as Partitioned, Keyed,
              plugin order, as `auth.tenancy` and per plugin in the manifest.
 ```
 
-`auth.tenancy` is what an operator passes to `TenantScope.enableRls({ plugins: auth.tenancy })` (BEH-EA-233). `awthaq plugin list` prints each table with its tenancy, so a Global table's reason is reviewed where the plugin is installed. A Global declaration is a statement, not a default: the type system refuses a table with no declaration.
+`auth.tenancy` is what an operator passes to `TenantScope.enableRls({ plugins: auth.tenancy })` (BEH-EA-233). `awthaq plugin list` prints each table with its tenancy, so a Global table's reason is reviewed where the plugin is installed. A Global declaration is a statement, not a default: the type system refuses a table with no declaration. A Keyed table (the organization tables: `id` or `organizationId`) has no ambient predicate: every records method takes the organization id as its scope, and a method that must cross organizations takes a witness ([BEH-EA-327](28-tenancy.md#beh-ea-327-a-cross-tenant-statement-presents-a-witness-and-the-witness-lifts-rls)).

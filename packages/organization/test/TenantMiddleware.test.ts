@@ -21,6 +21,7 @@ import * as Organization from "../src/Organization.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as TenantResolver from "../src/TenantResolver.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { grant } from "./support.ts";
 
 /** Reports the ambient tenant the handler's fiber sees. */
 const whoami = HttpRouter.add(
@@ -105,7 +106,7 @@ describe("Organization.tenantMiddleware (BEH-EA-234)", () => {
     Effect.gen(function* () {
       const records = yield* serveWith(Organization.tenantMiddleware);
       const acme = yield* records.create({ name: "Acme", slug: "acme" });
-      yield* records.setSuspended(acme.id, Option.some(yield* DateTime.now));
+      yield* records.setSuspended(grant, acme.id, Option.some(yield* DateTime.now));
       const seen = yield* tenantSeenBy({ "x-tenant": acme.id });
       assert.deepStrictEqual(seen.body, { tenant: acme.id });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),

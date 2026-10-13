@@ -10,6 +10,7 @@
 // suite obtains them from the memory records layers next to the layer under
 // test.
 import { Migrations, Users } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -21,6 +22,7 @@ import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { ambientOrganization, grant, vitestFramework } from "./support.ts";
 
 const MemoryLayer = ActiveContextRecords.layerMemory;
 
@@ -177,7 +179,7 @@ const suite = (
         yield* records.setOrganization("s-a2", yield* member(alice, "org-2"));
         yield* records.setOrganization("s-b", yield* member(bob, "org-1"));
 
-        yield* records.deleteAllByUser(alice);
+        yield* records.deleteAllByUser(grant, alice);
 
         assert.isTrue(Option.isNone(yield* records.findBySessionId("s-a1")));
         assert.isTrue(Option.isNone(yield* records.findBySessionId("s-a2")));
@@ -207,4 +209,102 @@ describe("ActiveContextRecords witnesses (type level)", () => {
       records.setOrganization("session-1", handBuilt);
     assert.isFunction(neverRun);
   });
+});
+
+// Plan 05: the tenant-isolation conformance suite. `organization_active_context` is Derived: it has no
+// tenant column of its own, a row is reached through its session (a core, partitioned table), so the
+// methods keyed by a session id the caller already resolved are `derived`. The ones keyed by an
+// organization id are `keyed`, and the erasure sweep across sessions takes a witness.
+let isolationCounter = 0;
+interface Row {
+  readonly sessionId: string;
+  readonly userId: Users.UserId;
+  readonly organizationId: string;
+}
+const read = (row: Row) =>
+  Effect.flatMap(ActiveContextRecords.ActiveContextRecords, (records) =>
+    records.findBySessionId(row.sessionId),
+  );
+/** Runs `change` and reports whether the session's active organization stopped being the row's organization. */
+const changed = (
+  row: Row,
+  change: (
+    records: ActiveContextRecords.ActiveContextRecordsShape,
+  ) => Effect.Effect<unknown, unknown>,
+) =>
+  Effect.flatMap(ActiveContextRecords.ActiveContextRecords, (records) =>
+    Effect.gen(function* () {
+      const before = yield* read(row);
+      yield* change(records);
+      const after = yield* read(row);
+      const active = (found: typeof before) =>
+        Option.isSome(found) && Option.isSome(found.value.activeOrganizationId);
+      return active(before) && !active(after);
+    }),
+  );
+const orgOf = (row: Row, as: "owner" | "other") =>
+  as === "owner" ? row.organizationId : "another-organization";
+
+const isolationCase: TestAuth.TableCase<
+  ActiveContextRecords.ActiveContextRecordsShape,
+  Row,
+  ActiveContextRecords.ActiveContextRecords | MembershipRecords.MembershipRecords
+> = {
+  table: "organization_active_context",
+  insert: Effect.gen(function* () {
+    const records = yield* ActiveContextRecords.ActiveContextRecords;
+    isolationCounter += 1;
+    const organizationId = yield* ambientOrganization;
+    const userId = Users.UserId(`isolation-user-${isolationCounter}`);
+    const sessionId = `isolation-session-${isolationCounter}`;
+    yield* records.setOrganization(sessionId, yield* member(userId, organizationId));
+    return { sessionId, userId, organizationId };
+  }),
+  methods: {
+    setOrganization: { insert: true },
+    unsetOrganization: {
+      derived: "keyed by the caller's own session id; the session is tenant-scoped",
+    },
+    setTeam: { derived: "keyed by the caller's own session id; the session is tenant-scoped" },
+    unsetTeam: { derived: "keyed by the caller's own session id; the session is tenant-scoped" },
+    findBySessionId: {
+      derived: "keyed by the caller's own session id; the session is tenant-scoped",
+    },
+    clearOrganization: {
+      keyed: {
+        run: (row, as) => changed(row, (records) => records.clearOrganization(orgOf(row, as))),
+      },
+    },
+    clearOrganizationForUser: {
+      keyed: {
+        run: (row, as) =>
+          changed(row, (records) => records.clearOrganizationForUser(row.userId, orgOf(row, as))),
+      },
+    },
+    clearTeam: {
+      derived: "keyed by a team id the caller already resolved through a tenant-scoped team read",
+    },
+    deleteAllByUser: {
+      crossTenant: {
+        run: (row) =>
+          Effect.flatMap(ActiveContextRecords.ActiveContextRecords, (records) =>
+            Effect.gen(function* () {
+              const before = yield* read(row);
+              yield* records.deleteAllByUser(grant, row.userId);
+              return Option.isSome(before) && Option.isNone(yield* read(row));
+            }),
+          ),
+      },
+    },
+  },
+};
+
+TestAuth.runTenantIsolationTests(vitestFramework, {
+  plugin: Organization.Organization,
+  covers: ["organization_active_context"],
+  adapters: [
+    { name: "layerMemory", layer: Layer.mergeAll(MemoryLayer, Witnesses) },
+    { name: "layerSql", layer: Layer.mergeAll(SqlLayer, Witnesses) },
+  ],
+  cases: [isolationCase],
 });
