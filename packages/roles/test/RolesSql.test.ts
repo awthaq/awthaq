@@ -223,3 +223,19 @@ describe("Roles.Roles.layerSql", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 });
+
+// Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
+describe("Roles.layerSql: a store outage", () => {
+  it.effect("assign fails with StoreUnavailable naming the operation", () =>
+    Effect.gen(function* () {
+      yield* TestSql.injectFailure({
+        name: "roles_fail_insert",
+        table: "roles_assignments",
+        event: "INSERT",
+      });
+      const roles = yield* Roles.Roles;
+      const failure = yield* roles.assign(Users.UserId("outage-user"), "editor").pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+});

@@ -406,18 +406,24 @@ export interface DeviceAuthorizationShape {
     context: { readonly verificationBase: string },
   ) => Effect.Effect<
     CodeIssued,
-    DeviceAuthorizationApi.InvalidClient | DeviceAuthorizationApi.InvalidScope | Api.RateLimited
+    | DeviceAuthorizationApi.InvalidClient
+    | DeviceAuthorizationApi.InvalidScope
+    | Api.RateLimited
+    | Errors.StoreUnavailable
   >;
   /** BEH-EA-300/315: one poll. Resolves only for the poll that wins the redemption claim. */
   readonly poll: (
     input: Source & { readonly deviceCode: Redacted.Redacted<string>; readonly clientId: string },
     context?: { readonly userAgent?: string | undefined },
-  ) => Effect.Effect<RedeemedGrant, PollError>;
+  ) => Effect.Effect<RedeemedGrant, PollError | Errors.StoreUnavailable>;
   /** BEH-EA-301: the verification page — claims an unclaimed pending code for `caller`, when there is one. */
   readonly verify: (
     input: Source & { readonly userCode: string },
     caller: Option.Option<Caller>,
-  ) => Effect.Effect<VerificationView, DeviceAuthorizationApi.InvalidUserCode | Api.RateLimited>;
+  ) => Effect.Effect<
+    VerificationView,
+    DeviceAuthorizationApi.InvalidUserCode | Api.RateLimited | Errors.StoreUnavailable
+  >;
   /** BEH-EA-302: approves a code the caller has claimed; a `BeforeDeviceApproval` tap can refuse it. */
   readonly approve: (
     input: Source & { readonly userCode: string },
@@ -429,6 +435,7 @@ export interface DeviceAuthorizationShape {
     | DeviceAuthorizationApi.DeviceApprovalRefused
     | Api.RateLimited
     | HookPoint.HookAborted
+    | Errors.StoreUnavailable
   >;
   /** BEH-EA-302: denies a code the caller has claimed. */
   readonly deny: (
@@ -440,18 +447,19 @@ export interface DeviceAuthorizationShape {
     | DeviceAuthorizationApi.UserCodeNotClaimed
     | DeviceAuthorizationApi.DeviceApprovalRefused
     | Api.RateLimited
+    | Errors.StoreUnavailable
   >;
   /** BEH-EA-305: registers a public client at runtime (an operator or seed script, never an end user). */
   readonly registerClient: (input: {
     readonly name: string;
     readonly clientId?: string | undefined;
     readonly scopes?: ReadonlyArray<string> | undefined;
-  }) => Effect.Effect<DeviceClientView, ClientExists | ClientInvalid>;
+  }) => Effect.Effect<DeviceClientView, ClientExists | ClientInvalid | Errors.StoreUnavailable>;
   /** Revokes a registered client: it can no longer ask for a code (grants it already holds run out). `false` when there was none to revoke. */
-  readonly revokeClient: (clientId: string) => Effect.Effect<boolean>;
-  readonly listClients: Effect.Effect<ReadonlyArray<DeviceClientView>>;
+  readonly revokeClient: (clientId: string) => Effect.Effect<boolean, Errors.StoreUnavailable>;
+  readonly listClients: Effect.Effect<ReadonlyArray<DeviceClientView>, Errors.StoreUnavailable>;
   /** BEH-EA-306: physically deletes grants that expired before `before` (default: now); an operator's retention job calls it. */
-  readonly purgeExpired: (before?: DateTime.Utc) => Effect.Effect<number>;
+  readonly purgeExpired: (before?: DateTime.Utc) => Effect.Effect<number, Errors.StoreUnavailable>;
 }
 
 /** The address (through the application-provided `ClientAddress` port) and user agent of a request. */

@@ -348,3 +348,19 @@ describe("ChallengeStore (layerCookie)", () => {
       }).pipe(Effect.provide(CookieLayer)),
   );
 });
+
+// Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
+describe("ChallengeStore.layerSql: a store outage", () => {
+  it.effect("issue fails with StoreUnavailable naming the operation", () =>
+    Effect.gen(function* () {
+      yield* TestSql.injectFailure({
+        name: "passkey_challenge_fail_insert",
+        table: "passkey_challenge",
+        event: "INSERT",
+      });
+      const store = yield* ChallengeStore.ChallengeStore;
+      const failure = yield* store.issue("outage-scope").pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+});

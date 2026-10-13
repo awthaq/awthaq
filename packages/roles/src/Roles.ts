@@ -28,7 +28,7 @@
 // `RevocationStore.layerSql` (`INSERT ... ON CONFLICT ... DO NOTHING`,
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
-import { Defects, Users } from "@awthaq/core";
+import { Defects, Errors, Users } from "@awthaq/core";
 import {
   AuthEvents,
   AuthPlugin,
@@ -75,27 +75,32 @@ export interface RolesShape {
     userId: Users.UserId,
     roleName: string,
     options?: RoleChangeOptions,
-  ) => Effect.Effect<void, UnknownRole>;
+  ) => Effect.Effect<void, UnknownRole | Errors.StoreUnavailable>;
   /** RRM-005: a real revoke publishes `auth.roles.revoked`; revoking a role the user never held publishes nothing. */
   readonly revoke: (
     userId: Users.UserId,
     roleName: string,
     options?: RoleChangeOptions,
-  ) => Effect.Effect<void>;
-  readonly listRoleNames: (userId: Users.UserId) => Effect.Effect<ReadonlyArray<string>>;
+  ) => Effect.Effect<void, Errors.StoreUnavailable>;
+  readonly listRoleNames: (
+    userId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<string>, Errors.StoreUnavailable>;
   /**
    * ECS-006: the users currently holding `roleName`. `awthaq seed admin` must find an
    * existing administrator before it grants another, and nothing else can answer "who has
    * this role" (`listRoleNames` goes the other way).
    */
-  readonly holders: (roleName: string) => Effect.Effect<ReadonlyArray<Users.UserId>>;
+  readonly holders: (
+    roleName: string,
+  ) => Effect.Effect<ReadonlyArray<Users.UserId>, Errors.StoreUnavailable>;
   /**
    * RRM-003: stored assignments whose role name is no longer in the catalog
    * (drift after a rename/removal) — for a startup/doctor check. Empty when
    * catalog and assignments agree.
    */
   readonly listUnknownAssignments: Effect.Effect<
-    ReadonlyArray<{ readonly userId: Users.UserId; readonly roleName: string }>
+    ReadonlyArray<{ readonly userId: Users.UserId; readonly roleName: string }>,
+    Errors.StoreUnavailable
   >;
 }
 
@@ -275,7 +280,9 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       assign: (userId, roleName, options) =>
         Effect.gen(function* () {
           if (!catalog.has(roleName)) return yield* Effect.fail(new UnknownRole({ roleName }));
-          const inserted = yield* assignQuery({ userId, role: roleName }).pipe(Effect.orDie);
+          const inserted = yield* assignQuery({ userId, role: roleName }).pipe(
+            Errors.orStoreUnavailable("Roles.assign"),
+          );
           if (Option.isSome(inserted)) {
             yield* events.publish({
               _tag: "auth.roles.assigned",
@@ -287,7 +294,9 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
         }),
       revoke: (userId, roleName, options) =>
         Effect.gen(function* () {
-          const removed = yield* revokeQuery({ userId, role: roleName }).pipe(Effect.orDie);
+          const removed = yield* revokeQuery({ userId, role: roleName }).pipe(
+            Errors.orStoreUnavailable("Roles.revoke"),
+          );
           if (Option.isSome(removed)) {
             yield* events.publish({
               _tag: "auth.roles.revoked",
@@ -300,18 +309,18 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       listRoleNames: (userId) =>
         listQuery(userId).pipe(
           Effect.map((rows) => rows.map((row) => row.role)),
-          Effect.orDie,
+          Errors.orStoreUnavailable("Roles.listRoleNames"),
         ),
       holders: (roleName) =>
         holdersQuery(roleName).pipe(
           Effect.map((rows) => rows.map((row) => Users.UserId(row.userId))),
-          Effect.orDie,
+          Errors.orStoreUnavailable("Roles.holders"),
         ),
       listUnknownAssignments: listUnknownQuery(catalogNames).pipe(
         Effect.map((rows) =>
           rows.map((row) => ({ userId: Users.UserId(row.userId), roleName: row.role })),
         ),
-        Effect.orDie,
+        Errors.orStoreUnavailable("Roles.listUnknownAssignments"),
       ),
     };
   });

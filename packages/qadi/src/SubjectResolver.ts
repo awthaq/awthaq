@@ -73,8 +73,11 @@ export const principalAttributes = (
 };
 
 export interface SubjectResolverShape {
-  /** BEH-EA-145: what `AuthorizedSubject`/`SubjectExtractorLive` both call. */
-  readonly resolve: (principal: Api.Principal) => Effect.Effect<AuthSubject>;
+  /**
+   * BEH-EA-145: what `AuthorizedSubject`/`SubjectExtractorLive` both call. An overriding resolver that reads a store
+   * (`@awthaq/roles`) fails with `StoreUnavailable` when it is down, never with a defect.
+   */
+  readonly resolve: (principal: Api.Principal) => Effect.Effect<AuthSubject, Api.StoreUnavailable>;
 }
 
 /**

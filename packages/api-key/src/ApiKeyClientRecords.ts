@@ -7,7 +7,7 @@
 // so a rotation never needs a hard cut-over.
 
 import { Users } from "@awthaq/core";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -33,19 +33,30 @@ export interface ApiKeyClientRecord {
 }
 
 export interface ApiKeyClientRecordsShape {
-  readonly insert: (record: ApiKeyClientRecord) => Effect.Effect<void>;
-  readonly findById: (clientId: string) => Effect.Effect<Option.Option<ApiKeyClientRecord>>;
+  readonly insert: (
+    record: ApiKeyClientRecord,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  readonly findById: (
+    clientId: string,
+  ) => Effect.Effect<Option.Option<ApiKeyClientRecord>, StoreFailure.StoreUnavailable>;
   /** Newest first. */
-  readonly listByOwner: (ownerId: Users.UserId) => Effect.Effect<ReadonlyArray<ApiKeyClientRecord>>;
-  readonly revoke: (clientId: string, at: DateTime.Utc) => Effect.Effect<void>;
+  readonly listByOwner: (
+    ownerId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<ApiKeyClientRecord>, StoreFailure.StoreUnavailable>;
+  readonly revoke: (
+    clientId: string,
+    at: DateTime.Utc,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** The current hash becomes the previous one (valid until `previousExpiresAt`); `secretHash` becomes current. */
   readonly rotateSecret: (input: {
     readonly clientId: string;
     readonly secretHash: string;
     readonly previousExpiresAt: DateTime.Utc;
-  }) => Effect.Effect<void>;
+  }) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** Erasure: every client the user owns, revoked or not. Idempotent. */
-  readonly deleteByOwner: (ownerId: Users.UserId) => Effect.Effect<void>;
+  readonly deleteByOwner: (
+    ownerId: Users.UserId,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class ApiKeyClientRecords extends Context.Service<
@@ -121,6 +132,8 @@ export const layerSql = Layer.effect(
   ApiKeyClientRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`ApiKeyClientRecords.${operation}`);
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
 
@@ -203,17 +216,17 @@ export const layerSql = Layer.effect(
           previousExpiresAt: Option.getOrNull(record.previousExpiresAt),
           createdAt: record.createdAt,
           revokedAt: Option.getOrNull(record.revokedAt),
-        }).pipe(Effect.orDie),
+        }).pipe(unavailable("previousExpiresAt")),
       findById: (clientId) =>
-        findByIdQuery(clientId).pipe(Effect.map(Option.map(toRecord)), Effect.orDie),
+        findByIdQuery(clientId).pipe(Effect.map(Option.map(toRecord)), unavailable("findById")),
       listByOwner: (ownerId) =>
         listByOwnerQuery(ownerId).pipe(
           Effect.map((rows) => rows.map(toRecord)),
-          Effect.orDie,
+          unavailable("listByOwner"),
         ),
-      revoke: (clientId, at) => revokeQuery({ clientId, at }).pipe(Effect.orDie),
-      rotateSecret: (input) => rotateQuery(input).pipe(Effect.orDie),
-      deleteByOwner: (ownerId) => deleteByOwnerQuery(ownerId).pipe(Effect.orDie),
+      revoke: (clientId, at) => revokeQuery({ clientId, at }).pipe(unavailable("revoke")),
+      rotateSecret: (input) => rotateQuery(input).pipe(unavailable("rotateSecret")),
+      deleteByOwner: (ownerId) => deleteByOwnerQuery(ownerId).pipe(unavailable("deleteByOwner")),
     });
   }),
 );

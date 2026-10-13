@@ -34,7 +34,7 @@
 // bare string is never treated as UTF-8 text there).
 
 import { Hmac } from "@awthaq/ports";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -76,11 +76,16 @@ export interface ChallengeStoreGuarantees {
 export interface ChallengeStoreShape {
   readonly guarantees: ChallengeStoreGuarantees;
   /** Mints a fresh challenge scoped to `scope`. When `guarantees.replacesPriorOnIssue`, replaces whatever this scope's own prior (unconsumed) challenge was, if any. Also reclaims expired entries (WPS-005). */
-  readonly issue: (scope: ChallengeScope) => Effect.Effect<Redacted.Redacted<string>>;
+  readonly issue: (
+    scope: ChallengeScope,
+  ) => Effect.Effect<Redacted.Redacted<string>, StoreFailure.StoreUnavailable>;
   /** BEH-EA-132: `true` only for the exact value just issued for `scope`, while unexpired — `false`, and (when `guarantees.singleUse`) the entry gone either way, for every other outcome. */
-  readonly consume: (scope: ChallengeScope, challenge: string) => Effect.Effect<boolean>;
+  readonly consume: (
+    scope: ChallengeScope,
+    challenge: string,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /** WPS-005: removes every expired, never-consumed challenge and answers how many it removed, so a host can schedule reclamation. Stateless stores answer `0`. */
-  readonly sweepExpired: Effect.Effect<number>;
+  readonly sweepExpired: Effect.Effect<number, StoreFailure.StoreUnavailable>;
 }
 
 export class ChallengeStore extends Context.Service<ChallengeStore, ChallengeStoreShape>()(
@@ -123,7 +128,9 @@ export const layerMemory: Layer.Layer<ChallengeStore, never, Crypto.Crypto> = La
 
     const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
       const value = Encoding.encodeBase64Url(
-        yield* crypto.randomBytes(RANDOM_BYTES).pipe(Effect.orDie),
+        yield* crypto
+          .randomBytes(RANDOM_BYTES)
+          .pipe(Effect.catch(StoreFailure.storeUnavailable("ChallengeStore.issue"))),
       );
       const now = yield* DateTime.now;
       // WPS-005: drop every already-expired entry in the same atomic update
@@ -180,6 +187,8 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
       const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
       const ChallengeRow = makeChallengeRow(wire);
       const crypto = yield* Crypto.Crypto;
+      const unavailable = (operation: string) =>
+        StoreFailure.orStoreUnavailable(`ChallengeStore.${operation}`);
 
       /**
        * ADR-EA-016's technique: one atomic upsert. `scope` is this table's
@@ -229,7 +238,9 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
 
       const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
         const value = Encoding.encodeBase64Url(
-          yield* crypto.randomBytes(RANDOM_BYTES).pipe(Effect.orDie),
+          yield* crypto
+            .randomBytes(RANDOM_BYTES)
+            .pipe(Effect.catch(StoreFailure.storeUnavailable("ChallengeStore.issue"))),
         );
         const now = yield* DateTime.now;
         yield* upsert({
@@ -237,16 +248,16 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
           value,
           expiresAt: DateTime.addDuration(now, TTL),
           createdAt: now,
-        }).pipe(Effect.orDie);
+        }).pipe(unavailable("issue"));
         // WPS-005: abandoned (anonymous, never-consumed) ceremonies would
         // otherwise accumulate forever — reclaim them on every issue.
-        yield* deleteExpired(now).pipe(Effect.orDie);
+        yield* deleteExpired(now).pipe(unavailable("issue"));
         return Redacted.make(value);
       });
 
       const consume: ChallengeStoreShape["consume"] = Effect.fnUntraced(
         function* (scope, challenge) {
-          const popped = yield* popByScope(scope).pipe(Effect.orDie);
+          const popped = yield* popByScope(scope).pipe(unavailable("consume"));
           if (Option.isNone(popped)) return false;
           const now = yield* DateTime.now;
           if (isExpired(popped.value.expiresAt, now)) return false;
@@ -256,7 +267,7 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
 
       const sweepExpired: ChallengeStoreShape["sweepExpired"] = Effect.gen(function* () {
         const now = yield* DateTime.now;
-        const removed = yield* deleteExpired(now).pipe(Effect.orDie);
+        const removed = yield* deleteExpired(now).pipe(unavailable("sweepExpired"));
         return removed.length;
       });
 
@@ -314,7 +325,9 @@ export const layerCookie: Layer.Layer<
       hmacSha256(crypto, secretBytes, concatBytes(new TextEncoder().encode(scope), payload));
 
     const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
-      const random = yield* crypto.randomBytes(RANDOM_BYTES).pipe(Effect.orDie);
+      const random = yield* crypto
+        .randomBytes(RANDOM_BYTES)
+        .pipe(Effect.catch(StoreFailure.storeUnavailable("ChallengeStore.issue")));
       const now = yield* DateTime.now;
       const payload = concatBytes(random, packExpiry(DateTime.addDuration(now, TTL)));
       const signature = yield* sign(scope, payload);

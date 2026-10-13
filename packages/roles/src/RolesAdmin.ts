@@ -41,17 +41,19 @@ const actorOf = (subject: AuthSubject): Users.UserId | undefined =>
 
 export interface RolesAdminShape {
   readonly catalog: Effect.Effect<ReadonlyArray<RolesAdminApi.RoleDto>>;
-  readonly userRoles: (userId: Users.UserId) => Effect.Effect<RolesAdminApi.UserRolesDto>;
+  readonly userRoles: (
+    userId: Users.UserId,
+  ) => Effect.Effect<RolesAdminApi.UserRolesDto, Api.StoreUnavailable>;
   readonly assign: (
     actor: AuthSubject,
     userId: Users.UserId,
     roleName: string,
-  ) => Effect.Effect<RolesAdminApi.UserRolesDto, RolesAdminApi.UnknownRole>;
+  ) => Effect.Effect<RolesAdminApi.UserRolesDto, RolesAdminApi.UnknownRole | Api.StoreUnavailable>;
   readonly revoke: (
     actor: AuthSubject,
     userId: Users.UserId,
     roleName: string,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, Api.StoreUnavailable>;
 }
 
 export const RolesAdminHandlers = HttpApiBuilder.group(

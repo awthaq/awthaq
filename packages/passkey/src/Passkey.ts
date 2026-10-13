@@ -537,7 +537,7 @@ export interface PasskeyShape {
   readonly reauthenticateOptions: (
     userId: Users.UserId,
     sessionId: string,
-  ) => Effect.Effect<PasskeyApi.PublicKeyCredentialRequestOptions>;
+  ) => Effect.Effect<PasskeyApi.PublicKeyCredentialRequestOptions, Errors.StoreUnavailable>;
   readonly reauthenticateVerify: (
     userId: Users.UserId,
     sessionId: string,
@@ -583,9 +583,14 @@ export interface PasskeyShape {
   >;
   readonly listCredentials: (
     userId: Users.UserId,
-  ) => Effect.Effect<ReadonlyArray<PasskeyCredentials.PasskeyCredentialRecord>>;
+  ) => Effect.Effect<
+    ReadonlyArray<PasskeyCredentials.PasskeyCredentialRecord>,
+    Errors.StoreUnavailable
+  >;
   /** BPAS-006/TC-004: the rpId, stable user handle and accepted credential ids a browser's Signals API call needs. */
-  readonly signals: (userId: Users.UserId) => Effect.Effect<PasskeySignals>;
+  readonly signals: (
+    userId: Users.UserId,
+  ) => Effect.Effect<PasskeySignals, Errors.StoreUnavailable>;
   /** TC-008: the origins `GET /.well-known/webauthn` serves — `PasskeyConfig.relatedOrigins` of the config in force for the request. */
   readonly relatedOrigins: Effect.Effect<ReadonlyArray<string>>;
   readonly renameCredential: (
@@ -594,7 +599,7 @@ export interface PasskeyShape {
     name: string,
   ) => Effect.Effect<
     PasskeyCredentials.PasskeyCredentialRecord,
-    PasskeyApi.PasskeyCredentialNotFound
+    PasskeyApi.PasskeyCredentialNotFound | Errors.StoreUnavailable
   >;
   readonly removeCredential: (
     userId: Users.UserId,
@@ -1402,7 +1407,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const applyCounterPolicy = (
         stored: PasskeyCredentials.PasskeyCredentialRecord,
         verified: WebAuthn.VerifiedAuthentication,
-      ): Effect.Effect<void, PasskeyApi.PasskeyCounterAnomaly> =>
+      ): Effect.Effect<void, PasskeyApi.PasskeyCounterAnomaly | Errors.StoreUnavailable> =>
         Effect.gen(function* () {
           const config = yield* configNow;
           const regressed =
@@ -1414,7 +1419,10 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             userId: stored.userId,
             credentialId: stored.id,
           });
-          yield* credentials.flagCounterAnomaly(stored.id).pipe(Effect.orDie);
+          // The credential was read a moment ago in this ceremony: a vanished row is a bug, not a domain outcome.
+          yield* credentials
+            .flagCounterAnomaly(stored.id)
+            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
           if (config.counterAnomalyPolicy === "reject") {
             return yield* Effect.fail(new PasskeyApi.PasskeyCounterAnomaly());
           }
@@ -1510,7 +1518,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           yield* applyCounterPolicy(stored, verified);
           yield* credentials
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
-            .pipe(Effect.orDie);
+            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
 
           // ADR-EA-038: core's sign-in completes it (lookup, gate, veto, MFA divert, session,
           // announcement). WPS-001: a deleted user's passkey credential row can outlive the
@@ -1618,7 +1626,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               LastAccountRefusal: () => Effect.fail(new PasskeyApi.PasskeyLastCredential()),
             }),
           );
-          yield* credentials.delete(id, userId).pipe(Effect.orDie);
+          yield* credentials
+            .delete(id, userId)
+            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
         },
       );
 
@@ -1707,7 +1717,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           yield* applyCounterPolicy(stored, verified);
           yield* credentials
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
-            .pipe(Effect.orDie);
+            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
 
           // BEH-EA-319: ended since the middleware's verify (revoked, superseded,
           // expired) is "no longer authenticated": 401, not a defect.

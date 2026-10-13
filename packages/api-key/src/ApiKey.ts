@@ -61,6 +61,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Headers from "effect/unstable/http/Headers";
@@ -188,14 +189,16 @@ export interface ApiKeyShape {
     },
   ) => Effect.Effect<
     CreatedApiKey,
-    ApiKeyApi.ApiKeyScopeNotGrantable | ApiKeyApi.ApiKeyLifetimeInvalid
+    ApiKeyApi.ApiKeyScopeNotGrantable | ApiKeyApi.ApiKeyLifetimeInvalid | Api.StoreUnavailable
   >;
-  readonly list: (ownerId: Users.UserId) => Effect.Effect<ReadonlyArray<ApiKeyView>>;
+  readonly list: (
+    ownerId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<ApiKeyView>, Api.StoreUnavailable>;
   /** Immediate. An unknown key and someone else's key are the same `ApiKeyNotFound`. */
   readonly revoke: (
     ownerId: Users.UserId,
     keyId: string,
-  ) => Effect.Effect<void, ApiKeyApi.ApiKeyNotFound>;
+  ) => Effect.Effect<void, ApiKeyApi.ApiKeyNotFound | Api.StoreUnavailable>;
   /** ADR-EA-022: mints a successor and lets the old key live on for `gracePeriod`. */
   readonly rotate: (
     ownerId: Users.UserId,
@@ -204,7 +207,10 @@ export interface ApiKeyShape {
       readonly gracePeriod?: Duration.Duration | undefined;
       readonly expiresIn?: Duration.Duration | undefined;
     },
-  ) => Effect.Effect<CreatedApiKey, ApiKeyApi.ApiKeyNotFound | ApiKeyApi.ApiKeyLifetimeInvalid>;
+  ) => Effect.Effect<
+    CreatedApiKey,
+    ApiKeyApi.ApiKeyNotFound | ApiKeyApi.ApiKeyLifetimeInvalid | Api.StoreUnavailable
+  >;
   /**
    * The per-request resolution: `None` for anything that is not a live key (malformed,
    * unknown id, wrong secret, revoked, expired, or owned by a user who is suspended or gone),
@@ -219,13 +225,15 @@ export interface ApiKeyShape {
   readonly registerClient: (
     ownerId: Users.UserId,
     input: { readonly name: string; readonly scopes: ReadonlyArray<string> },
-  ) => Effect.Effect<CreatedClient, ApiKeyApi.ApiKeyScopeNotGrantable>;
-  readonly listClients: (ownerId: Users.UserId) => Effect.Effect<ReadonlyArray<ApiKeyClientView>>;
+  ) => Effect.Effect<CreatedClient, ApiKeyApi.ApiKeyScopeNotGrantable | Api.StoreUnavailable>;
+  readonly listClients: (
+    ownerId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<ApiKeyClientView>, Api.StoreUnavailable>;
   /** Blocks new tokens at once; tokens already minted live until their expiry. */
   readonly revokeClient: (
     ownerId: Users.UserId,
     clientId: string,
-  ) => Effect.Effect<void, ApiKeyApi.ApiKeyClientNotFound>;
+  ) => Effect.Effect<void, ApiKeyApi.ApiKeyClientNotFound | Api.StoreUnavailable>;
   /** ADR-EA-022: a new secret; the old one keeps working for `gracePeriod`. At most two secrets are ever valid. */
   readonly rotateClientSecret: (
     ownerId: Users.UserId,
@@ -233,7 +241,7 @@ export interface ApiKeyShape {
     options?: { readonly gracePeriod?: Duration.Duration | undefined },
   ) => Effect.Effect<
     { readonly clientId: string; readonly clientSecret: Redacted.Redacted<string> },
-    ApiKeyApi.ApiKeyClientNotFound | ApiKeyApi.ApiKeyLifetimeInvalid
+    ApiKeyApi.ApiKeyClientNotFound | ApiKeyApi.ApiKeyLifetimeInvalid | Api.StoreUnavailable
   >;
   /**
    * RFC 6749 §4.4: verifies the client and mints its token. `requestedScope`
@@ -651,7 +659,10 @@ const CredentialContributionsLive = Layer.unwrap(
                   )
                 : Effect.fail(new Api.Unauthenticated()),
             ),
-            Effect.mapError(() => new Api.Unauthenticated()),
+            // A token that does not verify is `Unauthenticated`; a store outage while reading the key ring is not.
+            Effect.mapError((error) =>
+              Predicate.isTagged(error, "StoreUnavailable") ? error : new Api.Unauthenticated(),
+            ),
           ),
     });
 

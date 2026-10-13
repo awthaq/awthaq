@@ -257,3 +257,21 @@ describe("UserClaims composition", () => {
       }),
   );
 });
+
+// Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
+describe("UserClaims.layerSql: a store outage", () => {
+  it.effect("set fails with StoreUnavailable naming the operation", () =>
+    Effect.gen(function* () {
+      yield* TestSql.injectFailure({
+        name: "claims_fail_insert",
+        table: "claims_user",
+        event: "INSERT",
+      });
+      const claims = yield* UserClaims.UserClaims;
+      const failure = yield* claims
+        .set(Users.UserId("outage-user"), { plan: "pro" })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+});

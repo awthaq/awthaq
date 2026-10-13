@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) |
 
 ---
 
@@ -205,4 +205,4 @@ REQUIREMENT: A plugin records module MUST map a `SqlError` to the typed
              `StoreUnavailable`, and the request then answers 503.
 ```
 
-`StoreFailure` is defined once in `@awthaq/sql`; `@awthaq/core`'s `Errors` re-exports it ([ADR-EA-028](../decisions/028-infrastructure-error-policy.md) revision 1.3). A `SqlSyntaxError` or `AuthorizationError` (a missing GRANT, or a row-level-security refusal of a forgotten tenant filter) dies as `Defects/InvariantViolation` `store.statementRefused`, because a retry cannot fix it and a 503 would misreport it.
+`StoreFailure` is defined once in `@awthaq/sql`; `@awthaq/core`'s `Errors` re-exports it ([ADR-EA-028](../decisions/028-infrastructure-error-policy.md) revision 1.3). A `SqlSyntaxError` or `AuthorizationError` (a missing GRANT, or a row-level-security refusal of a forgotten tenant filter) dies as `Defects/InvariantViolation` `store.statementRefused`, because a retry cannot fix it and a 503 would misreport it. Every first-party plugin records module follows it (`api-key`, `device-authorization`, `passkey`, `roles` and the `qadi` claims store included); each records suite has one outage case that makes a write fail through `TestSql.injectFailure` and asserts the typed error.

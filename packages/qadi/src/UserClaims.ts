@@ -30,6 +30,7 @@ import {
   DataExport,
   Defects,
   Erasure,
+  Errors,
   Hooks,
   Migrations,
   Users,
@@ -58,21 +59,24 @@ export interface ClaimsChangeOptions {
 
 export interface UserClaimsShape {
   /** A user with no claims reads as `{}`. */
-  readonly get: (userId: Users.UserId) => Effect.Effect<Claims>;
+  readonly get: (userId: Users.UserId) => Effect.Effect<Claims, Errors.StoreUnavailable>;
   /** Replaces every claim. */
   readonly set: (
     userId: Users.UserId,
     claims: Claims,
     options?: ClaimsChangeOptions,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, Errors.StoreUnavailable>;
   /** Shallow-merges `patch`; a `null` value deletes that key. Returns the resulting claims. */
   readonly merge: (
     userId: Users.UserId,
     patch: Claims,
     options?: ClaimsChangeOptions,
-  ) => Effect.Effect<Claims>;
+  ) => Effect.Effect<Claims, Errors.StoreUnavailable>;
   /** Removes every claim. */
-  readonly delete: (userId: Users.UserId, options?: ClaimsChangeOptions) => Effect.Effect<void>;
+  readonly delete: (
+    userId: Users.UserId,
+    options?: ClaimsChangeOptions,
+  ) => Effect.Effect<void, Errors.StoreUnavailable>;
 }
 
 const emptyClaims: Claims = {};
@@ -94,11 +98,11 @@ const changedKeys = (before: Claims, after: Claims): ReadonlyArray<string> =>
 
 /** What a backing store must do: atomically rewrite one user's claims, returning both sides. */
 interface ClaimsStore {
-  readonly read: (userId: Users.UserId) => Effect.Effect<Claims>;
+  readonly read: (userId: Users.UserId) => Effect.Effect<Claims, Errors.StoreUnavailable>;
   readonly modify: (
     userId: Users.UserId,
     change: (current: Claims) => Claims,
-  ) => Effect.Effect<{ readonly before: Claims; readonly after: Claims }>;
+  ) => Effect.Effect<{ readonly before: Claims; readonly after: Claims }, Errors.StoreUnavailable>;
 }
 
 /** The shared behavior over either store: events, the hook announcement, and the three writes. */
@@ -203,10 +207,10 @@ const sqlMake = Effect.gen(function* () {
     execute: (subject) => sql`SELECT subject, claims FROM claims_user WHERE subject = ${subject}`,
   });
 
-  const read = (userId: Users.UserId): Effect.Effect<Claims> =>
+  const read = (userId: Users.UserId) =>
     findQuery(userId).pipe(
       Effect.map((row) => (Option.isSome(row) ? decodeClaims(row.value.claims) : emptyClaims)),
-      Effect.orDie,
+      Errors.orStoreUnavailable("UserClaims.read"),
     );
 
   const modify: ClaimsStore["modify"] = (userId, change) =>
@@ -225,7 +229,7 @@ const sqlMake = Effect.gen(function* () {
         }
         return { before, after };
       }),
-    ).pipe(Effect.orDie);
+    ).pipe(Errors.orStoreUnavailable("UserClaims.modify"));
 
   return yield* serviceOver({ read, modify });
 });
@@ -309,6 +313,10 @@ export const UserClaimsAttributes: Layer.Layer<AttributeResolver, never, UserCla
         }
         return claims.get(Users.UserId(subjectId.slice(USER_SUBJECT_PREFIX.length))).pipe(
           Effect.map((record): unknown => record),
+          // A store outage is "source down", told apart from "no claims" (a real, empty record).
+          Effect.catchTag("StoreUnavailable", (cause) =>
+            Effect.fail(new AttributeResolveError({ attribute, cause })),
+          ),
           Effect.catchDefect((cause) =>
             Effect.fail(new AttributeResolveError({ attribute, cause })),
           ),

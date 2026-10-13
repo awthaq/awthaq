@@ -54,7 +54,7 @@ import { SubjectResolver } from "./SubjectResolver.ts";
 export class AuthorizedSubject extends HttpApiMiddleware.Service<
   AuthorizedSubject,
   { provides: CurrentSubject; requires: Api.CurrentPrincipal }
->()("awthaq/qadi/AuthorizedSubject") {}
+>()("awthaq/qadi/AuthorizedSubject", { error: Api.StoreUnavailable }) {}
 
 /**
  * `SubjectResolver` is a `Context.Reference` (a slot with a fail-closed
@@ -69,7 +69,7 @@ export const AuthorizedSubjectLive: Layer.Layer<AuthorizedSubject> = Layer.effec
     const resolver = yield* SubjectResolver;
     const middleware: HttpApiMiddleware.HttpApiMiddleware<
       CurrentSubject,
-      never,
+      typeof Api.StoreUnavailable,
       Api.CurrentPrincipal
     > = Effect.fnUntraced(function* (httpEffect) {
       const principal = yield* Api.CurrentPrincipal;
