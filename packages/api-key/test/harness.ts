@@ -15,7 +15,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
+import { Jwt, JwtConfig, KeyRing, RevocationStore } from "@awthaq/jwt";
 import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -38,6 +38,7 @@ import * as ApiKey from "../src/ApiKey.ts";
 import * as ApiKeyApi from "../src/ApiKeyApi.ts";
 import * as ApiKeyClientRecords from "../src/ApiKeyClientRecords.ts";
 import * as ApiKeyRecords from "../src/ApiKeyRecords.ts";
+import { SigningKeyRecordsLive } from "../../jwt/test/support.ts";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -127,7 +128,7 @@ export const buildLayer = (options: HarnessOptions) =>
       Layer.provideMerge(Authentication.CredentialResolversLive),
       Layer.provideMerge(recordsLayer(options)),
       Layer.provideMerge(KeyRing.KeyRing.layer),
-      Layer.provideMerge(SigningKeyRecords.layerMemory),
+      Layer.provideMerge(SigningKeyRecordsLive),
       Layer.provideMerge(RevocationStore.layerMemory),
       Layer.provideMerge(SqlTransaction.layerNoop),
       Layer.provideMerge(Authentication.AuthenticationLive),

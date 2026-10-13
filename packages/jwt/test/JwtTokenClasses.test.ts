@@ -15,6 +15,7 @@ import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -29,7 +30,7 @@ const asCaller = (id: string, sessionId: string) =>
 const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
   Jwt.Jwt.layer.pipe(
     Layer.provide(KeyRing.KeyRing.layer),
-    Layer.provide(SigningKeyRecords.layerMemory),
+    Layer.provide(SigningKeyRecordsLive),
     Layer.provide(SqlTransaction.layerNoop),
     Layer.provide(AuthenticationLive),
     Layer.provideMerge(Sessions.layerMemory),
@@ -73,7 +74,10 @@ describe("token classes (VB-005)", () => {
       if (live._tag !== "JwtInvalidError") return assert.fail(live._tag);
       assert.strictEqual(live.reason, "typ mismatch");
       const plain = yield* jwt.verify(forged).pipe(Effect.flip);
-      assert.strictEqual(plain.reason, "typ mismatch");
+      assert.strictEqual(
+        plain._tag === "JwtInvalidError" ? plain.reason : plain._tag,
+        "typ mismatch",
+      );
     }).pipe(Effect.provide(buildLayer())),
   );
 
@@ -82,7 +86,10 @@ describe("token classes (VB-005)", () => {
       const jwt = yield* Jwt.Jwt;
       const token = yield* jwt.sign(asCaller("user-1", "session-1"));
       const result = yield* jwt.verifyJWT(token).pipe(Effect.flip);
-      assert.strictEqual(result.reason, "typ mismatch");
+      assert.strictEqual(
+        result._tag === "JwtInvalidError" ? result.reason : result._tag,
+        "typ mismatch",
+      );
     }).pipe(Effect.provide(buildLayer())),
   );
 
@@ -93,7 +100,10 @@ describe("token classes (VB-005)", () => {
         const jwt = yield* Jwt.Jwt;
         const token = yield* jwt.signJWT({ sub: "svc" }, { audience: "svc-a" });
         const atOrigin = yield* jwt.verifyJWT(token).pipe(Effect.flip);
-        assert.strictEqual(atOrigin.reason, "iss/aud mismatch");
+        assert.strictEqual(
+          atOrigin._tag === "JwtInvalidError" ? atOrigin.reason : atOrigin._tag,
+          "iss/aud mismatch",
+        );
         const claims = yield* jwt.verifyJWT(token, { audience: "svc-a" });
         assert.strictEqual(claims["aud"], "svc-a");
       }).pipe(Effect.provide(buildLayer())),
@@ -125,7 +135,10 @@ describe("subject requirement (JJS-007)", () => {
       const jwt = yield* Jwt.Jwt;
       const token = yield* jwt.signJWT({ machine: "etl-job" }, { typ: "at+jwt" });
       const result = yield* jwt.verify(token).pipe(Effect.flip);
-      assert.strictEqual(result.reason, "missing sub");
+      assert.strictEqual(
+        result._tag === "JwtInvalidError" ? result.reason : result._tag,
+        "missing sub",
+      );
     }).pipe(Effect.provide(buildLayer())),
   );
 });
@@ -133,7 +146,7 @@ describe("subject requirement (JJS-007)", () => {
 // `Effect.provide` builds each layer in its own scope, so two KeyRings only
 // share a store if the store *service* is built once and handed to both.
 const sharedRecords = Effect.map(
-  Effect.provide(SigningKeyRecords.SigningKeyRecords, SigningKeyRecords.layerMemory),
+  Effect.provide(SigningKeyRecords.SigningKeyRecords, SigningKeyRecordsLive),
   (service) =>
     Layer.mergeAll(
       Layer.succeed(SigningKeyRecords.SigningKeyRecords, service),

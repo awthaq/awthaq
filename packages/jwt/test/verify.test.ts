@@ -23,8 +23,8 @@ import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 import * as Verify from "../src/verify.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
 const ISSUER = "https://issuer.test";
 const JWKS_URL = "https://issuer.test/jwt/jwks";
@@ -50,7 +50,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const buildJwtLayer = () =>
   Jwt.Jwt.layer.pipe(
     Layer.provideMerge(KeyRing.KeyRing.layer),
-    Layer.provideMerge(SigningKeyRecords.layerMemory),
+    Layer.provideMerge(SigningKeyRecordsLive),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(Sessions.layerMemory),

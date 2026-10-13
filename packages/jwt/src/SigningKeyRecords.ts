@@ -12,11 +12,12 @@
 // `Some` under local signing (ticket 07's `mint`). The public JWK is stored
 // as JSON text and decoded with `Schema.fromJsonString`, never a raw
 // `JSON.parse`. KRS-001/SMS-001: `layerSql` stores the *private* JWK as an
-// `@awthaq/ports` `Encryption` envelope, its AAD bound to the row's own `kid`
-// (so ciphertext copied onto another row fails authentication), never as JWK
-// JSON — a database dump or read replica no longer yields signing keys.
-// `layerMemory` keeps the JWK in process memory unencrypted; it exists for
-// tests and single-process use. Production deployments that must keep private
+// `SealedColumn` (plan 05, ADR-EA-019 decision 6): an `Encryption` envelope whose AAD is
+// `jwt_signing_key:<kid>:privateKeyJwk`, so ciphertext copied onto another row fails
+// authentication, and a database dump or read replica no longer yields signing keys. Both
+// adapters seal (the memory one too, so a test exercises the same mechanism), the records hand
+// out `Sealed<Jwk>` and `KeyRing` opens the current key where it signs, and a key sealed under a
+// retired encryption key is re-sealed on its next read. Production deployments that must keep private
 // material out of the database entirely register a remote (KMS/HSM) key via
 // `KeyRing.registerRemoteKey` with a `JwtCodec.RemoteSigner`.
 //
@@ -36,8 +37,8 @@
 // whether it did, so a second rotator can neither mint a duplicate current
 // key nor re-extend a grace period that already started.
 
-import { Defects, Encryption } from "@awthaq/ports";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Defects, type Encryption } from "@awthaq/ports";
+import { Models as SqlModels, SealedColumn, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -60,10 +61,24 @@ export interface SigningKeyRecord {
   readonly kid: string;
   readonly alg: Algorithm;
   readonly publicKeyJwk: Jwk;
-  readonly privateKeyJwk: Option.Option<Redacted.Redacted<Jwk>>;
+  /** Sealed; `None` under remote signing. Open it where the key signs. */
+  readonly privateKeyJwk: Option.Option<SealedColumn.Sealed<Jwk>>;
   readonly createdAt: DateTime.Utc;
   readonly rotatedAt: Option.Option<DateTime.Utc>;
   readonly retiresAt: Option.Option<DateTime.Utc>;
+}
+
+/** The sealed `privateKeyJwk` column; canonical AAD already, so there is no legacy spelling. */
+export const privateKeyJwkColumn = SealedColumn.column({
+  table: "jwt_signing_key",
+  column: "privateKeyJwk",
+  key: "kid",
+  schema: Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+});
+
+/** A key as the memory adapter keeps it: the private half is the envelope string, like a SQL row. */
+interface StoredSigningKey extends Omit<SigningKeyRecord, "privateKeyJwk"> {
+  readonly privateKeyJwk: Option.Option<string>;
 }
 
 /** JJS-004: another process (or fiber) already created the one current key. Re-read `findCurrent` and use it. */
@@ -87,11 +102,16 @@ export interface SigningKeyRecordsShape {
       readonly rotatedAt: DateTime.Utc;
       readonly retiresAt: DateTime.Utc;
     };
-  }) => Effect.Effect<SigningKeyRecord, CurrentKeyConflict>;
+  }) => Effect.Effect<SigningKeyRecord, CurrentKeyConflict | StoreFailure.StoreUnavailable>;
   /** The row with no `rotatedAt` yet — the one currently used to sign new tokens, if any exists. */
-  readonly findCurrent: () => Effect.Effect<Option.Option<SigningKeyRecord>>;
+  readonly findCurrent: () => Effect.Effect<
+    Option.Option<SigningKeyRecord>,
+    StoreFailure.StoreUnavailable
+  >;
   /** Every row not yet past its `retiresAt` (rows with no `retiresAt` at all included). */
-  readonly listVerifiable: (now: DateTime.Utc) => Effect.Effect<ReadonlyArray<SigningKeyRecord>>;
+  readonly listVerifiable: (
+    now: DateTime.Utc,
+  ) => Effect.Effect<ReadonlyArray<SigningKeyRecord>, StoreFailure.StoreUnavailable>;
   /**
    * Stops `kid` from being `findCurrent`'s row and starts its grace period — it
    * keeps satisfying `listVerifiable` until `retiresAt`. Applies only to a row
@@ -102,26 +122,34 @@ export interface SigningKeyRecordsShape {
     kid: string,
     rotatedAt: DateTime.Utc,
     retiresAt: DateTime.Utc,
-  ) => Effect.Effect<boolean>;
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /**
    * N12/KRS-008: shortens an already-rotated key's grace period to end at
    * `retiresAt` — the "this key is compromised, stop trusting it now" lever.
    * Never lengthens a grace period and never touches a current key; resolves
    * `true` only when a row actually changed.
    */
-  readonly retire: (kid: string, retiresAt: DateTime.Utc) => Effect.Effect<boolean>;
+  readonly retire: (
+    kid: string,
+    retiresAt: DateTime.Utc,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
 }
 
 export class SigningKeyRecords extends Context.Service<SigningKeyRecords, SigningKeyRecordsShape>()(
   "awthaq/jwt/SigningKeyRecords",
 ) {}
 
-const newestFirst = (records: ReadonlyArray<SigningKeyRecord>): ReadonlyArray<SigningKeyRecord> =>
+const newestFirst = <A extends { readonly createdAt: DateTime.Utc }>(
+  records: ReadonlyArray<A>,
+): ReadonlyArray<A> =>
   [...records].sort(
     (a, b) => DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt),
   );
 
-const isVerifiable = (record: SigningKeyRecord, now: DateTime.Utc): boolean =>
+const isVerifiable = (
+  record: { readonly retiresAt: Option.Option<DateTime.Utc> },
+  now: DateTime.Utc,
+): boolean =>
   Option.match(record.retiresAt, {
     onNone: () => true,
     onSome: (retiresAt) => DateTime.toEpochMillis(retiresAt) > DateTime.toEpochMillis(now),
@@ -129,20 +157,60 @@ const isVerifiable = (record: SigningKeyRecord, now: DateTime.Utc): boolean =>
 
 // ---- layerMemory ------------------------------------------------------------
 
-type RecordsState = HashMap.HashMap<string, SigningKeyRecord>;
+type RecordsState = HashMap.HashMap<string, StoredSigningKey>;
 
-export const layerMemory = Layer.effect(
-  SigningKeyRecords,
+/**
+ * A test seam of `layerMemory`: the stored envelope of the sealed column, and a way to overwrite it
+ * (`TestAuth.runSealedColumnTests` needs to look at, and plant, what is at rest; over SQL that is a
+ * statement, over memory it is this).
+ */
+export class MemoryEnvelopes extends Context.Service<
+  MemoryEnvelopes,
+  {
+    readonly stored: (kid: string) => Effect.Effect<string>;
+    readonly plant: (kid: string, stored: string) => Effect.Effect<void>;
+  }
+>()("awthaq/jwt/SigningKeyRecords/MemoryEnvelopes") {}
+
+// The explicit types on `layerMemory` and `layerSql` are the narrow exception the plugins document
+// (TS2883): declaration emit cannot name `Encryption` through the sealed-column codec's requirement.
+export const layerMemory: Layer.Layer<
+  SigningKeyRecords | MemoryEnvelopes,
+  never,
+  Encryption.Encryption
+> = Layer.effectContext(
   Effect.gen(function* () {
     const state = yield* Ref.make<RecordsState>(HashMap.empty());
 
+    /** Persists a re-seal only while the row still holds the envelope that was read. */
+    const swap: SealedColumn.Swap = (rowKey, stored, fresh) =>
+      Ref.modify(state, (s) => {
+        const row = HashMap.get(s, rowKey);
+        if (Option.isNone(row) || Option.getOrUndefined(row.value.privateKeyJwk) !== stored) {
+          return [false, s] as const;
+        }
+        return [
+          true,
+          HashMap.set(s, rowKey, { ...row.value, privateKeyJwk: Option.some(fresh) }),
+        ] as const;
+      });
+    const privateKeys = yield* SealedColumn.codec(privateKeyJwkColumn, swap);
+    const toRecord = (row: StoredSigningKey): SigningKeyRecord => ({
+      ...row,
+      privateKeyJwk: Option.map(row.privateKeyJwk, (stored) => privateKeys.sealed(row.kid, stored)),
+    });
+
     const create: SigningKeyRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
-      const record: SigningKeyRecord = {
+      const privateKeyJwk = yield* Option.match(input.privateKeyJwk, {
+        onNone: () => Effect.succeed(Option.none<string>()),
+        onSome: (redacted) => Effect.map(privateKeys.seal(input.kid, redacted), Option.some),
+      });
+      const record: StoredSigningKey = {
         kid: input.kid,
         alg: input.alg,
         publicKeyJwk: input.publicKeyJwk,
-        privateKeyJwk: input.privateKeyJwk,
+        privateKeyJwk,
         createdAt: now,
         rotatedAt: Option.fromNullishOr(input.rotated?.rotatedAt),
         retiresAt: Option.fromNullishOr(input.rotated?.retiresAt),
@@ -150,12 +218,12 @@ export const layerMemory = Layer.effect(
       // One atomic step: the single-current check and the insert.
       return yield* Ref.modify(
         state,
-        (s): readonly [Result.Result<SigningKeyRecord, CurrentKeyConflict>, RecordsState] =>
+        (s): readonly [Result.Result<StoredSigningKey, CurrentKeyConflict>, RecordsState] =>
           Option.isNone(record.rotatedAt) &&
           Array.from(HashMap.values(s)).some((row) => Option.isNone(row.rotatedAt))
             ? [Result.fail(new CurrentKeyConflict({ kid: record.kid })), s]
             : [Result.succeed(record), HashMap.set(s, record.kid, record)],
-      ).pipe(Effect.flatMap(Effect.fromResult));
+      ).pipe(Effect.flatMap(Effect.fromResult), Effect.map(toRecord));
     });
 
     const findCurrent: SigningKeyRecordsShape["findCurrent"] = () =>
@@ -163,13 +231,15 @@ export const layerMemory = Layer.effect(
         Effect.map((s) =>
           newestFirst(Array.from(HashMap.values(s))).find((row) => Option.isNone(row.rotatedAt)),
         ),
-        Effect.map(Option.fromNullishOr),
+        Effect.map((row) => Option.map(Option.fromNullishOr(row), toRecord)),
       );
 
     const listVerifiable: SigningKeyRecordsShape["listVerifiable"] = (now) =>
       Ref.get(state).pipe(
         Effect.map((s) =>
-          newestFirst(Array.from(HashMap.values(s))).filter((row) => isVerifiable(row, now)),
+          newestFirst(Array.from(HashMap.values(s)))
+            .filter((row) => isVerifiable(row, now))
+            .map(toRecord),
         ),
       );
 
@@ -201,7 +271,24 @@ export const layerMemory = Layer.effect(
           : [false, s];
       });
 
-    return { create, findCurrent, listVerifiable, markRotated, retire };
+    const records = { create, findCurrent, listVerifiable, markRotated, retire };
+    const envelopes = MemoryEnvelopes.of({
+      stored: (kid) =>
+        Effect.map(Ref.get(state), (s) =>
+          Option.getOrElse(
+            Option.flatMap(HashMap.get(s, kid), (row) => row.privateKeyJwk),
+            () => "",
+          ),
+        ),
+      plant: (kid, stored) =>
+        Ref.update(state, (s) =>
+          Option.match(HashMap.get(s, kid), {
+            onNone: () => s,
+            onSome: (row) => HashMap.set(s, kid, { ...row, privateKeyJwk: Option.some(stored) }),
+          }),
+        ),
+    });
+    return Context.make(SigningKeyRecords, records).pipe(Context.add(MemoryEnvelopes, envelopes));
   }),
 );
 
@@ -222,47 +309,44 @@ type SigningKeyRow = ReturnType<typeof makeSigningKeyRow>["Type"];
 
 const JwkJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
 
-/** KRS-001: the AAD that ties a `privateKeyJwk` envelope to the one row (and column) it belongs to. */
-const privateKeyAad = (kid: string): string => `jwt_signing_key:${kid}:privateKeyJwk`;
-
-export const layerSql = Layer.effect(
+export const layerSql: Layer.Layer<
+  SigningKeyRecords,
+  never,
+  SqlClient.SqlClient | Encryption.Encryption
+> = Layer.effect(
   SigningKeyRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const SigningKeyRow = makeSigningKeyRow(wire);
-    const encryption = yield* Encryption.Encryption;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`SigningKeyRecords.${operation}`);
+    const privateKeys = yield* SealedColumn.codec(
+      privateKeyJwkColumn,
+      yield* SealedColumn.sqlSwap(privateKeyJwkColumn),
+    );
 
-    // An undecryptable or malformed signing key is a deployment fault (wrong
-    // or retired encryption key, tampered or swapped row), not something a
-    // caller can recover from, so it dies with a clear message.
+    // A public key that no longer decodes is a deployment fault (a tampered or swapped row),
+    // not something a caller can recover from, so it dies with a clear message. The private half
+    // is not decoded here: it is sealed and opens where the key signs (`SealedColumn.orDie`).
     const unreadable = (kid: string) => () =>
       Defects.invariantViolation(
         "SigningKeyUndecodable",
-        `awthaq/jwt: signing key "${kid}" could not be decoded or decrypted`,
+        `awthaq/jwt: the public key of signing key "${kid}" could not be decoded`,
       );
 
     const decodeRow = Effect.fnUntraced(function* (row: SigningKeyRow) {
       const publicKeyJwk = yield* Schema.decodeUnknownEffect(JwkJson)(row.publicKeyJwk).pipe(
         Effect.catch(unreadable(row.kid)),
       );
-      const privateKeyJwk = yield* Option.match(Option.fromNullishOr(row.privateKeyJwk), {
-        onNone: () => Effect.succeed(Option.none<Redacted.Redacted<Jwk>>()),
-        onSome: (envelope) =>
-          encryption.decrypt(envelope, privateKeyAad(row.kid)).pipe(
-            Effect.flatMap(({ plaintext }) =>
-              Schema.decodeUnknownEffect(JwkJson)(Redacted.value(plaintext)),
-            ),
-            Effect.map((jwk) => Option.some(Redacted.make(jwk))),
-            Effect.catch(unreadable(row.kid)),
-          ),
-      });
       const record: SigningKeyRecord = {
         kid: row.kid,
         alg: row.alg,
         publicKeyJwk,
-        privateKeyJwk,
+        privateKeyJwk: Option.map(Option.fromNullishOr(row.privateKeyJwk), (stored) =>
+          privateKeys.sealed(row.kid, stored),
+        ),
         createdAt: row.createdAt,
         rotatedAt: Option.fromNullishOr(row.rotatedAt),
         retiresAt: Option.fromNullishOr(row.retiresAt),
@@ -344,11 +428,7 @@ export const layerSql = Layer.effect(
       const now = yield* DateTime.now;
       const privateKeyJwk = yield* Option.match(input.privateKeyJwk, {
         onNone: () => Effect.succeed(null),
-        onSome: (redacted) =>
-          encryption.encrypt(
-            Redacted.make(JSON.stringify(Redacted.value(redacted))),
-            privateKeyAad(input.kid),
-          ),
+        onSome: (redacted) => privateKeys.seal(input.kid, redacted),
       });
       const row = yield* insert({
         kid: input.kid,
@@ -362,21 +442,19 @@ export const layerSql = Layer.effect(
         // A unique violation on a *current* key insert can only be the
         // single-current index (the kid is a fresh identifier): another
         // process minted the current key first.
-        Effect.catchTags({
-          SqlError: (error) =>
-            error.reason._tag === "UniqueViolation" && input.rotated === undefined
-              ? Effect.fail(new CurrentKeyConflict({ kid: input.kid }))
-              : Effect.die(error),
-          NoSuchElementError: Effect.die,
-          SchemaError: Effect.die,
-        }),
+        input.rotated === undefined
+          ? StoreFailure.orConflict(
+              "SigningKeyRecords.create",
+              () => new CurrentKeyConflict({ kid: input.kid }),
+            )
+          : unavailable("create"),
       );
       return yield* decodeRow(row);
     });
 
     const findCurrent: SigningKeyRecordsShape["findCurrent"] = () =>
       findCurrentQuery(undefined).pipe(
-        Effect.orDie,
+        unavailable("findCurrent"),
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.succeedNone,
@@ -387,15 +465,18 @@ export const layerSql = Layer.effect(
 
     const listVerifiable: SigningKeyRecordsShape["listVerifiable"] = (now) =>
       listVerifiableQuery(now).pipe(
-        Effect.orDie,
+        unavailable("listVerifiable"),
         Effect.flatMap((rows) => Effect.forEach(rows, decodeRow)),
       );
 
     const markRotated: SigningKeyRecordsShape["markRotated"] = (kid, rotatedAt, retiresAt) =>
-      markRotatedQuery({ kid, rotatedAt, retiresAt }).pipe(Effect.map(Option.isSome), Effect.orDie);
+      markRotatedQuery({ kid, rotatedAt, retiresAt }).pipe(
+        Effect.map(Option.isSome),
+        unavailable("markRotated"),
+      );
 
     const retire: SigningKeyRecordsShape["retire"] = (kid, retiresAt) =>
-      retireQuery({ kid, retiresAt }).pipe(Effect.map(Option.isSome), Effect.orDie);
+      retireQuery({ kid, retiresAt }).pipe(Effect.map(Option.isSome), unavailable("retire"));
 
     return { create, findCurrent, listVerifiable, markRotated, retire };
   }),

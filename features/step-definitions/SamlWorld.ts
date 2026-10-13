@@ -30,7 +30,6 @@ import {
 import {
   ClientAddress,
   Encryption,
-  KeyProvider,
   Mailer,
   RateLimiter,
   SqlTransaction,
@@ -50,7 +49,6 @@ type SamlConfigInput = Saml.SamlConfigInput;
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { inflateRawSync } from "node:zlib";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -74,6 +72,7 @@ import {
   type SignOptions,
 } from "./SamlFixtures.ts";
 import { makeOutcomes, type Outcomes } from "./shared/Outcomes.ts";
+import { EncryptionLive } from "./shared/TestEncryption.ts";
 
 export const BASE_URL = "https://sp.example.com";
 export const ACS_PATH = "/auth/saml/acs";
@@ -175,22 +174,6 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
       secret: Redacted.make("saml-bdd-csrf-secret-padded-to-thirty-two-bytes-long"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-/** A real `Encryption` over a fixed test key: the SP signing keys are sealed with it, as in production. */
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
   ),
   Layer.provide(NodeCrypto.layer),
 );

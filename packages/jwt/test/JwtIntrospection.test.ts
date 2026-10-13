@@ -14,7 +14,7 @@ import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
 const SessionsLive = Sessions.layerMemory.pipe(
   Layer.provide(AuthEvents.layer),
@@ -28,7 +28,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 
 const jwtBase = Jwt.Jwt.layer.pipe(
   Layer.provide(KeyRing.KeyRing.layer),
-  Layer.provide(SigningKeyRecords.layerMemory),
+  Layer.provide(SigningKeyRecordsLive),
   Layer.provide(SqlTransaction.layerNoop),
   Layer.provide(RevocationStore.layerMemory),
   Layer.provide(NodeCrypto.layer),

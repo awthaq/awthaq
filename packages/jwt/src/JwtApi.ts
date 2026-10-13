@@ -57,6 +57,7 @@ export class IntrospectionResponse extends Schema.Class<IntrospectionResponse>(
 export const JwtGroup = HttpApiGroup.make("jwt").add(
   HttpApiEndpoint.get("jwks", "/jwt/jwks", {
     success: JwksResponse,
+    error: Api.StoreUnavailable,
   }),
 );
 

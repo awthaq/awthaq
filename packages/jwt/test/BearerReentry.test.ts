@@ -23,7 +23,7 @@ import * as JwtApi from "../src/JwtApi.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -45,7 +45,7 @@ const appLayer = (config: Parameters<typeof JwtConfig.config>[0], withRegistry =
     Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(withRegistry ? Authentication.CredentialResolversLive : Layer.empty),
     Layer.provideMerge(KeyRing.KeyRing.layer),
-    Layer.provideMerge(SigningKeyRecords.layerMemory),
+    Layer.provideMerge(SigningKeyRecordsLive),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(Sessions.layerMemory),
     Layer.provideMerge(AuthEvents.layer),

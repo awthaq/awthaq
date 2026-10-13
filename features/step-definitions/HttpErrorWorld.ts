@@ -31,6 +31,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { EncryptionLive } from "./shared/TestEncryption.ts";
 
 // ---- the World's own plugins ------------------------------------------------------------
 
@@ -141,6 +142,7 @@ const apiKeyServices = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(KeyRing.KeyRing.layer),
   Layer.provideMerge(SigningKeyRecords.layerMemory),
+  Layer.provideMerge(EncryptionLive),
   Layer.provideMerge(
     JwtConfig.config({ issuer: "https://issuer.test", audience: "https://api.test" }),
   ),

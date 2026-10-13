@@ -52,6 +52,7 @@ import { Api } from "@awthaq/api";
 import { AuthPlugin, Errors, Migrations, Sessions, Tenant, Users } from "@awthaq/core";
 import { Defects, RefreshingCache } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
+import { SealedColumn } from "@awthaq/sql";
 import * as Arr from "effect/Array";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -90,10 +91,10 @@ export interface JwtShape {
   readonly sign: (
     principal: Api.Principal,
     options?: { readonly ttl?: Duration.Duration },
-  ) => Effect.Effect<string, JwtCodec.JwtInvalidError>;
+  ) => Effect.Effect<string, JwtCodec.JwtInvalidError | Errors.StoreUnavailable>;
   readonly verify: (
     token: string,
-  ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError>;
+  ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError | Errors.StoreUnavailable>;
   /** Ticket 12: `verify` plus a live check that the token's `sid` still names an unrevoked, unexpired session. The documented, deliberate weakening `verify` alone carries (a revoked session's JWT keeps verifying until its own `exp`) does not apply here. */
   readonly verifyLive: (
     token: string,
@@ -118,7 +119,7 @@ export interface JwtShape {
       readonly audience?: string | ReadonlyArray<string>;
       readonly typ?: string;
     },
-  ) => Effect.Effect<string, JwtCodec.JwtInvalidError>;
+  ) => Effect.Effect<string, JwtCodec.JwtInvalidError | Errors.StoreUnavailable>;
   /**
    * The general-purpose counterpart of `signJWT` (JJS-007/VB-005): checks
    * issuer, `options.audience` (default `JwtConfig.audience`) and
@@ -128,8 +129,11 @@ export interface JwtShape {
   readonly verifyJWT: (
     token: string,
     options?: { readonly audience?: string; readonly typ?: string },
-  ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError>;
-  readonly jwks: Effect.Effect<{ readonly keys: ReadonlyArray<Record<string, unknown>> }>;
+  ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError | Errors.StoreUnavailable>;
+  readonly jwks: Effect.Effect<
+    { readonly keys: ReadonlyArray<Record<string, unknown>> },
+    Errors.StoreUnavailable
+  >;
   /**
    * TIR-001/MAPS-002: `verify` plus a denylist lookup by the token's own
    * `jti` — the RFC 7662-shaped path for a caller that needs freshness
@@ -140,7 +144,9 @@ export interface JwtShape {
    * before this claim existed, or foreign) simply can't be denylisted and
    * is treated as not revoked.
    */
-  readonly introspect: (token: string) => Effect.Effect<IntrospectionResult>;
+  readonly introspect: (
+    token: string,
+  ) => Effect.Effect<IntrospectionResult, Errors.StoreUnavailable>;
   /**
    * TIR-001: `introspect` plus, when the token carries a `sid`, the same
    * session-liveness check `verifyLive` runs — a superset, reusing its
@@ -351,9 +357,10 @@ const PostAuthResponseHookLive = Layer.effect(
         : jwt.sign(principal).pipe(
             Effect.map((token) => HttpServerResponse.setHeader(response, "x-jwt-token", token)),
             Effect.catch((error) =>
-              Effect.logWarning("awthaq/jwt: response mirroring failed", error.reason).pipe(
-                Effect.as(response),
-              ),
+              Effect.logWarning(
+                "awthaq/jwt: response mirroring failed",
+                error._tag === "JwtInvalidError" ? error.reason : error,
+              ).pipe(Effect.as(response)),
             ),
           );
     // BO-006: the opt-in session-mirror cookie — a short-lived JWT copy of a
@@ -440,7 +447,8 @@ const BearerCredentialContributionLive = Layer.unwrap(
         Option.exists(JwtCodec.peekTyp(raw), (typ) => typ.toLowerCase() === PRINCIPAL_TYP),
       resolve: (credential) =>
         jwt.verify(Redacted.value(credential)).pipe(
-          Effect.mapError(() => new Api.Unauthenticated()),
+          // A token that does not verify is `Unauthenticated`; a store outage while reading the key ring is not.
+          Effect.catchTag("JwtInvalidError", () => Effect.fail(new Api.Unauthenticated())),
           Effect.flatMap(claimsToPrincipal),
         ),
     }).pipe(Layer.provide(Layer.succeed(Authentication.CredentialResolvers, registry.value)));
@@ -640,7 +648,12 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             // material and no remote signer configured is a deployment
             // mistake, not a recoverable runtime condition.
             const signer = yield* Option.match(key.privateKeyJwk, {
-              onSome: (redacted) => Effect.succeed(JwtCodec.localSigner(Redacted.value(redacted))),
+              // A key that is there but does not open is a deployment fault (a retired encryption key, a
+              // tampered or swapped row): fail closed as a defect, never sign with anything else.
+              onSome: (sealed) =>
+                Effect.map(SealedColumn.orDie(sealed.open), (redacted) =>
+                  JwtCodec.localSigner(Redacted.value(redacted)),
+                ),
               onNone: () =>
                 Option.match(remoteSigner, {
                   onSome: Effect.succeed,
@@ -723,7 +736,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
           });
           return attempt.pipe(
             Effect.catchIf(
-              (error) => error.reason === "unknown kid",
+              (error) => error._tag === "JwtInvalidError" && error.reason === "unknown kid",
               () => Effect.andThen(keyRefresh.refreshOnMiss, attempt),
             ),
           );

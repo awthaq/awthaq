@@ -36,6 +36,7 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { TestServices } from "./shared/Harness.ts";
+import { EncryptionLive } from "./shared/TestEncryption.ts";
 
 /**
  * BEH-EA-072: a *different* declaration of the same two schemes, in the opposite order. Its
@@ -237,6 +238,7 @@ const buildApp = (options: AppOptions) => {
       ),
       Layer.provideMerge(KeyRing.KeyRing.layer),
       Layer.provideMerge(SigningKeyRecords.layerMemory),
+      Layer.provideMerge(EncryptionLive),
       Layer.provideMerge(RevocationStore.layerMemory),
       Layer.provideMerge(SqlTransaction.layerNoop),
       Layer.provideMerge(ReorderedLive),

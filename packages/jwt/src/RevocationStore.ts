@@ -26,7 +26,7 @@
 // — the same standalone-export shape `KeyRing.rotateNow` already uses)
 // with a `jti` it extracted from `jwt.verify`/`verifyJWT`'s own claims.
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -39,8 +39,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 export interface RevocationStoreShape {
-  readonly revoke: (jti: string, expiresAt: DateTime.Utc) => Effect.Effect<void>;
-  readonly isRevoked: (jti: string) => Effect.Effect<boolean>;
+  readonly revoke: (
+    jti: string,
+    expiresAt: DateTime.Utc,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  readonly isRevoked: (jti: string) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
 }
 
 export class RevocationStore extends Context.Service<RevocationStore, RevocationStoreShape>()(
@@ -105,12 +108,15 @@ export const layerSql = Layer.effect(
       execute: (jti) => sql`SELECT * FROM jwt_token_revocation WHERE jti = ${jti}`,
     });
 
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`RevocationStore.${operation}`);
+
     const revoke: RevocationStoreShape["revoke"] = (jti, expiresAt) =>
-      upsert({ jti, expiresAt }).pipe(Effect.asVoid, Effect.orDie);
+      upsert({ jti, expiresAt }).pipe(Effect.asVoid, unavailable("revoke"));
 
     const isRevoked: RevocationStoreShape["isRevoked"] = (jti) =>
       Effect.gen(function* () {
-        const row = yield* findQuery(jti).pipe(Effect.orDie);
+        const row = yield* findQuery(jti).pipe(unavailable("isRevoked"));
         if (Option.isNone(row)) return false;
         const now = yield* DateTime.now;
         return DateTime.toEpochMillis(row.value.expiresAt) > DateTime.toEpochMillis(now);

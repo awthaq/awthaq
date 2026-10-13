@@ -16,7 +16,7 @@ import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
 /**
  * `Jwt.layer` now bundles the `jwt.token` mint endpoint's handlers
@@ -47,7 +47,7 @@ const asCaller = (input: {
 const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
   Jwt.Jwt.layer.pipe(
     Layer.provide(KeyRing.KeyRing.layer),
-    Layer.provide(SigningKeyRecords.layerMemory),
+    Layer.provide(SigningKeyRecordsLive),
     Layer.provide(SqlTransaction.layerNoop),
     Layer.provide(AuthenticationLive),
     // `provideMerge`, not `provide`: `verifyLive` (ticket 12) requires

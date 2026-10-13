@@ -40,7 +40,7 @@ import * as JwtCodec from "../src/JwtCodec.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -83,7 +83,7 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Jwt.Jwt.layer),
   Layer.provideMerge(AuthenticationLive),
   Layer.provideMerge(KeyRing.KeyRing.layer),
-  Layer.provideMerge(SigningKeyRecords.layerMemory),
+  Layer.provideMerge(SigningKeyRecordsLive),
   Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(Sessions.layerMemory),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -378,7 +378,7 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
       Layer.provideMerge(Jwt.Jwt.layer),
       Layer.provideMerge(AuthenticationLive),
       Layer.provideMerge(KeyRing.KeyRing.layer),
-      Layer.provideMerge(SigningKeyRecords.layerMemory),
+      Layer.provideMerge(SigningKeyRecordsLive),
       Layer.provideMerge(SqlTransaction.layerNoop),
       Layer.provideMerge(Sessions.layerMemory),
       Layer.provideMerge(Verification.layerMemory),

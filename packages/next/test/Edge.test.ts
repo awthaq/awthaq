@@ -7,7 +7,7 @@
 // (`../src/edge.ts`) sees only plain cookie headers and an HTTP response.
 import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Sessions } from "@awthaq/core";
-import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
+import { Jwt, JwtConfig, KeyRing, RevocationStore } from "@awthaq/jwt";
 import { makeVerifier } from "@awthaq/jwt/verify";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
@@ -20,6 +20,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { afterEach, vi } from "vitest";
 import { makeSessionVerifier, verifySessionJwt } from "../src/edge.ts";
+import { SigningKeyRecordsLive } from "../../jwt/test/support.ts";
 
 const ISSUER = "https://issuer.test";
 const JWKS_URL = "https://issuer.test/jwt/jwks";
@@ -33,7 +34,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 
 const JwtTestLayer = Jwt.Jwt.layer.pipe(
   Layer.provideMerge(KeyRing.KeyRing.layer),
-  Layer.provideMerge(SigningKeyRecords.layerMemory),
+  Layer.provideMerge(SigningKeyRecordsLive),
   Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(AuthenticationLive),
   Layer.provideMerge(Sessions.layerMemory),

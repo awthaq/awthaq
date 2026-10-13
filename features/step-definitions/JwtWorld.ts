@@ -7,6 +7,7 @@
 import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
+import { SealedColumn } from "@awthaq/sql";
 import {
   Jwt,
   JwtApi,
@@ -30,6 +31,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
 import { parseJson, isRecord, snapshot, type Snapshot } from "./shared/WireJson.ts";
+import { EncryptionLive } from "./shared/TestEncryption.ts";
 
 export const ISSUER = "https://issuer.test";
 
@@ -49,6 +51,7 @@ const buildAppLayer = (config: JwtConfigInput) =>
     Layer.provideMerge(Authentication.CredentialResolversLive),
     Layer.provideMerge(KeyRing.KeyRing.layer),
     Layer.provideMerge(SigningKeyRecords.layerMemory),
+    Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(Sessions.layerMemory),
     Layer.provideMerge(AuthEvents.layer),
@@ -320,7 +323,7 @@ export const signWithCurrentKey = Effect.fn("features.jwt.signWithCurrentKey")(f
       Effect.gen(function* () {
         const key = yield* KeyRing.current;
         const material = yield* Option.match(key.privateKeyJwk, {
-          onSome: (redacted) => Effect.succeed(Redacted.value(redacted)),
+          onSome: (sealed) => Effect.map(SealedColumn.orDie(sealed.open), Redacted.value),
           onNone: () => Effect.die(new Error("the current signing key has no local private key")),
         });
         const iat = nowSeconds();

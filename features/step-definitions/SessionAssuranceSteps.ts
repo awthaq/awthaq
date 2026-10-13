@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { inApp, World } from "./SessionWorld.ts";
+import { EncryptionLive } from "./shared/TestEncryption.ts";
 
 /** `"none"` is how a Gherkin table spells "no method recorded". */
 const methodsOf = (text: string): ReadonlyArray<Sessions.AuthMethod> =>
@@ -33,6 +34,7 @@ const epochSeconds = (view: Sessions.SessionView) =>
 const JwtSigner = Jwt.Jwt.layer.pipe(
   Layer.provide(KeyRing.KeyRing.layer),
   Layer.provide(SigningKeyRecords.layerMemory),
+  Layer.provide(EncryptionLive),
   Layer.provide(SqlTransaction.layerNoop),
   Layer.provide(
     Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
