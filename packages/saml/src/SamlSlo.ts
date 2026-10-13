@@ -21,8 +21,8 @@
 // Outbound messages (our request, our response) are signed with the connection's SP key whenever it has one.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, RateLimits, Sessions, Tenant, Verification } from "@awthaq/core";
-import { RateLimiter, XmlSignature } from "@awthaq/ports";
+import { AuthEvents, Sessions, Tenant, Verification } from "@awthaq/core";
+import { XmlSignature } from "@awthaq/ports";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -104,27 +104,13 @@ export interface SloDeps {
   readonly xmlSignature: XmlSignature.XmlSignatureShape;
   readonly spKeys: SamlSpKeys.SamlSpKeysShape;
   readonly crypto: Crypto.Crypto;
-  readonly limiter: RateLimiter.RateLimiterShape;
+  /** The `slo` rule of `Saml`'s budget, spent per source address (a closure: this module must not import `Saml.ts`). */
+  readonly rateLimit: (ip: string | undefined) => Effect.Effect<void, Api.RateLimited>;
   readonly resolveCallbackURL: (raw: string | undefined) => string;
 }
 
 export const makeSlo = (deps: SloDeps) => {
   const { settings, records, sessions, verification, events, xmlSignature, spKeys, crypto } = deps;
-
-  const rateLimit = (ip: string | undefined) =>
-    RateLimits.enforce({
-      key: `saml:slo:${ip ?? "unknown"}`,
-      limit: settings.rateLimits.slo.limit,
-      window: settings.rateLimits.slo.window,
-      meta: { group: "saml", endpoint: "slo", rule: "slo", dimension: "ip" },
-    }).pipe(
-      Effect.provideService(RateLimiter.RateLimiter, deps.limiter),
-      Effect.provideService(AuthEvents.AuthEvents, events),
-      Effect.catchTag(
-        "RateLimitExceeded",
-        (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-      ),
-    );
 
   /** Signs and encodes one outbound message for the IdP's binding, with the SP key when the connection has one. */
   const outbound = Effect.fnUntraced(function* (input: {
@@ -370,7 +356,7 @@ export const makeSlo = (deps: SloDeps) => {
   });
 
   const slo = Effect.fnUntraced(function* (input: SloInput) {
-    yield* rateLimit(input.ip);
+    yield* deps.rateLimit(input.ip);
     let strategy = "saml";
     const reject = (reason: string) =>
       Effect.all(
@@ -474,5 +460,5 @@ export const makeSlo = (deps: SloDeps) => {
     return yield* chain.pipe(Effect.catchTag("LogoutInvalid", (invalid) => reject(invalid.reason)));
   });
 
-  return { slo, logout, rateLimit };
+  return { slo, logout };
 };

@@ -81,9 +81,21 @@ export class SamlConfig extends Context.Service<SamlConfig, SamlConfigShape>()(
   "awthaq/saml/Config",
 ) {}
 
+/** What `config(...)` accepts: `rateLimits` may name only the endpoints to change (the others keep their defaults). */
 export type SamlConfigInput = { readonly baseUrl: string } & Partial<
-  Omit<SamlConfigShape, "baseUrl">
->;
+  Omit<SamlConfigShape, "baseUrl" | "rateLimits">
+> & { readonly rateLimits?: Partial<SamlConfigShape["rateLimits"]> };
+
+/** BEH-EA-107/111: the default per-source budgets: the unauthenticated endpoints' rule table reads these too. */
+export const defaultRateLimits = {
+  login: { limit: 30, window: Duration.minutes(1) },
+  acs: { limit: 30, window: Duration.minutes(1) },
+  slo: { limit: 30, window: Duration.minutes(1) },
+  sso: { limit: 30, window: Duration.minutes(1) },
+} satisfies SamlConfigShape["rateLimits"];
+
+/** BEH-EA-318: the default admin-group budget, per administrator. */
+export const defaultAdminRate = { limit: 60, window: Duration.minutes(1) } satisfies SamlRateLimit;
 
 const MAX_SKEW = Duration.seconds(300);
 
@@ -129,19 +141,14 @@ export const config = (input: SamlConfigInput) =>
         maxResponseBytes: input.maxResponseBytes ?? 256 * 1024,
         tenantScoped: input.tenantScoped ?? true,
         allowPrivateTargets: input.allowPrivateTargets ?? false,
-        rateLimits: input.rateLimits ?? {
-          login: { limit: 30, window: Duration.minutes(1) },
-          acs: { limit: 30, window: Duration.minutes(1) },
-          slo: { limit: 30, window: Duration.minutes(1) },
-          sso: { limit: 30, window: Duration.minutes(1) },
-        },
+        rateLimits: { ...defaultRateLimits, ...input.rateLimits },
         logoutFreshness: input.logoutFreshness ?? Duration.minutes(5),
         sessionRecordRetention: input.sessionRecordRetention ?? Duration.days(90),
         signingKeyValidityDays: input.signingKeyValidityDays ?? 1825,
         maxMetadataBytes: input.maxMetadataBytes ?? 512 * 1024,
         metadataTimeout: input.metadataTimeout ?? Duration.seconds(10),
         canManageSaml: input.canManageSaml ?? (() => Effect.succeed(false)),
-        adminRate: input.adminRate ?? { limit: 60, window: Duration.minutes(1) },
+        adminRate: input.adminRate ?? defaultAdminRate,
         allowOwnerRoleMapping: input.allowOwnerRoleMapping ?? false,
       };
       return value;

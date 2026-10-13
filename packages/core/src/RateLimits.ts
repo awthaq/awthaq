@@ -62,6 +62,12 @@ import {
 import * as Tenant from "./Tenant.ts";
 
 export * from "./RateLimitModel.ts";
+/**
+ * The service `budget` publishes a breach through (`auth.rateLimit.exceeded`), re-exported so that a plugin
+ * which only spends a budget can have its inferred `layer` type named in declaration emit (TS2883) through
+ * the `RateLimits` namespace it already imports, without importing `AuthEvents` for nothing.
+ */
+export { AuthEvents as Events } from "./AuthEvents.ts";
 export * as Key from "./RateLimitKey.ts";
 
 type Table = RateLimitModel.Table;

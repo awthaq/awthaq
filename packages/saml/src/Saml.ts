@@ -646,11 +646,49 @@ const currentUserPrincipal = Effect.gen(function* () {
   return principal;
 });
 
+// ---- rate limits --------------------------------------------------------------------------------------
+
+/**
+ * BEH-EA-105/107/111: the rules `Saml` enforces, declared once (they used to be enforced without being
+ * declared or registered). The static `rateLimits` listing is derived from this table at the default numbers
+ * (`SamlConfig.rateLimits`/`adminRate` tune them at build). `login`, `acs` and `slo` are per source address
+ * on the unauthenticated endpoints (`slo` covers `slo` and `sloPost`); `admin` is per administrator, past the
+ * `canManageSaml` gate, and a group-wide rule: the breach event reports the admin action as its endpoint.
+ */
+const rules = {
+  login: RateLimits.rule({
+    group: "saml",
+    endpoint: "login",
+    key: RateLimits.Key.ip,
+    ...SamlConfig.defaultRateLimits.login,
+  }),
+  acs: RateLimits.rule({
+    group: "saml",
+    endpoint: "acs",
+    key: RateLimits.Key.ip,
+    ...SamlConfig.defaultRateLimits.acs,
+  }),
+  slo: RateLimits.rule({
+    group: "saml",
+    endpoint: "slo",
+    key: RateLimits.Key.ip,
+    ...SamlConfig.defaultRateLimits.slo,
+  }),
+  admin: RateLimits.rule({
+    group: "saml.admin",
+    endpoint: "*",
+    key: RateLimits.Key.user,
+    ...SamlConfig.defaultAdminRate,
+  }),
+};
+
 // ---- the plugin --------------------------------------------------------------------------------------
 
 export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   apiVersion: 1,
   contract: SamlApi.SamlApi,
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
   tables: ["saml_connection", "saml_connection_domain", "saml_sp_key", "saml_session"],
   migrations: samlMigrations,
 }) {
@@ -675,7 +713,6 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const spKeys = yield* SamlSpKeys.SamlSpKeys;
       const xmlSignature = yield* XmlSignature.XmlSignature;
       const crypto = yield* Crypto.Crypto;
-      const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const settings = yield* SamlConfig.SamlConfig;
       const beforeSignUp = yield* Hooks.BeforeSignUp;
@@ -685,22 +722,18 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const afterSignIn = yield* Hooks.AfterSignIn;
 
       const acsUrl = SamlConfig.acsUrl(settings);
-      const admin = yield* SamlAdmin.makeAdmin;
-
-      const rateLimit = (endpoint: "login" | "acs", ip: string | undefined) =>
-        RateLimits.enforce({
-          key: `saml:${endpoint}:${ip ?? "unknown"}`,
-          limit: settings.rateLimits[endpoint].limit,
-          window: settings.rateLimits[endpoint].window,
-          meta: { group: "saml", endpoint, rule: endpoint, dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // The configured numbers tune the declared defaults (`sso` belongs to the `Sso` plugin's own budget).
+      const limits = yield* RateLimits.budget(Saml, {
+        tune: Effect.succeed({
+          login: settings.rateLimits.login,
+          acs: settings.rateLimits.acs,
+          slo: settings.rateLimits.slo,
+          admin: settings.adminRate,
+        }),
+      });
+      const admin = yield* SamlAdmin.makeAdmin((adminId, action) =>
+        limits.spend("admin", { userId: adminId }, { endpoint: action }),
+      );
 
       /** A connection that exists AND whose organization exists and is not suspended (BEH-EA-237); anything else is `None`. */
       const usableConnection = (connectionId: string) =>
@@ -739,7 +772,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
 
       const authnRequest: SamlShape["authnRequest"] = Effect.fnUntraced(
         function* (connectionId, input) {
-          yield* rateLimit("login", input.ip);
+          yield* limits.spend("login", { ip: input.ip });
           const connection = yield* usableConnection(connectionId);
           if (Option.isNone(connection))
             return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
@@ -1071,7 +1104,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       });
 
       const acs: SamlShape["acs"] = Effect.fnUntraced(function* (input) {
-        yield* rateLimit("acs", input.ip);
+        yield* limits.spend("acs", { ip: input.ip });
         // Which connection the attempt was for, once known, so the audit event can name it.
         let strategy = "saml";
         const reject = (reason: string) =>
@@ -1118,7 +1151,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         xmlSignature,
         spKeys,
         crypto,
-        limiter,
+        rateLimit: (ip) => limits.spend("slo", { ip }),
         resolveCallbackURL: (raw) => resolveCallbackURL(raw, settings),
       });
 
