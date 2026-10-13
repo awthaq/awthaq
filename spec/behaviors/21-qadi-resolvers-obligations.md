@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-21 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) <br> 1.2 (2026-09-29): Banner replaced with per-behavior implementation pointers; BEH-EA-161's example rewritten to the shipped shape (no `plan` attribute; a user-table defect surfaces as `AttributeResolveError`); the same-attribute-resolver paragraph rewritten around `attributeResolverRegistry` (AAPS-007, RZS-007, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) <br> 1.2 (2026-09-29): Banner replaced with per-behavior implementation pointers; BEH-EA-161's example rewritten to the shipped shape (no `plan` attribute; a user-table defect surfaces as `AttributeResolveError`); the same-attribute-resolver paragraph rewritten around `attributeResolverRegistry` (AAPS-007, RZS-007, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-165's `reauth` handler uses `Sessions.requireFresh` (BEH-EA-320) |
 ---
 
 > Implemented: BEH-EA-161 in `@awthaq/qadi`'s `Resolvers.UserAttributes`; BEH-EA-162 in `@awthaq/organization`'s `OrganizationQadi.relationships` (with the application's `ResourceOrganizationLookup`, layer `layerNone` by default); BEH-EA-163 by `@qadi/core`'s `relationshipResolverFromEdges`; BEH-EA-165 in `Resolvers` (`reauth`, `ObligationHandlers.reauth`). BEH-EA-164 (decision history over the audit table) is an example of what an application composes from `AuditLog`; awthaq ships no `DecisionHistory` layer of its own. Tests: `packages/qadi/test/Resolvers.test.ts`, `packages/organization/test/OrganizationQadi.test.ts`. The Gherkin scenarios in `features/` are `@skip @unwired`.
@@ -135,7 +135,8 @@ REQUIREMENT: `ObligationHandlers.reauth` MUST compare the current session's
              `authenticatedAt` timestamp to the obligation's `maxAgeSeconds`
              and MUST fail with a typed re-authentication error when stale; it
              MUST NOT accept a session merely because it is currently valid,
-             independent of when it was last authenticated. A `reauth`
+             independent of when it was last authenticated. The comparison
+             is `Sessions.requireFresh` (BEH-EA-320). A `reauth`
              obligation the handler cannot interpret (no finite, non-negative
              numeric `maxAgeSeconds`) MUST fail loudly rather than discharge,
              and among several `reauth` duties the strictest window wins.

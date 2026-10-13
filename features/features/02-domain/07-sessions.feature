@@ -302,3 +302,15 @@ Feature: Sessions
       And "alice" reauthenticates the superseded session "s0" a minute later
       Then the reauthentication of "alice" is refused as a missing session
       And session "s0"'s row keeps its original authentication time
+
+  # BEH-EA-320 — spec/behaviors/07-sessions.md
+  @BEH-EA-320
+  Rule: requireFresh is the one gate for "this session proved a credential recently"
+
+    @REQ-EA-1277
+    Scenario: A session is fresh only within the window since it last proved a credential
+      Given a signed-in user "alice" with session "s0"
+      When 10 minutes pass without "alice" proving a credential
+      Then session "s0" is not fresh within 5 minutes
+      When "alice" reauthenticates session "s0"
+      Then session "s0" is fresh within 5 minutes

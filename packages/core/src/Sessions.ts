@@ -266,11 +266,10 @@ export interface SessionListItem {
 }
 
 /**
- * Ticket 15: the one staleness comparison a step-up/reauth check needs —
- * factored out here so `@awthaq/qadi`'s `reauthHandler` and
- * `@awthaq/passkey`'s own enrollment gate both compare `authenticatedAt`
- * the same way, rather than each re-deriving the
- * `DateTime.distance`/`Duration.isGreaterThan` pair independently.
+ * Ticket 15: the one staleness comparison a step-up/reauth check needs.
+ * `Sessions.requireFresh` is its only caller; a gate asks the store
+ * (BEH-EA-320) instead of re-deriving the `DateTime.distance`/
+ * `Duration.isGreaterThan` pair itself.
  */
 export const isStale = (
   authenticatedAt: DateTime.Utc,
@@ -310,6 +309,17 @@ const refuseSelfActingAs = (input: {
 export class SessionNotFound extends Data.TaggedError("Sessions/NotFound")<{
   readonly message: string;
   readonly id?: SessionId;
+}> {}
+
+/**
+ * BEH-EA-320: `requireFresh` found no session that proved a credential within `maxAge`.
+ * Callers map it to their own wire error (`PasskeyReauthRequired`, `TwoFactorReauthRequired`,
+ * `Api.ReauthRequired`); `reason` is for logs and step-up UX, never for an authorization decision.
+ */
+export class SessionStale extends Data.TaggedError("Sessions/Stale")<{
+  readonly maxAgeSeconds: number;
+  /** `notLive`: absent, foreign, tombstoned or expired. `stale`: live, but `authenticatedAt` is older than `maxAge`. */
+  readonly reason: "notLive" | "stale";
 }> {}
 
 export class SessionExpired extends Data.TaggedError("SessionExpired")<{
@@ -536,6 +546,18 @@ export interface SessionsShape {
     /** THS-003: methods this step-up just proved; unioned into the session's `amr` (monotone — never removed). */
     amr?: ReadonlyArray<AuthMethod>,
   ) => Effect.Effect<SessionView, SessionNotFound | StoreUnavailable>;
+  /**
+   * BEH-EA-320: the one "fresh session" gate. Succeeds with the session when it is live,
+   * owned by `userId` and proved a credential (`authenticatedAt`) within `maxAge` (a session
+   * exactly `maxAge` old is still fresh); otherwise fails `SessionStale` with the window and a
+   * `reason`. Built once from `findOwned`, so both layers share the liveness rule and a test
+   * double has a single member to stub.
+   */
+  readonly requireFresh: (
+    userId: UserId,
+    id: SessionId,
+    maxAge: Duration.Duration,
+  ) => Effect.Effect<SessionListItem, SessionStale | StoreUnavailable>;
 }
 
 export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
@@ -557,6 +579,23 @@ const isLiveAt = (
   Option.isNone(row.supersededAt) &&
   DateTime.toEpochMillis(now) < DateTime.toEpochMillis(row.absoluteExpiresAt) &&
   DateTime.toEpochMillis(now) < DateTime.toEpochMillis(row.idleExpiresAt);
+
+/** BEH-EA-320: the single `requireFresh`, shared by both layers because it is built on their `findOwned`. */
+const requireFreshVia =
+  (findOwned: SessionsShape["findOwned"]) =>
+  (userId: UserId, id: SessionId, maxAge: Duration.Duration) =>
+    Effect.gen(function* () {
+      const maxAgeSeconds = Duration.toSeconds(maxAge);
+      const current = yield* findOwned(userId, id);
+      if (Option.isNone(current)) {
+        return yield* new SessionStale({ maxAgeSeconds, reason: "notLive" });
+      }
+      const now = yield* DateTime.now;
+      if (isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
+        return yield* new SessionStale({ maxAgeSeconds, reason: "stale" });
+      }
+      return current.value;
+    });
 
 /** ESS-005: newest activity first, ties broken by id so both layers order identically. */
 const newestActivityFirst = (
@@ -1227,6 +1266,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         findOwned,
         isLive,
         reauthenticate,
+        requireFresh: requireFreshVia(findOwned),
       };
     }),
   );
@@ -1770,6 +1810,7 @@ export const layerSql: Layer.Layer<
       findOwned,
       isLive,
       reauthenticate,
+      requireFresh: requireFreshVia(findOwned),
     };
   }),
 );

@@ -135,6 +135,7 @@ const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Session
   isLive: () => Effect.die("not used in this test"),
   purgeExpired: () => Effect.die("not used in this test"),
   reauthenticate: () => Effect.die("not used in this test"),
+  requireFresh: () => Effect.die("not used in this test"),
 });
 
 describe("Authentication", () => {
@@ -696,6 +697,7 @@ describe("Authentication per-request cache (TS-003/NHS-006)", () => {
       isLive: () => Effect.die("not used in this test"),
       purgeExpired: () => Effect.die("not used in this test"),
       reauthenticate: () => Effect.die("not used in this test"),
+      requireFresh: () => Effect.die("not used in this test"),
     });
 
   const sessionsWith = (verifies: Ref.Ref<number>) =>

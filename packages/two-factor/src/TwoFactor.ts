@@ -496,24 +496,19 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
 
       /**
        * BEH-EA-263: enrolling, disabling and regenerating need a session that proved a credential
-       * recently, so a hijacked cookie cannot quietly swap the victim's second factor. A session that
-       * is not live for its owner fails closed the same as a stale one.
+       * recently, so a hijacked cookie cannot quietly swap the victim's second factor. The rule is
+       * `Sessions.requireFresh` (BEH-EA-320); this maps it to the plugin's own wire error.
        */
-      const requireFreshSession = (
-        userId: Users.UserId,
-        sessionId: string,
-      ): Effect.Effect<void, TwoFactorApi.TwoFactorReauthRequired | Errors.StoreUnavailable> =>
-        Effect.gen(function* () {
-          const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAge);
-          const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));
-          if (Option.isNone(current)) {
-            return yield* Effect.fail(new TwoFactorApi.TwoFactorReauthRequired({ maxAgeSeconds }));
-          }
-          const now = yield* DateTime.now;
-          if (Sessions.isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
-            return yield* Effect.fail(new TwoFactorApi.TwoFactorReauthRequired({ maxAgeSeconds }));
-          }
-        });
+      const requireFreshSession = (userId: Users.UserId, sessionId: string) =>
+        sessions
+          .requireFresh(userId, Sessions.SessionId(sessionId), config.reauthMaxAge)
+          .pipe(
+            Effect.catchTag("Sessions/Stale", (stale) =>
+              Effect.fail(
+                new TwoFactorApi.TwoFactorReauthRequired({ maxAgeSeconds: stale.maxAgeSeconds }),
+              ),
+            ),
+          );
 
       /**
        * THS-001 step 5/11: the ONE place this plugin mints a session, and it accepts only a

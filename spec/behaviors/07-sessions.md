@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-07 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) |
 
 ---
 
@@ -225,3 +225,28 @@ REQUIREMENT: `Sessions.reauthenticate(userId, id, amr?)` MUST set
 ```
 
 A dead or foreign session is "absent", the answer `findOwned` and `isLive` already give, and not `SessionExpired`: that error answers a *presented credential* and carries a cookie-clearing meaning `reauthenticate` has no use for. The tombstoned row of a rotated session is kept for reuse detection (BEH-EA-053), so it must never receive a fresh `authenticatedAt`. `POST /password/reauthenticate` and `POST /passkey/reauthenticate/verify` turn `SessionNotFound` into `Unauthenticated` (401): the session the middleware verified ended between that check and the write (the password path holds a full hash verification in between), which is "no longer authenticated", not an invariant violation.
+
+## BEH-EA-320: `requireFresh` is the one gate for "this session proved a credential recently"
+
+> **See:** [BEH-EA-319](07-sessions.md#beh-ea-319-reauthenticate-advances-only-a-live-session-the-caller-owns), [BEH-EA-255](17-passkey.md), [BEH-EA-263](31-two-factor.md), [BEH-EA-165](21-qadi-resolvers-obligations.md)
+
+```ts
+yield* sessions.requireFresh(userId, sessionId, Duration.minutes(5))
+// SessionListItem, or fails Sessions/Stale { maxAgeSeconds, reason: "notLive" | "stale" }
+```
+
+```text
+REQUIREMENT: `Sessions.requireFresh(userId, id, maxAge)` MUST succeed with
+             the session only when it is live and owned by `userId`
+             (`findOwned`'s rule) and its `authenticatedAt` is no older than
+             `maxAge` (a session exactly `maxAge` old is still fresh);
+             otherwise it MUST fail `SessionStale` carrying `maxAgeSeconds`
+             and a `reason`: `notLive` (absent, foreign, tombstoned or
+             expired) or `stale`. Both layers MUST share one implementation
+             built on `findOwned`. Every step-up gate (passkey enrolment,
+             two-factor enable/disable/regenerate, the qadi `reauth`
+             obligation, password email change) MUST use it rather than
+             compare `authenticatedAt` itself.
+```
+
+The rule lives in the session store; the *wire contract* stays per plugin. Each caller maps `SessionStale` to its own error, so a client keeps decoding what it already decoded: `PasskeyReauthRequired`, `TwoFactorReauthRequired`, `PasswordReauthRequired` or `Api.ReauthRequired` (all HTTP 403, all carrying `maxAgeSeconds`). `reason` is for logs and step-up UX ("your session ended" versus "confirm your password"); a caller never branches an authorization decision on it. A session that is not live fails closed the same as a stale one: there is no live session left to have proven anything recently.

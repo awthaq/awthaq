@@ -411,6 +411,62 @@ const suite = (
         }).pipe(Effect.provide(layer)),
     );
 
+    // BEH-EA-320: the one fresh-session gate, identical on both layers.
+    it.effect("BEH-EA-320: requireFresh passes a live owned session, boundary included", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.seconds(30));
+        const item = yield* sessions.requireFresh(userId, session.id, Duration.seconds(60));
+        assert.strictEqual(item.id, session.id);
+        // Exactly `maxAge` old is still fresh (`isStale` is strictly greater-than).
+        const boundary = yield* sessions.requireFresh(userId, session.id, Duration.seconds(30));
+        assert.strictEqual(boundary.id, session.id);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BEH-EA-320: requireFresh fails stale past maxAge until a reauthenticate", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.seconds(90));
+        const stale = yield* sessions
+          .requireFresh(userId, session.id, Duration.seconds(60))
+          .pipe(Effect.flip);
+        if (stale._tag !== "Sessions/Stale") return assert.fail(stale._tag);
+        assert.strictEqual(stale.reason, "stale");
+        assert.strictEqual(stale.maxAgeSeconds, 60);
+        yield* sessions.reauthenticate(userId, session.id);
+        const item = yield* sessions.requireFresh(userId, session.id, Duration.seconds(60));
+        assert.strictEqual(item.id, session.id);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "BEH-EA-320: requireFresh fails notLive for a revoked, foreign or unknown session",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const other = Users.UserId("22222222-2222-2222-2222-222222222222");
+          const mine = yield* sessions.issue({ userId });
+          const gone = yield* sessions.issue({ userId });
+          yield* sessions.revoke(gone.session.id, "signOut");
+          const reasons = yield* Effect.all([
+            sessions.requireFresh(userId, gone.session.id, Duration.minutes(5)).pipe(Effect.flip),
+            sessions.requireFresh(other, mine.session.id, Duration.minutes(5)).pipe(Effect.flip),
+            sessions
+              .requireFresh(userId, Sessions.SessionId("does-not-exist"), Duration.minutes(5))
+              .pipe(Effect.flip),
+          ]);
+          assert.deepStrictEqual(
+            reasons.map((failure) =>
+              failure._tag === "Sessions/Stale" ? failure.reason : failure._tag,
+            ),
+            ["notLive", "notLive", "notLive"],
+          );
+        }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BEH-EA-052: idle refresh is throttled to at most one write per touchEvery", () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;

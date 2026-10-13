@@ -129,6 +129,14 @@ export interface PasswordConfigShape {
    * across a fleet and over time.
    */
   readonly identifierDigestKey: Option.Option<Redacted.Redacted<string>>;
+  /**
+   * BEH-EA-320: how recent the session's `authenticatedAt` must be to start an email change
+   * (`POST /change-email`); an older session gets `PasswordReauthRequired` and must step up
+   * through `POST /password/reauthenticate` (or a passkey) first. Without it a hijacked cookie
+   * could point the account's address at an attacker's mailbox and then reset the password.
+   * `Duration.infinity` turns the gate off. Default 5 minutes, like passkey enrolment.
+   */
+  readonly reauthMaxAge: Duration.Duration;
 }
 
 // ---- rate limits ------------------------------------------------------------------------------------
@@ -308,6 +316,7 @@ const defaultPasswordConfig: PasswordConfigShape = {
   requireVerifiedEmail: true,
   signUpEnumeration: "reveal",
   identifierDigestKey: Option.none(),
+  reauthMaxAge: Duration.minutes(5),
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -449,9 +458,12 @@ export interface PasswordShape {
    */
   readonly requestEmailChange: (input: {
     readonly userId: Users.UserId;
+    /** BEH-EA-320: the caller's own session; it must have proved a credential within `PasswordConfig.reauthMaxAge`. */
+    readonly currentSessionId: Sessions.SessionId;
     readonly newEmail: string;
   }) => Effect.Effect<
     void,
+    | PasswordApi.PasswordReauthRequired
     | PasswordApi.EmailChangeNotSupported
     | PasswordApi.EmailDeliveryFailed
     | Api.RateLimited
@@ -836,6 +848,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
         }
         yield* password.requestEmailChange({
           userId: Users.UserId(principal.ref.id),
+          currentSessionId: Sessions.SessionId(principal.sessionId),
           newEmail: payload.newEmail,
         });
       }),
@@ -1653,6 +1666,16 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           const config = yield* configNow;
           // The requester's own budget, then the target inbox's (see the rules' comments).
           yield* limits.spend("changeEmail", input);
+          // BEH-EA-320: the shared fresh-session gate; a stale one never reaches the target inbox's budget.
+          yield* sessions
+            .requireFresh(input.userId, input.currentSessionId, config.reauthMaxAge)
+            .pipe(
+              Effect.catchTag("Sessions/Stale", (stale) =>
+                Effect.fail(
+                  new PasswordApi.PasswordReauthRequired({ maxAgeSeconds: stale.maxAgeSeconds }),
+                ),
+              ),
+            );
           yield* limits.spend("changeEmailTarget", { email: input.newEmail });
           const user = yield* users.findById(input.userId).pipe(
             Effect.catchTag("UserNotFound", () =>

@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1269 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1276; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1270 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1277; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1287,3 +1287,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1274 | [BEH-EA-111](../spec/behaviors/14-rate-limiting.md#beh-ea-111-registry-ordering) | [04-cross-cutting/14-rate-limiting.feature](features/04-cross-cutting/14-rate-limiting.feature) | A plugin cannot enforce a rule it did not declare |
 | REQ-EA-1275 | [BEH-EA-101](../spec/behaviors/13-events.md#beh-ea-101-events-are-typed-tagged-values-forming-a-registry-contract) | [04-cross-cutting/13-events.feature](features/04-cross-cutting/13-events.feature) | Every registered event declares who acted and which of its fields are personal data |
 | REQ-EA-1276 | [BEH-EA-319](../spec/behaviors/07-sessions.md#beh-ea-319-reauthenticate-advances-only-a-live-session-the-caller-owns) | [02-domain/07-sessions.feature](features/02-domain/07-sessions.feature) | Reauthenticating a superseded session is refused and leaves it unchanged |
+| REQ-EA-1277 | [BEH-EA-320](../spec/behaviors/07-sessions.md#beh-ea-320-requirefresh-is-the-one-gate-for-this-session-proved-a-credential-recently) | [02-domain/07-sessions.feature](features/02-domain/07-sessions.feature) | A session is fresh only within the window since it last proved a credential |

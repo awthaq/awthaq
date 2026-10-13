@@ -728,6 +728,65 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  // ---- REQ-EA-1277 (BEH-EA-320): requireFresh ----
+
+  When(
+    "{int} minutes pass without {string} proving a credential",
+    function* (minutes: number, _name: string) {
+      yield* advance(Duration.minutes(minutes));
+    },
+  );
+
+  When("{string} reauthenticates session {string}", function* (_name: string, sessionName: string) {
+    const { snapshots } = yield* World;
+    const original = yield* snapshots.get(`session:${sessionName}`);
+    yield* inApp(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* sessions.reauthenticate(
+          Users.UserId(column(original, "userId")),
+          Sessions.SessionId(column(original, "id")),
+        );
+      }),
+    );
+  });
+
+  const freshness = Effect.fn("features.session.freshness")(function* (
+    sessionName: string,
+    minutes: number,
+  ) {
+    const { snapshots } = yield* World;
+    const original = yield* snapshots.get(`session:${sessionName}`);
+    return yield* inApp(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        return yield* sessions
+          .requireFresh(
+            Users.UserId(column(original, "userId")),
+            Sessions.SessionId(column(original, "id")),
+            Duration.minutes(minutes),
+          )
+          .pipe(
+            Effect.match({
+              onFailure: (failure) => failure._tag,
+              onSuccess: () => "fresh",
+            }),
+          );
+      }),
+    );
+  });
+
+  Then("session {string} is fresh within {int} minutes", function* (name: string, minutes: number) {
+    assert.equal(yield* freshness(name, minutes), "fresh");
+  });
+
+  Then(
+    "session {string} is not fresh within {int} minutes",
+    function* (name: string, minutes: number) {
+      assert.equal(yield* freshness(name, minutes), "Sessions/Stale");
+    },
+  );
+
   // ---- REQ-EA-149: session list ----
 
   Given("{string} has {int} active sessions", function* (name: string, count: number) {

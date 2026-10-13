@@ -20,7 +20,7 @@
 //   patterns, not something this bridge package ships.
 import { Defects, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
-import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
@@ -214,7 +214,7 @@ export type ReauthRequired = Api.ReauthRequired;
  * ticket 15 — AAPS-001: "when this session last *proved* a credential,"
  * set at `issue` and advanced only by `Sessions.reauthenticate`, never by
  * idle refresh/rotation, unlike `createdAt` this handler used to compare
- * instead) to the obligation's own `maxAgeSeconds` via `Sessions.isStale`.
+ * instead) to the obligation's own `maxAgeSeconds` via `Sessions.requireFresh` (BEH-EA-320).
  * A stale session fails with `ReauthRequired`, never silently passes
  * because it happens to still be live; `@awthaq/password`'s
  * `POST /password/reauthenticate` and `@awthaq/passkey`'s
@@ -262,18 +262,18 @@ const reauthHandler: ObligationHandler<
       return yield* Effect.fail(new Api.ReauthRequired({ maxAgeSeconds }));
     }
     const sessions = yield* Sessions.Sessions;
-    const userId = Users.UserId(principal.ref.id);
-    const sessionId = Sessions.SessionId(principal.sessionId);
-    // TIR-003: a keyed lookup, not `list` + `find` (a paginated list could
-    // omit the caller's own current session).
-    const current = yield* sessions.findOwned(userId, sessionId);
-    if (Option.isNone(current)) {
-      return yield* Effect.fail(new Api.ReauthRequired({ maxAgeSeconds }));
-    }
-    const now = yield* DateTime.now;
-    if (Sessions.isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
-      return yield* Effect.fail(new Api.ReauthRequired({ maxAgeSeconds }));
-    }
+    // BEH-EA-320: the shared gate; a keyed lookup under it (TIR-003), never `list` + `find`.
+    yield* sessions
+      .requireFresh(
+        Users.UserId(principal.ref.id),
+        Sessions.SessionId(principal.sessionId),
+        Duration.seconds(maxAgeSeconds),
+      )
+      .pipe(
+        Effect.catchTag("Sessions/Stale", () =>
+          Effect.fail(new Api.ReauthRequired({ maxAgeSeconds })),
+        ),
+      );
   });
 
 export const ObligationHandlers = { reauth: reauthHandler };

@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-31 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) |
+> | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch <br> 1.1 (2026-10-13): SAML named among the first factors that pass `amr` to the divert (plan 10 item 1) <br> 1.2 (2026-10-13): The failure budget's bucket is the `SecondFactor.failureRule` rule (plan 06) <br> 1.3 (2026-10-13): BEH-EA-263 names `Sessions.requireFresh` as the gate (BEH-EA-320) |
 ---
 
 > Status: the `@awthaq/two-factor` plugin is implemented and tested (`packages/two-factor/test/`). The decisions behind it are [ADR-EA-020](../decisions/020-two-factor-state.md); the credential-reset veto it taps is [BEH-EA-259](15-password.md#beh-ea-259-a-credential-reset-consults-beforecredentialreset-before-anything-is-rewritten). SMS is deliberately not part of it ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -105,7 +105,8 @@ GET  /two-factor/status                      -> { enabled, remainingRecoveryCode
 ```text
 REQUIREMENT: `enable`, `disable` and `regenerate` MUST require a session
              whose `authenticatedAt` is within `reauthMaxAge` (default ten
-             minutes), else `TwoFactorReauthRequired`. `enable` MUST store a
+             minutes), else `TwoFactorReauthRequired`; the freshness check is
+             `Sessions.requireFresh` (BEH-EA-320). `enable` MUST store a
              pending secret that is not an active factor until `confirm`
              proves it with a valid code; enabling an already-confirmed
              account MUST fail `TwoFactorAlreadyEnabled`. The secret MUST be

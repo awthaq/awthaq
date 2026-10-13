@@ -1109,30 +1109,24 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const limits = yield* RateLimits.budget(Passkey);
 
       /**
-       * Ticket 15 (BPAS-001): the shared freshness gate `registerOptions`/
-       * `registerOptionsConditional`/`registerVerify` all apply before
-       * doing anything else — `Sessions.findOwned` (TIR-003: a keyed
-       * lookup, never a `list` + `find` that a 200-row page cap could
-       * blind) mirrors `@awthaq/qadi`'s own `reauthHandler`. A session
-       * that is not live for its owner (already revoked/tombstoned/
-       * expired) fails closed the same as a stale one — there is no live
-       * session left to have proven anything recently.
+       * Ticket 15 (BPAS-001): the freshness gate `registerOptions`/
+       * `registerOptionsConditional`/`registerVerify` all apply before doing anything
+       * else. The rule is `Sessions.requireFresh` (BEH-EA-320): a session that is not
+       * live for its owner fails closed the same as a stale one. This maps it to the
+       * plugin's own wire error.
        */
-      const requireFreshSession = (
-        userId: Users.UserId,
-        sessionId: string,
-      ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable> =>
+      const requireFreshSession = (userId: Users.UserId, sessionId: string) =>
         Effect.gen(function* () {
           const config = yield* configNow;
-          const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAgeSeconds);
-          const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));
-          if (Option.isNone(current)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
-          }
-          const now = yield* DateTime.now;
-          if (Sessions.isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
-          }
+          yield* sessions
+            .requireFresh(userId, Sessions.SessionId(sessionId), config.reauthMaxAgeSeconds)
+            .pipe(
+              Effect.catchTag("Sessions/Stale", (stale) =>
+                Effect.fail(
+                  new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds: stale.maxAgeSeconds }),
+                ),
+              ),
+            );
         });
 
       /** TC-003: the knobs every options generator sets explicitly. */
