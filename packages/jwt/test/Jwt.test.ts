@@ -2,7 +2,7 @@
 // result succeeds with every claim correct; a tampered signature fails;
 // an expired token fails (`TestClock`-driven).
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -46,6 +46,7 @@ const asCaller = (input: {
 
 const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
   Jwt.Jwt.layer.pipe(
+    Layer.provide(Hooks.HooksLive),
     Layer.provide(KeyRing.KeyRing.layer),
     Layer.provide(SigningKeyRecordsLive),
     Layer.provide(SqlTransaction.layerNoop),

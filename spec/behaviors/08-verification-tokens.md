@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-08 |
-> | Revision | 1.6 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) <br> 1.4 (2026-10-13): `Verification.redeem` owns the claim-and-use transaction in both adapters; BEH-EA-058 "as shipped" text, BEH-EA-059 and BEH-EA-062 notes (ADR-EA-039, plan 07) <br> 1.5 (2026-10-13): BEH-EA-063: a reservation is expired iff `now >= expiresAt` in both layers; SOS-004: a miss is charged to the row it was judged against (plan 02 phase 0) <br> 1.6 (2026-10-13): One implementation over `VerificationStore`: a consumed row is kept as evidence in every adapter and is never consumable again (BEH-EA-062, was `MUST be gone` in memory), the payload is one JSON codec, a reservation's tenant is stamped by every adapter (plan 02 phase 3) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) <br> 1.4 (2026-10-13): `Verification.redeem` owns the claim-and-use transaction in both adapters; BEH-EA-058 "as shipped" text, BEH-EA-059 and BEH-EA-062 notes (ADR-EA-039, plan 07) <br> 1.5 (2026-10-13): BEH-EA-063: a reservation is expired iff `now >= expiresAt` in both layers; SOS-004: a miss is charged to the row it was judged against (plan 02 phase 0) <br> 1.6 (2026-10-13): One implementation over `VerificationStore`: a consumed row is kept as evidence in every adapter and is never consumable again (BEH-EA-062, was `MUST be gone` in memory), the payload is one JSON codec, a reservation's tenant is stamped by every adapter (plan 02 phase 3) <br> 1.7 (2026-10-14): BEH-EA-337, plugins contribute their table-expiry rules to `Retention.sweep` (plan 10 item 6) |
 
 ---
 
@@ -161,3 +161,23 @@ REQUIREMENT: A verification-token-issuing endpoint (password reset,
 
 _Previous: [BEH-EA-056](07-sessions.md#beh-ea-056-session-secret-verification-is-a-constant-time-comparison-over-a-fixed-length-hash)_
 _Next: [BEH-EA-065](09-authentication-middleware.md#beh-ea-065-the-authentication-middleware-tries-a-cookie-handler-first-in-its-declared-security-record)_
+
+## BEH-EA-337: `Retention.sweep` runs every installed plugin's retention contribution; one failing contribution does not stop the others
+
+> **See:** [ADR-EA-031](../decisions/031-erasure-registry-and-retention.md) Decision 6, [BEH-EA-282](34-webhooks.md#beh-ea-282-the-delivery-log-takes-part-in-erasure-and-export-and-is-pruned), [BEH-EA-306](37-device-authorization.md#beh-ea-306-grants-are-audited-erased-exported-and-retained-like-any-personal-data)
+
+```text
+REQUIREMENT: A plugin that owns a table whose rows expire or end MUST
+             contribute its own retention rule through `Retention.contribute`
+             rather than prune inside a request. `Retention.sweep` MUST run
+             every registered contribution with the sweep's `now`, after the
+             core purges, and report what each deleted. A contribution that
+             fails MUST be logged and reported as failed, and MUST NOT stop
+             the other contributions or undo the core purges. A request never
+             prunes a plugin's table as a side effect, except where the table
+             is fed by an anonymous endpoint (passkey challenges).
+```
+
+**As shipped (plan 10 item 6).** Contributions: `saml.sessions` (records older than `sessionRecordRetention`, 90 days; the ACS no longer prunes, so a host that never sweeps keeps them), `device_authorization.grants` (grants past `expiresAt`), `jwt.revocations` (denylist rows past the denied token's `exp`), `organization.invitations` (invitations `invitationRetention`, default 30 days, past `expiresAt`, whatever their status), `passkey.challenges` (expired challenges; `issue` still prunes inline) and `webhooks.deliveries` (finished deliveries older than `deliveryRetention`; the opt-in worker keeps its own hourly prune). Not contributed, by decision: impersonation records, API keys and clients, recovery codes, signing keys (ADR-EA-031). `SweepReport.plugins` lists `{ id, deleted, failed }` in run order. Tests: `packages/core/test/Retention.test.ts` (two fakes, one failing), one test per contributing plugin, and the device-authorization scenario in `28-device-authorization.feature`.
+
+_Previous: [BEH-EA-064](08-verification-tokens.md#beh-ea-064-purpose-scoped-flows-respond-uniformly-regardless-of-whether-their-target-exists)_

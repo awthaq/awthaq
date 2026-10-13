@@ -49,7 +49,7 @@
 // logic.
 
 import { Api } from "@awthaq/api";
-import { AuthPlugin, Errors, Migrations, Sessions, Tenant, Users } from "@awthaq/core";
+import { AuthPlugin, Errors, Migrations, Retention, Sessions, Tenant, Users } from "@awthaq/core";
 import { Defects, type Encryption, RefreshingCache, type SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import { SealedColumn } from "@awthaq/sql";
@@ -558,6 +558,19 @@ const jwtMigrations: Migrations.Migrations = [
 export type RecordsEncryption = Encryption.Encryption;
 export type LayerTransaction = SqlTransaction.SqlTransaction;
 
+/**
+ * Plan 10 item 6: `jwt_token_revocation` gets one row per revoked token and nothing else ever
+ * removes it; a row past its `expiresAt` already reads as absent, so the sweep only reclaims space.
+ * The signing keys are not contributed: a retired key still verifies tokens inside the grace window.
+ */
+export const jwtRevocationRetention = Retention.contribute({
+  id: "jwt.revocations",
+  make: Effect.gen(function* () {
+    const store = yield* RevocationStore.RevocationStore;
+    return (now: DateTime.Utc) => store.purgeExpired(now);
+  }),
+});
+
 export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
   apiVersion: 1,
   contract: JwtApi,
@@ -576,6 +589,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
     Layer.mergeAll(PostAuthResponseHookLive, BearerCredentialContributionLive),
     AuthPlugin.layer(Jwt, {
       handlers: JwtHandlers,
+      contributes: jwtRevocationRetention,
       make: Effect.gen(function* () {
         // EP-007 (ADR-EA-018 Decision 8): the token policy — issuer, audience, ttl,
         // `definePayload` — is decided per operation, so a tenant's `Jwt.config(...)` provided in

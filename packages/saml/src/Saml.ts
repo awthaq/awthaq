@@ -36,6 +36,7 @@ import {
   Hooks,
   Migrations,
   RateLimits,
+  Retention,
   SessionCookie,
   Sessions,
   SignIn,
@@ -746,6 +747,24 @@ export const samlOrganizationDeletion = OrganizationDeletion.contribute({
   }),
 });
 
+/**
+ * Plan 10 item 6: the session-record sweep is a retention contribution, not a side effect of a
+ * sign-in (ADR-EA-031 Decision 6). `Retention.sweep` (or `Retention.layerScheduled`) ages out the
+ * rows older than `sessionRecordRetention`; the ACS no longer prunes.
+ */
+export const samlSessionRetention = Retention.contribute({
+  id: "saml.sessions",
+  make: Effect.gen(function* () {
+    const records = yield* SamlRecords.SamlRecords;
+    const settings = yield* SamlConfig.SamlConfig;
+    return (now: DateTime.Utc) =>
+      records.pruneSessions(
+        sweepGrant,
+        DateTime.subtractDuration(now, settings.sessionRecordRetention),
+      );
+  }),
+});
+
 /** Named so the class's inferred `records` type can be emitted (TS2883 needs the `Encryption` namespace in scope). */
 export type RecordsEncryption = Encryption.Encryption;
 
@@ -772,7 +791,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       XmlSignature.XmlSignature,
     ],
     dependsOn: [Organization.Organization],
-    contributes: samlOrganizationDeletion,
+    contributes: Layer.mergeAll(samlOrganizationDeletion, samlSessionRetention),
     handlers: Layer.mergeAll(SamlHandlers, SamlAccountHandlers, SamlAdminHandlers),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
@@ -1072,10 +1091,6 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
                 nameIdFormat: payload.nameIdFormat,
                 sessionIndex: payload.sessionIndex,
               });
-              yield* records.pruneSessions(
-                sweepGrant,
-                DateTime.subtractDuration(yield* DateTime.now, settings.sessionRecordRetention),
-              );
             }),
         ),
       });

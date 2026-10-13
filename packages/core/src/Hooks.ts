@@ -31,6 +31,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as DataExportRegistry from "./DataExportRegistry.ts";
 import * as ErasureRegistry from "./ErasureRegistry.ts";
+import * as RetentionRegistry from "./RetentionRegistry.ts";
 import * as HookPoint from "./HookPoint.ts";
 import * as ContinuationRegistry from "./SignInContinuationRegistry.ts";
 
@@ -209,6 +210,8 @@ export const HooksLive = Layer.mergeAll(
   // erasure to it (`Erasure.contribute`), so erasure is not something a host opts into.
   ErasureRegistry.registryLayer,
   DataExportRegistry.registryLayer,
+  // Plan 10 item 6: each plugin's table-expiry rule registers here, so `Retention.sweep` reaches it.
+  RetentionRegistry.registryLayer,
   // ADR-EA-038: a first factor's sign-in continuations (SAML's Single Logout record) register here.
   ContinuationRegistry.registryLayer,
 );

@@ -17,7 +17,7 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { AuditLog, AuthEvents, Persistence, Sessions } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
@@ -49,6 +49,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 // it — mirroring `packages/jwt/test/Jwt.test.ts`'s own identical fix.
 const buildJwtLayer = () =>
   Jwt.Jwt.layer.pipe(
+    Layer.provide(Hooks.HooksLive),
     Layer.provideMerge(KeyRing.KeyRing.layer),
     Layer.provideMerge(SigningKeyRecordsLive),
     Layer.provideMerge(SqlTransaction.layerNoop),

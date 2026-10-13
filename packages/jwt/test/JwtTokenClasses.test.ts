@@ -3,7 +3,7 @@
 // audience, `verifyJWT` does not demand a `sub`, and an algorithm switch keeps
 // grace-period keys of the old algorithm verifying.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -29,6 +29,7 @@ const asCaller = (id: string, sessionId: string) =>
 
 const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
   Jwt.Jwt.layer.pipe(
+    Layer.provide(Hooks.HooksLive),
     Layer.provide(KeyRing.KeyRing.layer),
     Layer.provide(SigningKeyRecordsLive),
     Layer.provide(SqlTransaction.layerNoop),
@@ -189,6 +190,7 @@ describe("algorithm switch (JJS-003)", () => {
         const records = yield* sharedRecords;
         const layerWith = (algorithm: JwtConfig.JwtConfigShape["algorithm"]) =>
           Jwt.Jwt.layer.pipe(
+            Layer.provide(Hooks.HooksLive),
             Layer.provide(Layer.fresh(KeyRing.KeyRing.layer)),
             Layer.provide(records),
             Layer.provide(AuthenticationLive),

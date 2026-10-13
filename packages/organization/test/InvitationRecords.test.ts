@@ -203,6 +203,27 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
+    it.effect("purgeExpired deletes only the invitations whose expiry is before the cutoff", () =>
+      Effect.gen(function* () {
+        const records = yield* InvitationRecords.InvitationRecords;
+        const make = (email: string, expiresAt: DateTime.Utc) =>
+          records.create({
+            email,
+            inviterId: inviter,
+            organizationId: orgId,
+            role: ["member"],
+            expiresAt,
+            tokenHash: nextHash(),
+          });
+        const gone = yield* make("old@example.com", yield* future(-100));
+        const kept = yield* make("live@example.com", yield* future(48));
+        assert.strictEqual(yield* records.purgeExpired(grant, yield* future(-1)), 1);
+        assert.isTrue(Option.isNone(yield* records.findById(grant, gone.id)));
+        assert.isTrue(Option.isSome(yield* records.findById(grant, kept.id)));
+        assert.strictEqual(yield* records.purgeExpired(grant, yield* future(-1)), 0);
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("removeAllForOrganization clears every invitation for that org, and no other", () =>
       Effect.gen(function* () {
         const records = yield* InvitationRecords.InvitationRecords;
@@ -366,6 +387,14 @@ const isolationCase: TestAuth.TableCase<
       keyed: {
         run: (row, as) =>
           changed(row, (records) => records.updateStatus(orgOf(row, as), row.id, "canceled")),
+      },
+    },
+    purgeExpired: {
+      crossTenant: {
+        run: (row) =>
+          changed(row, (records) =>
+            Effect.flatMap(future(24 * 365), (before) => records.purgeExpired(grant, before)),
+          ),
       },
     },
     removeAllForOrganization: {

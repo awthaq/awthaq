@@ -286,3 +286,9 @@ Feature: Device Authorization
       Given one device code that expired and one that is still live
       When the operator purges expired grants
       Then one grant is reported purged and the live one remains
+
+    @REQ-EA-1305
+    Scenario: The retention sweep reaches the plugin's expired grants
+      Given one device code that expired and one that is still live
+      When the host runs the retention sweep
+      Then the sweep reports one device-authorization grant deleted and the live one remains

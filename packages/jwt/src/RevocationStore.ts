@@ -44,6 +44,13 @@ export interface RevocationStoreShape {
     expiresAt: DateTime.Utc,
   ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   readonly isRevoked: (jti: string) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
+  /**
+   * Retention (plan 10 item 6): deletes the rows whose `expiresAt` (the denied token's own `exp`)
+   * is not after `now`, which `isRevoked` already reads as absent; resolves to how many went.
+   */
+  readonly purgeExpired: (
+    now: DateTime.Utc,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
 }
 
 export class RevocationStore extends Context.Service<RevocationStore, RevocationStoreShape>()(
@@ -71,7 +78,16 @@ export const layerMemory = Layer.effect(
         return DateTime.toEpochMillis(entry.value) > DateTime.toEpochMillis(now);
       });
 
-    return { revoke, isRevoked };
+    const purgeExpired: RevocationStoreShape["purgeExpired"] = (now) =>
+      Ref.modify(state, (s) => {
+        const kept = HashMap.filter(
+          s,
+          (expiresAt) => DateTime.toEpochMillis(expiresAt) > DateTime.toEpochMillis(now),
+        );
+        return [HashMap.size(s) - HashMap.size(kept), kept] as const;
+      });
+
+    return { revoke, isRevoked, purgeExpired };
   }),
 );
 
@@ -108,6 +124,13 @@ export const layerSql = Layer.effect(
       execute: (jti) => sql`SELECT * FROM jwt_token_revocation WHERE jti = ${jti}`,
     });
 
+    const purgeQuery = SqlSchema.findAll({
+      Request: wire.dateTime,
+      Result: Schema.Struct({ jti: Schema.String }),
+      execute: (now) =>
+        sql`DELETE FROM jwt_token_revocation WHERE "expiresAt" <= ${now} RETURNING jti`,
+    });
+
     const unavailable = (operation: string) =>
       StoreFailure.orStoreUnavailable(`RevocationStore.${operation}`);
 
@@ -122,6 +145,12 @@ export const layerSql = Layer.effect(
         return DateTime.toEpochMillis(row.value.expiresAt) > DateTime.toEpochMillis(now);
       });
 
-    return { revoke, isRevoked };
+    const purgeExpired: RevocationStoreShape["purgeExpired"] = (now) =>
+      purgeQuery(now).pipe(
+        Effect.map((rows) => rows.length),
+        unavailable("purgeExpired"),
+      );
+
+    return { revoke, isRevoked, purgeExpired };
   }),
 );

@@ -102,6 +102,15 @@ export interface InvitationRecordsShape {
     id: string,
     status: InvitationStatus,
   ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound | StoreFailure.StoreUnavailable>;
+  /**
+   * Retention (plan 10 item 6): deletes every invitation, whatever its status, whose `expiresAt` is
+   * before `before` (an expired pending one is dead, a terminal one is history); returns how many.
+   * A maintenance sweep over every organization, so it presents a witness.
+   */
+  readonly purgeExpired: (
+    grant: TenantScoped.CrossTenant,
+    before: DateTime.Utc,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   /** Deletes every invitation row for an organization — used by `Organization.delete`'s cascade. */
   readonly removeAllForOrganization: (
     organizationId: string,
@@ -261,6 +270,15 @@ export const layerMemory = Layer.effect(
         ),
       );
 
+    const purgeExpired: InvitationRecordsShape["purgeExpired"] = (_grant, before) =>
+      Ref.modify(state, (s) => {
+        const kept = HashMap.filter(
+          s,
+          (row) => DateTime.toEpochMillis(row.expiresAt) >= DateTime.toEpochMillis(before),
+        );
+        return [HashMap.size(s) - HashMap.size(kept), kept] as const;
+      });
+
     const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (_grant, userId, email) =>
       Ref.update(state, (s) =>
         Array.from(HashMap.entries(s)).reduce(
@@ -284,6 +302,7 @@ export const layerMemory = Layer.effect(
       listByInviter,
       countPendingByInviter,
       updateStatus,
+      purgeExpired,
       removeAllForOrganization,
       removeAllForUser,
     };
@@ -417,6 +436,13 @@ export const layerSql = Layer.effect(
         sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_invitation WHERE "inviterId" = ${inviterId} AND status = 'pending'`,
     });
 
+    const purgeExpiredQuery = SqlSchema.findAll({
+      Request: wire.dateTime,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (before) =>
+        sql`DELETE FROM organization_invitation WHERE "expiresAt" < ${before} RETURNING id`,
+    });
+
     const updateStatusQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         organizationId: Schema.String,
@@ -522,6 +548,13 @@ export const layerSql = Layer.effect(
       },
     );
 
+    const purgeExpired: InvitationRecordsShape["purgeExpired"] = (grant, before) =>
+      purgeExpiredQuery(before).pipe(
+        Effect.map((rows) => rows.length),
+        TenantScoped.liftOn(sql, grant),
+        unavailable("purgeExpired"),
+      );
+
     const removeAllForOrganization: InvitationRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
@@ -547,6 +580,7 @@ export const layerSql = Layer.effect(
       listByInviter,
       countPendingByInviter,
       updateStatus,
+      purgeExpired,
       removeAllForOrganization,
       removeAllForUser,
     };

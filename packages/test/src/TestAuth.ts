@@ -77,6 +77,7 @@ import {
   Migrations,
   Persistence,
   RateLimits,
+  type Retention,
   Sessions,
   Slots,
   Users,
@@ -132,6 +133,9 @@ const TestHasher = PasswordHasher.layerArgon2id.pipe(
   ),
   Layer.orDie,
 );
+
+/** Named so the foundations' inferred types can be emitted (declaration emit needs the namespace in scope). */
+export type RetentionRegistryService = Retention.RetentionRegistry;
 
 /**
  * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's

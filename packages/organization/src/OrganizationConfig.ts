@@ -79,6 +79,11 @@ export interface OrganizationConfigShape {
    */
   readonly teamStatements: Readonly<Record<string, PermissionEngine.Statements>>;
   readonly invitationExpiresIn: Duration.Duration;
+  /**
+   * How long past its `expiresAt` an invitation row (pending, accepted, rejected or canceled) is kept
+   * before `Retention.sweep` deletes it (plan 10 item 6). Default 30 days.
+   */
+  readonly invitationRetention: Duration.Duration;
   readonly invitationLimit: number;
   readonly cancelPendingInvitationsOnReInvite: boolean;
   readonly requireEmailVerificationOnInvitation: boolean;
@@ -101,6 +106,7 @@ const defaultOrganizationConfig: OrganizationConfigShape = {
   },
   teamStatements: { lead: { team: ["update"] } },
   invitationExpiresIn: Duration.hours(48),
+  invitationRetention: Duration.days(30),
   invitationLimit: 100,
   cancelPendingInvitationsOnReInvite: false,
   // EP-010: an invitation is addressed to an email, so membership is conferred

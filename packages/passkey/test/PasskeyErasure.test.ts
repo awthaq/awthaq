@@ -1,11 +1,15 @@
 // CSG-001/DRS-002 (.issues/high): `PasskeyCredentials.deleteAllByUser` and
 // `Passkey.passkeyErasure` (the plugin's `Erasure` contribution, CSG-001).
-import { DataExport, Erasure, Users } from "@awthaq/core";
+import { DataExport, Erasure, Retention, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
+import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
@@ -140,6 +144,33 @@ describe("Passkey export contribution", () => {
         assert.notInclude(text, secret);
       }
       assert.notInclude(text, "cred-other");
+    }).pipe(Effect.scoped, Effect.provide(TestLayer)),
+  );
+});
+
+// Plan 10 item 6: the plugin's retention contribution sweeps expired challenges.
+describe("Passkey retention contribution", () => {
+  const TestLayer = ChallengeStore.layerMemory.pipe(
+    Layer.provideMerge(Retention.registryLayer),
+    Layer.provide(NodeCrypto.layer),
+  );
+
+  it.effect("registers as `passkey.challenges` and removes only the expired challenges", () =>
+    Effect.gen(function* () {
+      const registry = yield* Retention.RetentionRegistry;
+      const store = yield* ChallengeStore.ChallengeStore;
+      yield* store.issue("old");
+      yield* TestClock.adjust(Duration.minutes(3));
+      yield* store.issue("fresh");
+      yield* TestClock.adjust(Duration.minutes(3));
+      yield* Layer.build(Passkey.passkeyChallengeRetention);
+      const contributions = yield* registry.contributions;
+      assert.deepStrictEqual(
+        contributions.map((c) => c.id),
+        ["passkey.challenges"],
+      );
+      assert.strictEqual(yield* contributions[0]!.purge(yield* DateTime.now), 1);
+      assert.strictEqual(yield* contributions[0]!.purge(yield* DateTime.now), 0);
     }).pipe(Effect.scoped, Effect.provide(TestLayer)),
   );
 });

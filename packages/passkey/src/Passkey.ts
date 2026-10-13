@@ -36,6 +36,7 @@ import {
   Migrations,
   Observability,
   RateLimits,
+  Retention,
   Sessions,
   SignIn,
   Tenant,
@@ -992,6 +993,18 @@ export const passkeyExport = DataExport.contribute({
   }),
 });
 
+/**
+ * Plan 10 item 6: the scheduled half of `ChallengeStore.sweepExpired` (`issue` still prunes inline: it bounds a
+ * table fed by an anonymous endpoint). The store reads its own clock; `now` is the sweep's, the same instant.
+ */
+export const passkeyChallengeRetention = Retention.contribute({
+  id: "passkey.challenges",
+  make: Effect.gen(function* () {
+    const challenges = yield* ChallengeStore.ChallengeStore;
+    return () => challenges.sweepExpired;
+  }),
+});
+
 export const passkeyErasure = Erasure.contribute({
   id: "passkey",
   make: Effect.gen(function* () {
@@ -1060,7 +1073,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   static readonly layer = AuthPlugin.layer(Passkey, {
     ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter, WebAuthn.WebAuthn],
     handlers: PasskeyHandlers,
-    contributes: Layer.mergeAll(passkeyErasure, passkeyExport),
+    contributes: Layer.mergeAll(passkeyErasure, passkeyExport, passkeyChallengeRetention),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;

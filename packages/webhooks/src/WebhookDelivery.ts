@@ -62,7 +62,7 @@ const relay = TenantScoped.crossTenant("webhooks relay: tenantRoutes decides del
 // ---- enqueue: the EventTransport ---------------------------------------------------------------
 
 /** Turns a relayed batch into queued deliveries. Requires the records, `Crypto` (ids) and the plugin config. */
-// The explicit types on `enqueue`, `drainDue` and `pruneOnce` are the narrow exception the plugins document
+// The explicit types on `enqueue` and `drainDue` are the narrow exception the plugins document
 // (TS2883): declaration emit cannot name `StoreUnavailable` through the records' inferred error.
 export const enqueue = (
   events: ReadonlyArray<Parameters<typeof WebhookPayload.toBody>[0]>,
@@ -323,20 +323,19 @@ export const drainDue: Effect.Effect<
   return claimed.length;
 });
 
+/** Deletes finished rows that completed more than `deliveryRetention` before `now`. */
+export const pruneAt = (now: DateTime.Utc) =>
+  Effect.gen(function* () {
+    const records = yield* WebhookRecords.WebhookRecords;
+    const settings = yield* WebhooksConfig.WebhooksConfig;
+    return yield* records.pruneFinished(
+      relay,
+      DateTime.subtractDuration(now, settings.deliveryRetention),
+    );
+  });
+
 /** Deletes finished rows older than `deliveryRetention`. */
-export const pruneOnce: Effect.Effect<
-  number,
-  StoreFailure.StoreUnavailable,
-  WebhookRecords.WebhookRecords
-> = Effect.gen(function* () {
-  const records = yield* WebhookRecords.WebhookRecords;
-  const settings = yield* WebhooksConfig.WebhooksConfig;
-  const now = yield* DateTime.now;
-  return yield* records.pruneFinished(
-    relay,
-    DateTime.subtractDuration(now, settings.deliveryRetention),
-  );
-});
+export const pruneOnce = Effect.flatMap(DateTime.now, pruneAt);
 
 /**
  * Opt-in: a scoped background fiber draining due deliveries, sleeping `pollInterval` when idle, plus an

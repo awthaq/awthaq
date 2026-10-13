@@ -21,6 +21,7 @@ import {
   DataExport,
   Erasure,
   HookPoint,
+  type Retention,
   Users,
 } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
@@ -37,7 +38,11 @@ import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationHandlers from "./OrganizationHandlers.ts";
 import { organizationMigrations } from "./OrganizationMigrations.ts";
-import { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
+import {
+  organizationErasure,
+  organizationExport,
+  organizationInvitationRetention,
+} from "./OrganizationPersonalData.ts";
 import * as OrganizationBundle from "./OrganizationBundle.ts";
 import { OrganizationHooksLive } from "./OrganizationHooks.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
@@ -61,7 +66,11 @@ import * as PermissionEngine from "./PermissionEngine.ts";
 // live in their own files; re-exported so `Organization.<name>` keeps resolving.
 export * from "./OrganizationConfig.ts";
 export type { OrganizationShape } from "./OrganizationShape.ts";
-export { organizationErasure, organizationExport } from "./OrganizationPersonalData.ts";
+export {
+  organizationErasure,
+  organizationExport,
+  organizationInvitationRetention,
+} from "./OrganizationPersonalData.ts";
 
 // EP-001 (ADR-EA-018): the opt-in tenant middleware, reachable as `Organization.tenantMiddleware`.
 export {
@@ -76,7 +85,10 @@ export {
  * (a composition without them does not compile). Named here so the layer's inferred type can be
  * emitted, which needs both namespaces in scope.
  */
-export type PersonalDataRegistries = Erasure.ErasureRegistry | DataExport.DataExportRegistry;
+export type PersonalDataRegistries =
+  | Erasure.ErasureRegistry
+  | DataExport.DataExportRegistry
+  | Retention.RetentionRegistry;
 
 /**
  * The wire middleware and the typed veto error the plugin's class and layer mention, named here so their
@@ -115,7 +127,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     ports: [Mailer.Mailer, SqlTransaction.SqlTransaction],
     exposes: { services: OrganizationSystem.services, layer: OrganizationSystem.layer },
     handlers: OrganizationHandlers.make(Organization),
-    contributes: Layer.mergeAll(organizationErasure, organizationExport),
+    contributes: Layer.mergeAll(
+      organizationErasure,
+      organizationExport,
+      organizationInvitationRetention,
+    ),
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
       // ADR-EA-040: the plugin's system interfaces, built beneath this `make` by `exposes`.

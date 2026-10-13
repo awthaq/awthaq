@@ -3,7 +3,7 @@
 // alongside `Jwt` at build time, and is plain `introspect` otherwise.
 // JR-005: an impersonation session's JWT carries an RFC 8693 `act.sub`.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -29,6 +29,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 );
 
 const jwtBase = Jwt.Jwt.layer.pipe(
+  Layer.provide(Hooks.HooksLive),
   Layer.provide(KeyRing.KeyRing.layer),
   Layer.provide(SigningKeyRecordsLive),
   Layer.provide(SqlTransaction.layerNoop),

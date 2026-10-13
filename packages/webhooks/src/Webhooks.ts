@@ -32,6 +32,7 @@ import {
   Erasure,
   Migrations,
   RateLimits,
+  Retention,
   Tenant,
   Users,
 } from "@awthaq/core";
@@ -320,6 +321,23 @@ export const webhooksErasure = Erasure.contribute({
   }),
 });
 
+/**
+ * Plan 10 item 6: finished deliveries older than `deliveryRetention` leave with the sweep. The opt-in worker
+ * keeps its own hourly prune (deliveries churn faster than a daily sweep); both are the same idempotent delete.
+ */
+export const webhooksRetention = Retention.contribute({
+  id: "webhooks.deliveries",
+  make: Effect.gen(function* () {
+    const records = yield* WebhookRecords.WebhookRecords;
+    const settings = yield* WebhooksConfig.WebhooksConfig;
+    return (now: DateTime.Utc) =>
+      WebhookDelivery.pruneAt(now).pipe(
+        Effect.provideService(WebhookRecords.WebhookRecords, records),
+        Effect.provideService(WebhooksConfig.WebhooksConfig, settings),
+      );
+  }),
+});
+
 /** The data-subject export: which of their events were queued to which endpoint and how it went — outcomes only, never a body. */
 export const webhooksExport = DataExport.contribute({
   id: "webhooks",
@@ -471,7 +489,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         });
       }),
     ),
-    contributes: Layer.mergeAll(webhooksErasure, webhooksExport),
+    contributes: Layer.mergeAll(webhooksErasure, webhooksExport, webhooksRetention),
     make: Effect.gen(function* () {
       const records = yield* WebhookRecords.WebhookRecords;
       const crypto = yield* Crypto.Crypto;

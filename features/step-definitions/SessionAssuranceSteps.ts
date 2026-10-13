@@ -3,7 +3,7 @@
 // and subject attributes are what the running app's `PrincipalResolver` and the default
 // `SubjectResolver` produce from a real session row.
 import { Api } from "@awthaq/api";
-import { Assurance, AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
+import { Assurance, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { SqlTransaction } from "@awthaq/ports";
 import { SubjectResolver } from "@awthaq/qadi";
@@ -43,6 +43,7 @@ const JwtSigner = Jwt.Jwt.layer.pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(RevocationStore.layerMemory),
+  Layer.provide(Hooks.HooksLive),
   Layer.provide(NodeCrypto.layer),
   Layer.provide(JwtConfig.config({ issuer: "https://issuer.test" })),
 );

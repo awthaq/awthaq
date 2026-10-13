@@ -2,13 +2,14 @@
 //
 // This plugin's parts of the account erasure (ADR-EA-031) and the data-subject export (CSG-005).
 
-import { DataExport, Erasure } from "@awthaq/core";
+import { DataExport, Erasure, Retention } from "@awthaq/core";
 import { TenantScoped } from "@awthaq/sql";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as ActiveContextRecords from "./ActiveContextRecords.ts";
 import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
+import * as OrganizationConfig from "./OrganizationConfig.ts";
 import * as TeamRecords from "./TeamRecords.ts";
 
 // ---- cross-organization witnesses (plan 05, ADR-EA-018 decision 10) ----------------------
@@ -96,5 +97,28 @@ export const organizationExport = DataExport.contribute({
           ).map(invitationView),
         };
       });
+  }),
+});
+
+/** The retention sweep reaches every organization's invitation rows. */
+const retentionGrant = TenantScoped.crossTenant(
+  "organization retention (plan 10 item 6): invitations past their expiry are swept in every organization",
+);
+
+/**
+ * Plan 10 item 6: an invitation nobody answers (or that was answered long ago) is never deleted
+ * except with its organization or its invitee, so the table grows for ever. `Retention.sweep` removes
+ * the rows `invitationRetention` past their `expiresAt`.
+ */
+export const organizationInvitationRetention = Retention.contribute({
+  id: "organization.invitations",
+  make: Effect.gen(function* () {
+    const invitations = yield* InvitationRecords.InvitationRecords;
+    const settings = yield* OrganizationConfig.OrganizationConfig;
+    return (now: DateTime.Utc) =>
+      invitations.purgeExpired(
+        retentionGrant,
+        DateTime.subtractDuration(now, settings.invitationRetention),
+      );
   }),
 });

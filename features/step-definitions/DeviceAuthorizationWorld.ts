@@ -18,6 +18,7 @@ import {
   Erasure,
   Persistence,
   RateLimits,
+  Retention,
   Sessions,
   Users,
   Verification,
@@ -76,6 +77,8 @@ export type DeviceServices =
   | Erasure.ErasureRegistry
   | DataExport.DataExportRegistry
   | RateLimits.RateLimitsRegistry
+  | Retention.RetentionRegistry
+  | Verification.Verification
   | TwoFactor.TwoFactor
   | Crypto.Crypto;
 

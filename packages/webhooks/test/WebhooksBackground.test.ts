@@ -1,7 +1,7 @@
 // BEH-EA-279 (spec/behaviors/34-webhooks.md): `Webhooks.background()` end to end, running for real —
 // the relay tailing the audit log into the queue and the worker sending it, driven by the test clock,
 // with an endpoint that fails once (retry).
-import { AuthEvents, EventRelay, Users } from "@awthaq/core";
+import { AuthEvents, EventRelay, Retention, Users } from "@awthaq/core";
 import { Tenant } from "@awthaq/ports";
 import { StoreFailure } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
@@ -77,6 +77,36 @@ describe("Webhooks.background: relay + worker", () => {
         ),
       ),
   );
+});
+
+describe("Webhooks retention contribution", () => {
+  it.effect("Retention.sweep deletes finished deliveries older than deliveryRetention only", () => {
+    const receiver = fakeReceiver();
+    return Effect.gen(function* () {
+      const records = yield* WebhookRecords.WebhookRecords;
+      const { endpoint } = yield* seedEndpoint({ eventTags: ["auth.user.signedIn"] });
+      yield* WebhookDelivery.enqueue([yield* published(signedIn("sweep"))]);
+      yield* WebhookDelivery.drainDue;
+      const listed = () => records.listDeliveries({ endpointId: endpoint.id, limit: 10 });
+      assert.deepStrictEqual(
+        (yield* listed()).map((row) => row.status),
+        ["succeeded"],
+      );
+      // Inside the 30-day default window: kept.
+      yield* TestClock.adjust(Duration.days(29));
+      const kept = yield* Retention.sweep;
+      assert.strictEqual(kept.plugins.find((p) => p.id === "webhooks.deliveries")?.deleted, 0);
+      assert.strictEqual((yield* listed()).length, 1);
+      // Past it: gone.
+      yield* TestClock.adjust(Duration.days(2));
+      const swept = yield* Retention.sweep;
+      assert.deepStrictEqual(
+        swept.plugins.find((p) => p.id === "webhooks.deliveries"),
+        { id: "webhooks.deliveries", deleted: 1, failed: false },
+      );
+      assert.strictEqual((yield* listed()).length, 0);
+    }).pipe(Effect.provide(deliveryLayer({ receiver: receiver.layer })));
+  });
 });
 
 describe("Webhooks.background: a store outage", () => {

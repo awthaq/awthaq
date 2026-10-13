@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1295 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1304; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1296 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1305; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1313,3 +1313,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1302 | [BEH-EA-334](../spec/behaviors/01-plugin-contract.md#beh-ea-334-a-plugin-declares-its-record-stores-as-matched-memory-and-sql-bundles) | [00-foundations/01-plugin-contract.feature](features/00-foundations/01-plugin-contract.feature) | A bundle whose memory and sql provide different stores fails to compile |
 | REQ-EA-1303 | [BEH-EA-334](../spec/behaviors/01-plugin-contract.md#beh-ea-334-a-plugin-declares-its-record-stores-as-matched-memory-and-sql-bundles) | [00-foundations/01-plugin-contract.feature](features/00-foundations/01-plugin-contract.feature) | A bundle that provides a service other than a record store fails to compile |
 | REQ-EA-1304 | [BEH-EA-335](../spec/behaviors/03-ports-slots-hooks-registries.md#beh-ea-335-a-plugin-declares-the-hook-points-it-owns) | [00-foundations/03-ports-slots-hooks-registries.feature](features/00-foundations/03-ports-slots-hooks-registries.feature) | A plugin requiring a hook point that neither core nor the plugin declares fails to compile |
+| REQ-EA-1305 | [BEH-EA-306](../spec/behaviors/37-device-authorization.md#beh-ea-306-grants-are-audited-erased-exported-and-retained-like-any-personal-data) | [05-authentication-methods/28-device-authorization.feature](features/05-authentication-methods/28-device-authorization.feature) | The retention sweep reaches the plugin's expired grants |

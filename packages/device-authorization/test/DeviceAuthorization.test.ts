@@ -8,6 +8,7 @@ import {
   Erasure,
   Persistence,
   RateLimits,
+  Retention,
   Sessions,
   Users,
   Verification,
@@ -783,6 +784,25 @@ for (const options of suites) {
           assert.notInclude(text, Redacted.value(issued.deviceCode));
           assert.notMatch(text, /[0-9a-f]{64}/);
         }).pipe(Effect.provide(layer())),
+      );
+
+      it.effect(
+        "Retention.sweep runs the plugin's contribution and purges the expired grants",
+        () =>
+          Effect.gen(function* () {
+            const old = yield* requestCode();
+            yield* TestClock.adjust(Duration.minutes(5));
+            const fresh = yield* requestCode({ ip: "203.0.113.61" });
+            yield* TestClock.adjust(Duration.minutes(11));
+            // `old` expired a minute ago, `fresh` has four minutes left.
+            const report = yield* Retention.sweep;
+            assert.deepStrictEqual(
+              report.plugins.find((entry) => entry.id === "device_authorization.grants"),
+              { id: "device_authorization.grants", deleted: 1, failed: false },
+            );
+            assert.isTrue(Option.isNone(yield* grantOf(old)));
+            assert.isTrue(Option.isSome(yield* grantOf(fresh)));
+          }).pipe(Effect.provide(layer())),
       );
 
       it.effect("purgeExpired deletes only rows past their expiry, and reports how many", () =>

@@ -2,7 +2,7 @@
 // one composition (one key ring) mints and verifies tokens for tenants with different
 // `Jwt.config(...)`. With no override the build-time configuration applies exactly as before.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Persistence, Sessions } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -28,6 +28,7 @@ const caller = new Api.UserPrincipal({
 
 const buildLayer = () =>
   Jwt.Jwt.layer.pipe(
+    Layer.provide(Hooks.HooksLive),
     Layer.provide(KeyRing.KeyRing.layer),
     Layer.provide(SigningKeyRecordsLive),
     Layer.provide(SqlTransaction.layerNoop),

@@ -36,6 +36,7 @@ import {
   HookPoint,
   Migrations,
   RateLimits,
+  Retention,
   Sessions,
   SignIn,
   Users,
@@ -683,6 +684,15 @@ export const deviceAuthorizationErasure = Erasure.contribute({
   }),
 });
 
+/** Retention (plan 10 item 6): grants past `expiresAt` that nobody polled again are swept with the rest of the library's tables. */
+export const deviceAuthorizationRetention = Retention.contribute({
+  id: "device_authorization.grants",
+  make: Effect.gen(function* () {
+    const grants = yield* DeviceGrantRecords.DeviceGrantRecords;
+    return (now: DateTime.Utc) => grants.purgeExpired(now);
+  }),
+});
+
 /** Data-subject export: which client asked, the scope and the state of each grant — never a code or a hash. */
 export const deviceAuthorizationExport = DataExport.contribute({
   id: "device_authorization",
@@ -750,7 +760,11 @@ export class DeviceAuthorization extends AuthPlugin.Service<
     // PV-241: the handlers and `make` throttle and attribute by address.
     ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
     handlers: DeviceAuthorizationHandlers,
-    contributes: Layer.mergeAll(deviceAuthorizationErasure, deviceAuthorizationExport),
+    contributes: Layer.mergeAll(
+      deviceAuthorizationErasure,
+      deviceAuthorizationExport,
+      deviceAuthorizationRetention,
+    ),
     make: Effect.gen(function* () {
       const grants = yield* DeviceGrantRecords.DeviceGrantRecords;
       const clients = yield* DeviceClientRecords.DeviceClientRecords;

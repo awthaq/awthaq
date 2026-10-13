@@ -6,7 +6,7 @@
 // really-signed tokens and a real JWKS document; the code under test
 // (`../src/edge.ts`) sees only plain cookie headers and an HTTP response.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Persistence, Sessions } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore } from "@awthaq/jwt";
 import { makeVerifier } from "@awthaq/jwt/verify";
 import { SqlTransaction } from "@awthaq/ports";
@@ -33,6 +33,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 );
 
 const JwtTestLayer = Jwt.Jwt.layer.pipe(
+  Layer.provide(Hooks.HooksLive),
   Layer.provideMerge(KeyRing.KeyRing.layer),
   Layer.provideMerge(SigningKeyRecordsLive),
   Layer.provideMerge(SqlTransaction.layerNoop),

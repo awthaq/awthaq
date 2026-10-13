@@ -20,6 +20,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import { StoreUnavailable } from "../src/Errors.ts";
 import * as Hooks from "../src/Hooks.ts";
 import * as Retention from "../src/Retention.ts";
 import * as Sessions from "../src/Sessions.ts";
@@ -73,7 +74,11 @@ const days = (n: number) => Duration.days(n);
 const suite = (
   name: string,
   layer: Layer.Layer<
-    Sessions.Sessions | Verification.Verification | AuditLog.AuditLog | AuthEvents.AuthEvents,
+    | Sessions.Sessions
+    | Verification.Verification
+    | AuditLog.AuditLog
+    | AuthEvents.AuthEvents
+    | Retention.RetentionRegistry,
     unknown
   >,
 ) =>
@@ -94,6 +99,7 @@ const suite = (
             sessionsDeleted: 0,
             verificationRowsDeleted: 0,
             auditRowsDeleted: 0,
+            plugins: [],
           });
 
           // Now expired 8 days ago: gone; the live one is untouched.
@@ -200,6 +206,52 @@ const suite = (
           );
           assert.strictEqual(onlyDefault.auditRowsDeleted, 1);
           assert.deepStrictEqual(yield* tags, ["auth.user.emailVerified"]);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "runs every installed plugin's contribution after the core purges; a failing one is reported and does not stop the others",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          yield* sessions.issue({ userId: alice, absoluteDuration: Duration.hours(1) });
+          const seen: Array<number> = [];
+          yield* Layer.build(
+            Layer.mergeAll(
+              Retention.contribute({
+                id: "fake.b",
+                order: 2,
+                make: Effect.succeed((now: DateTime.Utc) =>
+                  Effect.sync(() => {
+                    seen.push(DateTime.toEpochMillis(now));
+                    return 3;
+                  }),
+                ),
+              }),
+              Retention.contribute({
+                id: "fake.failing",
+                order: 1,
+                make: Effect.succeed(() =>
+                  Effect.fail(new StoreUnavailable({ operation: "fake" })),
+                ),
+              }),
+              Retention.contribute({
+                id: "fake.a",
+                order: 0,
+                make: Effect.succeed(() => Effect.succeed(1)),
+              }),
+            ),
+          ).pipe(Effect.scoped);
+          yield* TestClock.adjust(days(30));
+          const report = yield* Retention.sweep;
+          // The core purge still ran, and every contribution was reported in run order.
+          assert.strictEqual(report.sessionsDeleted, 1);
+          assert.deepStrictEqual(report.plugins, [
+            { id: "fake.a", deleted: 1, failed: false },
+            { id: "fake.failing", deleted: 0, failed: true },
+            { id: "fake.b", deleted: 3, failed: false },
+          ]);
+          assert.deepStrictEqual(seen, [DateTime.toEpochMillis(yield* DateTime.now)]);
         }).pipe(Effect.provide(layer)),
     );
 
