@@ -4,22 +4,17 @@
 // `POST /jwt/token` is the authenticated endpoint used as the probe: it answers
 // 200 only when `Authentication` resolved a principal.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Auth, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication } from "@awthaq/server";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Jwt from "../src/Jwt.ts";
-import * as JwtApi from "../src/JwtApi.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
@@ -27,53 +22,17 @@ import { SigningKeyRecordsLive } from "./support.ts";
 
 const ORIGIN = "http://localhost:3000";
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
 /**
- * The stateless deployment recipe (NAM-001): only in-memory stores, no SQL. The
- * registry sits below `Jwt.layer` so the `acceptAsBearer` contribution can find it.
+ * The stateless deployment recipe (NAM-001) through `TestAuth.layer(Auth.make([Jwt]))`: in-memory stores, the
+ * derived `Authentication` and the credential-resolver registry the `acceptAsBearer` contribution registers into.
  */
-const appLayer = (config: Parameters<typeof JwtConfig.config>[0], withRegistry = true) =>
-  AuthHttp.routes(JwtApi.JwtApi).pipe(
-    Layer.provideMerge(Jwt.Jwt.layer),
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provideMerge(withRegistry ? Authentication.CredentialResolversLive : Layer.empty),
-    Layer.provideMerge(KeyRing.KeyRing.layer),
-    Layer.provideMerge(SigningKeyRecordsLive),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(RevocationStore.layerMemory),
-    Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-    Layer.provideMerge(JwtConfig.config(config)),
-  );
+const appLayer = (config: Parameters<typeof JwtConfig.config>[0]) =>
+  TestAuth.layer(Auth.make([Jwt.Jwt]), { services: JwtConfig.config(config) });
 
 const harness = (config: Parameters<typeof JwtConfig.config>[0]) => {
-  const layer = appLayer(config);
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(layer, { memoMap });
-  const withContext = <A, E>(
-    effect: Effect.Effect<A, E, Layer.Success<typeof layer>>,
-  ): Promise<A> =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(layer, memoMap, scope);
-          return yield* effect.pipe(Effect.provide(context));
-        }),
-      ),
-    );
+  const app = TestAuth.app(appLayer(config), { baseUrl: ORIGIN });
+  const { handler } = app;
+  const withContext = app.run;
   const userId = Users.UserId("55555555-5555-5555-5555-555555555555");
   const issueSession = () =>
     withContext(
@@ -198,13 +157,32 @@ describe("JWT bearer re-entry (MAPS-001/NAM-001)", () => {
     assert.strictEqual(response.status, 200);
   });
 
+  // Hand-wired on purpose: the registry's ABSENCE is the wiring under test, and `TestAuth.layer` always derives it
+  // (plan 08 exemption). The principal resolver is a stub: nothing here resolves a principal.
   it.effect(
     "acceptAsBearer without the credential registry in the composition fails the build",
     () =>
       Effect.gen(function* () {
-        const exit = yield* Effect.exit(
-          Layer.build(appLayer({ issuer: "https://issuer.test", acceptAsBearer: true }, false)),
+        const NoResolver = Layer.succeed(
+          Authentication.PrincipalResolver,
+          Authentication.PrincipalResolver.of({ resolve: () => Effect.die("not used") }),
         );
+        const withoutRegistry = Jwt.Jwt.layer.pipe(
+          Layer.provideMerge(Authentication.AuthenticationLive.pipe(Layer.provide(NoResolver))),
+          Layer.provideMerge(KeyRing.KeyRing.layer),
+          Layer.provideMerge(SigningKeyRecordsLive),
+          Layer.provideMerge(SqlTransaction.layerNoop),
+          Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
+          Layer.provideMerge(AuthEvents.layer),
+          Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+          Layer.provideMerge(Hooks.HooksLive),
+          Layer.provideMerge(RevocationStore.layerMemory),
+          Layer.provideMerge(NodeCrypto.layer),
+          Layer.provideMerge(
+            JwtConfig.config({ issuer: "https://issuer.test", acceptAsBearer: true }),
+          ),
+        );
+        const exit = yield* Effect.exit(Layer.build(withoutRegistry));
         assert.isTrue(exit._tag === "Failure");
       }).pipe(Effect.scoped),
   );

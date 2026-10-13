@@ -2,10 +2,8 @@
 // one composition (one key ring) mints and verifies tokens for tenants with different
 // `Jwt.config(...)`. With no override the build-time configuration applies exactly as before.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Persistence, Sessions } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -13,13 +11,6 @@ import * as Layer from "effect/Layer";
 import * as LayerMap from "effect/LayerMap";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
-import * as KeyRing from "../src/KeyRing.ts";
-import * as RevocationStore from "../src/RevocationStore.ts";
-import { SigningKeyRecordsLive } from "./support.ts";
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
 
 const caller = new Api.UserPrincipal({
   ref: new Api.PrincipalRef({ type: "user", id: "user-1" }),
@@ -27,19 +18,9 @@ const caller = new Api.UserPrincipal({
 });
 
 const buildLayer = () =>
-  Jwt.Jwt.layer.pipe(
-    Layer.provide(Hooks.HooksLive),
-    Layer.provide(KeyRing.KeyRing.layer),
-    Layer.provide(SigningKeyRecordsLive),
-    Layer.provide(SqlTransaction.layerNoop),
-    Layer.provide(AuthenticationLive),
-    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-    Layer.provideMerge(RevocationStore.layerMemory),
-    Layer.provide(NodeCrypto.layer),
-    Layer.provide(JwtConfig.config({ issuer: "https://issuer.test" })),
-  );
+  TestAuth.layer(Auth.make([Jwt.Jwt]), {
+    services: JwtConfig.config({ issuer: "https://issuer.test" }),
+  });
 
 /** The application's own map: tenant id -> that tenant's `Jwt.config(...)`. */
 class TenantConfig extends LayerMap.Service<TenantConfig>()("test/JwtTenantConfig", {

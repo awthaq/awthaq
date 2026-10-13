@@ -6,8 +6,8 @@
 // JWKS document for `verify.ts` to be handed as plain data/HTTP
 // responses — mirroring `packages/oauth/test/OAuth.test.ts`'s own fake-
 // `HttpClient` pattern for exercising fetch-based code without a network.
-import { SqlTransaction } from "@awthaq/ports";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -17,53 +17,18 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { AuditLog, AuthEvents, Hooks, Persistence, Sessions } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
-import * as RevocationStore from "../src/RevocationStore.ts";
 import * as Verify from "../src/verify.ts";
-import { SigningKeyRecordsLive } from "./support.ts";
 
 const ISSUER = "https://issuer.test";
 const JWKS_URL = "https://issuer.test/jwt/jwks";
 
-/**
- * `Jwt.layer` bundles the `jwt.token` mint endpoint's handlers (ticket
- * 10), which require `Api.Authentication` to discharge — even here, in a
- * test that never goes over HTTP and never invokes that middleware.
- * Mirrors `packages/jwt/test/Jwt.test.ts`'s own identical fix.
- */
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-// `provideMerge`, not `provide`, throughout: one test below
-// (`KeyRing.rotateNow`) needs the exact same `KeyRing`/`SigningKeyRecords`/
-// `JwtConfig`/`Crypto` instances `Jwt.layer` itself already uses, exposed
-// alongside `Jwt` rather than hidden inside its own composition — a
-// second, independently-built `KeyRing` would rotate a key `jwt.sign`
-// never reads from. `Sessions` is exposed for the same reason `verifyLive`
-// (unused by this file, but part of `Jwt.layer`'s own declared `R`) needs
-// it — mirroring `packages/jwt/test/Jwt.test.ts`'s own identical fix.
+// The full `Jwt` plugin through `TestAuth.layer`: the output holds the very `KeyRing`/`SigningKeyRecords`/
+// `JwtConfig` instances the plugin uses (one test rotates the key `jwt.sign` reads), so no second ring is built.
 const buildJwtLayer = () =>
-  Jwt.Jwt.layer.pipe(
-    Layer.provide(Hooks.HooksLive),
-    Layer.provideMerge(KeyRing.KeyRing.layer),
-    Layer.provideMerge(SigningKeyRecordsLive),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
-    // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-    // TIR-001: `RevocationStore` is now captured once in `Jwt`'s own
-    // `make`, so it must be provided for the plugin to build at all.
-    Layer.provideMerge(RevocationStore.layerMemory),
-    Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(JwtConfig.config({ issuer: ISSUER })),
-  );
+  TestAuth.layer(Auth.make([Jwt.Jwt]), { services: JwtConfig.config({ issuer: ISSUER }) });
 
 /** Serves whatever JWKS document `served` currently holds — lets a test simulate a server-side rotation between two fetches. */
 const fakeJwksHttpClient = (served: Ref.Ref<unknown>) =>
