@@ -257,7 +257,7 @@ describe("SCIM Groups go through OrganizationTeams (plan 04)", () => {
   const withTaps = (
     taps: Layer.Layer<never, never, Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>>,
     organization: Parameters<typeof ScimLive>[1] = {},
-  ) => ScimLive({}, organization, undefined, undefined, taps);
+  ) => ScimLive({}, organization, undefined, taps);
 
   const deny = (code: string) => Effect.fail(new HookPoint.HookAbort({ code }));
 

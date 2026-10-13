@@ -4,19 +4,12 @@
 //     asking, so a refused DELETE still logged the user out and hid it from the directory.
 //   - BEH-EA-252: `/ServiceProviderConfig` must report the `filter.maxResults` the plugin
 //     actually enforces (`ScimConfig.maxResults`), not a hard-coded 200.
-import { AuditLog, HookPoint, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
+import { AuditLog, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
 import { MembershipRecords } from "@awthaq/organization/records";
-import { AuthHttp } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import { TestAuth } from "@awthaq/test";
 import * as Scim from "../src/Scim.ts";
-import * as ScimApi from "../src/ScimApi.ts";
 import { ScimLive, seedConnection } from "./support.ts";
 import { TenantScoped } from "@awthaq/sql";
 
@@ -25,7 +18,7 @@ const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const LegalHold = Hooks.BeforeUserDelete.tap(() =>
   Effect.fail(new HookPoint.HookAbort({ code: "LEGAL_HOLD" })),
-).pipe(Layer.provideMerge(Hooks.HooksLive));
+);
 
 describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
   it.effect(
@@ -53,41 +46,16 @@ describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
         assert.strictEqual((yield* members.listByUser(grant, id)).length, 1);
         assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.deleted" }), []);
         assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.scim.userDeleted" }), []);
-      }).pipe(
-        Effect.provide(
-          ScimLive(
-            { deleteBehavior: "erase" },
-            {},
-            Users.layer.pipe(Layer.provide(Persistence.memory)),
-            LegalHold,
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, undefined, LegalHold))),
   );
 });
 
 describe("SCIM ServiceProviderConfig (BEH-EA-252)", () => {
   it.effect("reports the configured maximum page size as the filter's maxResults", () =>
     Effect.gen(function* () {
-      const Live = ScimLive({ maxResults: 50 });
-      const AppLayer = AuthHttp.routes(ScimApi.ScimApi).pipe(
-        Layer.provide(Live),
-        Layer.provideMerge(
-          Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-            Layer.provideMerge(FileSystem.layerNoop({})),
-          ),
-        ),
-        Layer.provideMerge(HttpRouter.layer),
-      );
-      const memoMap = Layer.makeMemoMapUnsafe();
-      const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
-      const { token } = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(Live, memoMap, scope);
-          return yield* seedConnection().pipe(Effect.provide(context));
-        }),
-      );
+      const app = TestAuth.app(ScimLive({ maxResults: 50 }));
+      const { handler } = app;
+      const { token } = yield* Effect.promise(() => app.run(seedConnection()));
       const response = yield* Effect.promise(() =>
         handler(
           new Request("http://localhost:3000/scim/v2/ServiceProviderConfig", {
@@ -101,6 +69,7 @@ describe("SCIM ServiceProviderConfig (BEH-EA-252)", () => {
         typeof body === "object" && body !== null && "filter" in body ? body.filter : undefined,
         { supported: true, maxResults: 50 },
       );
+      yield* Effect.promise(() => app.dispose());
     }),
   );
 });
