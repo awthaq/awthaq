@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-14 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; "What is missing" and "Verification" rewritten against `packages/organization` (AOMS-011, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; "What is missing" and "Verification" rewritten against `packages/organization` (AOMS-011, CCR-EA-006) <br> 1.2 (2026-10-13): Module structure: the authorized interface, the eight system modules, the table-ownership table and the actor (ADR-EA-040, architecture plan 04 phase 10) |
 ---
 
 ## What it is
@@ -131,6 +131,36 @@ further worked example of the plugin's own contract.
 ## What is missing
 
 The entities, invitation flow, per-organization roles, teams, the `OrganizationApi` contract and the qadi `RelationshipResolver` contribution (`OrganizationQadi`) are built. Still undecided or unbuilt: the plugin has no `BEH-EA` range of its own (its behavior is specified by its tests and `.scratch/organization/spec.md`; only the tenancy half is normative, in [`behaviors/28-tenancy.md`](../behaviors/28-tenancy.md)), which is a specification gap; and SSO ([MOD-EA-009](09-sso.md)), which depends on this plugin, is not built.
+
+## Module structure (ADR-EA-040, BEH-EA-330)
+
+The plugin has two layers. The **authorized interface** (`Organization`, 41 methods, `Organization.ts`) is what a signed-in member calls over HTTP: membership visibility (MTI-009), the feature gates in PV-300 order, `PermissionEngine` statements with the `permissionDenied` audit event (PERS-005), and the derivation of the caller's grant ceiling (`OrganizationActor.Bound`). Beneath it, `Organization.layer` exposes eight **system modules** (`AuthPlugin.layer({ exposes })`, BEH-EA-329), each taking an explicit `OrganizationActor.Actor` for audit and hook taps and never a request principal:
+
+```text
+ HTTP (OrganizationHandlers)      SCIM          SAML / Sso      AdminTenants      app code / jobs
+          │                        │               │                │                 │
+          ▼                        │               │                │                 │
+ Organization (authorized)         │               │                │                 │
+          │ Actor.User             │ Directory     │ IdentityProv.  │ PlatformAdmin   │ Application
+          ▼                        ▼               ▼                ▼                 ▼
+ Directory · Members · Teams · Invitations · Roles · ActiveContext · Authority · Deletion
+   each: guards → veto (HookPoint.aborted) → SqlTransaction{writes, attach} → events → observe
+          │ reads                                     ▲
+          ▼                                           │ OrganizationQadi.relationships / attributes
+   *Records (at `@awthaq/organization/records`; one writer per table)
+```
+
+| Table | Writer |
+|---|---|
+| `organization_org` | `OrganizationDirectory` |
+| `organization_membership` | `OrganizationMembers` (the Directory and Invitations create the first / an accepted one) |
+| `organization_team*` | `OrganizationTeams` (and the Members / Directory cascades) |
+| `organization_invitation` | `OrganizationInvitations` (Directory cascade, erasure) |
+| `organization_role` | `OrganizationRoles` (Directory cascade) |
+| `organization_active_context` | `OrganizationActiveContext` (cascades) |
+| `organization_oauth_connection*` | `OrganizationConnectionStore` (an `OrganizationDeletion` contribution) |
+
+`OrganizationAuthority` is read-only: what a role, a membership or a team role confers, shared by the gates, every `Bound` and qadi's relationships, so one evaluation path decides. `OrganizationDeletion` is the registry other plugins (`@awthaq/saml`, `@awthaq/scim`, the OIDC connection store) contribute their connection rows to, removed in the deletion's own transaction. An actor kind is `User`, `Directory`, `IdentityProvider`, `PlatformAdmin` or `Application`; a role-conferring method takes a `Bound` (`Ceiling` of what its source holds, or the explicit `Unbounded`).
 
 ## Tenancy
 

@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-21 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) <br> 1.2 (2026-09-29): Banner replaced with per-behavior implementation pointers; BEH-EA-161's example rewritten to the shipped shape (no `plan` attribute; a user-table defect surfaces as `AttributeResolveError`); the same-attribute-resolver paragraph rewritten around `attributeResolverRegistry` (AAPS-007, RZS-007, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-165's `reauth` handler uses `Sessions.requireFresh` (BEH-EA-320) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) <br> 1.2 (2026-09-29): Banner replaced with per-behavior implementation pointers; BEH-EA-161's example rewritten to the shipped shape (no `plan` attribute; a user-table defect surfaces as `AttributeResolveError`); the same-attribute-resolver paragraph rewritten around `attributeResolverRegistry` (AAPS-007, RZS-007, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-165's `reauth` handler uses `Sessions.requireFresh` (BEH-EA-320) <br> 1.4 (2026-10-13): BEH-EA-162 note: relations read `OrganizationAuthority` (ADR-EA-040, architecture plan 04 phase 10) |
 ---
 
-> Implemented: BEH-EA-161 in `@awthaq/qadi`'s `Resolvers.UserAttributes`; BEH-EA-162 in `@awthaq/organization`'s `OrganizationQadi.relationships` (with the application's `ResourceOrganizationLookup`, layer `layerNone` by default); BEH-EA-163 by `@qadi/core`'s `relationshipResolverFromEdges`; BEH-EA-165 in `Resolvers` (`reauth`, `ObligationHandlers.reauth`). BEH-EA-164 (decision history over the audit table) is an example of what an application composes from `AuditLog`; awthaq ships no `DecisionHistory` layer of its own. Tests: `packages/qadi/test/Resolvers.test.ts`, `packages/organization/test/OrganizationQadi.test.ts`. The Gherkin scenarios in `features/` are `@skip @unwired`.
+> Implemented: BEH-EA-161 in `@awthaq/qadi`'s `Resolvers.UserAttributes`; BEH-EA-162 in `@awthaq/organization`'s `OrganizationQadi.relationships` (with the application's `ResourceOrganizationLookup`, layer `layerNone` by default; it reads `OrganizationAuthority`, the same computation as the plugin's own gating, ADR-EA-040); BEH-EA-163 by `@qadi/core`'s `relationshipResolverFromEdges`; BEH-EA-165 in `Resolvers` (`reauth`, `ObligationHandlers.reauth`). BEH-EA-164 (decision history over the audit table) is an example of what an application composes from `AuditLog`; awthaq ships no `DecisionHistory` layer of its own. Tests: `packages/qadi/test/Resolvers.test.ts`, `packages/organization/test/OrganizationQadi.test.ts`. The Gherkin scenarios in `features/` are `@skip @unwired`.
 
 ## BEH-EA-161: Attributes resolved from the user table
 
