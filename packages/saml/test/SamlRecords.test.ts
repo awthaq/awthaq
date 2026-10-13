@@ -1,7 +1,9 @@
 // BEH-EA-241: `SamlRecords`, one contract suite over both layers. `layerSql` is migrated through the plugin's own
 // real `migrations` (and, under `pnpm run test:pg`, runs on Postgres), so an email domain routing to exactly one
-// connection is a real database constraint.
-import { Migrations } from "@awthaq/core";
+// connection is a real database constraint. Organization's migrations run first: Saml's own backfills its domains into
+// organization's claim tables (BEH-EA-317).
+import { Auth, Migrations } from "@awthaq/core";
+import { Organization } from "@awthaq/organization";
 import { Tenant } from "@awthaq/ports";
 import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import { TestAuth } from "@awthaq/test";
@@ -26,9 +28,9 @@ const grant = TenantScoped.crossTenant("saml records test: a cross-organization 
 
 const SqlLive = TestSql.layer("saml_SamlRecords");
 
-const Migrated = Layer.effectDiscard(Migrations.run(Saml.Saml.migrations)).pipe(
-  Layer.provide(SqlLive),
-);
+const Migrated = Layer.effectDiscard(
+  Migrations.run(Auth.make([Organization.Organization, Saml.Saml]).migrations),
+).pipe(Layer.provide(SqlLive));
 
 // The records layers need `Encryption` (the sealed `privateKey` column); the sealed suite below provides a
 // rotatable one itself.

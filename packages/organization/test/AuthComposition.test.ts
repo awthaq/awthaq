@@ -24,6 +24,8 @@ describe("Auth.make([Organization])", () => {
           "organization_active_context",
           "organization_oauth_connection",
           "organization_oauth_connection_domain",
+          "organization_domain_owner",
+          "organization_domain_claim",
         ],
         tenancy: {
           organization_org: AuthPlugin.Table.keyed("id"),
@@ -36,6 +38,8 @@ describe("Auth.make([Organization])", () => {
           organization_active_context: AuthPlugin.Table.derived("sessions", "sessionId"),
           organization_oauth_connection: AuthPlugin.Table.keyed("organizationId"),
           organization_oauth_connection_domain: AuthPlugin.Table.keyed("organizationId"),
+          organization_domain_owner: AuthPlugin.Table.keyed("organizationId"),
+          organization_domain_claim: AuthPlugin.Table.keyed("organizationId"),
         },
         dependsOn: [],
         groups: ["organization"],

@@ -1077,6 +1077,75 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       yield* world.outcomes.set(`oidc:${name}`, view.providerId);
     },
   );
+  Given("the organization {string} exists", function* (name: string) {
+    yield* organizationOf(name);
+  });
+  When(
+    "the organization {string} tries a {word} connection for the domain {string}",
+    function* (name: string, protocol: string, domain: string) {
+      const world = yield* World;
+      const organizationId = yield* organizationOf(name);
+      const tagOf = (exit: Exit.Exit<unknown, { readonly _tag: string }>) =>
+        Exit.isFailure(exit)
+          ? (Option.getOrUndefined(Exit.findErrorOption(exit))?._tag ?? "defect")
+          : "created";
+      const attempt =
+        protocol === "SAML"
+          ? tagOf(
+              yield* inAppExit(
+                Effect.flatMap(SamlConnections.SamlConnectionStore, (store) =>
+                  store.create({
+                    organizationId,
+                    name: `${name} SAML`,
+                    idp: {
+                      entityId: `https://idp.${name}.example`,
+                      ssoUrl: `https://idp.${name}.example/sso`,
+                      certificates: [idp.cert],
+                    },
+                    emailDomains: [domain],
+                  }),
+                ),
+              ),
+            )
+          : tagOf(
+              yield* inAppExit(
+                Effect.flatMap(OrganizationConnections.OrganizationConnectionStore, (store) =>
+                  store.create(OrganizationActor.application("bdd"), {
+                    organizationId,
+                    kind: "oidc",
+                    name: `${name} OIDC`,
+                    issuer: `https://oidc.${name}.example`,
+                    discoveryUrl: `https://oidc.${name}.example/.well-known/openid-configuration`,
+                    clientId: "client-1",
+                    clientSecret: Redacted.make("secret"),
+                    emailDomains: [domain],
+                  }),
+                ),
+              ),
+            );
+      yield* world.outcomes.set("domainAttempt", attempt);
+    },
+  );
+  Then("the attempt is refused as {string}", function* (tag: string) {
+    const world = yield* World;
+    assert.equal(yield* world.outcomes.getAs("domainAttempt", isString), tag);
+  });
+  Then(
+    "the dispatcher still answers the {word} login URL of {string} for {string}",
+    function* (protocol: string, name: string, email: string) {
+      const world = yield* World;
+      const route = yield* inApp(Effect.flatMap(Sso.Sso, (sso) => sso.discover({ email })));
+      assert.ok(Option.isSome(route), "a route");
+      if (protocol === "SAML") {
+        assert.equal(route.value.protocol, "saml");
+        assert.equal(route.value.connectionId, (yield* connectionState(name)).id);
+      } else {
+        assert.equal(route.value.protocol, "oidc");
+        const providerId = yield* world.outcomes.getAs(`oidc:${name}`, isString);
+        assert.equal(route.value.loginUrl, `/oauth/${encodeURIComponent(providerId)}/authorize`);
+      }
+    },
+  );
   Given("the Sso preference is {word}", function* (preferred: string) {
     const world = yield* World;
     yield* Ref.set(world.ssoPreference, preferred === "OIDC" ? "oidc" : "saml");

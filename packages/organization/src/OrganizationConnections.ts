@@ -37,7 +37,7 @@
 import { OAuthConnections, OAuthProvider } from "@awthaq/oauth";
 import { Claims } from "@awthaq/oauth/presets";
 import { AuthEvents } from "@awthaq/core";
-import { OutboundUrl } from "@awthaq/ports";
+import { OutboundUrl, SqlTransaction } from "@awthaq/ports";
 import { SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -50,6 +50,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Data from "effect/Data";
 import * as ConnectionRecords from "./ConnectionRecords.ts";
+import * as DomainClaims from "./DomainClaims.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationDeletion from "./OrganizationDeletion.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
@@ -418,10 +419,27 @@ export const layerStore = Layer.effect(
   OrganizationConnectionStore,
   Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
+    const claims = yield* DomainClaims.DomainClaims;
+    const transaction = yield* SqlTransaction.SqlTransaction;
     const map = yield* OrganizationConnections;
     const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const events = yield* AuthEvents.AuthEvents;
     const crypto = yield* Crypto.Crypto;
+
+    /** A domain another organization owns (over any protocol) is a taken domain, worded as this protocol's own refusal. */
+    const claimed = <A, E, R>(
+      input: DomainClaims.DomainClaim,
+      previous: ReadonlyArray<string> | undefined,
+      write: Effect.Effect<A, E, R>,
+    ) =>
+      DomainClaims.withClaim(
+        claims,
+        transaction,
+        input,
+        previous,
+        write,
+        (domain) => new ConnectionRecords.ConnectionDomainTaken({ domain }),
+      );
 
     /** A connection belongs to an organization that exists and is not suspended (BEH-EA-237), worded as the SAML store words it. */
     const requireActiveOrganization = (organizationId: string) =>
@@ -455,22 +473,31 @@ export const layerStore = Layer.effect(
           scopes,
         });
         const emailDomains = yield* normalizeDomains(input.emailDomains ?? []);
-        const record = yield* records.create({
-          id,
-          organizationId: input.organizationId,
-          kind: input.kind,
-          name: input.name.trim(),
-          issuer: input.issuer,
-          discoveryUrl: input.discoveryUrl,
-          authorizationEndpoint: input.authorizationEndpoint,
-          tokenEndpoint: input.tokenEndpoint,
-          jwksUri: input.jwksUri,
-          userinfoEndpoint: input.userinfoEndpoint,
-          clientId: input.clientId,
-          clientSecret: input.clientSecret,
-          scopes,
-          emailDomains,
-        });
+        const record = yield* claimed(
+          {
+            organizationId: input.organizationId,
+            protocol: "oauth",
+            connectionId: id,
+            domains: emailDomains,
+          },
+          undefined,
+          records.create({
+            id,
+            organizationId: input.organizationId,
+            kind: input.kind,
+            name: input.name.trim(),
+            issuer: input.issuer,
+            discoveryUrl: input.discoveryUrl,
+            authorizationEndpoint: input.authorizationEndpoint,
+            tokenEndpoint: input.tokenEndpoint,
+            jwksUri: input.jwksUri,
+            userinfoEndpoint: input.userinfoEndpoint,
+            clientId: input.clientId,
+            clientSecret: input.clientSecret,
+            scopes,
+            emailDomains,
+          }),
+        );
         yield* map.invalidate(input.organizationId);
         yield* events.publish({
           _tag: "auth.organization.connectionCreated",
@@ -513,7 +540,7 @@ export const layerStore = Layer.effect(
           patch.emailDomains === undefined
             ? undefined
             : yield* normalizeDomains(patch.emailDomains);
-        const record = yield* records.update(organizationId, connectionId, {
+        const update = records.update(organizationId, connectionId, {
           ...(patch.name === undefined ? {} : { name: patch.name.trim() }),
           issuer: patch.issuer,
           discoveryUrl: patch.discoveryUrl,
@@ -526,6 +553,13 @@ export const layerStore = Layer.effect(
           scopes: patch.scopes,
           emailDomains,
         });
+        const record = yield* emailDomains === undefined
+          ? update
+          : claimed(
+              { organizationId, protocol: "oauth", connectionId, domains: emailDomains },
+              current.emailDomains,
+              update,
+            );
         yield* map.invalidate(organizationId);
         yield* events.publish({
           _tag: "auth.organization.connectionUpdated",
@@ -542,7 +576,13 @@ export const layerStore = Layer.effect(
 
     const remove: OrganizationConnectionStoreShape["remove"] = Effect.fnUntraced(
       function* (actor, organizationId, connectionId) {
-        yield* records.remove(organizationId, connectionId);
+        yield* DomainClaims.withRelease(
+          claims,
+          transaction,
+          organizationId,
+          connectionId,
+          records.remove(organizationId, connectionId),
+        );
         yield* map.invalidate(organizationId);
         yield* events.publish({
           _tag: "auth.organization.connectionDeleted",
@@ -589,9 +629,15 @@ export const connectionsOnOrganizationDelete = OrganizationDeletion.contribute({
   id: "organization.oauthConnections",
   make: Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
+    const claims = yield* DomainClaims.DomainClaims;
     const map = yield* OrganizationConnections;
     return {
-      inTransaction: records.removeAllForOrganization,
+      // The organization's domain claims go with it, whatever protocol made them.
+      inTransaction: (organizationId: string) =>
+        Effect.andThen(
+          records.removeAllForOrganization(organizationId),
+          claims.releaseAllForOrganization(organizationId),
+        ),
       afterCommit: map.invalidate,
     };
   }),

@@ -104,7 +104,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     apiVersion: 1,
     contract: OrganizationApi.OrganizationApi,
     migrations: organizationMigrations,
-    // Plan 08 (BEH-EA-T4): the seven record stores, memory and SQL, matched.
+    // Plan 08 (BEH-EA-T4): the eight record stores, memory and SQL, matched.
     records: OrganizationBundle,
     // Plan 08: the 46 hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.
     hookPoints: OrganizationHooksLive,
@@ -120,6 +120,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       organization_active_context: AuthPlugin.Table.derived("sessions", "sessionId"),
       organization_oauth_connection: AuthPlugin.Table.keyed("organizationId"),
       organization_oauth_connection_domain: AuthPlugin.Table.keyed("organizationId"),
+      organization_domain_owner: AuthPlugin.Table.keyed("organizationId"),
+      organization_domain_claim: AuthPlugin.Table.keyed("organizationId"),
     },
   },
 ) {

@@ -33,6 +33,7 @@ import * as Redacted from "effect/Redacted";
 import { fakeHttpClient } from "../../oauth/test/FakeProvider.ts";
 import * as DateTime from "effect/DateTime";
 import * as ConnectionRecords from "../src/ConnectionRecords.ts";
+import * as DomainClaims from "../src/DomainClaims.ts";
 import * as OrganizationConnections from "../src/OrganizationConnections.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationDirectory from "../src/OrganizationDirectory.ts";
@@ -105,6 +106,8 @@ const ConnectionsLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
   Layer.provideMerge(ConnectionRecords.layerMemory),
+  Layer.provideMerge(DomainClaims.layerMemory),
+  Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(StubDirectoryLive),
   Layer.provideMerge(EncryptionLive),
   Layer.provideMerge(
@@ -321,6 +324,7 @@ const RealLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
   Layer.provideMerge(ConnectionRecords.layerMemory),
+  Layer.provideMerge(DomainClaims.layerMemory),
   Layer.provideMerge(OrganizationSystem.layer.pipe(Layer.provide(Organization.config({})))),
   Layer.provideMerge(OrganizationMemory.layer),
   Layer.provideMerge(EncryptionLive),

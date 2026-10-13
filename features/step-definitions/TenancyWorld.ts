@@ -41,7 +41,7 @@ import {
   TenantResolver,
   OrganizationMemory,
 } from "@awthaq/organization";
-import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
+import { ConnectionRecords, DomainClaims, OrganizationRecords } from "@awthaq/organization/records";
 import { OAuth, OAuthConnections, OAuthProvider } from "@awthaq/oauth";
 import {
   ClientAddress,
@@ -277,6 +277,8 @@ const buildConnectionStack = () =>
   Layer.mergeAll(OrganizationConnections.layerStore, OrganizationConnections.oauthConnections).pipe(
     Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
     Layer.provideMerge(ConnectionRecords.layerMemory),
+    Layer.provideMerge(DomainClaims.layerMemory),
+    Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(ActiveOrganizations),
     Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(EncryptionLive),

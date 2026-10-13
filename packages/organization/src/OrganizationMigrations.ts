@@ -458,4 +458,32 @@ export const organizationMigrations: Migrations.Migrations = [
       });
     }),
   },
+  // Plan 10 item 7 (BEH-EA-317): one organization per email domain across protocols. `organization_domain_owner`'s
+  // primary key makes a first claim atomic; `organization_domain_claim` says which connections still claim a
+  // domain. The OIDC/OAuth2 domains already stored are backfilled (each is unique, so they cannot clash with each
+  // other); `@awthaq/saml`'s own migration backfills its domains after this one and refuses a cross-organization clash.
+  {
+    name: "create_organization_domain_claim",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        CREATE TABLE organization_domain_owner (
+          domain TEXT PRIMARY KEY,
+          "organizationId" TEXT NOT NULL
+        )`;
+      yield* sql`CREATE INDEX organization_domain_owner_organization_id ON organization_domain_owner("organizationId")`;
+      yield* sql`
+        CREATE TABLE organization_domain_claim (
+          domain TEXT NOT NULL,
+          "connectionId" TEXT NOT NULL,
+          protocol TEXT NOT NULL,
+          "organizationId" TEXT NOT NULL,
+          PRIMARY KEY (domain, "connectionId")
+        )`;
+      yield* sql`CREATE INDEX organization_domain_claim_connection_id ON organization_domain_claim("connectionId")`;
+      yield* sql`CREATE INDEX organization_domain_claim_organization_id ON organization_domain_claim("organizationId")`;
+      yield* sql`INSERT INTO organization_domain_claim (domain, "connectionId", protocol, "organizationId") SELECT domain, "connectionId", 'oauth', "organizationId" FROM organization_oauth_connection_domain`;
+      yield* sql`INSERT INTO organization_domain_owner (domain, "organizationId") SELECT DISTINCT domain, "organizationId" FROM organization_domain_claim`;
+    }),
+  },
 ];

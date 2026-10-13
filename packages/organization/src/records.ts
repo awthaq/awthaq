@@ -16,9 +16,11 @@
 //   organization_role                         OrganizationRoles (Directory cascade)
 //   organization_active_context               OrganizationActiveContext (cascades)
 //   organization_oauth_connection(+_domain)   OrganizationConnectionStore (OrganizationDeletion contribution)
+//   organization_domain_owner / _claim         OrganizationConnectionStore and SamlConnectionStore (BEH-EA-317)
 
 export * as ActiveContextRecords from "./ActiveContextRecords.ts";
 export * as ConnectionRecords from "./ConnectionRecords.ts";
+export * as DomainClaims from "./DomainClaims.ts";
 export * as InvitationRecords from "./InvitationRecords.ts";
 export * as MembershipRecords from "./MembershipRecords.ts";
 export * as OrganizationRecords from "./OrganizationRecords.ts";

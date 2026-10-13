@@ -54,6 +54,7 @@ import {
   XmlSignature,
 } from "@awthaq/ports";
 import {
+  DomainClaims,
   Organization,
   OrganizationActor,
   OrganizationAuthority,
@@ -312,6 +313,36 @@ const samlMigrations: Migrations.Migrations = [
       });
       yield* sql`CREATE INDEX saml_session_identity ON saml_session("connectionId", "nameId")`;
       yield* sql`CREATE INDEX saml_session_created_at ON saml_session("createdAt")`;
+    }),
+  },
+  {
+    // Plan 10 item 7 (BEH-EA-317): a domain belongs to one organization across protocols. The stored SAML domains are
+    // claimed in `@awthaq/organization`'s `organization_domain_claim` (created by its own, earlier migration). If an
+    // organization already claims a domain this table gives to another one (an OIDC connection of organization A and
+    // a SAML connection of organization B), the migration FAILS naming the domains: which side keeps the domain is
+    // the operator's call, so release one before upgrading.
+    name: "claim_saml_connection_domains",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const clashes = yield* sql<{ readonly domain: string }>`
+        SELECT DISTINCT d.domain AS domain
+        FROM saml_connection_domain d
+        JOIN saml_connection c ON c.id = d."connectionId"
+        JOIN organization_domain_claim x ON x.domain = d.domain AND x."organizationId" <> c."organizationId"
+        UNION
+        SELECT DISTINCT d.domain AS domain
+        FROM saml_connection_domain d
+        JOIN saml_connection c ON c.id = d."connectionId"
+        JOIN saml_connection_domain d2 ON d2.domain = d.domain
+        JOIN saml_connection c2 ON c2.id = d2."connectionId" AND c2."organizationId" <> c."organizationId"`;
+      if (clashes.length > 0) {
+        return yield* Defects.invariantViolation(
+          "saml.domainClaimClash",
+          `awthaq/saml: these email domains are claimed by two organizations (one over OIDC and one over SAML): ${clashes.map((row) => row.domain).join(", ")}. A domain belongs to one organization (BEH-EA-317); remove the claim from one side, then migrate again`,
+        );
+      }
+      yield* sql`INSERT INTO organization_domain_claim (domain, "connectionId", protocol, "organizationId") SELECT d.domain, d."connectionId", 'saml', c."organizationId" FROM saml_connection_domain d JOIN saml_connection c ON c.id = d."connectionId"`;
+      yield* sql`INSERT INTO organization_domain_owner (domain, "organizationId") SELECT DISTINCT x.domain, x."organizationId" FROM organization_domain_claim x WHERE NOT EXISTS (SELECT 1 FROM organization_domain_owner o WHERE o.domain = x.domain)`;
     }),
   },
 ];
@@ -730,6 +761,7 @@ export const samlOrganizationDeletion = OrganizationDeletion.contribute({
   id: "saml",
   make: Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
+    const claims = yield* DomainClaims.DomainClaims;
     return {
       inTransaction: (organizationId: string) =>
         Effect.flatMap(records.listByOrganization(organizationId), (connections) =>
@@ -739,7 +771,11 @@ export const samlOrganizationDeletion = OrganizationDeletion.contribute({
               records
                 .remove(organizationId, connection.id)
                 // Removed meanwhile: the goal state holds.
-                .pipe(Effect.catchTag("SamlRecordNotFound", () => Effect.void)),
+                .pipe(
+                  Effect.catchTag("SamlRecordNotFound", () => Effect.void),
+                  // Its email domains are free for another organization again (BEH-EA-317).
+                  Effect.andThen(claims.release(organizationId, connection.id)),
+                ),
             { discard: true },
           ),
         ),

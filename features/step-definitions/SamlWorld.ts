@@ -26,7 +26,7 @@ import {
   OrganizationHooks,
   OrganizationMemory,
 } from "@awthaq/organization";
-import { ConnectionRecords, MembershipRecords } from "@awthaq/organization/records";
+import { ConnectionRecords, DomainClaims, MembershipRecords } from "@awthaq/organization/records";
 import {
   ClientAddress,
   Encryption,
@@ -208,6 +208,7 @@ const metadataFetcher = (served: ReadonlyMap<string, string>) =>
 const OidcStoreLive = OrganizationConnections.layerStore.pipe(
   Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
   Layer.provideMerge(ConnectionRecords.layerMemory),
+  Layer.provideMerge(DomainClaims.layerMemory),
 );
 
 const OrganizationLive = Organization.Organization.layer.pipe(
@@ -251,6 +252,7 @@ const buildLive = (
     Layer.provideMerge(RateLimiter.layerPermissive),
     Layer.provideMerge(ClientAddress.layerDirect),
     Layer.provideMerge(OrganizationMemory.layer),
+    Layer.provideMerge(DomainClaims.layerMemory),
     Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Mailer.layerMemory),

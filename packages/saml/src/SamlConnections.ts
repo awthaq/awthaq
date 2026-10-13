@@ -23,8 +23,8 @@
 // what gets pinned afterwards is the fingerprint, not the document.
 
 import type { Api } from "@awthaq/api";
-import { OrganizationAuthority, OrganizationDirectory } from "@awthaq/organization";
-import { OutboundUrl } from "@awthaq/ports";
+import { DomainClaims, OrganizationAuthority, OrganizationDirectory } from "@awthaq/organization";
+import { OutboundUrl, SqlTransaction } from "@awthaq/ports";
 import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
 import { X509Certificate } from "node:crypto";
@@ -203,16 +203,33 @@ export class SamlConnectionStore extends Context.Service<
   SamlConnectionStoreShape
 >()("awthaq/saml/SamlConnectionStore") {}
 
-/** Requires `SamlRecords`, the exposed `OrganizationDirectory`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
+/** Requires `SamlRecords`, `DomainClaims` (organization's record store), `SqlTransaction`, the exposed `OrganizationDirectory`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
 export const layerStore = Layer.effect(
   SamlConnectionStore,
   Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
+    const claims = yield* DomainClaims.DomainClaims;
+    const transaction = yield* SqlTransaction.SqlTransaction;
     const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
     const crypto = yield* Crypto.Crypto;
     const settings = yield* SamlConfig.SamlConfig;
+
+    /** BEH-EA-317: a domain another organization owns, over any protocol, is a taken domain; the claim and the row are one unit. */
+    const claimed = <A, E, R>(
+      input: DomainClaims.DomainClaim,
+      previous: ReadonlyArray<string> | undefined,
+      write: Effect.Effect<A, E, R>,
+    ) =>
+      DomainClaims.withClaim(
+        claims,
+        transaction,
+        input,
+        previous,
+        write,
+        (domain) => new SamlRecords.SamlDomainTaken({ domain }),
+      );
 
     const validatedUrl = (field: string, url: string) => {
       const problem = OutboundUrl.problem(field, url, {
@@ -348,22 +365,31 @@ export const layerStore = Layer.effect(
       const id = yield* crypto.randomUUIDv7.pipe(
         Effect.catch(StoreFailure.storeUnavailable("SamlConnectionStore.create")),
       );
-      const created = yield* records.create({
-        id,
-        organizationId: input.organizationId,
-        name,
-        idpEntityId: idp.entityId.trim(),
-        ssoUrl,
-        idpCertificates,
-        emailDomains,
-        trustsEmail: input.trustsEmail ?? false,
-        authnRequestsSigned: input.authnRequestsSigned ?? idp.wantsSignedRequests,
-        sloUrl,
-        sloBinding:
-          input.sloBinding ?? (sloUrl === idp.sloUrl ? idp.sloBinding : undefined) ?? "redirect",
-        metadataUrl: input.metadataUrl,
-        roleMapping,
-      });
+      const created = yield* claimed(
+        {
+          organizationId: input.organizationId,
+          protocol: "saml",
+          connectionId: id,
+          domains: emailDomains,
+        },
+        undefined,
+        records.create({
+          id,
+          organizationId: input.organizationId,
+          name,
+          idpEntityId: idp.entityId.trim(),
+          ssoUrl,
+          idpCertificates,
+          emailDomains,
+          trustsEmail: input.trustsEmail ?? false,
+          authnRequestsSigned: input.authnRequestsSigned ?? idp.wantsSignedRequests,
+          sloUrl,
+          sloBinding:
+            input.sloBinding ?? (sloUrl === idp.sloUrl ? idp.sloBinding : undefined) ?? "redirect",
+          metadataUrl: input.metadataUrl,
+          roleMapping,
+        }),
+      );
       yield* ensureSigningKey(created);
       return created;
     });
@@ -397,7 +423,7 @@ export const layerStore = Layer.effect(
         patch.roleMapping === undefined
           ? undefined
           : yield* validatedRoleMapping(current.organizationId, patch.roleMapping);
-      const updated = yield* records
+      const write = records
         .update(current.organizationId, id, {
           name: patch.name?.trim(),
           idpEntityId: patch.entityId?.trim(),
@@ -416,6 +442,18 @@ export const layerStore = Layer.effect(
             Effect.fail(new SamlConnectionNotFound({ id })),
           ),
         );
+      const updated = yield* emailDomains === undefined
+        ? write
+        : claimed(
+            {
+              organizationId: current.organizationId,
+              protocol: "saml",
+              connectionId: id,
+              domains: emailDomains,
+            },
+            current.emailDomains,
+            write,
+          );
       yield* ensureSigningKey(updated);
       return updated;
     });
@@ -470,7 +508,15 @@ export const layerStore = Layer.effect(
       refreshMetadata,
       remove: (id) =>
         get(id).pipe(
-          Effect.flatMap((current) => records.remove(current.organizationId, id)),
+          Effect.flatMap((current) =>
+            DomainClaims.withRelease(
+              claims,
+              transaction,
+              current.organizationId,
+              id,
+              records.remove(current.organizationId, id),
+            ),
+          ),
           Effect.catchTag("SamlRecordNotFound", () =>
             Effect.fail(new SamlConnectionNotFound({ id })),
           ),
