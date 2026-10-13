@@ -697,33 +697,44 @@ export interface OAuthShape {
   >;
 }
 
+// ---- rate limits ------------------------------------------------------------------------------------
+
+/**
+ * OAP-008/MNA-003, BEH-EA-105/107/111: the three unauthenticated endpoints, throttled per source IP and
+ * declared once. The static `rateLimits` listing is derived from this table at the default numbers
+ * (`OAuthConfig.rateLimits` tunes them per request, EP-007) and the layer registers it with
+ * `RateLimits.budget`. `authorize` is looser (a real user opening the sign-in page repeatedly is normal)
+ * but still bounds the Verification-row and crypto amplification an anonymous caller could otherwise
+ * generate; `callback` is tighter because each admitted call may cost a provider round trip (ticket 13:
+ * 20 a minute per IP is loose enough for a real user's own retries after a transient provider hiccup);
+ * `token` is the native exchange-code redemption. An unresolved IP shares one bucket, never unthrottled.
+ */
+const rules = {
+  callback: RateLimits.rule({
+    group: "oauth",
+    endpoint: "callback",
+    key: RateLimits.Key.ip,
+    ...defaultRateLimits.callback,
+  }),
+  authorize: RateLimits.rule({
+    group: "oauth",
+    endpoint: "authorize",
+    key: RateLimits.Key.ip,
+    ...defaultRateLimits.authorize,
+  }),
+  token: RateLimits.rule({
+    group: "oauth.exchange",
+    endpoint: "token",
+    key: RateLimits.Key.ip,
+    ...defaultRateLimits.token,
+  }),
+};
+
 export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
   apiVersion: 1,
   contract: OAuthApi.OAuthApi,
-  // PV-241: the default throttles (`OAuthConfig.rateLimits` tunes them); mirrors the layer's registrations.
-  rateLimits: [
-    {
-      group: "oauth",
-      endpoint: "callback",
-      name: "callback",
-      dimension: "ip",
-      ...defaultRateLimits.callback,
-    },
-    {
-      group: "oauth",
-      endpoint: "authorize",
-      name: "authorize",
-      dimension: "ip",
-      ...defaultRateLimits.authorize,
-    },
-    {
-      group: "oauth.exchange",
-      endpoint: "token",
-      name: "token",
-      dimension: "ip",
-      ...defaultRateLimits.token,
-    },
-  ],
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it at the default numbers.
+  rateLimitRules: rules,
   // BEH-EA-125: an OAuth account is an ordinary `accounts` row (extended
   // with `issuer`, per BEH-EA-125) — this plugin owns no table of its own,
   // the same reasoning `@awthaq/password`'s own `tables: []` documents.
@@ -810,10 +821,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // userinfo); `httpClient` stays plain for the single-use code exchange.
       const readClient = ProviderHttp.retrying(httpClient, config_.retry);
       const jwksCaches = yield* IdToken.makeJwksCaches;
-      const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const encryption = yield* Encryption.Encryption;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
       // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
       // future `TwoFactor` plugin taps, consulted at the sign-in-completing
       // path of `callback` only (never `flow.link`, which issues no new
@@ -826,60 +835,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const beforeSignUp = yield* Hooks.BeforeSignUp;
       const afterSignUp = yield* Hooks.AfterSignUp;
 
-      /**
-       * Ticket 13: 20 callback attempts per minute per source IP — loose
-       * enough not to trip a real user's own retries after a transient
-       * provider hiccup, tight enough to bound repeated token-exchange
-       * calls (the expensive step — a real network round trip to the
-       * provider) against one origin. `undefined` IP (no
-       * `HttpServerRequest.remoteAddress`) shares one bucket, never
-       * unthrottled.
-       */
-      const {
-        authorize: AUTHORIZE_RATE_LIMIT,
-        callback: CALLBACK_RATE_LIMIT,
-        token: TOKEN_RATE_LIMIT,
-      } = config_.rateLimits;
-      // Only registered above for introspection; enforcement reads the budget in force (EP-007).
-      // The explicit return-type annotation below is a narrow, necessary
-      // exception, not a style choice: passing `OAuth` (this class) into
-      // anything typed `AuthPlugin.Any` (which itself requires a `layer`
-      // field) from within `OAuth`'s own `static readonly layer`
-      // initializer is a real TS circularity — see `@awthaq/password`'s
-      // `Password.ts` for the identical problem and the same fix, first
-      // hit there (ticket 12).
-      const registerRateLimitRules: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =
-        rateLimitsRegistry
-          .register(OAuth, {
-            group: "oauth",
-            endpoint: "callback",
-            key: "ip",
-            limit: CALLBACK_RATE_LIMIT.limit,
-            window: CALLBACK_RATE_LIMIT.window,
-          })
-          // OAP-008: `authorize` is throttled too, on its own looser rule.
-          .pipe(
-            Effect.andThen(
-              rateLimitsRegistry.register(OAuth, {
-                group: "oauth",
-                endpoint: "authorize",
-                key: "ip",
-                limit: AUTHORIZE_RATE_LIMIT.limit,
-                window: AUTHORIZE_RATE_LIMIT.window,
-              }),
-            ),
-            // MNA-003: the exchange redemption is anonymous too.
-            Effect.andThen(
-              rateLimitsRegistry.register(OAuth, {
-                group: "oauth.exchange",
-                endpoint: "token",
-                key: "ip",
-                limit: TOKEN_RATE_LIMIT.limit,
-                window: TOKEN_RATE_LIMIT.window,
-              }),
-            ),
-          );
-      yield* registerRateLimitRules.pipe(Effect.orDie);
+      // The table above is registered (introspectable) and spent through one budget. The numbers in force
+      // come from the configuration of the operation (EP-007), so a tenant's `OAuth.config(...)` provided
+      // in the calling fiber tunes the limits; the registry records the built value.
+      const limits = yield* RateLimits.budget(OAuth, {
+        tune: Effect.map(configNow, (current) => current.rateLimits),
+      });
 
       // BEH-EA-127/NAM-004: resolved by the shared `OAuthProviders` registry
       // — boot-mode providers while this layer builds (a mismatched or
@@ -903,20 +864,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       const authorize: OAuthShape["authorize"] = Effect.fnUntraced(function* (providerId, input) {
         const config = yield* configNow;
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        yield* RateLimits.enforce({
-          key: `oauth:authorize:${input.ip ?? "unknown"}`,
-          limit: config.rateLimits.authorize.limit,
-          window: config.rateLimits.authorize.window,
-          meta: { group: "oauth", endpoint: "authorize", rule: "authorize", dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("authorize", { ip: input.ip });
         const provider = yield* providers.get(providerId);
         const nativeChallenge = input.native?.codeChallenge;
         const resolved = resolveCallbackURL(input.callbackURL, {
@@ -989,20 +937,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       const callbackFlow: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
         const config = yield* configNow;
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        yield* RateLimits.enforce({
-          key: `oauth:callback:${input.ip ?? "unknown"}`,
-          limit: config.rateLimits.callback.limit,
-          window: config.rateLimits.callback.window,
-          meta: { group: "oauth", endpoint: "callback", rule: "callback", dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("callback", { ip: input.ip });
         const provider = yield* providers.get(providerId);
         // BEH-EA-122: the correlation cookie and the returned `state` must
         // agree before the (single-use) Verification entry is even
@@ -1459,20 +1394,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         );
 
       const exchange: OAuthShape["exchange"] = Effect.fnUntraced(function* (input) {
-        const config = yield* configNow;
-        yield* RateLimits.enforce({
-          key: `oauth:token:${input.ip ?? "unknown"}`,
-          limit: config.rateLimits.token.limit,
-          window: config.rateLimits.token.window,
-          meta: { group: "oauth.exchange", endpoint: "token", rule: "token", dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("token", { ip: input.ip });
         const decoded = decodeState(input.code);
         // The prefix is checked BEFORE `consume`: consuming is destructive, and
         // this endpoint must never burn (or redeem) a `Verification` value issued

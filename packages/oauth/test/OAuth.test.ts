@@ -15,6 +15,7 @@ import { Authentication } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
+import * as Context from "effect/Context";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -135,6 +136,8 @@ const buildLayer = <Wrapped extends Sessions.Sessions | Users.Users = never>(opt
   readonly config?: Partial<OAuth.OAuthConfigInput>;
   /** EP-004: per-organization connections, consulted after the static registry. */
   readonly connections?: OAuthConnections.OAuthConnectionResolverShape;
+  /** The limiter the plugin captures; permissive by default so an ordinary loop never trips a production limit. */
+  readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
   /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
   readonly coreOverride?: Layer.Layer<Wrapped, never, Wrapped>;
 }) =>
@@ -158,7 +161,7 @@ const buildLayer = <Wrapped extends Sessions.Sessions | Users.Users = never>(opt
     // Ticket 13: `callback` is now rate-limited — a real, permissive
     // default here, mirroring `TestAuth`'s own posture, so an ordinary
     // test loop never trips a limit tuned for production.
-    Layer.provideMerge(RateLimiter.layerPermissive),
+    Layer.provideMerge(options.limiter ?? RateLimiter.layerPermissive),
     Layer.provideMerge(RateLimits.layer),
     // Ticket 16: `SqlTransaction`'s no-op layer — this test's own `CoreLive`
     // is in-memory, with nothing a transaction would need to wrap.
@@ -1659,17 +1662,59 @@ describe("OAuth", () => {
     );
   });
 
-  describe("PV-241: the static rateLimits declaration matches the registry", () => {
-    it.effect("declares exactly what the layer registers, at the default configuration", () =>
+  describe("EP-007: the rate limits in force are the operation's configuration", () => {
+    it.effect(
+      "a tenant's OAuth.config provided in the calling fiber tunes the authorize budget without a rebuild",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const input = { callbackURL: undefined, link: undefined, ip: "203.0.113.5" };
+          // Built value: the default 30 a minute. Two calls pass.
+          yield* oauth.authorize("acme", input);
+          yield* oauth.authorize("acme", input);
+          // A tenant's configuration allows one: its second call is refused.
+          const tenant = Context.get(
+            yield* Layer.build(
+              OAuth.config({
+                providers: [acme()],
+                baseUrl,
+                rateLimits: { authorize: { limit: 1, window: Duration.minutes(1) } },
+              }),
+            ),
+            OAuth.OAuthConfig,
+          );
+          const tenantInput = { ...input, ip: "203.0.113.6" };
+          yield* oauth
+            .authorize("acme", tenantInput)
+            .pipe(Effect.provideService(OAuth.OAuthConfig, tenant));
+          const refused = yield* oauth
+            .authorize("acme", tenantInput)
+            .pipe(Effect.provideService(OAuth.OAuthConfig, tenant), Effect.flip);
+          assert.strictEqual(refused._tag, "RateLimited");
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+            }),
+          ),
+        ),
+    );
+
+    it.effect("the registry records the same three rules the static declaration lists", () =>
       Effect.gen(function* () {
         const registry = yield* RateLimits.RateLimitsRegistry;
+        const mine = (yield* registry.registered).filter((rule) => rule.plugin === "oauth");
         assert.deepStrictEqual(
-          RateLimits.declarationDrift(OAuth.OAuth, yield* registry.registered),
-          {
-            undeclared: [],
-            unregistered: [],
-            mismatched: [],
-          },
+          mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.strategy, rule.bucket]),
+          OAuth.OAuth.rateLimits.map((rule) => [
+            rule.name,
+            rule.group,
+            rule.endpoint,
+            rule.key,
+            `${rule.group}.${rule.name}`,
+          ]),
         );
       }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
     );
