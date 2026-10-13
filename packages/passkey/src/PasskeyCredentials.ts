@@ -123,7 +123,7 @@ export interface PasskeyCredentialsShape {
 export class PasskeyCredentials extends Context.Service<
   PasskeyCredentials,
   PasskeyCredentialsShape
->()("awthaq/passkey/PasskeyCredentials") {}
+>()("awthaq/passkey/records/PasskeyCredentials") {}
 
 // ---- layerMemory ----------------------------------------------------------
 

@@ -43,7 +43,7 @@ export interface PasskeyUserHandlesShape {
 export class PasskeyUserHandles extends Context.Service<
   PasskeyUserHandles,
   PasskeyUserHandlesShape
->()("awthaq/passkey/PasskeyUserHandles") {}
+>()("awthaq/passkey/records/PasskeyUserHandles") {}
 
 const randomHandle = (crypto: Crypto.Crypto) =>
   crypto

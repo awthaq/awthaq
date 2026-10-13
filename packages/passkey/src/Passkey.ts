@@ -1017,6 +1017,19 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
     passkey_user_handle: AuthPlugin.Table.global("user-attached; the directory is global"),
   },
   migrations: passkeyMigrations,
+  // Plan 08 (BEH-EA-T4): the credential, user-handle and challenge stores, memory and SQL, matched.
+  records: {
+    memory: Layer.mergeAll(
+      PasskeyCredentials.layerMemory,
+      PasskeyUserHandles.layerMemory,
+      ChallengeStore.layerMemory,
+    ),
+    sql: Layer.mergeAll(
+      PasskeyCredentials.layerSql,
+      PasskeyUserHandles.layerSql,
+      ChallengeStore.layerSql,
+    ),
+  },
   // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
   config: [
     ConfigDescriptor.make(PasskeyConfig, {

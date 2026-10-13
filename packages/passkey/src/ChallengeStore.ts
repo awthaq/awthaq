@@ -89,7 +89,7 @@ export interface ChallengeStoreShape {
 }
 
 export class ChallengeStore extends Context.Service<ChallengeStore, ChallengeStoreShape>()(
-  "awthaq/passkey/ChallengeStore",
+  "awthaq/passkey/records/ChallengeStore",
 ) {}
 
 const isExpired = (expiresAt: DateTime.Utc, now: DateTime.Utc): boolean =>
