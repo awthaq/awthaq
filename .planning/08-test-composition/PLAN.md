@@ -1162,3 +1162,42 @@ regenerates `features/traceability.md`.
 - **Q9: Flip all suites to SQL in `pnpm test:pg`?** An env switch (`AWTHAQ_TEST_RECORDS=sql`) could make every
   `TestAuth.layer` without an explicit `records` run over Postgres, with an auto-generated `suite` per layer
   build. That would mean full-suite SQL coverage. It is richer, but it would multiply `test:pg` time.
+
+---
+
+## Decisions taken (implementation record)
+
+Executed on `architecture/deepening-plans` after plans 01-07 and 09 (commit history: `git log --grep 'plan 08'`). `pnpm test:pg` could not be run (Docker unavailable): every SQL-mode case ran over SQLite here, and the new SQL-mode suites (`TestAuthRecords`, the plugin template) are added to `scripts/test-pg.sh`.
+
+### Open questions: the recommended default was taken
+
+| Q | Decision |
+|---|---|
+| Q1 | **Absorb**, where it is possible: `SamlConnections.layerStore` and `SamlSpKeys.layer` into `Saml.layer`; `ScimAuthenticationLive` and `ScimConnections.layerStore` into `Scim.layer`; `KeyRing.KeyRing.layer` into `Jwt.layer`, each by `AuthPlugin.layer(...).pipe(Layer.provideMerge(derived))` so it stays in `ROut`. **Not absorbed**: `SecondFactor.layer` (the two gates a host provides beneath the plugin require `SecondFactor` themselves, so they would have nothing to read it from: plan error), and Sso's `OrganizationConnectionStore` (`Organization.layer` does not require `ConnectionRecords`: OAuth connections stay optional, so the host composes `OrganizationConnections.layerStore`). |
+| Q2 | **Key segment**: every record store is keyed `<pkg>/records/<Name>`; `RecordKeysOf` reads it like `PortKeysOf` reads `/ports/`. |
+| Q3 | **Record stores**: new `RoleAssignments` (`awthaq/roles/records/RoleAssignments`) and `UserClaimsRecords` (`awthaq/qadi/records/UserClaims`); `Roles` and `UserClaims` are written once over them and `layerSql` is deleted from both. |
+| Q4 | **Keep `built`** as `TestAuth.layer`'s first parameter. |
+| Q5 | **No**: `Auth.make` does not provide declared hook points in production; the declaration serves the harness and the manifest. |
+| Q6 | **Yes**: `examples/memory-server` composes `Persistence.memory`, each plugin's `records.memory` and `hookPoints` and `AuthHttp.middlewareFor`, and no longer depends on `@awthaq/test` (it now runs the production-cost hasher). `examples/sql-server` uses `middlewareFor` too. |
+| Q7 | **Opt-in** `build: { services }`, used by 12 plugin packages (admin x3, api-key, device-authorization, jwt, magic-link x2, oauth, organization, passkey, password, qadi, roles (not `RolesAdmin`), scim, two-factor, webhooks). Saml/Sso and `RolesAdmin` opt out (they need adapters the suites build: an XML-signature adapter and a metadata fetcher; a host-built `RequirePermission`). |
+| Q8 | **Mandatory** `RedactionGuard`; no escape hatch: the measured suites stayed within budget. |
+| Q9 | **No** `AWTHAQ_TEST_RECORDS` switch: no caller needs it yet (speculative infrastructure); `TestAuth.recordModes` and `records: "sql"` are the per-suite dial. |
+
+### Deviations from the plan's text
+
+- **Phase 0 spikes** became the permanent type tests (`AuthPlugin.records.types.test.ts`, `MiddlewareFor.types.test.ts`) in the same commit as Phase 1; no separate baseline commit. `Class` takes `Records` and `Points` after `Limits` (the plan's order predates plan 06's `Limits`). `records`/`hookPoints` infer without an assertion through an overloaded local function declaration inside `Service` (the implementation signature is the widened one), not through two overloads of `Service` itself.
+- `RecordsLegal` is intersected on the options object, not on the `records` property: the property form did not infer.
+- **`MemoryEnvelopes`** (the sealed stores' test seam) is projected out of the bundles (`Layer.effect(Store, Effect.service(Store)).pipe(Layer.provide(layerMemory))`); a suite that plants envelopes adds the `layerMemory` itself to `services` (the same layer object, one instance).
+- `AuthHttp.middlewareFor` builds each derived layer with `Layer.fresh`: the module-level `...Live` constants are memoized by reference, so a test that also built one over its own config shared whichever instance was built first (found by the CSRF BDD world). Its `csrf` option may fail with `ConfigError` (`Csrf.layerConfig`).
+- `TestAuth.layer`'s base also provides `AuditChain` (`Admin`'s records read it); `TestAuth.app` takes `{ baseUrl }`; `csrfToken` takes `{ issuedAt }` (a suite under `TestClock` mints at 0).
+- **Bundle tests**: the per-plugin `describe.each(recordModes)` over the store suites was not written; the matched-pair guarantee is the compile-time `RecordsLegal`/`RecordsComplete` plus the contract suite's runtime parity check (`runPluginContractTests`), which builds both bundles for every plugin, and the existing per-store suites (unchanged).
+- `NoteRecords.layerMemory` already existed (plan 05), so the template only gained the declaration and the key rename. The contract-test files were created in Phase 4 in one commit, not per plugin in Phase 2.
+- **Coverage**: moving `TestSql` into `@awthaq/test`'s `src` put its Postgres-only branches inside `vitest.config.ts`'s coverage `include`; the file is excluded there (it only executes under `pnpm test:pg`). `CookieAssertions.ts` (`@awthaq/test`'s `src`, exercised by other packages only through the built `lib`, so 0% in its own package) got a direct suite. The global branch floor (83%) already read 82.71% at the password-coverage fix (before this plan's first commit) and reads 83.14% after.
+- `scripts/check-contract-tests.mjs` reads `AWTHAQ_CONTRACT_TESTS_ROOT` so its BDD scenario can run it against a throwaway tree.
+
+### What was not done
+
+- **Phase 3 is partial.** Migrated onto `TestAuth.layer`/`TestAuth.app`: the support or harness files of scim, saml, webhooks, device-authorization, api-key, two-factor, password and magic-link, the organization plugin-level suites (`Organization`, `OrganizationHooks`, `OrganizationQadiPolicy`), the plugin template, and the existing 36 callers. Not migrated (tickets 31 in part, 32-36, 37-45): the organization system-module suites and `AuthHttp`/`Sql`/`Connections` suites, jwt, admin, passkey, oauth, qadi, roles, the remaining password/magic-link/two-factor HTTP suites, and every BDD world (`TenancyWorld`, `DomainWorld`, `SamlWorld`, `PasswordWorld`, ...). So the §5.3 shrinkage targets are not met: files building `PrincipalResolverLive` went from 105 to 75, `CsrfProtectionLive` from 79 to 47, `createHmac` CSRF mints from 22 to 16 and hand-built memo maps from 40 to 30; files using `TestAuth.layer(` went from 19 to 37. `OrganizationMemory.layer` is kept (13 callers remain; the bundle is `Organization.records.memory`, which also carries `ConnectionRecords`). `features/step-definitions/CsrfTestSupport.ts` and `TestServices` in `shared/Harness.ts` remain.
+- The exemption header comment (`// Hand-wired on purpose: ...`) was not added to the hand-wired suites.
+- The ticket files under `.scratch/08-test-composition/` and the baseline/result notes were not written (nothing under `.scratch/` is committed); wall-clock budgets were not measured separately: `pnpm test` ran in about 90 s before and after.
+- **`pnpm test:pg` could not be run** (no Docker).
