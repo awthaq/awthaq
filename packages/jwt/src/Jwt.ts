@@ -50,7 +50,7 @@
 
 import { Api } from "@awthaq/api";
 import { AuthPlugin, Errors, Migrations, Sessions, Tenant, Users } from "@awthaq/core";
-import { Defects, RefreshingCache } from "@awthaq/ports";
+import { Defects, type Encryption, RefreshingCache, type SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import { SealedColumn } from "@awthaq/sql";
 import * as Arr from "effect/Array";
@@ -71,6 +71,7 @@ import { JwtConfig, type JwtConfigShape } from "./JwtConfig.ts";
 import * as JwtCodec from "./JwtCodec.ts";
 import * as KeyRing from "./KeyRing.ts";
 import * as RevocationStore from "./RevocationStore.ts";
+import * as SigningKeyRecords from "./SigningKeyRecords.ts";
 
 /**
  * VB-005: the header `typ` separating token classes. Principal tokens follow
@@ -553,6 +554,10 @@ const jwtMigrations: Migrations.Migrations = [
   },
 ];
 
+/** Named so the class's and the layer's inferred types can be emitted (TS2883 needs these namespaces in scope). */
+export type RecordsEncryption = Encryption.Encryption;
+export type LayerTransaction = SqlTransaction.SqlTransaction;
+
 export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
   apiVersion: 1,
   contract: JwtApi,
@@ -561,6 +566,11 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
     jwt_token_revocation: AuthPlugin.Table.global("the revoked jti set is deployment-wide"),
   },
   migrations: jwtMigrations,
+  // Plan 08 (BEH-EA-T4): the signing-key and revocation stores, memory and SQL, matched.
+  records: {
+    memory: Layer.mergeAll(SigningKeyRecords.layerMemoryStore, RevocationStore.layerMemory),
+    sql: Layer.mergeAll(SigningKeyRecords.layerSql, RevocationStore.layerSql),
+  },
 }) {
   static readonly layer = Layer.provideMerge(
     Layer.mergeAll(PostAuthResponseHookLive, BearerCredentialContributionLive),
@@ -865,6 +875,8 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
           introspectComposed,
         };
       }),
-    }),
+      // Plan 08 (Q1): the key ring (a `LayerRef` over `SigningKeyRecords`) is always required and
+      // storage-agnostic, so it ships with the plugin instead of in every host's graph. `JwtConfig` stays the host's.
+    }).pipe(Layer.provideMerge(KeyRing.KeyRing.layer)),
   );
 }

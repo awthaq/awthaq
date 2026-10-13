@@ -136,7 +136,7 @@ export interface SigningKeyRecordsShape {
 }
 
 export class SigningKeyRecords extends Context.Service<SigningKeyRecords, SigningKeyRecordsShape>()(
-  "awthaq/jwt/SigningKeyRecords",
+  "awthaq/jwt/records/SigningKeyRecords",
 ) {}
 
 const newestFirst = <A extends { readonly createdAt: DateTime.Utc }>(
@@ -481,3 +481,13 @@ export const layerSql: Layer.Layer<
     return { create, findCurrent, listVerifiable, markRotated, retire };
   }),
 );
+
+/**
+ * Plan 08 (BEH-EA-T4): the signing-key store as a layer that provides the record store only. `layerMemory`
+ * also provides `MemoryEnvelopes`, a test seam that is not a store; a bundle provides record stores only, so it
+ * is projected away here (a suite that plants envelopes uses `layerMemory` directly).
+ */
+export const layerMemoryStore: Layer.Layer<SigningKeyRecords, never, Encryption.Encryption> =
+  Layer.effect(SigningKeyRecords, Effect.service(SigningKeyRecords)).pipe(
+    Layer.provide(layerMemory),
+  );

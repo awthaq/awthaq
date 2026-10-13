@@ -47,7 +47,7 @@ export interface RevocationStoreShape {
 }
 
 export class RevocationStore extends Context.Service<RevocationStore, RevocationStoreShape>()(
-  "awthaq/jwt/RevocationStore",
+  "awthaq/jwt/records/RevocationStore",
 ) {}
 
 // ---- layerMemory ------------------------------------------------------------
