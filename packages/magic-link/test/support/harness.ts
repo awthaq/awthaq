@@ -1,7 +1,7 @@
 // The shared domain-level composition for this package's tests: real in-memory `Users`, `Sessions`,
 // `Verification`, `AuthEvents` and `AuditLog`, the real `MagicLink` and `EmailOtp` plugins, and —
 // so the MFA divert can be proven end to end — the real `@awthaq/two-factor` plugin with both gates.
-import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, Errors, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -18,6 +18,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as EmailOtp from "../../src/EmailOtp.ts";
 import * as MagicLink from "../../src/MagicLink.ts";
 import { TestAuth } from "@awthaq/test";
@@ -48,12 +49,33 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const CoreLive = Layer.mergeAll(
-  Accounts.layerMemory,
-  Users.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+/** Fails `Sessions.issue` with the typed outage while the flag is set (ADR-EA-039: a link must survive it). */
+const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
+  Layer.effect(
+    Sessions.Sessions,
+    Effect.gen(function* () {
+      const real = yield* Sessions.Sessions;
+      return Sessions.Sessions.of({
+        ...real,
+        issue: (input) =>
+          Ref.get(outage).pipe(
+            Effect.flatMap((down) =>
+              down
+                ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
+                : real.issue(input),
+            ),
+          ),
+      });
+    }),
+  ).pipe(Layer.provide(Sessions.layerMemory));
+
+const coreLive = (failSessionIssue: Ref.Ref<boolean> | undefined) =>
+  Layer.mergeAll(
+    Accounts.layerMemory,
+    Users.layerMemory,
+    failSessionIssue === undefined ? Sessions.layerMemory : sessionsWithOutage(failSessionIssue),
+    Verification.layerMemory,
+  ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -87,11 +109,13 @@ export const buildLayer = (options?: {
   readonly magicLink?: Partial<MagicLink.MagicLinkConfigShape>;
   readonly emailOtp?: Partial<EmailOtp.EmailOtpConfigShape>;
   readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
+  /** While set, `Sessions.issue` fails with the typed `StoreUnavailable`. */
+  readonly failSessionIssue?: Ref.Ref<boolean>;
 }) =>
   Layer.mergeAll(MagicLink.MagicLink.layer, EmailOtp.EmailOtp.layer, TwoFactorLive).pipe(
     Layer.provideMerge(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
+    Layer.provideMerge(coreLive(options?.failSessionIssue)),
     Layer.provideMerge(
       Layer.mergeAll(
         TestHasher,

@@ -298,25 +298,31 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
         const presented = Redacted.value(input.code).trim();
         // A value that cannot be a code is refused without touching the store (and spends nothing of any code's budget).
         if (!wellFormedCode(presented)) return yield* refused;
-        const consumed = yield* verification
-          .consume(identifierOf(email), Redacted.make(presented))
-          .pipe(Effect.catchTag("Verification/TokenConsumed", () => refused));
-        return yield* channel
-          .complete({
-            strategy: "emailOtp",
-            amr: ["otp", "email"],
-            email: Option.some(
-              Option.match(decodePayload(consumed.payload), {
-                onNone: () => email,
-                onSome: (payload) => payload.email,
+        // ADR-EA-039: redeemed, not merely consumed (see `MagicLink.verify`). A rolled-back
+        // completion also leaves the code's spent-attempt count unchanged: a hit spends no attempt.
+        return yield* verification
+          .redeem({
+            identifier: identifierOf(email),
+            value: Redacted.make(presented),
+            use: (consumed) =>
+              channel.complete({
+                strategy: "emailOtp",
+                amr: ["otp", "email"],
+                email: Option.some(
+                  Option.match(decodePayload(consumed.payload), {
+                    onNone: () => email,
+                    onSome: (payload) => payload.email,
+                  }),
+                ),
+                userId: consumed.userId,
+                allowSignUp: settings.allowSignUp,
+                ip: input.ip,
+                userAgent: context?.userAgent,
               }),
-            ),
-            userId: consumed.userId,
-            allowSignUp: settings.allowSignUp,
-            ip: input.ip,
-            userAgent: context?.userAgent,
+            onFailure: Verification.commitUnlessUnavailable,
           })
           .pipe(
+            Effect.catchTag("Verification/TokenConsumed", () => refused),
             Effect.catchTag("MagicLink/ChannelInvalid", (invalid) =>
               Channel.logInvalid("emailOtp", invalid).pipe(Effect.andThen(refused)),
             ),

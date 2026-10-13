@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-32 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (BAM-007, MLO-005, MLO-002, ARF-005 Fix A; wayfinder ticket 05 §2), replacing [MOD-EA-004](../models/04-magic-link.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-269: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) |
+> | Change History | 1.0 (2026-09-29): Initial release (BAM-007, MLO-005, MLO-002, ARF-005 Fix A; wayfinder ticket 05 §2), replacing [MOD-EA-004](../models/04-magic-link.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-269: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-10-13): BEH-EA-269 redeems the link through `Verification.redeem`: an outage while completing leaves it usable (ADR-EA-039, plan 07) |
 ---
 
 > Status: the `MagicLink` plugin in `@awthaq/magic-link` is implemented and tested (`packages/magic-link/test/MagicLink.test.ts`, `AuthHttp.test.ts`). It shares its channel-credential module with [`EmailOtp`](33-email-otp.md).
@@ -68,8 +68,8 @@ MagicLink.verify({ token, ip }, { userAgent }): Effect<IssuedSession, MagicLinkC
 
 ```text
 REQUIREMENT: `verify` MUST decode the token and check its purpose before
-             anything is rate limited or consumed, MUST consume it through
-             `Verification.consume` (single use; expired, replayed, foreign
+             anything is rate limited or consumed, MUST redeem it through
+             `Verification.redeem` (single use; expired, replayed, foreign
              and malformed tokens all the one `MagicLinkConsumed`, 410), and
              then, through the shared channel step: find the user the row
              names or the one owning the address, or — only when `allowSignUp`
@@ -78,7 +78,10 @@ REQUIREMENT: `verify` MUST decode the token and check its purpose before
              `BeforeSignIn` veto and `BeforeSessionIssue`; and issue a
              session recorded as `amr ["email"]`. A user with a confirmed
              second factor MUST be diverted to `TwoFactorRequired` and no
-             session minted (ARF-005 Fix A).
+             session minted (ARF-005 Fix A). A refusal after a valid
+             presentation (veto, suspension, divert, no usable user) spends
+             the link; an infrastructure failure or a defect while completing
+             leaves it usable (ADR-EA-039).
 ```
 
 The sign-in half of the shared channel step is core's `SignIn.complete` (BEH-EA-322, ADR-EA-038), which makes the gate refusal a published `signInFailed{suspended}`; a user erased between the proof and the session is the one opaque refusal, like any invalid link. The user is created *after* the proof, never at request time. A magic link never links, unlinks or replaces any credential of an existing account (an existing password credential is untouched). A refusal publishes `auth.user.signInFailed { strategy: "magicLink" }`.

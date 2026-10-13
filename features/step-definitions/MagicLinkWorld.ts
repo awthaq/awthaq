@@ -14,6 +14,7 @@
 // options; nothing may have been requested yet, since state does not carry over a rebuild).
 import { Api } from "@awthaq/api";
 import {
+  Errors,
   Accounts,
   AuditLog,
   HookPoint,
@@ -125,12 +126,33 @@ const TwoFactorLive = TwoFactor.TwoFactor.layer.pipe(
   Layer.provideMerge(EncryptionLive),
 );
 
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+/** ADR-EA-039: while the flag is set, `Sessions.issue` fails with the typed outage, as a down session store would. */
+const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
+  Layer.effect(
+    Sessions.Sessions,
+    Effect.gen(function* () {
+      const real = yield* Sessions.Sessions;
+      return Sessions.Sessions.of({
+        ...real,
+        issue: (input) =>
+          Ref.get(outage).pipe(
+            Effect.flatMap((down) =>
+              down
+                ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
+                : real.issue(input),
+            ),
+          ),
+      });
+    }),
+  ).pipe(Layer.provide(Sessions.layerMemory));
+
+const coreLive = (outage: Ref.Ref<boolean>) =>
+  Layer.mergeAll(
+    Users.layerMemory,
+    Accounts.layerMemory,
+    sessionsWithOutage(outage),
+    Verification.layerMemory,
+  ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 
@@ -138,6 +160,7 @@ const buildApp = (options: AppOptions) => {
   const mailer = makeCapturingMailer();
   /** Addresses whose sign-in a `BeforeSignIn` tap refuses (a scenario's own veto, BEH-EA-269). */
   const vetoed = Ref.makeUnsafe<ReadonlyArray<string>>([]);
+  const sessionOutage = Ref.makeUnsafe(false);
 
   const Veto = Hooks.BeforeSignIn.tap((input) =>
     Effect.gen(function* () {
@@ -160,7 +183,7 @@ const buildApp = (options: AppOptions) => {
     Layer.provideMerge(Layer.mergeAll(TwoFactorLive, Veto)),
     Layer.provideMerge(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
+    Layer.provideMerge(coreLive(sessionOutage)),
     Layer.provideMerge(
       Layer.mergeAll(
         cheapArgon2id,
@@ -176,7 +199,7 @@ const buildApp = (options: AppOptions) => {
     Layer.provideMerge(MagicLink.config(options.magicLink ?? {})),
     Layer.provideMerge(EmailOtp.config(options.emailOtp ?? {})),
   );
-  return { appLayer, sentMail: mailer.sent, vetoed };
+  return { appLayer, sentMail: mailer.sent, vetoed, sessionOutage };
 };
 
 interface App {
@@ -184,11 +207,12 @@ interface App {
   readonly ctx: Context.Context<MagicLinkServices>;
   readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
   readonly vetoed: Ref.Ref<ReadonlyArray<string>>;
+  readonly sessionOutage: Ref.Ref<boolean>;
   readonly dispose: () => Promise<void>;
 }
 
 const startApp = (options: AppOptions): Promise<App> => {
-  const { appLayer, sentMail, vetoed } = buildApp(options);
+  const { appLayer, sentMail, vetoed, sessionOutage } = buildApp(options);
   const scope = Scope.makeUnsafe();
   const memoMap = Layer.makeMemoMapUnsafe();
   return Effect.runPromise(Layer.buildWithMemoMap(appLayer, memoMap, scope)).then((ctx) => {
@@ -198,6 +222,7 @@ const startApp = (options: AppOptions): Promise<App> => {
       ctx,
       sentMail,
       vetoed,
+      sessionOutage,
       dispose: async () => {
         await Effect.runPromise(Scope.close(scope, Exit.void));
         await web.dispose();

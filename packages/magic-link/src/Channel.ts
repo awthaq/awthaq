@@ -11,7 +11,9 @@
 //    creates a user — *only* when the plugin's `allowSignUp` is on, through the same `BeforeSignUp`
 //    veto every user-creating path consults (NAM-002), and announced with `auth.user.created` and
 //    `AfterSignUp` (all through core's `SignUp`). The user is created here, after the proof, never at request time: an unanswered
-//    request creates nothing.
+//    request creates nothing. The plugins call this from inside `Verification.redeem` (ADR-EA-039), so the
+//    user is created in the same transaction as the link's spend, and a race on the address is contained
+//    by `SignUp`'s own savepoint rather than poisoning that transaction.
 // 2. **The mailbox is now proven**, so `emailVerified` flips (idempotent).
 // 3. **The shared sign-in** is core's `SignIn.complete` (ADR-EA-038): the suspension gate, the
 //    `BeforeSignIn` veto, then `BeforeSessionIssue`, the MFA divert (ARF-005 Fix A). A user with a

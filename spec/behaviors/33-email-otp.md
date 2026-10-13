@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-33 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (SOS-001, BCR-005, SOS-004, MLO-002; wayfinder ticket 05 §3), replacing [MOD-EA-005](../models/05-email-otp.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-273: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) |
+> | Change History | 1.0 (2026-09-29): Initial release (SOS-001, BCR-005, SOS-004, MLO-002; wayfinder ticket 05 §3), replacing [MOD-EA-005](../models/05-email-otp.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-273: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-10-13): BEH-EA-273 redeems the code through `Verification.redeem`: an outage while completing leaves it usable with its attempt budget unchanged (ADR-EA-039, plan 07) |
 ---
 
 > Status: the `EmailOtp` plugin in `@awthaq/magic-link` and the `Verification` numeric-value and attempt-budget support it needs are implemented and tested (`packages/magic-link/test/EmailOtp.test.ts`, `packages/core/test/Verification.test.ts`). SMS is deferred ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -70,15 +70,18 @@ EmailOtp.verify({ email, code, ip }, { userAgent }): Effect<IssuedSession, Inval
 ```text
 REQUIREMENT: `verify` MUST be rate limited per source and per normalised
              address, MUST refuse a value that cannot be a code without
-             touching the store, and MUST otherwise consume through
-             `Verification.consume` under the per-code attempt budget. A
+             touching the store, and MUST otherwise redeem through
+             `Verification.redeem` under the per-code attempt budget. A
              wrong, expired, spent, burned or never-issued code MUST all be
              the one `InvalidEmailOtp` (401). A correct code MUST go through
              the shared channel step (BEH-EA-269): find or create the user
              (only with `allowSignUp`), mark the mailbox verified, run the
              sign-in gate, veto and MFA divert, and record `amr ["otp",
              "email"]`. A user with a confirmed second factor MUST be
-             diverted to `TwoFactorRequired`.
+             diverted to `TwoFactorRequired`. A refusal after a correct code
+             spends it; an infrastructure failure or a defect while completing
+             leaves it usable and its spent-attempt count unchanged
+             (ADR-EA-039).
 ```
 
 The per-address limit (10 per 15 minutes) is the layer above the per-code budget: it bounds guesses at one address across many codes. `["otp", "email"]` is one factor's worth of assurance — both are possession of the mailbox — which `Assurance` (BEH-EA-258) reports as aal1.

@@ -13,7 +13,8 @@
 //   address rides in the row's server-side `payload`, so a link for a not-yet-existing user still
 //   knows whom to create.
 // - **Verify** (`POST /magic-link/verify`): the only way to consume a link. Decode and purpose-check
-//   it, rate limit, `Verification.consume` (single use), then `Channel.complete` — find or create the
+//   it, rate limit, then `Verification.redeem` (single use; an outage while completing leaves the
+//   link usable, ADR-EA-039) around `Channel.complete` — find or create the
 //   user, mark the mailbox verified, run the sign-in gate, veto and MFA divert, and mint a session
 //   recorded as `["email"]`. A 2FA-enrolled user is diverted to `TwoFactorRequired` (ARF-005 Fix A).
 // - **The link carries its token in the URL fragment** (`baseUrl`/`link` config), so it is never sent
@@ -303,20 +304,30 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
         });
         if (Option.isNone(decoded)) return yield* refused;
         yield* limits.spend("verifyByToken", { identifier: decoded.value.publicId });
-        const consumed = yield* verification
-          .consume(decoded.value.identifier, decoded.value.value)
-          .pipe(Effect.catchTag("Verification/TokenConsumed", () => refused));
-        return yield* channel
-          .complete({
-            strategy: "magicLink",
-            amr: ["email"],
-            email: Option.map(decodePayload(consumed.payload), (payload) => payload.email),
-            userId: consumed.userId,
-            allowSignUp: settings.allowSignUp,
-            ip: input.ip,
-            userAgent: context?.userAgent,
+        // ADR-EA-039: the link is redeemed, not merely consumed. The whole completion runs in the
+        // transaction that claims it, so an outage or a defect while issuing the session gives the
+        // link back; a refusal after a valid presentation (a veto, a suspension, the second-factor
+        // divert, no usable user) spends it, as `commitUnlessUnavailable` settles. Rate limits stay
+        // before `redeem` (a limiter charge inside `use` would be refunded by a rollback), and
+        // `refused` publishes after it, so a rolled-back attempt still leaves its audit row.
+        return yield* verification
+          .redeem({
+            identifier: decoded.value.identifier,
+            value: decoded.value.value,
+            use: (consumed) =>
+              channel.complete({
+                strategy: "magicLink",
+                amr: ["email"],
+                email: Option.map(decodePayload(consumed.payload), (payload) => payload.email),
+                userId: consumed.userId,
+                allowSignUp: settings.allowSignUp,
+                ip: input.ip,
+                userAgent: context?.userAgent,
+              }),
+            onFailure: Verification.commitUnlessUnavailable,
           })
           .pipe(
+            Effect.catchTag("Verification/TokenConsumed", () => refused),
             Effect.catchTag("MagicLink/ChannelInvalid", (invalid) =>
               Channel.logInvalid("magicLink", invalid).pipe(Effect.andThen(refused)),
             ),

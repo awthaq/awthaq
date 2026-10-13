@@ -11,6 +11,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Layer from "effect/Layer";
@@ -28,6 +29,8 @@ const codeFor = (email: string) =>
     );
     return { mail, code: secretOf(mail, "code") };
   });
+
+const flag = Ref.makeUnsafe(true);
 
 const wrongCodeFor = (code: string) => (code === "000000" ? "111111" : "000000");
 
@@ -274,5 +277,31 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "TwoFactorRequired");
       }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+  );
+});
+
+describe("EmailOtp.verify redeems the code (ADR-EA-039)", () => {
+  it.effect(
+    "an outage while issuing the session leaves the code usable and its attempt budget unspent",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const users = yield* Users.Users;
+        yield* users.create({
+          identity: { _tag: "Email", email: "otp-out@example.com" },
+          name: "O",
+        });
+        const { code } = yield* codeFor("otp-out@example.com");
+        const down = yield* emailOtp
+          .verify({ email: "otp-out@example.com", code: Redacted.make(code) })
+          .pipe(Effect.flip);
+        assert.strictEqual(down._tag, "StoreUnavailable");
+        yield* Ref.set(flag, false);
+        const ok = yield* emailOtp.verify({
+          email: "otp-out@example.com",
+          code: Redacted.make(code),
+        });
+        assert.isDefined(ok.session);
+      }).pipe(Effect.provide(buildLayer({ failSessionIssue: flag }))),
   );
 });

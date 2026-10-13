@@ -164,6 +164,27 @@ Feature: Magic Link
       And no session was issued
       And the second-factor challenge records the first factor as "email" via "magicLink"
 
+    # ADR-EA-039: the link is redeemed, so a failure of the completion that is not a refusal gives it back.
+    @REQ-EA-1283
+    Scenario: An outage while completing the sign-in leaves the link usable
+      Given a user "outage@example.com"
+      And a mailed magic link for "outage@example.com"
+      And the session store is down
+      When the link is presented
+      Then it fails with "StoreUnavailable"
+      When the session store is back
+      And the same link is presented again
+      Then a session is issued for "outage@example.com" recorded as "email"
+
+    @REQ-EA-1284
+    Scenario: A sign-in diverted to the second factor spends the link
+      Given a user "spent@example.com" with a confirmed second factor
+      And a mailed magic link for "spent@example.com"
+      When the link is presented
+      Then it fails with "TwoFactorRequired" naming "spent@example.com"
+      When the same link is presented again
+      Then it fails with "MagicLinkConsumed"
+
     @REQ-EA-1093
     Scenario: A magic link never touches an existing account's credentials
       Given a user "ada@example.com" with a password credential
