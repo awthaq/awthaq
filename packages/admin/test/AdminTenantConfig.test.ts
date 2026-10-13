@@ -1,55 +1,22 @@
 // EP-007 (ADR-EA-018 Decision 8, BEH-EA-236): the admin gates are read per operation, so one
 // composition serves tenants with different `Admin.config(...)`. Deny-all stays the default.
 import { Api } from "@awthaq/api";
-import { AuditChain, Persistence, Sessions, Tenant, Users } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { AuditChain, Auth, Tenant } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as LayerMap from "effect/LayerMap";
 import * as Redacted from "effect/Redacted";
 import * as Admin from "../src/Admin.ts";
-import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("admin-tenant-config-test-csrf-secret-padded-to-32-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 const buildLayer = (config: Partial<Admin.AdminConfigShape>) =>
-  Admin.Admin.layer.pipe(
-    Layer.provide(Admin.config(config)),
-    Layer.provide(
+  TestAuth.layer(Auth.make([Admin.Admin]), {
+    services: Layer.mergeAll(
+      Admin.config(config),
       AuditChain.config({ key: Redacted.make("admin-tenant-config-chain-key-0123456789") }),
     ),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      ImpersonationRecords.layerMemory.pipe(
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
-      ),
-    ),
-  );
+  });
 
 /** The application's own map: tenant id -> that tenant's `Admin.config(...)`. */
 class TenantConfig extends LayerMap.Service<TenantConfig>()("test/AdminTenantConfig", {

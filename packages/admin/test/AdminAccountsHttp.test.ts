@@ -1,105 +1,33 @@
 // BAM-005/BAM-009 (BEH-EA-225): the `admin.accounts` group over a real `HttpRouter` — real status
 // codes, a real session cookie, the CSRF double-submit: deny-by-default 403, the erasure cascade
 // behind DELETE, the 202 of a mailed email change, the 422 of a weak password.
-import { Api } from "@awthaq/api";
-import { Accounts, Erasure, Persistence, Sessions, Users, Verification } from "@awthaq/core";
-import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Accounts, Auth, Sessions, Users } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
-import * as AdminAccountsApi from "../src/AdminAccountsApi.ts";
-import { TestAuth } from "@awthaq/test";
 
-const CSRF_TEST_SECRET = "admin-accounts-http-csrf-secret-padded-to-thirty-two-bytes";
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_TEST_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
-  return `${signed}.${signature}`;
-})();
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Verification.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-
-const buildAppLayer = (config: Partial<Admin.AdminConfigShape>) =>
-  AuthHttp.routes(AdminAccountsApi.AdminAccountsApi, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(AdminAccounts.AdminAccounts.layer),
-    Layer.provide(Admin.config(config)),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(Erasure.layer.pipe(Layer.provideMerge(CoreLive))),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        PasswordHasher.layerArgon2id,
-        Mailer.layerMemory,
-        SqlTransaction.layerNoop,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
-    ),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
+const built = Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]);
 
 const allow = () => Effect.succeed(true);
 
 const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
-  const AppLayer = buildAppLayer(config);
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+  const app = TestAuth.app(
+    TestAuth.layer(built, { services: Admin.config(config), openapiPath: "/openapi.json" }),
+  );
 
-  /** Runs `program` against the same running services the handler uses (shared via `memoMap`). */
+  /** Runs `program` against the same running services the handler uses. */
   const inApp = <A, E>(
     program: Effect.Effect<
       A,
       E,
       Users.Users | Sessions.Sessions | Accounts.Accounts | Mailer.Mailer
     >,
-  ): Promise<A> =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-          return yield* program.pipe(Effect.provide(context));
-        }),
-      ),
-    );
+  ): Promise<A> => app.run(program);
 
   const seedUser = (name: string) =>
     inApp(
@@ -122,18 +50,9 @@ const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
       }),
     );
 
+  /** The CSRF double-submit pair a browser would send comes with `TestAuth.app`'s `request`. */
   const call = (method: "POST" | "DELETE", path: string, cookie: string, body?: unknown) =>
-    handler(
-      new Request(`http://localhost:3000${path}`, {
-        method,
-        headers: {
-          "content-type": "application/json",
-          cookie: `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`,
-          "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      }),
-    );
+    app.request(method, path, { cookie, ...(body === undefined ? {} : { json: body }) });
 
   return { inApp, seedUser, cookieFor, call };
 };

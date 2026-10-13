@@ -2,40 +2,15 @@
 // composed the way an application does — `Organization` beside `AdminTenants` —
 // and driven domain-level, like `Admin.test.ts`.
 import { Api } from "@awthaq/api";
-import { AuditLog, HookPoint, Persistence, Sessions, Users } from "@awthaq/core";
-import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, AuditLog, HookPoint } from "@awthaq/core";
+import { Organization, OrganizationHooks } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Admin from "../src/Admin.ts";
 import * as AdminTenants from "../src/AdminTenants.ts";
 import { TestAuth } from "@awthaq/test";
-
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("admin-tenants-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
 
 const buildLayer = (
   config: Partial<Admin.AdminConfigShape>,
@@ -46,25 +21,11 @@ const buildLayer = (
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = Layer.empty,
 ) =>
-  // `AdminTenants` `dependsOn: [Organization]`, so the type system makes the organization
-  // plugin part of the composition: it must sit *under* `AdminTenants`, not beside it.
-  AdminTenants.AdminTenants.layer.pipe(
-    Layer.provideMerge(
-      Organization.Organization.layer.pipe(
-        Layer.provide(Organization.config({})),
-        Layer.provide(AuthenticationLive),
-      ),
-    ),
-    Layer.provide(Admin.config(config)),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(taps),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+  // `AdminTenants` `dependsOn: [Organization]`: the harness composes the organization plugin beneath it.
+  TestAuth.layer(Auth.make([Organization.Organization, AdminTenants.AdminTenants]), {
+    services: Layer.mergeAll(Admin.config(config), Organization.config({})),
+    taps,
+  });
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({

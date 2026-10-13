@@ -3,7 +3,6 @@
 import { Api } from "@awthaq/api";
 import {
   Accounts,
-  AuditChain,
   Auth,
   DataExport,
   Erasure,
@@ -28,7 +27,6 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as Admin from "../src/Admin.ts";
-import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 import { TestAuth } from "@awthaq/test";
 
 const ORIGIN = "http://localhost:3000";
@@ -47,54 +45,22 @@ type AdminHandler = HttpApiMiddleware.HttpApiMiddlewareSecurity<
   never
 >["cookie"];
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("admin-tier-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const RecordsLive = ImpersonationRecords.layerMemory.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
-);
-
 /** What a host's replacement admin scheme has to supply: the same three handlers `Api.AdminAuthentication` declares. */
-type AdminScheme = Layer.Layer<Api.AdminAuthentication, never, Sessions.Sessions>;
+type AdminScheme = Layer.Layer<Api.AdminAuthentication>;
 
-/** The admin handlers, given a caller-chosen admin scheme. */
-const AdminLive = (adminAuthentication: AdminScheme) =>
-  Admin.Admin.layer.pipe(
-    Layer.provide(Admin.config({ canImpersonate: () => Effect.succeed(true) })),
-    Layer.provide(adminAuthentication),
-  );
-
-const adminHandler = (adminAuthentication: AdminScheme) =>
-  HttpRouter.toWebHandler(
-    AuthHttp.routes(auth.adminApi).pipe(
-      Layer.provide(AdminLive(adminAuthentication)),
-      Layer.provide(CsrfProtectionLive),
-      Layer.provideMerge(CoreLive),
-      Layer.provideMerge(RecordsLive),
-      Layer.provideMerge(TestServices),
-      Layer.provideMerge(HttpRouter.layer),
-    ),
+/**
+ * The composition, served through the harness: `/admin` is the same group the admin listener serves, and a
+ * `services` layer providing `Api.AdminAuthentication` replaces the derived scheme (a host's own).
+ */
+const adminHandler = (adminAuthentication?: AdminScheme) =>
+  TestAuth.app(
+    TestAuth.layer(auth, {
+      services: Layer.mergeAll(
+        Admin.config({ canImpersonate: () => Effect.succeed(true) }),
+        adminAuthentication ?? Layer.empty,
+      ),
+    }),
+    { baseUrl: ORIGIN },
   ).handler;
 
 describe("AR-003: the admin tier", () => {
@@ -108,8 +74,35 @@ describe("AR-003: the admin tier", () => {
     }),
   );
 
+  // Hand-wired on purpose: which API tier a listener serves (`AuthHttp.routes(auth.publicApi)` alone) is the wiring
+  // under test, and `TestAuth.layer` always serves the whole composition (plan 08 exemption). Nothing here
+  // authenticates, so the principal resolver is a stub.
   it.effect("a listener serving only publicApi answers /admin with 404", () =>
     Effect.gen(function* () {
+      const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
+        Layer.provideMerge(FileSystem.layerNoop({})),
+      );
+      const CoreLive = Layer.mergeAll(
+        Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+        Users.layer.pipe(Layer.provide(Persistence.memory)),
+      ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+      const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+        Layer.provide(
+          Layer.succeed(Csrf.CsrfConfig, {
+            secret: Redacted.make("admin-tier-test-csrf-secret-padded-to-thirty-two-bytes"),
+            allowedOrigins: [] as ReadonlyArray<string>,
+          }),
+        ),
+        Layer.provide(NodeCrypto.layer),
+      );
+      const AuthenticationLive = Authentication.AuthenticationLive.pipe(
+        Layer.provide(
+          Layer.succeed(
+            Authentication.PrincipalResolver,
+            Authentication.PrincipalResolver.of({ resolve: () => Effect.die("not used") }),
+          ),
+        ),
+      );
       const { handler } = HttpRouter.toWebHandler(
         AuthHttp.routes(auth.publicApi).pipe(
           Layer.provide(AuthHttp.coreHandlers),
@@ -175,9 +168,7 @@ describe("AR-003: the admin tier", () => {
 
   it.effect("the default AdminAuthentication is the ordinary session authentication", () =>
     Effect.gen(function* () {
-      const handler = adminHandler(
-        Authentication.AdminAuthenticationLive.pipe(Layer.provide(AuthenticationLive)),
-      );
+      const handler = adminHandler();
       const anonymous = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/admin`)));
       assert.strictEqual(anonymous.status, 401);
     }),
