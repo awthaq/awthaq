@@ -284,7 +284,7 @@ export interface WebhookRecordsShape {
 }
 
 export class WebhookRecords extends Context.Service<WebhookRecords, WebhookRecordsShape>()(
-  "awthaq/webhooks/WebhookRecords",
+  "awthaq/webhooks/records/WebhookRecords",
 ) {}
 
 const notFound = (id: string): WebhookRecordNotFound => new WebhookRecordNotFound({ id });
@@ -1348,3 +1348,14 @@ export const layerSql: Layer.Layer<
     } satisfies WebhookRecordsShape;
   }),
 );
+
+/**
+ * Plan 08 (BEH-EA-T4): the plugin's record store as two matched layers, `Webhooks.records`. `layerMemory` also
+ * provides `MemoryEnvelopes`, a test seam that is not a store; a bundle provides record stores only, so it is
+ * projected away (a suite that plants envelopes uses `layerMemory` directly).
+ */
+const memoryStore = Layer.effect(WebhookRecords, Effect.service(WebhookRecords)).pipe(
+  Layer.provide(layerMemory),
+);
+
+export const records = { memory: memoryStore, sql: layerSql };

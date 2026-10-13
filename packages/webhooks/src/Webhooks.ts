@@ -35,7 +35,7 @@ import {
   Tenant,
   Users,
 } from "@awthaq/core";
-import { Defects, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { Defects, type Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
 import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import { makeSubject } from "@qadi/core";
 import * as Crypto from "effect/Crypto";
@@ -372,6 +372,9 @@ const rules = {
   }),
 };
 
+/** Named so the class's inferred `records` type can be emitted (TS2883 needs the `Encryption` namespace in scope). */
+export type RecordsEncryption = Encryption.Encryption;
+
 export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("webhooks", {
   apiVersion: 1,
   contract: WebhooksApi.WebhooksApi,
@@ -382,6 +385,8 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
     webhooks_delivery: AuthPlugin.Table.derived("webhooks_endpoint", "endpointId"),
   },
   migrations: webhooksMigrations,
+  // Plan 08 (BEH-EA-T4): the endpoint and delivery store, memory and SQL, matched.
+  records: WebhookRecords.records,
   config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
 }) {
   static readonly layer = AuthPlugin.layer(Webhooks, {
