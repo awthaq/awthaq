@@ -10,64 +10,17 @@
 // real bug (`Schema.Union` collapsing per-member `httpApiStatus`) that its
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
-import {
-  Accounts,
-  Persistence,
-  RateLimits,
-  SessionCookie,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Auth, SessionCookie } from "@awthaq/core";
 import { CookieAssertions, TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as OAuth from "../src/OAuth.ts";
-import * as OAuthApi from "../src/OAuthApi.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import { FakeReply, fakeHttpClient, type FakeRoutes } from "./FakeProvider.ts";
-
-// Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
-// requires `Encryption` — a fixed test key, isolated from the real
-// `process.env`.
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Verification.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const baseUrl = "https://app.example.com";
 
@@ -98,22 +51,9 @@ const buildAppLayer = (options: {
   readonly enforcing?: boolean;
   readonly config?: OAuth.OAuthConfigInput;
 }) =>
-  AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(OAuth.OAuth.layer),
-    Layer.provide(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      options.enforcing === true
-        ? RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))
-        : RateLimiter.layerPermissive,
-    ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provide(fakeHttpClient(options.routes ?? defaultRoutes)),
-    Layer.provide(
+  TestAuth.layer(Auth.make([OAuth.OAuth]), {
+    services: Layer.mergeAll(
+      fakeHttpClient(options.routes ?? defaultRoutes),
       OAuth.config({
         providers: [acme],
         linking: "explicit",
@@ -123,9 +63,9 @@ const buildAppLayer = (options: {
         ...options.config,
       }),
     ),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
+    rateLimiter: options.enforcing === true ? "enforcing" : "permissive",
+    openapiPath: "/openapi.json",
+  });
 
 const AppLayer = buildAppLayer({});
 
@@ -148,7 +88,7 @@ const runCallback = (
   query: (state: string) => string = (state) => `code=auth-code&state=${state}`,
 ) =>
   Effect.gen(function* () {
-    const { handler } = HttpRouter.toWebHandler(layer);
+    const { handler } = TestAuth.app(layer);
     const authorizeResponse = yield* Effect.promise(() =>
       handler(new Request("http://localhost/oauth/acme/authorize")),
     );
@@ -173,7 +113,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "BEH-EA-121/128: authorize answers a 302 with a Location and sets the correlation cookie",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const response = yield* Effect.promise(() =>
           handler(new Request("http://localhost/oauth/acme/authorize")),
         );
@@ -197,7 +137,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "BEH-EA-113-adjacent/083: callback answers the same-site interstitial (200) and sets the session cookie on success",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const authorizeResponse = yield* Effect.promise(() =>
           handler(new Request("http://localhost/oauth/acme/authorize")),
         );
@@ -234,7 +174,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "MNA-003: a native flow redirects to the deep link with a code, sets no session cookie, and POST /oauth/token redeems it once",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(NativeLayer);
+        const { handler } = TestAuth.app(NativeLayer);
         const authorize = yield* Effect.promise(() =>
           handler(
             new Request(
@@ -281,7 +221,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("MNA-003: a code_challenge without native mode, or a malformed one, answers 400", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(NativeLayer);
+      const { handler } = TestAuth.app(NativeLayer);
       const challenge = "A".repeat(43);
       const browserMode = yield* Effect.promise(() =>
         handler(new Request(`http://localhost/oauth/acme/authorize?code_challenge=${challenge}`)),
@@ -306,7 +246,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("BEH-EA-004: an unknown provider answers 404 ProviderNotFound", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         handler(new Request("http://localhost/oauth/nonexistent/authorize")),
       );
@@ -318,7 +258,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "BEH-EA-122: a callback with a mismatched state/cookie answers 400 OAuthCallbackFailed",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const response = yield* Effect.promise(() =>
           handler(
             new Request("http://localhost/oauth/acme/callback?code=c1&state=bogus.state", {
@@ -332,7 +272,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("shipping-gaps/13: callback is throttled once its own rule's limit is exceeded", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(ThrottledAppLayer);
+      const { handler } = TestAuth.app(ThrottledAppLayer);
       // The limiter runs before state/cookie validation, so a garbage
       // callback is enough to exercise it — 20 requests admitted as
       // ordinary 400s, the 21st throttled.
@@ -377,7 +317,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "CSS-004: the authorize state cookie is a __Host- cookie, HttpOnly and SameSite=Lax",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const response = yield* Effect.promise(() =>
           handler(new Request("http://localhost/oauth/acme/authorize")),
         );
@@ -430,7 +370,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
    */
   const browserLanding = (layer: typeof AppLayer) =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(layer);
+      const { handler } = TestAuth.app(layer);
       const authorize = yield* Effect.promise(() =>
         handler(
           new Request(
@@ -498,7 +438,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("PV-016: the landing URL is HTML-escaped into the interstitial", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const authorize = yield* Effect.promise(() =>
         handler(
           new Request(
@@ -555,7 +495,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("PDR-004: authorize and callback responses carry Referrer-Policy: no-referrer", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const authorize = yield* Effect.promise(() =>
         handler(new Request("http://localhost/oauth/acme/authorize")),
       );
@@ -573,7 +513,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("OAP-008: authorize is throttled after its own rule's limit", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(ThrottledAppLayer);
+      const { handler } = TestAuth.app(ThrottledAppLayer);
       for (let i = 0; i < 30; i++) {
         const response = yield* Effect.promise(() =>
           handler(new Request("http://localhost/oauth/acme/authorize")),
@@ -636,7 +576,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "AP-005: error=access_denied with a mismatched state answers 400 OAuthCallbackFailed",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const response = yield* Effect.promise(() =>
           handler(
             new Request(
@@ -656,7 +596,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("AP-005: a denial consumes the flow, so a replay carrying a code fails", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const authorizeResponse = yield* Effect.promise(() =>
         handler(new Request("http://localhost/oauth/acme/authorize")),
       );
@@ -681,7 +621,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("BEH-EA-084: serves generated OpenAPI JSON from this plugin's own api", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         handler(new Request("http://localhost/openapi.json")),
       );

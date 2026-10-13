@@ -8,23 +8,12 @@
 // RSA keypair signing a real RS256 `id_token` that `Jwt.ts`'s own verifier
 // checks — not a stub that always returns `true`.
 import { createHmac, generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
-import {
-  Accounts,
-  AuditLog,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Authentication } from "@awthaq/server";
+import { Accounts, AuditLog, Auth, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Encryption } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -40,24 +29,6 @@ import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { FakeReply, fakeHttpClient, hangingRoute, type FakeRoutes } from "./FakeProvider.ts";
 import { SignInProbe, TestAuth } from "@awthaq/test";
-
-// Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
-// requires `Encryption` — a fixed test key, isolated from the real
-// `process.env`.
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
 
 // ---- RS256 test signing (a real keypair, a real signature — not a stub) ----
 
@@ -118,14 +89,9 @@ const optionalField = <K extends string, V>(
 ): { readonly [P in K]: V } | {} =>
   value === undefined ? {} : ({ [key]: value } as { [P in K]: V });
 
-// ---- shared core/domain layers ----
+// ---- the composition: `OAuth` through the harness ----
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Verification.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+const built = Auth.make([OAuth.OAuth]);
 
 const baseUrl = "https://app.example.com";
 
@@ -145,42 +111,15 @@ const buildLayer = <Wrapped extends Sessions.Sessions | Users.Users = never>(opt
   /** EP-004: per-organization connections, consulted after the static registry. */
   readonly connections?: OAuthConnections.OAuthConnectionResolverShape;
   /** The limiter the plugin captures; permissive by default so an ordinary loop never trips a production limit. */
-  readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
+  readonly limiter?: "permissive" | "enforcing";
   /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
   readonly coreOverride?: Layer.Layer<Wrapped, never, Wrapped>;
 }) =>
-  OAuth.OAuth.layer.pipe(
-    Layer.provide(options.coreOverride ?? Layer.empty),
-    Layer.provide(
+  TestAuth.layer(built, {
+    // The provider transport and the plugin's own configuration: what is genuinely this test's own.
+    services: Layer.mergeAll(
+      fakeHttpClient(options.httpRoutes ?? {}),
       options.connections === undefined ? Layer.empty : OAuthConnections.layer(options.connections),
-    ),
-    // `OAuthApi.OAuthGroup`'s own `.middleware(Api.OptionalAuthentication)`
-    // is part of what `OAuth.layer` merges its handlers with — required
-    // even for these domain-level tests, which never issue an HTTP
-    // request at all, because `AuthPlugin.layer` ties a plugin's own
-    // service and its handlers together in one `Layer.provideMerge`.
-    // Order matters: a `Layer.provide` call can only satisfy a
-    // requirement introduced *earlier* in the pipe, so `CoreLive` (which
-    // satisfies `OptionalAuthenticationLive`'s own `Sessions` need) has to
-    // come after it, not before.
-    Layer.provide(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(CoreLive),
-    // Ticket 13: `callback` is now rate-limited — a real, permissive
-    // default here, mirroring `TestAuth`'s own posture, so an ordinary
-    // test loop never trips a limit tuned for production.
-    Layer.provideMerge(options.limiter ?? RateLimiter.layerPermissive),
-    Layer.provideMerge(RateLimits.layer),
-    // Ticket 16: `SqlTransaction`'s no-op layer — this test's own `CoreLive`
-    // is in-memory, with nothing a transaction would need to wrap.
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    // AGA-001/NHS-003: `OAuth`'s callback handler now resolves through
-    // `ClientAddress` — the direct passthrough is byte-for-byte today's
-    // `remoteAddress` behavior.
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provide(fakeHttpClient(options.httpRoutes ?? {})),
-    Layer.provide(
       OAuth.config({
         providers: options.providers,
         linking: options.linking ?? "explicit",
@@ -192,7 +131,10 @@ const buildLayer = <Wrapped extends Sessions.Sessions | Users.Users = never>(opt
         ...options.config,
       }),
     ),
-  );
+    // Permissive by default, so an ordinary test loop never trips a limit tuned for production.
+    rateLimiter: options.limiter ?? "permissive",
+    ...(options.coreOverride === undefined ? {} : { decorate: options.coreOverride }),
+  });
 
 // ---- a plain OAuth2 provider (no id_token — GitHub-shaped) ----
 
@@ -1630,24 +1572,21 @@ describe("OAuth", () => {
       "NAM-004: OAuth and OAuthTokenAccess share one resolved registry (discovery fetched once)",
       () => {
         let discoveryCalls = 0;
-        const both = Layer.merge(OAuth.OAuth.layer, OAuthTokenAccess.layer).pipe(
-          Layer.provide(Authentication.OptionalAuthenticationLive),
-          Layer.provide(Authentication.PrincipalResolverLive),
-          Layer.provideMerge(CoreLive),
-          Layer.provideMerge(RateLimiter.layerPermissive),
-          Layer.provideMerge(RateLimits.layer),
-          Layer.provideMerge(SqlTransaction.layerNoop),
-          Layer.provideMerge(ClientAddress.layerDirect),
-          Layer.provideMerge(EncryptionLive),
-          Layer.provide(
-            fakeHttpClient({
-              ".well-known/openid-configuration": () => {
-                discoveryCalls += 1;
-                return oktaDiscovery;
-              },
+        // `OAuthTokenAccess` is stacked over the very composition `OAuth` is built in, so both read one registry.
+        const both = OAuthTokenAccess.layer.pipe(
+          Layer.provideMerge(
+            TestAuth.layer(built, {
+              services: Layer.mergeAll(
+                fakeHttpClient({
+                  ".well-known/openid-configuration": () => {
+                    discoveryCalls += 1;
+                    return oktaDiscovery;
+                  },
+                }),
+                OAuth.config({ providers: [okta()], baseUrl }),
+              ),
             }),
           ),
-          Layer.provide(OAuth.config({ providers: [okta()], baseUrl })),
         );
         return Effect.gen(function* () {
           yield* OAuthTokenAccess.OAuthTokenAccess;
@@ -1704,7 +1643,7 @@ describe("OAuth", () => {
           Effect.provide(
             buildLayer({
               providers: [acme()],
-              limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+              limiter: "enforcing",
             }),
           ),
         ),

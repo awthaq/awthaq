@@ -3,13 +3,9 @@
 // an allowlisted deep link carrying a one-time exchange code, redeemed once at
 // `POST /oauth/token` for the session token. Domain-level, like `OAuth.test.ts`.
 import { createHash } from "node:crypto";
-import { Accounts, Persistence, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Sessions, Verification } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -21,28 +17,6 @@ import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import { fakeHttpClient } from "./FakeProvider.ts";
 import { TestAuth } from "@awthaq/test";
-
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Verification.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const acme = OAuthProvider.oauth2({
   id: "acme",
@@ -63,22 +37,12 @@ const acme = OAuthProvider.oauth2({
 const NATIVE_REDIRECT = "myapp://oauth/callback";
 
 const buildLayer = (config: Partial<OAuth.OAuthConfigInput> = {}) =>
-  OAuth.OAuth.layer.pipe(
-    Layer.provide(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(RateLimiter.layerPermissive),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provide(
+  TestAuth.layer(Auth.make([OAuth.OAuth]), {
+    services: Layer.mergeAll(
       fakeHttpClient({
         "/token": { access_token: "at-1" },
         "/userinfo": { id: "native-user-1", email: "native@example.com" },
       }),
-    ),
-    Layer.provide(
       OAuth.config({
         providers: [acme],
         baseUrl: "https://app.example.com",
@@ -87,7 +51,7 @@ const buildLayer = (config: Partial<OAuth.OAuthConfigInput> = {}) =>
         ...config,
       }),
     ),
-  );
+  });
 
 /** Runs the flow up to the callback and returns what it redirected to. */
 const runFlow = (native: { readonly codeChallenge?: string } | undefined, callbackURL?: string) =>
