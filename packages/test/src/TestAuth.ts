@@ -566,7 +566,14 @@ export type AppNeeds = Csrf.CsrfConfig | Users.Users | Sessions.Sessions;
  * wire-level suite uses. It replaces the hand-rolled `Layer.makeMemoMapUnsafe` + `HttpRouter.toWebHandler`
  * + `buildWithMemoMap` blocks and the per-suite CSRF token mint.
  */
-export const app = <A, E>(appLayer: Layer.Layer<A | AppNeeds, E>): App<A | AppNeeds> => {
+export const app = <A, E>(
+  appLayer: Layer.Layer<A | AppNeeds, E>,
+  options: {
+    /** The origin `request` addresses (default `http://localhost`): a plugin that derives a URL from the request's host sees it. */
+    readonly baseUrl?: string;
+  } = {},
+): App<A | AppNeeds> => {
+  const baseUrl = options.baseUrl ?? "http://localhost";
   const memoMap = Layer.makeMemoMapUnsafe();
   const scope = Scope.makeUnsafe();
   const web = HttpRouter.toWebHandler(appLayer, { memoMap, disableLogger: true });
@@ -605,7 +612,7 @@ export const app = <A, E>(appLayer: Layer.Layer<A | AppNeeds, E>): App<A | AppNe
       }
       for (const [name, value] of Object.entries(init.headers ?? {})) headers.set(name, value);
       return web.handler(
-        new Request(`http://localhost${path}`, {
+        new Request(`${baseUrl}${path}`, {
           method,
           headers,
           ...(body === undefined ? {} : { body }),
