@@ -10,39 +10,20 @@
 //
 // `Effect.runPromise`-style HTTP handlers run on the real clock; a scenario that needs
 // expiry uses the direct `ctx` services under `TestClock` and never mixes the two.
-import { TestEncryption } from "@awthaq/test";
-import { AuthCore } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
   Auth,
   AuthEvents,
   DataExport,
-  Erasure,
   Errors,
-  Hooks,
-  Migrations,
-  Persistence,
-  RateLimits,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  type Mailer,
-  type PasswordHasher,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
-import { Password, PasswordApi } from "@awthaq/password";
-import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import * as ConfigProvider from "effect/ConfigProvider";
+import { type Mailer, type PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Password } from "@awthaq/password";
+import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -54,19 +35,9 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { Profile } from "./UserFieldsFixture.ts";
-import {
-  cheapArgon2id,
-  makeCapturingMailer,
-  makeNamedRegistry,
-  TestServices,
-} from "./shared/Harness.ts";
-
-/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
-const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
+import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
@@ -93,41 +64,9 @@ export interface Probes {
   readonly events: Ref.Ref<ReadonlyArray<AuthEvents.Published>>;
 }
 
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 // BEH-EA-048/254: the composition carries one plugin, `profile`, that declares user fields and
 // contributes an export section — the linker's generated migrations add its columns after core's.
 const auth = Auth.make([Profile]);
-
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
-const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
-    yield* Migrations.run(auth.migrations);
-  }),
-).pipe(Layer.provide(SqlLive));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
 
 /** A breach corpus nothing ever matches — this composition is about identity rows, not the breach check. */
 const NoBreachHttpClient = Layer.succeed(
@@ -253,41 +192,18 @@ const makeProbes = () => ({
   events: Ref.makeUnsafe<ReadonlyArray<AuthEvents.Published>>([]),
 });
 
+const built = Auth.make([Profile, Password.Password]);
+
+/**
+ * `Auth.make([Profile, Password])` through `TestAuth.layer({ records: "sql" })`: `Users`/`Accounts`/`Sessions`/
+ * `Verification` over an in-memory SQLite database migrated by core's own migrations and the plugins' (the linker's
+ * generated user-field columns included), a real `SqlTransaction`, the password plugin and the core `session`/`account`
+ * groups on one router. The probes wrap the real services (`decorate`), the mailer, the switchable limiter and the
+ * `profile` export section are this world's own `services`.
+ */
 const buildStack = (probes: Probes) => {
   const mailer = makeCapturingMailer();
   const { AccountsProbe, VerificationProbe, SessionsProbe } = probesLayer(probes);
-
-  const RealStores = Layer.mergeAll(
-    Accounts.layer
-      .pipe(Layer.provide(SqlStores))
-      .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
-    Sessions.layer.pipe(Layer.provide(SqlStores)),
-    Verification.layer
-      .pipe(Layer.provide(SqlStores))
-      .pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Repositories.VerificationRepositoryLive,
-            Repositories.VerificationReservationsRepositoryLive,
-          ),
-        ),
-      ),
-  );
-
-  // The probes wrap the real services under the same tags (provide, never merge, so the
-  // probed instance is the only one anything above sees).
-  const Stores = Layer.merge(
-    Users.layer
-      .pipe(Layer.provide(SqlStores))
-      .pipe(Layer.provide(Repositories.UsersRepositoryLive), Layer.provide(auth.userFieldsLayer)),
-    Layer.mergeAll(
-      Layer.mergeAll(AccountsProbe, VerificationProbe, SessionsProbe).pipe(
-        Layer.provide(RealStores),
-      ),
-      // `Password` still declares the port; nothing probes it any more (`redeem` opens its own transaction).
-      SqlTransaction.layerSql,
-    ),
-  );
 
   // The plugin's own export section (BEH-EA-254): the user fields it holds, under its own id.
   const ProfileExport = DataExport.contribute({
@@ -305,42 +221,19 @@ const buildStack = (probes: Probes) => {
     }),
   });
 
-  const CoreLive = Layer.mergeAll(Erasure.layer, DataExport.layer, ProfileExport).pipe(
-    Layer.provideMerge(Stores),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
-  );
-
-  const appLayer = Layer.mergeAll(
-    AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Session.SessionHandlers),
-      Layer.provide(Account.AccountHandlers),
+  const appLayer = TestAuth.layer(built, {
+    records: "sql",
+    suite: "features_DomainWorld",
+    services: Layer.mergeAll(
+      NoBreachHttpClient,
+      Password.config({}),
+      mailer.layer,
+      switchableLimiter(probes),
+      ProfileExport,
+      eventsLayer(probes),
     ),
-    AuthHttp.routes(PasswordApi.PasswordApi, { openapiPath: "/password-openapi.json" }).pipe(
-      Layer.provide(Password.Password.layer),
-    ),
-  ).pipe(
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(eventsLayer(probes)),
-    Layer.provideMerge(auth.userFieldsLayer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(cheapArgon2id, mailer.layer, switchableLimiter(probes)).pipe(
-        Layer.provideMerge(NodeCrypto.layer),
-      ),
-    ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(NoBreachHttpClient),
-    Layer.provide(ClientAddress.layerDirect),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-    Layer.provideMerge(Password.config({})),
-  );
+    decorate: Layer.mergeAll(AccountsProbe, VerificationProbe, SessionsProbe),
+  });
 
   return { appLayer, sentMail: mailer.sent };
 };
@@ -396,9 +289,10 @@ export const WorldLive = Layer.effect(
   Effect.gen(function* () {
     const probes = makeProbes();
     const { appLayer, sentMail } = buildStack(probes);
-    // Built on the real clock, outside the step's `TestClock`: `CsrfProtection` (and every other
-    // service that reads the clock when it is *built*) would otherwise be pinned to 1970 and
-    // reject the real-clock CSRF cookie. Direct calls still read the caller's clock per call.
+    // Built on the real clock, outside the step's `TestClock`: `CsrfProtection` (and every other service that reads
+    // the clock when it is *built*) would otherwise be pinned to 1970 and reject the real-clock CSRF cookie. The
+    // context is kept: a direct step runs on the CALLER's fiber (so its `TestClock` moves what it reads), against the
+    // very instances the handler serves from (one memo map).
     const scope = Scope.makeUnsafe();
     const memoMap = Layer.makeMemoMapUnsafe();
     const ctx = yield* Effect.promise(() =>

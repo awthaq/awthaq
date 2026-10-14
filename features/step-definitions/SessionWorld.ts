@@ -21,86 +21,37 @@
 //   published event, so "the secret never reaches a log or span" is checkable.
 // - **Fiber interleaving.** A `gate` endpoint behind the real `Authentication` middleware whose
 //   handler blocks until released, so "validated, then revoked, then completes" can be driven.
-import { TestEncryption } from "@awthaq/test";
-import { Api, AuthCore } from "@awthaq/api";
-import {
-  Accounts,
-  DataExport,
-  Erasure,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { Api } from "@awthaq/api";
+import { Auth, Sessions, Users } from "@awthaq/core";
 import type { Mailer } from "@awthaq/ports";
-import { Password, PasswordApi } from "@awthaq/password";
-import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { Password } from "@awthaq/password";
 import { RedactionGuard, TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { mailedToken } from "./MailedToken.ts";
 import {
-  cheapArgon2id,
   cookieFrom,
   letForkedFibersRun,
   makeCapturingMailer,
   makeNamedRegistry,
   setCookieFrom,
   STRONG_PASSWORD,
-  TestServices,
 } from "./shared/Harness.ts";
-
-/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
-const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
-
-const CoreMigrated = Layer.effectDiscard(
-  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
-).pipe(Layer.provideMerge(SqliteClient.layer({ filename: ":memory:" })));
-
-const sessionsSql = (config: Sessions.SessionConfig) =>
-  Sessions.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(
-      Layer.provide(Repositories.SessionsRepositoryLive),
-      Layer.provide(Layer.succeed(Sessions.SessionConfig, config)),
-      Layer.provideMerge(CoreMigrated),
-    );
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-// The simulated clock moves by days in some scenarios; a token older than the default 24h would
-// be rejected, so this World's double-submit token outlives every scenario's simulated span.
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, { ...CsrfConfigForTests, maxAge: Duration.days(400) }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
 
 const NoBreachHttpClient = Layer.succeed(
   HttpClient.HttpClient,
@@ -115,7 +66,8 @@ const NoBreachHttpClient = Layer.succeed(
 const GateGroup = HttpApiGroup.make("gate")
   .add(HttpApiEndpoint.get("hold", "/gate/hold", { success: Schema.String }))
   .middleware(Api.Authentication);
-const GateApi = HttpApi.make("gate").add(GateGroup);
+// Declared against the composed api's own id (`auth`): the group rides beside `Password` as an `extraGroup`.
+const GateApi = HttpApi.make("auth").add(GateGroup);
 
 interface Gate {
   readonly entered: Deferred.Deferred<void>;
@@ -145,67 +97,37 @@ const defaultSettings: Sessions.SessionConfig = {
   touchEvery: Duration.hours(1),
 };
 
+const built = Auth.make([Password.Password], { extraGroups: [GateGroup] });
+
+/**
+ * `Auth.make([Password], { extraGroups: [gate] })` through `TestAuth.layer({ records: "sql" })` (the core stores over an
+ * in-memory SQLite database migrated by core's own migrations, so a step can read the persisted row), with core's `session`
+ * and `account` groups served from the composed api. `@awthaq/test`'s `RedactionGuard` records every span, log line and
+ * published event (BEH-EA-199). A simulated clock starts at the real "now" (the CSRF token's `iat` is minted against the
+ * wall clock) and `advance` moves it; the double-submit token outlives every scenario's simulated span.
+ */
 const buildAppLayer = (settings: Sessions.SessionConfig, gate: Gate) => {
   const { layer: capturingMailer, sent } = makeCapturingMailer();
 
-  const CoreLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-    // CSG-001: the account handler runs `AccountErasure` over these same stores (and
-    // over the registry `Hooks.HooksLive` provides).
-    Layer.provideMerge(
-      Layer.mergeAll(
-        Users.layer.pipe(Layer.provide(Persistence.memory)),
-        Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-        sessionsSql(settings),
-        Verification.layer.pipe(Layer.provide(Persistence.memory)),
-      ),
-    ),
-    Layer.provideMerge(TestAuth.memoryFoundation),
-  );
-
-  // Records every span, log line and published event of this composition (BEH-EA-199).
-  // The base logger set is emptied first (the guard's own logger merges with what it finds), so
-  // the suite's output is not one console line per request.
-  const GuardLive = RedactionGuard.layerEvents.pipe(
-    Layer.provideMerge(RedactionGuard.layer.pipe(Layer.provide(Logger.layer([])))),
-  );
-
-  // Simulated time, started at the real "now": the CSRF token's `iat` is minted against the
-  // wall clock, and rows are stamped by the ambient clock.
   const ClockLive = Layer.effectDiscard(TestClock.setTime(Date.now())).pipe(
     Layer.provideMerge(TestClock.layer()),
   );
 
-  const appLayer = Layer.mergeAll(
-    AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Session.SessionHandlers),
-      Layer.provide(Account.AccountHandlers),
+  const appLayer = TestAuth.layer(built, {
+    records: "sql",
+    suite: "features_SessionWorld",
+    csrf: { maxAge: Duration.days(400) },
+    services: Layer.mergeAll(
+      NoBreachHttpClient,
+      Password.config({}),
+      capturingMailer,
+      GateHandlers(gate),
     ),
-    AuthHttp.routes(PasswordApi.PasswordApi, { openapiPath: "/password-openapi.json" }).pipe(
-      Layer.provide(Password.Password.layer),
-    ),
-    AuthHttp.routes(GateApi, { openapiPath: "/gate-openapi.json" }).pipe(
-      Layer.provide(GateHandlers(gate)),
-    ),
-    AuthHttp.docs(AuthCore.AuthCoreApi),
-  ).pipe(
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(GuardLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(cheapArgon2id, capturingMailer, RateLimiter.layerPermissive).pipe(
-        Layer.provideMerge(NodeCrypto.layer),
-      ),
-    ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(NoBreachHttpClient),
-    // CSG-001/DRS-002: `Account.deleteUser` runs inside a `SqlTransaction` — a no-op wrapper
-    // for this composition, same as `TestAuth.layer`'s own default and `OAuth.test.ts`'s.
-    Layer.provide(SqlTransaction.layerNoop),
-    // AGA-001/NHS-003: `Password`'s sign-up/sign-in/reset resolve through `ClientAddress` too.
-    Layer.provide(ClientAddress.layerDirect),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
+    openapiPath: "/openapi.json",
+    docsPath: "/docs",
+  }).pipe(
+    // The session lifetimes this scenario wants: the base's `Sessions` reads `SessionConfig` when it is built.
+    Layer.provide(Layer.succeed(Sessions.SessionConfig, settings)),
     Layer.provideMerge(ClockLive),
   );
   return { appLayer, sent };
@@ -231,8 +153,7 @@ export type AppServices =
 
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
-  readonly memoMap: Layer.MemoMap;
-  readonly appLayer: ReturnType<typeof buildAppLayer>["appLayer"];
+  readonly run: <A>(effect: Effect.Effect<A, never, AppServices>) => Promise<A>;
   readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
   readonly gate: Gate;
 }
@@ -295,11 +216,10 @@ const appHandle = Effect.fn("features.session.appHandle")(function* () {
     admitted: Ref.makeUnsafe(0),
   };
   const { appLayer, sent } = buildAppLayer(yield* Ref.get(world.settings), gate);
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  const built: AppHandle = { handler, memoMap, appLayer, sentMail: sent, gate };
-  yield* Ref.set(world.app, built);
-  return built;
+  const app = TestAuth.app(appLayer);
+  const handle: AppHandle = { handler: app.handler, run: app.run, sentMail: sent, gate };
+  yield* Ref.set(world.app, handle);
+  return handle;
 });
 
 /**
@@ -309,18 +229,8 @@ const appHandle = Effect.fn("features.session.appHandle")(function* () {
  */
 export const inApp = <A, E>(effect: Effect.Effect<A, E, AppServices>) =>
   Effect.gen(function* () {
-    const { appLayer, memoMap } = yield* appHandle();
-    return yield* Effect.promise(() =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const scope = yield* Effect.scope;
-            const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-            return yield* effect.pipe(Effect.provide(context), Effect.orDie);
-          }),
-        ),
-      ),
-    );
+    const { run } = yield* appHandle();
+    return yield* Effect.promise(() => run(effect.pipe(Effect.orDie)));
   });
 
 /** Moves the app's simulated clock forward. */

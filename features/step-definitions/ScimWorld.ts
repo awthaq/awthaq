@@ -1,9 +1,9 @@
 // BDD-005/P20a: the SCIM plugin's real wire-level seam — the layer graph
 // `packages/scim/test/support.ts` builds (the real in-memory core, the organization plugin
 // `Scim` depends on, the SCIM records, the connection store and bearer authentication),
-// served over `HttpRouter.toWebHandler` and reached the way a directory service's HTTP client
+// served through `TestAuth.app` and reached the way a directory service's HTTP client
 // would reach it: as the holder of a connection's bearer token. The services the handler runs
-// on are reachable through `withContext` (the same instances, via one shared `MemoMap`), for
+// on are reachable through `withContext` (the same instances, `TestAuth.app`'s one memo map), for
 // the Givens that arrange what only an operator can (a connection, an administrator's ban,
 // live sessions) and for the Thens that observe what HTTP cannot show (an account's status,
 // its sessions, its membership, the audit log).
@@ -11,48 +11,37 @@ import { Api } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
-  AuthEvents,
+  Auth,
   Erasure,
   Errors,
   HookPoint,
   Hooks,
-  Persistence,
   Sessions,
   Users,
-  Verification,
 } from "@awthaq/core";
 import { Organization, OrganizationHooks, OrganizationTeams } from "@awthaq/organization";
 import {
-  ActiveContextRecords,
   InvitationRecords,
   MembershipRecords,
   OrganizationRecords,
-  OrgRoleRecords,
   TeamRecords,
 } from "@awthaq/organization/records";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Scim, ScimApi, ScimConnections, ScimRecords } from "@awthaq/scim";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
-
-const UsersInMemory = Users.layer.pipe(Layer.provide(Persistence.memory));
 
 const ORIGIN = "http://localhost:3000";
 
 // ---- the composition ---------------------------------------------------------------------
 
 /** The real in-memory `Users`, except that reading by email reports an outage (ADR-EA-028). */
-const UsersDownOnLookup: typeof UsersInMemory = Layer.effect(
+const UsersDownOnLookup = Layer.effect(
   Users.Users,
   Effect.gen(function* () {
     const real = yield* Users.Users;
@@ -62,10 +51,6 @@ const UsersDownOnLookup: typeof UsersInMemory = Layer.effect(
         Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findByEmail" })),
     });
   }),
-).pipe(
-  // provideMerge: the real `UserRemoval` rides along; this double's `Users` wins (`Context.merge`
-  // keeps the later entry).
-  Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
 );
 
 /** A `BeforeCreateTeam` tap that refuses every team (plan 04: a veto now reaches SCIM Groups). */
@@ -78,24 +63,6 @@ const VetoDelete = Hooks.BeforeUserDelete.tap(() =>
   Effect.fail(new HookPoint.HookAbort({ code: "LEGAL_HOLD" })),
 );
 
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("scim-bdd-csrf-secret-padded-to-thirty-two-bytes-long"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const OrganizationRecordsLive = OrganizationRecords.layerMemory.pipe(
-  Layer.provide(NodeCrypto.layer),
-);
-
 export interface AppOptions {
   readonly scim?: Partial<Scim.ScimConfigShape>;
   readonly organization?: Partial<Organization.OrganizationConfigShape>;
@@ -105,30 +72,20 @@ export interface AppOptions {
   readonly usersOutage?: boolean;
 }
 
-const buildLive = (options: AppOptions) => {
-  const users =
-    options.usersOutage === true
-      ? UsersDownOnLookup
-      : Users.layer.pipe(Layer.provide(Persistence.memory));
-  const hooks =
-    options.vetoDelete === true
-      ? VetoDelete.pipe(Layer.provideMerge(Hooks.HooksLive))
-      : Hooks.HooksLive;
-  const CoreLive = Layer.mergeAll(
-    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-    Verification.layer.pipe(Layer.provide(Persistence.memory)),
-    users,
-  ).pipe(
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-    Layer.provideMerge(hooks),
-    Layer.provideMerge(NodeCrypto.layer),
-  );
-  const OrganizationLive = Organization.Organization.layer.pipe(
-    // SCIM Groups are organization teams, so the world turns teams on (BEH-EA-251): no quotas, and a
-    // directory may delete every group. A scenario about a refusal overrides it.
-    Layer.provide(
+const built = Auth.make([Organization.Organization, Scim.Scim]);
+
+/**
+ * `Auth.make([Organization, Scim])` through `TestAuth.layer` (plan 08): the real in-memory core, the organization
+ * plugin `Scim` depends on, the SCIM records, connection store and bearer authentication come from the plugins' own
+ * declarations. `ScimRecords` is shared by the plugin, the connection store and the bearer authentication (one
+ * `Ref`), so a token created through the store authenticates through the plugin.
+ */
+const buildLive = (options: AppOptions) =>
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Scim.config(options.scim ?? {}),
+      // SCIM Groups are organization teams, so the world turns teams on (BEH-EA-251): no quotas, and a
+      // directory may delete every group. A scenario about a refusal overrides it.
       Organization.config({
         teams: {
           enabled: true,
@@ -138,31 +95,15 @@ const buildLive = (options: AppOptions) => {
         },
         ...options.organization,
       }),
+      // A substituted `Users` must reach the erasure cascade too (SCIM `erase` runs it).
+      ...(options.usersOutage === true ? [Layer.fresh(Erasure.layer)] : []),
     ),
-    Layer.provide(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-  );
-  // `ScimRecords.layerMemory` is shared by the plugin, the connection store and the bearer
-  // authentication (one `Ref`), so a token created through the store authenticates through
-  // the plugin.
-  return Scim.Scim.layer.pipe(
-    Layer.provide(Scim.config(options.scim ?? {})),
-    Layer.provideMerge(OrganizationLive),
-    Layer.provideMerge(ScimRecords.layerMemory),
-    Layer.provideMerge(Erasure.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(OrganizationRecordsLive),
-    Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(ActiveContextRecords.layerMemory),
-    Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(options.vetoCreateTeam === true ? VetoCreateTeam : Layer.empty),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
-};
+    ...(options.usersOutage === true ? { decorate: UsersDownOnLookup } : {}),
+    taps: Layer.mergeAll(
+      options.vetoDelete === true ? VetoDelete : Layer.empty,
+      options.vetoCreateTeam === true ? VetoCreateTeam : Layer.empty,
+    ),
+  });
 
 export type AppServices =
   | Scim.Scim
@@ -187,22 +128,12 @@ export interface AppHandle {
 }
 
 const buildApp = (options: AppOptions): AppHandle => {
-  const Live = buildLive(options);
-  const AppLayer = AuthHttp.routes(ScimApi.ScimApi).pipe(
-    Layer.provide(Live),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
-  // One long-lived scope owns the built layer, so `withContext` sees the very instances the
-  // handler runs on for the whole scenario.
-  const scope = Effect.runSync(Scope.make());
-  let built: Promise<Context.Context<AppServices>> | undefined;
-  const context = () => (built ??= Effect.runPromise(Layer.buildWithMemoMap(Live, memoMap, scope)));
-  const withContext: AppHandle["withContext"] = (effect) =>
-    context().then((services) => Effect.runPromise(effect.pipe(Effect.provide(services))));
-  return { handler, withContext, close: Scope.close(scope, Exit.void) };
+  const app = TestAuth.app(buildLive(options), { baseUrl: ORIGIN });
+  return {
+    handler: app.handler,
+    withContext: (effect) => app.run(effect),
+    close: Effect.promise(() => app.dispose()),
+  };
 };
 
 // ---- the World ---------------------------------------------------------------------------

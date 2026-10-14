@@ -23,6 +23,7 @@ import {
   Accounts,
   AuditLog,
   AuthEvents,
+  Auth,
   HookPoint,
   Hooks,
   Persistence,
@@ -39,22 +40,11 @@ import {
   OrganizationQadi,
   TenantMiddleware,
   TenantResolver,
-  OrganizationMemory,
 } from "@awthaq/organization";
 import { ConnectionRecords, DomainClaims, OrganizationRecords } from "@awthaq/organization/records";
 import { OAuth, OAuthConnections, OAuthProvider } from "@awthaq/oauth";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  RateLimiter,
-  SqlTransaction,
-  Tenant,
-} from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Encryption, KeyProvider, SqlTransaction, Tenant } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
-import { RateLimits } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { RelationshipResolver } from "@qadi/core";
@@ -77,7 +67,6 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
 import { TestAuth } from "@awthaq/test";
 
@@ -191,49 +180,26 @@ const RefuseBillingHold = OrganizationHooks.BeforeSuspendOrganization.tap((input
     : Effect.succeed(input),
 );
 
-const buildOrganizationStack = () => {
-  const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-    Layer.provide(Authentication.PrincipalResolverLive),
-  );
-  const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-    Layer.provide(AuthenticationLive),
-  );
-  const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-    Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-    Layer.provide(NodeCrypto.layer),
-  );
-  const CoreLive = Layer.mergeAll(
-    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-    Users.layer.pipe(Layer.provide(Persistence.memory)),
-  ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-  return Layer.mergeAll(
-    AdminTenants.AdminTenants.layer,
+const buildOrganizationStack = () =>
+  // Built ABOVE the composition: the qadi relationships resolver reads the exposed organization authority.
+  Layer.mergeAll(
     OrganizationQadi.relationships.pipe(
       Layer.provide(OrganizationQadi.ResourceOrganizationLookup.layerNone),
     ),
     TenantConfig.layer,
   ).pipe(
     Layer.provideMerge(
-      Organization.Organization.layer.pipe(
-        Layer.provide(Organization.config({ membershipLimit: BUILD_TIME_MEMBERSHIP_LIMIT })),
-        Layer.provide(AuthenticationLive),
-      ),
-    ),
-    Layer.provide(
-      Admin.config({
-        canAdministerTenants: ({ admin }) => Effect.succeed(admin.id === PLATFORM_ADMIN),
+      TestAuth.layer(Auth.make([Organization.Organization, AdminTenants.AdminTenants]), {
+        services: Layer.mergeAll(
+          Organization.config({ membershipLimit: BUILD_TIME_MEMBERSHIP_LIMIT }),
+          Admin.config({
+            canAdministerTenants: ({ admin }) => Effect.succeed(admin.id === PLATFORM_ADMIN),
+          }),
+        ),
+        taps: RefuseBillingHold,
       }),
     ),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(RefuseBillingHold),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
-};
 
 // ---- the OAuth connection store ----------------------------------------------------------
 
@@ -313,25 +279,11 @@ export const OAUTH_BASE_URL = "https://app.example.com";
 const buildOAuthLayer = (
   providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>,
   connections: OAuthConnections.OAuthConnectionResolverShape | undefined,
-) => {
-  const CoreLive = Layer.mergeAll(
-    Users.layer.pipe(Layer.provide(Persistence.memory)),
-    Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-    Verification.layer.pipe(Layer.provide(Persistence.memory)),
-  ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-  return OAuth.OAuth.layer.pipe(
-    Layer.provide(connections === undefined ? Layer.empty : OAuthConnections.layer(connections)),
-    Layer.provide(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(RateLimiter.layerPermissive),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provide(NoProviderTransport),
-    Layer.provide(
+) =>
+  TestAuth.layer(Auth.make([OAuth.OAuth]), {
+    services: Layer.mergeAll(
+      NoProviderTransport,
+      connections === undefined ? Layer.empty : OAuthConnections.layer(connections),
       OAuth.config({
         providers,
         linking: "explicit",
@@ -340,8 +292,7 @@ const buildOAuthLayer = (
         retry: { base: Duration.zero },
       }),
     ),
-  );
-};
+  });
 
 // ---- the tenant-middleware gateway -------------------------------------------------------
 
