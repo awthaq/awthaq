@@ -10,7 +10,7 @@ import * as Authentication from "../../src/Authentication.ts";
 import * as Csrf from "../../src/Csrf.ts";
 
 /** At least 32 bytes, as `Csrf.layerConfig` requires. */
-export const TEST_CSRF_SECRET = "server-test-csrf-secret-padded-to-thirty-two-bytes";
+const TEST_CSRF_SECRET = "server-test-csrf-secret-padded-to-thirty-two-bytes";
 
 /** The resolver every suite here uses: `Sessions` -> `PrincipalResolver`, no user facts. */
 export const resolver = Authentication.PrincipalResolverLive;
