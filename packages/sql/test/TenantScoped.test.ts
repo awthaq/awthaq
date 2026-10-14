@@ -110,15 +110,18 @@ describe("TenantScoped", () => {
     }),
   );
 
-  it.effect("lift is a no-op outside an RLS transaction (SQLite, no withTenant, the relay)", () =>
+  it.effect("lift is a no-op outside an RLS transaction (no withTenant, the relay, SQLite)", () =>
     Effect.gen(function* () {
       const value = yield* Effect.succeed(42).pipe(TenantScoped.lift(grant));
       assert.strictEqual(value, 42);
-      // withTenant on SQLite provides only the ambient tenant, never the RLS scope.
+      // Outside withTenant there is no RLS scope on either backend.
+      assert.isFalse(yield* Effect.service(TenantScoped.InRlsScope));
+      // withTenant opens an RLS transaction on Postgres only; on SQLite it provides just
+      // the ambient tenant. The suite runs on both, so assert each backend's contract.
       const inScope = yield* Effect.service(TenantScoped.InRlsScope).pipe(
         TenantScope.withTenant("t1"),
       );
-      assert.isFalse(inScope);
+      assert.strictEqual(inScope, process.env["AWTHAQ_POSTGRES_URL"] !== undefined);
     }).pipe(Effect.provide(TestSql.layer("tenant_scoped_lift"))),
   );
 
