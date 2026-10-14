@@ -7,26 +7,26 @@ settings:
 catalogs:
   default:
     '@effect/atom-react':
-      specifier: 4.0.0-rc.116
-      version: 4.0.0-rc.116
+      specifier: 4.0.3
+      version: 4.0.3
     '@effect/platform-node':
-      specifier: 4.0.0-rc.116
-      version: 4.0.0-rc.116
+      specifier: 4.0.3
+      version: 4.0.3
     '@effect/sql-libsql':
-      specifier: 4.0.0-rc.116
-      version: 4.0.0-rc.116
+      specifier: 4.0.3
+      version: 4.0.3
     '@effect/sql-pg':
-      specifier: 4.0.0-rc.116
-      version: 4.0.0-rc.116
+      specifier: 4.0.3
+      version: 4.0.3
     '@effect/sql-sqlite-node':
-      specifier: 4.0.0-rc.116
-      version: 4.0.0-rc.116
+      specifier: 4.0.3
+      version: 4.0.3
     '@effect/tsgo':
       specifier: 0.46.1
       version: 0.46.1
     '@effect/vitest':
-      specifier: 4.0.0-rc.116
-      version: 4.0.0-rc.116
+      specifier: 4.0.3
+      version: 4.0.3
     '@testing-library/react':
       specifier: ^16.3.2
       version: 16.3.3
@@ -43,8 +43,8 @@ catalogs:
       specifier: 5.0.2
       version: 5.0.2
     effect:
-      specifier: 4.0.0-rc.116
-      version: 4.0.0-rc.116
+      specifier: 4.0.3
+      version: 4.0.3
     happy-dom:
       specifier: ^20.11.1
       version: 20.14.5
@@ -142,7 +142,7 @@ importers:
         version: link:../../packages/server
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@qadi/core':
         specifier: ^0.8.0
         version: 0.8.0
@@ -151,14 +151,14 @@ importers:
         version: 0.8.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../../packages/test
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -182,17 +182,17 @@ importers:
         version: link:../../packages/sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../../packages/test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -219,23 +219,23 @@ importers:
         version: link:../../packages/sql
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../../packages/test
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -322,16 +322,16 @@ importers:
         version: link:../packages/webhooks
       '@effect-cucumber/vitest':
         specifier: ^0.10.1
-        version: 0.10.1(@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1))(@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2))(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 0.10.1(@effect/platform-node@4.0.3(effect@4.0.3)(redis@6.2.1))(@effect/vitest@4.0.3(effect@4.0.3)(vitest@5.0.2))(effect@4.0.3)(vitest@5.0.2)
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       '@qadi/core':
         specifier: ^0.8.0
         version: 0.8.0
@@ -352,7 +352,7 @@ importers:
         version: 0.8.15
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
       react:
         specifier: 'catalog:'
         version: 19.3.0
@@ -394,17 +394,17 @@ importers:
         version: 0.8.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -416,7 +416,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       typescript:
         specifier: 'catalog:'
@@ -447,14 +447,14 @@ importers:
         version: link:../sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -496,16 +496,16 @@ importers:
         version: link:../sql
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/password':
         specifier: workspace:*
@@ -515,7 +515,7 @@ importers:
         version: link:../test
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       '@qadi/core':
         specifier: ^0.8.0
         version: 0.8.0
@@ -542,11 +542,11 @@ importers:
         version: 14.0.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -567,17 +567,17 @@ importers:
         version: link:../sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -604,7 +604,7 @@ importers:
         version: link:../sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
@@ -614,10 +614,10 @@ importers:
         version: link:../two-factor
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -644,17 +644,17 @@ importers:
         version: link:../sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -678,7 +678,7 @@ importers:
         version: link:../server
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
@@ -688,10 +688,10 @@ importers:
         version: link:../two-factor
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -712,14 +712,14 @@ importers:
         version: 3.0.3
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -740,7 +740,7 @@ importers:
         version: link:../sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
       hash-wasm:
         specifier: 'catalog:'
         version: 4.12.0
@@ -750,13 +750,13 @@ importers:
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -774,17 +774,17 @@ importers:
         version: link:../ports
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
       hash-wasm:
         specifier: 'catalog:'
         version: 4.12.0
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -808,7 +808,7 @@ importers:
         version: link:../web
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
       next:
         specifier: '>=15.0.0'
         version: 16.3.6(@types/node@22.20.4)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -821,10 +821,10 @@ importers:
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       '@types/react':
         specifier: 'catalog:'
         version: 19.3.0
@@ -854,17 +854,17 @@ importers:
         version: link:../server
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -894,17 +894,17 @@ importers:
         version: 0.8.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -931,17 +931,17 @@ importers:
         version: link:../sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -965,17 +965,17 @@ importers:
         version: link:../server
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -993,17 +993,17 @@ importers:
         version: 14.0.3
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
       hash-wasm:
         specifier: 'catalog:'
         version: 4.12.0
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1036,17 +1036,17 @@ importers:
         version: 0.8.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1064,14 +1064,14 @@ importers:
         version: link:../client
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@effect/atom-react':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(react@19.3.0)(scheduler@0.27.0)
+        version: 4.0.3(effect@4.0.3)(react@19.3.0)(scheduler@0.27.0)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       '@qadi/core':
         specifier: ^0.8.0
         version: 0.8.0
@@ -1122,14 +1122,14 @@ importers:
         version: 0.8.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1162,7 +1162,7 @@ importers:
         version: 0.8.15
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
       xml-crypto:
         specifier: 6.3.2
         version: 6.3.2
@@ -1175,7 +1175,7 @@ importers:
         version: link:../test
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1202,14 +1202,14 @@ importers:
         version: link:../sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1230,14 +1230,14 @@ importers:
         version: link:../ports
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1255,23 +1255,23 @@ importers:
         version: link:../ports
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/sql-libsql':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1298,23 +1298,23 @@ importers:
         version: link:../sql
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+        version: 4.0.3(effect@4.0.3)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/password':
         specifier: workspace:*
         version: link:../password
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1341,7 +1341,7 @@ importers:
         version: link:../sql
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/password':
         specifier: workspace:*
@@ -1351,10 +1351,10 @@ importers:
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1378,17 +1378,17 @@ importers:
         version: link:../server
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1415,17 +1415,17 @@ importers:
         version: 0.8.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.116
+        version: 4.0.3
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: 4.0.3(effect@4.0.3)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
+        version: 4.0.3(effect@4.0.3)(vitest@5.0.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1591,37 +1591,44 @@ packages:
       react: '>=19.0.0 <20.0.0'
       scheduler: '>=0.25.0 <0.28.0'
 
+  '@effect/atom-react@4.0.3':
+    resolution: {integrity: sha512-niFAKlL2heOKYfjSaC6nbMBQfxBZRX4LLaSBlnNgLLvamj735aBHTGqejyddMlvAbUYGUV0tD5ov9C9hxFFLJg==}
+    peerDependencies:
+      effect: ^4.0.3
+      react: '>=19.0.0 <20.0.0'
+      scheduler: '>=0.25.0 <0.29.0'
+
   '@effect/language-service@0.87.3':
     resolution: {integrity: sha512-g1OmRBZF5chbW9QMNoirPo5Bb4zzU2HfP88tR7/VSZEUxHJ1/qVb8AQ0kUh2ggctLH1I715yCwP4gkw56PTjpQ==}
     hasBin: true
 
-  '@effect/platform-node-shared@4.0.0-rc.116':
-    resolution: {integrity: sha512-4FB6UriGqArWFUaFqVchhfCRmmtOVzmD/k/bH6LErlKY8a9amt5dk6c3Arsi7AvUpChsdO+3jsG+P85HsxMkNA==}
+  '@effect/platform-node-shared@4.0.3':
+    resolution: {integrity: sha512-5srkJfmWklWSgwZwlkMeTXobfNtxuwuTCvY9JWdPXRv/PBXAe5kKSptzRxT778oFFsaE9IMI8X61pvkifT9Eug==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-rc.116
+      effect: ^4.0.3
 
-  '@effect/platform-node@4.0.0-rc.116':
-    resolution: {integrity: sha512-uA66Nh998OcChBVX83tQDkBDvQQcVaMXodP9gNGWVeIwWWquy7bzIkAq/fMZGKs/BVFhFQ0XCp3VIqYjnXu5ng==}
+  '@effect/platform-node@4.0.3':
+    resolution: {integrity: sha512-ctvREpC1EzRVsOm0JyIzYHajAQScFaec6Gl+M7TEIpEqdmmx6Ju11Um92EA/CE2KBfY5Fp1QWlqTkK6lOL7tqg==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-rc.116
+      effect: ^4.0.3
       redis: '>=5.0.0 <7.0.0'
 
-  '@effect/sql-libsql@4.0.0-rc.116':
-    resolution: {integrity: sha512-tBnYYzL5C3z95tBh080StlssofE2+NIwqTxfRAAMb20xPxoMXljwGzn4RmuOlnre+reNupSB0HmctjbGBsLQVA==}
+  '@effect/sql-libsql@4.0.3':
+    resolution: {integrity: sha512-REYsk1yEyLSH5yjcVe2gXzPW0KmkqyU+19IqQrG84romJgYPZUZctiS34/DuHjuPi5euW3xi+sPtjFdPnvTNOw==}
     peerDependencies:
-      effect: ^4.0.0-rc.116
+      effect: ^4.0.3
 
-  '@effect/sql-pg@4.0.0-rc.116':
-    resolution: {integrity: sha512-cnvH+XyNsCfd+m6buOzVpuYUyQYWC9pkkC6L6J+gQXrogcZ3O/WAxlcaxsEMC4Ru66vO0PZiWBUzhee5jh3KRQ==}
+  '@effect/sql-pg@4.0.3':
+    resolution: {integrity: sha512-pHrR3FGUIoqwkn/0X1yB5Gr1HkPMwzDt/9+cFv2e3eLlpVJwkgYUDeL+IRaO9fXTrKGwQw+y3948lv3x1nLOaQ==}
     peerDependencies:
-      effect: ^4.0.0-rc.116
+      effect: ^4.0.3
 
-  '@effect/sql-sqlite-node@4.0.0-rc.116':
-    resolution: {integrity: sha512-nh7k7lXUPtEXBJpS5RHP01l6rtBFHsZq8Q3l+eV+lhO5qbvApt8Xb+Jb9j8LmXT4CcEagKe2Ix/bbipWpRXXnA==}
+  '@effect/sql-sqlite-node@4.0.3':
+    resolution: {integrity: sha512-u+b0X/yt8vATwUscXKHdWF75LRMQKBIkx9DsNw8tdgF9xxPOTfx+e30gdwBjd1kY1GmQYkzD7/cP+9mys2b0pg==}
     peerDependencies:
-      effect: ^4.0.0-rc.116
+      effect: ^4.0.3
 
   '@effect/tsgo-darwin-arm64@0.46.1':
     resolution: {integrity: sha512-ErehNqI9p8me4XKO8N4bzdDWgBbSNlJ3CIZGfXoAW6Fo4Oo7x4ZbZV7KNsMSn9aJSiUUOQUoXjGBdslU5OYMdw==}
@@ -1662,10 +1669,10 @@ packages:
     resolution: {integrity: sha512-DMcBCg5nWLufejRlyqFEkXmbtaLUJ56NKny6L1LTtimvz0U3VNj9H6ZUXV4WeeWvJzVyL0y7G2wsCBAFUgy1jw==}
     hasBin: true
 
-  '@effect/vitest@4.0.0-rc.116':
-    resolution: {integrity: sha512-q42ue4hAa5AcPBwqi8rvMvR1Jstr+JjsyyxEBUoBk+WWm8otnqFxQ+XbWslW1QSwdg5+2Fdgd7z59IValt9Oiw==}
+  '@effect/vitest@4.0.3':
+    resolution: {integrity: sha512-jsIkpssf0CFuOeycW2sQZkWx0qzlsRv+JIkzd9qQpoFDcHC9JZFSdIjEBAhsdp20pDy4Y/b2vT/ew7wXZxvEig==}
     peerDependencies:
-      effect: ^4.0.0-rc.116
+      effect: ^4.0.3
       vitest: '>=5.0.0 <6.0.0'
 
   '@emnapi/core@1.11.2':
@@ -2769,8 +2776,8 @@ packages:
   '@types/whatwg-mimetype@3.0.2':
     resolution: {integrity: sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript-eslint/project-service@8.70.0':
     resolution: {integrity: sha512-hFHbTNqhU9G+2eKFXCBVb1tjFT/LceiJ4+HfLO4pTpDI0KHi6iajpcFFkaSQ9gXmCh7n82A0PthaayEdN6mspQ==}
@@ -3209,6 +3216,9 @@ packages:
 
   effect@4.0.0-rc.116:
     resolution: {integrity: sha512-nawqJHSjHV8XIBRZNZ+D7cLZpN3kkSjzy6aiT9ofKENsl7xAMFKEoDa0itN5JFl3GUQ1PIN1T1HNlva5+xyO/A==}
+
+  effect@4.0.3:
+    resolution: {integrity: sha512-LoWn/Uwwx0JjHSDmBAAahx8sB+klzM6vsZovnbYowBNw6B4QScJLRLBByO61plvNiycx7HPN8FnsWUCu0eXW5w==}
 
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
@@ -4017,8 +4027,8 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  undici@8.10.2:
-    resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
+  undici@8.11.2:
+    resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
     engines: {node: '>=22.19.0'}
 
   unicode-emoji-modifier-base@1.0.0:
@@ -4140,8 +4150,8 @@ packages:
     resolution: {integrity: sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q==}
     engines: {node: '>=10'}
 
-  ws@8.21.3:
-    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -4371,19 +4381,19 @@ snapshots:
 
   '@discoveryjs/json-ext@1.1.0': {}
 
-  '@effect-cucumber/gherkin@0.10.1(effect@4.0.0-rc.116)':
+  '@effect-cucumber/gherkin@0.10.1(effect@4.0.3)':
     dependencies:
       '@cucumber/cucumber-expressions': 20.1.0
       '@cucumber/gherkin': 42.0.1
       '@cucumber/messages': 34.2.1
-      effect: 4.0.0-rc.116
+      effect: 4.0.3
 
-  '@effect-cucumber/vitest@0.10.1(@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1))(@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2))(effect@4.0.0-rc.116)(vitest@5.0.2)':
+  '@effect-cucumber/vitest@0.10.1(@effect/platform-node@4.0.3(effect@4.0.3)(redis@6.2.1))(@effect/vitest@4.0.3(effect@4.0.3)(vitest@5.0.2))(effect@4.0.3)(vitest@5.0.2)':
     dependencies:
-      '@effect-cucumber/gherkin': 0.10.1(effect@4.0.0-rc.116)
-      '@effect/platform-node': 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
-      '@effect/vitest': 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
-      effect: 4.0.0-rc.116
+      '@effect-cucumber/gherkin': 0.10.1(effect@4.0.3)
+      '@effect/platform-node': 4.0.3(effect@4.0.3)(redis@6.2.1)
+      '@effect/vitest': 4.0.3(effect@4.0.3)(vitest@5.0.2)
+      effect: 4.0.3
       tinyglobby: 0.2.17
       vitest: 5.0.2(@types/node@22.20.4)(@vitest/coverage-v8@5.0.2)(happy-dom@20.14.5)(vite@8.3.0(@types/node@22.20.4)(jiti@2.7.0)(yaml@2.9.1))
 
@@ -4393,42 +4403,48 @@ snapshots:
       react: 19.3.0
       scheduler: 0.27.0
 
+  '@effect/atom-react@4.0.3(effect@4.0.3)(react@19.3.0)(scheduler@0.27.0)':
+    dependencies:
+      effect: 4.0.3
+      react: 19.3.0
+      scheduler: 0.27.0
+
   '@effect/language-service@0.87.3': {}
 
-  '@effect/platform-node-shared@4.0.0-rc.116(effect@4.0.0-rc.116)':
+  '@effect/platform-node-shared@4.0.3(effect@4.0.3)':
     dependencies:
-      '@types/ws': 8.18.1
-      effect: 4.0.0-rc.116
-      ws: 8.21.3
+      '@types/ws': 8.18.2
+      effect: 4.0.3
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)':
+  '@effect/platform-node@4.0.3(effect@4.0.3)(redis@6.2.1)':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0-rc.116(effect@4.0.0-rc.116)
-      effect: 4.0.0-rc.116
+      '@effect/platform-node-shared': 4.0.3(effect@4.0.3)
+      effect: 4.0.3
       redis: 6.2.1
-      undici: 8.10.2
+      undici: 8.11.2
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/sql-libsql@4.0.0-rc.116(effect@4.0.0-rc.116)':
+  '@effect/sql-libsql@4.0.3(effect@4.0.3)':
     dependencies:
       '@libsql/client': 0.18.0
-      effect: 4.0.0-rc.116
+      effect: 4.0.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/sql-pg@4.0.0-rc.116(effect@4.0.0-rc.116)':
+  '@effect/sql-pg@4.0.3(effect@4.0.3)':
     dependencies:
-      effect: 4.0.0-rc.116
+      effect: 4.0.3
 
-  '@effect/sql-sqlite-node@4.0.0-rc.116(effect@4.0.0-rc.116)':
+  '@effect/sql-sqlite-node@4.0.3(effect@4.0.3)':
     dependencies:
-      effect: 4.0.0-rc.116
+      effect: 4.0.3
 
   '@effect/tsgo-darwin-arm64@0.46.1':
     optional: true
@@ -4461,9 +4477,9 @@ snapshots:
       '@effect/tsgo-win32-arm64': 0.46.1
       '@effect/tsgo-win32-x64': 0.46.1
 
-  '@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)':
+  '@effect/vitest@4.0.3(effect@4.0.3)(vitest@5.0.2)':
     dependencies:
-      effect: 4.0.0-rc.116
+      effect: 4.0.3
       vitest: 5.0.2(@types/node@22.20.4)(@vitest/coverage-v8@5.0.2)(happy-dom@20.14.5)(vite@8.3.0(@types/node@22.20.4)(jiti@2.7.0)(yaml@2.9.1))
 
   '@emnapi/core@1.11.2':
@@ -4638,8 +4654,8 @@ snapshots:
 
   '@libsql/isomorphic-ws@0.1.5':
     dependencies:
-      '@types/ws': 8.18.1
-      ws: 8.21.3
+      '@types/ws': 8.18.2
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -5250,7 +5266,7 @@ snapshots:
 
   '@types/whatwg-mimetype@3.0.2': {}
 
-  '@types/ws@8.18.1':
+  '@types/ws@8.18.2':
     dependencies:
       '@types/node': 22.20.4
 
@@ -5633,6 +5649,8 @@ snapshots:
 
   effect@4.0.0-rc.116: {}
 
+  effect@4.0.3: {}
+
   emoji-regex@8.0.0: {}
 
   emojilib@2.4.0: {}
@@ -5749,11 +5767,11 @@ snapshots:
     dependencies:
       '@types/node': 22.20.4
       '@types/whatwg-mimetype': 3.0.2
-      '@types/ws': 8.18.1
+      '@types/ws': 8.18.2
       buffer-image-size: 0.6.4
       entities: 7.0.1
       whatwg-mimetype: 3.0.0
-      ws: 8.21.3
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -6506,7 +6524,7 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici@8.10.2: {}
+  undici@8.11.2: {}
 
   unicode-emoji-modifier-base@1.0.0: {}
 
@@ -6568,7 +6586,7 @@ snapshots:
       string-width: 4.2.3
       strip-ansi: 6.0.1
 
-  ws@8.21.3: {}
+  ws@8.22.0: {}
 
   xml-crypto@6.3.2:
     dependencies:
