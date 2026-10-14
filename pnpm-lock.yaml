@@ -144,11 +144,11 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       '@qadi/http':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -327,11 +327,11 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       '@qadi/http':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.4
@@ -384,8 +384,8 @@ importers:
         specifier: workspace:*
         version: link:../sql
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -511,8 +511,8 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -884,8 +884,8 @@ importers:
         specifier: workspace:*
         version: link:../sql
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -1023,11 +1023,11 @@ importers:
         specifier: workspace:*
         version: link:../server
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       '@qadi/http':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -1067,11 +1067,11 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       '@qadi/react':
-        specifier: ^0.8.0
-        version: 0.8.0(react@19.3.0)(scheduler@0.27.0)
+        specifier: ^0.11.0
+        version: 0.11.0(@effect/atom-react@4.0.0-rc.116(effect@4.0.0-rc.116)(react@19.3.0)(scheduler@0.27.0))(effect@4.0.0-rc.116)(react@19.3.0)(scheduler@0.27.0)
       '@testing-library/react':
         specifier: 'catalog:'
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -1109,11 +1109,11 @@ importers:
         specifier: workspace:*
         version: link:../qadi
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       '@qadi/http':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -1155,8 +1155,8 @@ importers:
         specifier: workspace:*
         version: link:../sql
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       '@xmldom/xmldom':
         specifier: 0.8.15
         version: 0.8.15
@@ -1408,8 +1408,8 @@ importers:
         specifier: workspace:*
         version: link:../sql
       '@qadi/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.11.0
+        version: 0.11.0(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -2538,18 +2538,24 @@ packages:
     resolution: {integrity: sha512-4EDEmvxWtgsCnnVeBvtFIFZtUhPPt1+bA9JrSwU4Sa//6oKtzCSlGGXYJr44OD9aGISymbieJ4mCKHUygUDU+g==}
     engines: {node: '>=18'}
 
-  '@qadi/core@0.8.0':
-    resolution: {integrity: sha512-BC3Nni1D2oc4TltgIhWDCqZqnaFXJE5o/PurQI6Q5baTD6OnNt1TOY9ChZRzPbxKlpeSZ5jVwsAGRrl5LbFczw==}
-    engines: {node: '>=22.12.0'}
-
-  '@qadi/http@0.8.0':
-    resolution: {integrity: sha512-HV0RCbS37dVK9/WLUwaI7Fvj++WuYzeaCj93OWuzd/BfPhrRGGtSetwSkZbcN320gJj4hCI7g/YQngLykU2F4w==}
-    engines: {node: '>=22.12.0'}
-
-  '@qadi/react@0.8.0':
-    resolution: {integrity: sha512-YbJQe20sAKQafcvTqhRKFEVw76GWfk7Bg92MADwW9Wvuc2TxJJVTYrWf7s2Idi0G7IQFRKYzrdQD7CtxDEgpzA==}
+  '@qadi/core@0.11.0':
+    resolution: {integrity: sha512-cipz4AGrW4486PuFVD+9O8S8Q7buZQyKkGFqQi82Y3+nbcJWFEZUmZ5CeeyQF8ReIS+qjxP+tSGgc7zmtpszPw==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
+      effect: ^4.0.0
+
+  '@qadi/http@0.11.0':
+    resolution: {integrity: sha512-rxPNRhXpLM7ReTX0mj9n00INoGqP6kTMPLj5TkfxudIrAqvLJFVg/hCwldMm5srsK++FCtfcmYsU+J6ZksFlbQ==}
+    engines: {node: '>=22.12.0'}
+    peerDependencies:
+      effect: ^4.0.0
+
+  '@qadi/react@0.11.0':
+    resolution: {integrity: sha512-oYXtjag64DR23SoATnPygn3dgn3wJeGUmA9IVg3XpH4myvxNNk2G3ECQ5GM0bKCEU8Yd33jmSJdEvcI34Dzz7g==}
+    engines: {node: '>=22.12.0'}
+    peerDependencies:
+      '@effect/atom-react': ^4.0.0
+      effect: ^4.0.0
       react: '>=19.2.4'
       scheduler: '>=0.25.0 <0.28.0'
 
@@ -5076,19 +5082,19 @@ snapshots:
     dependencies:
       tinyexec: 1.3.1
 
-  '@qadi/core@0.8.0':
+  '@qadi/core@0.11.0(effect@4.0.0-rc.116)':
     dependencies:
       effect: 4.0.0-rc.116
 
-  '@qadi/http@0.8.0':
+  '@qadi/http@0.11.0(effect@4.0.0-rc.116)':
     dependencies:
-      '@qadi/core': 0.8.0
+      '@qadi/core': 0.11.0(effect@4.0.0-rc.116)
       effect: 4.0.0-rc.116
 
-  '@qadi/react@0.8.0(react@19.3.0)(scheduler@0.27.0)':
+  '@qadi/react@0.11.0(@effect/atom-react@4.0.0-rc.116(effect@4.0.0-rc.116)(react@19.3.0)(scheduler@0.27.0))(effect@4.0.0-rc.116)(react@19.3.0)(scheduler@0.27.0)':
     dependencies:
       '@effect/atom-react': 4.0.0-rc.116(effect@4.0.0-rc.116)(react@19.3.0)(scheduler@0.27.0)
-      '@qadi/core': 0.8.0
+      '@qadi/core': 0.11.0(effect@4.0.0-rc.116)
       effect: 4.0.0-rc.116
       react: 19.3.0
       scheduler: 0.27.0
