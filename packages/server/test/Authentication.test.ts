@@ -43,6 +43,7 @@ import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Authentication from "../src/Authentication.ts";
+import * as Wiring from "./support/Wiring.ts";
 
 // `HttpApiTest.groups` needs these platform services regardless of which
 // middleware is under test — the same bundle effect's own HttpApiBuilder
@@ -117,7 +118,7 @@ const OptionalLayer = HttpApiBuilder.group(TestApi, "optional", (handlers) =>
 const TestLayer = Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provideMerge(Authentication.OptionalAuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provide(Wiring.resolver),
   Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
@@ -330,7 +331,7 @@ describe("Authentication", () => {
         Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
-          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provide(Wiring.resolver),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -369,7 +370,7 @@ describe("Authentication", () => {
         Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
-          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provide(Wiring.resolver),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provideMerge(AuthEvents.layer),
@@ -408,7 +409,7 @@ describe("Authentication", () => {
         Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
-          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provide(Wiring.resolver),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -465,7 +466,7 @@ const RotationHandlers = HttpApiBuilder.group(RotationApi, "g", (handlers) =>
 const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(RotationHandlers),
   Layer.provideMerge(Authentication.AuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provide(Wiring.resolver),
   Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -478,7 +479,7 @@ const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
 const OutageLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(RotationHandlers),
   Layer.provideMerge(Authentication.AuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provide(Wiring.resolver),
   Layer.provideMerge(UnreliableSessions),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
@@ -511,7 +512,7 @@ const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
   HttpApiBuilder.layer(RotationApi).pipe(
     Layer.provide(RotationHandlers),
     Layer.provideMerge(Authentication.AuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provide(Wiring.resolver),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -879,7 +880,7 @@ describe("Authentication challenges (JR-007)", () => {
 // the opt-in resolver adds emailVerified.
 describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
   const factsLayer = Layer.mergeAll(
-    Authentication.PrincipalResolverLive,
+    Wiring.resolver,
     Sessions.layer.pipe(Layer.provide(Persistence.memory)),
     Users.layer.pipe(Layer.provide(Persistence.memory)),
   ).pipe(

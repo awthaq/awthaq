@@ -23,6 +23,7 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
 import * as Authentication from "../src/Authentication.ts";
+import * as Wiring from "./support/Wiring.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -113,7 +114,7 @@ const layerWith = (...contributions: ReadonlyArray<ReturnType<typeof contributio
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provideMerge(Authentication.OptionalAuthenticationLive),
     Layer.provideMerge(Authentication.MachineAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provide(Wiring.resolver),
     Layer.provideMerge(registry),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
