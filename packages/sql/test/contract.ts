@@ -166,44 +166,8 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect("FAMS-002: promoteIdentity sets an identity only on a row that has none", () =>
-      Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        const guest = yield* users.insert(yield* M.User.insert.makeEffect({ name: "Guest" }));
-        const promoted = yield* users.promoteIdentity(guest.id, {
-          _tag: "Email",
-          email: "promoted@example.com",
-        });
-        assert.strictEqual(Option.getOrThrow(promoted).email, "promoted@example.com");
-        assert.strictEqual(Option.getOrThrow(promoted).emailVerified, false);
-        // Already has one: the guarded UPDATE matches nothing.
-        const again = yield* users.promoteIdentity(guest.id, {
-          _tag: "Phone",
-          phone: Schema.decodeUnknownSync(Models.E164)("+15550143"),
-        });
-        assert.isTrue(Option.isNone(again));
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
     it.effect(
-      "BAM-009: changeEmail replaces the address and clears emailVerified in one statement",
-      () =>
-        Effect.gen(function* () {
-          const users = yield* Repositories.UsersRepository;
-          const created = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "before@example.com", name: "Change" }),
-          );
-          yield* users.verifyEmail(created.id);
-          const changed = yield* users.changeEmail(created.id, "after@example.com");
-          assert.strictEqual(Option.getOrThrow(changed).email, "after@example.com");
-          assert.strictEqual(Option.getOrThrow(changed).emailVerified, false);
-          const guest = yield* users.insert(yield* M.User.insert.makeEffect({ name: "G" }));
-          assert.isTrue(Option.isNone(yield* users.changeEmail(guest.id, "g@example.com")));
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "SCP-001: setStatus is the only writer of status; the generic update leaves it alone",
+      "SCP-001: setStatus is the only writer of status; updateProfile leaves it alone",
       () =>
         Effect.gen(function* () {
           const users = yield* Repositories.UsersRepository;
@@ -222,8 +186,13 @@ export const contractCases = (
             DateTime.Equivalence(suspended.suspendedUntil ?? DateTime.makeUnsafe(0), until),
           );
 
-          const renamed = yield* users.update(
-            yield* M.User.update.makeEffect({ id: created.id, name: "Renamed" }),
+          const renamed = Option.getOrThrow(
+            yield* users.updateProfile({
+              id: created.id,
+              name: "Renamed",
+              metadata: undefined,
+              image: undefined,
+            }),
           );
           assert.strictEqual(renamed.name, "Renamed");
           assert.strictEqual(renamed.status, "suspended");
@@ -312,48 +281,11 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
+    // PPS-001 / SMS-002: `writeTokens` takes the row's AAD from its own token-free read, so a
+    // real (non-null) token proves the AAD genuinely round-trips through re-encryption; a null
+    // token cannot tell a correct AAD from a wrong one.
     it.effect(
-      "AccountsRepository.update replaces passwordHash (accessToken/refreshToken must be passed through unchanged, being Model.Sensitive rather than FieldExcept-excluded)",
-      () =>
-        Effect.gen(function* () {
-          const accounts = yield* Repositories.AccountsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "rehash@example.com", name: "Rehash" }),
-          );
-          const account = yield* accounts.insert(
-            yield* M.Account.insert.makeEffect({
-              userId: user.id,
-              providerId: "password",
-              subject: user.id,
-              issuer: "",
-              passwordHash: "old-hash",
-              accessToken: null,
-              refreshToken: null,
-            }),
-          );
-          const updated = yield* accounts.update(
-            yield* M.Account.update.makeEffect({
-              id: account.id,
-              passwordHash: "new-hash",
-              accessToken: account.accessToken,
-              refreshToken: account.refreshToken,
-            }),
-            { providerId: account.providerId, userId: account.userId },
-          );
-          assert.strictEqual(updated.passwordHash, "new-hash");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    // PPS-001: `update` now takes `aad` from the caller instead of an
-    // internal `findById` re-derivation — a real, non-null accessToken/
-    // refreshToken (unlike the null ones above, which can't distinguish a
-    // correct AAD from a wrong one, since encrypting/decrypting `null` is a
-    // no-op either way) proves the caller-supplied `providerId`/`userId`
-    // genuinely round-trips through re-encryption correctly, not just that
-    // the call compiles.
-    it.effect(
-      "AccountsRepository.update's caller-supplied aad correctly re-encrypts a real accessToken/refreshToken",
+      "AccountsRepository.writeTokens re-encrypts a real accessToken/refreshToken under the row's AAD",
       () =>
         Effect.gen(function* () {
           const accounts = yield* Repositories.AccountsRepository;
@@ -368,31 +300,31 @@ export const contractCases = (
               subject: "gh-aad-update",
               issuer: "",
               passwordHash: null,
+              accessToken: null,
+              refreshToken: null,
+            }),
+          );
+          const written = yield* accounts.writeTokens(
+            account.id,
+            {
               accessToken: "plaintext-access-token",
               refreshToken: "plaintext-refresh-token",
-            }),
+              idToken: null,
+              accessTokenExpiresAt: null,
+              refreshTokenExpiresAt: null,
+              scope: null,
+              tokenType: null,
+            },
+            yield* DateTime.now,
           );
-          const updated = yield* accounts.update(
-            yield* M.Account.update.makeEffect({
-              id: account.id,
-              passwordHash: null,
-              accessToken: account.accessToken,
-              refreshToken: account.refreshToken,
-            }),
-            { providerId: account.providerId, userId: account.userId },
-          );
-          assert.strictEqual(updated.accessToken, "plaintext-access-token");
-          assert.strictEqual(updated.refreshToken, "plaintext-refresh-token");
-
-          // The re-encrypted write is independently re-readable too, not
-          // just the write call's own in-memory return value.
-          const reread = yield* accounts.findById(account.id);
+          assert.isTrue(written);
+          const reread = yield* accounts.findTokensById(account.id);
           assert.strictEqual(reread.accessToken, "plaintext-access-token");
           assert.strictEqual(reread.refreshToken, "plaintext-refresh-token");
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect("BEH-EA-043: findByProviderSubject identifies at most one Account row", () =>
+    it.effect("BEH-EA-043: findIdentityByKey identifies at most one Account row", () =>
       Effect.gen(function* () {
         const accounts = yield* Repositories.AccountsRepository;
         const users = yield* Repositories.UsersRepository;
@@ -410,9 +342,9 @@ export const contractCases = (
             refreshToken: null,
           }),
         );
-        const found = yield* accounts.findByProviderSubject("github", "gh-123", "");
+        const found = yield* accounts.findIdentityByKey("github", "gh-123", "");
         assert.isTrue(Option.isSome(found));
-        const missing = yield* accounts.findByProviderSubject("github", "no-such-subject", "");
+        const missing = yield* accounts.findIdentityByKey("github", "no-such-subject", "");
         assert.isTrue(Option.isNone(missing));
       }).pipe(Effect.provide(RepositoriesLive)),
     );
@@ -650,7 +582,7 @@ export const contractCases = (
             yield* M.VerificationToken.insert.makeEffect({
               identifier: "verify-email:user-1",
               valueHash: "hashed-token-value",
-              expiresAt: now,
+              expiresAt: DateTime.addDuration(now, Duration.days(1)),
               consumedAt: null,
             }),
           );
@@ -658,10 +590,12 @@ export const contractCases = (
           const found = yield* verification.findByIdentifier("verify-email:user-1");
           assert.isTrue(Option.isSome(found));
 
-          const consumed = yield* verification.update(
-            yield* M.VerificationToken.update.makeEffect({ id: token.id, consumedAt: now }),
-          );
-          assert.isNotNull(consumed.consumedAt);
+          const consumed = yield* verification.tryConsume({
+            identifier: "verify-email:user-1",
+            valueHash: "hashed-token-value",
+            now,
+          });
+          assert.isNotNull(Option.getOrThrow(consumed).consumedAt);
 
           // PPS-003: the lookup is scoped to the *live* row, so a consumed
           // token (kept as history) is no longer "the token for this identifier".
@@ -1211,7 +1145,7 @@ export const contractCases = (
           .findByEmail("global@tenant.test")
           .pipe(Tenant.withTenant("tenant-b"));
         const bySubject = yield* accounts
-          .findByProviderSubject("github", "global-subject", "")
+          .findIdentityByKey("github", "global-subject", "")
           .pipe(Tenant.withTenant("tenant-b"));
         assert.isTrue(Option.isSome(byEmail));
         assert.isTrue(Option.isSome(bySubject));

@@ -5,10 +5,10 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
@@ -166,25 +166,24 @@ describe("AccountsRepository token read path (SMS-002)", () => {
   );
 
   it.effect(
-    "findByProviderSubject still resolves the identity row when its token ciphertext is unreadable",
+    "findIdentityByKey still resolves the identity row when its token ciphertext is unreadable",
     () =>
       Effect.gen(function* () {
         const account = yield* seedAccount("identity").pipe(Effect.provide(RepoK1));
         yield* tamper(account.id);
         const accounts = yield* Repositories.AccountsRepository;
-        const found = yield* accounts.findByProviderSubject("github", "identity", "");
+        const found = yield* accounts.findIdentityByKey("github", "identity", "");
         assert.isTrue(Option.isSome(found));
       }).pipe(Effect.provide(over(RepoK1))),
   );
 
-  it.effect("updateProviderTokens overwrites an undecryptable token without reading it", () =>
+  it.effect("writeTokens overwrites an undecryptable token without reading it", () =>
     Effect.gen(function* () {
       const account = yield* seedAccount("heal").pipe(Effect.provide(RepoK1));
       yield* tamper(account.id);
       const accounts = yield* Repositories.AccountsRepository;
-      yield* accounts.updateProviderTokens(
+      yield* accounts.writeTokens(
         account.id,
-        { providerId: account.providerId, userId: account.userId },
         {
           accessToken: "fresh-access",
           refreshToken: "fresh-refresh",
@@ -194,6 +193,7 @@ describe("AccountsRepository token read path (SMS-002)", () => {
           scope: "read",
           tokenType: "Bearer",
         },
+        yield* DateTime.now,
       );
       const healed = yield* accounts.findTokensById(account.id);
       assert.strictEqual(healed.accessToken, "fresh-access");
@@ -202,34 +202,13 @@ describe("AccountsRepository token read path (SMS-002)", () => {
     }).pipe(Effect.provide(over(RepoK1))),
   );
 
-  // RRS-006: the AAD for a token write is (providerId, userId); reading it must
-  // not decrypt, log, or lazily re-encrypt the token columns about to be replaced.
-  it.effect("findAad returns the encryption AAD without touching the token columns", () =>
-    Effect.gen(function* () {
-      const account = yield* seedAccount("aad").pipe(Effect.provide(RepoK1));
-      const before = yield* rawColumns(account.id);
-      yield* tamper(account.id);
-      const tampered = yield* rawColumns(account.id);
-      const accounts = yield* Repositories.AccountsRepository;
-      const aad = yield* accounts.findAad(account.id);
-      assert.deepStrictEqual(aad, { providerId: "github", userId: account.userId });
-      // Even on a row whose ciphertext is unreadable (where `findById` would decrypt and log).
-      assert.deepStrictEqual(yield* rawColumns(account.id), tampered);
-      assert.notStrictEqual(before.accessToken, tampered.accessToken);
-      const missing = yield* accounts
-        .findAad(Schema.decodeUnknownSync(Models.AccountId)("nope"))
-        .pipe(Effect.flip);
-      assert.strictEqual(missing._tag, "NoSuchElementError");
-    }).pipe(Effect.provide(over(RepoRotated))),
-  );
-
-  it.effect("updatePasswordHash never touches the token columns", () =>
+  it.effect("writePasswordHash never touches the token columns", () =>
     Effect.gen(function* () {
       const account = yield* seedAccount("hash").pipe(Effect.provide(RepoK1));
       const before = yield* rawColumns(account.id);
       const accounts = yield* Repositories.AccountsRepository;
-      const updated = yield* accounts.updatePasswordHash(account.id, "new-hash");
-      assert.strictEqual(updated.passwordHash, "new-hash");
+      assert.isTrue(yield* accounts.writePasswordHash(account.id, "new-hash", yield* DateTime.now));
+      assert.deepStrictEqual(yield* accounts.findPasswordHash(account.id), Option.some("new-hash"));
       assert.deepStrictEqual(yield* rawColumns(account.id), before);
     }).pipe(Effect.provide(over(RepoK1))),
   );
