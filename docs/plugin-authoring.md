@@ -149,6 +149,16 @@ A column that must be decryptable (a client secret, a signing key, a TOTP secret
 - `open` fails with the typed `SealedColumn/Unreadable`; each call site picks exactly one treatment: `SealedColumn.orDie` (fail closed, for a value the operation cannot proceed without) or `SealedColumn.option` (degrade one value with a warning).
 - Prove it with `TestAuth.runSealedColumnTests` (one call per column and adapter: envelope at rest, round trip, moved ciphertext, key rotation, legacy AAD). `SealedColumn.sweep` re-seals the rows nobody reads again; running it is the operator's job.
 
+### Operator runbook: sweeping sealed columns (legacy-AAD sunset preparation)
+
+A `legacyAad` entry and `adoptPlaintext` stay in the code until a later release deletes them (ADR-EA-019 decision 6; `.scratch` ticket "legacy-aad-sunset"). Nothing deletes them yet; this is how an operator gets a deployment ready.
+
+1. List every sealed column the deployment runs (each plugin's `SealedColumn.column` declarations, plus the core token and PII columns your composition enables).
+2. Run `SealedColumn.sweepAll([...columns])` as a one-off job against the production database, with the production `Encryption` and `SqlClient` (it is never run by a request). It pages each column by its key, re-seals every stale-key or legacy-AAD value by compare-and-swap (a concurrent writer always wins), and answers one report per column: `{ table, column, scanned, resealed, legacy, unreadable }`. It also logs one Info line per column with the same counts (ids and counts only, never a value).
+3. Read the reports. `legacy` counts the values re-sealed because only a legacy AAD opened them. `unreadable` values (tampered, or under a retired key) are never touched: investigate them, they will not heal.
+4. Run `sweepAll` again. Every column must now report `legacy: 0`. While a deployment reads with `resealOnRead: false`, any read of a legacy value logs a warning (ids only) and the value stays legacy until a sweep.
+5. A deployment is ready for the legacy read to be deleted only when step 4 holds on it. Keep the `legacyAad` entries until the release that removes them; they are what keeps unswept rows readable.
+
 ## Multi-statement writes
 
 An operation that is several SQL statements runs in one transaction so it is all-or-nothing, even when called directly. Open it with `SqlTransaction.transactional(sql)(effect)` (or the `SqlTransaction` port's `withTransaction`, which is the same thing); never call `sql.withTransaction` directly, `pnpm check:transactions` fails the build. Composing two records services stays the domain service's job (BEH-EA-035); take the `SqlTransaction` port there.

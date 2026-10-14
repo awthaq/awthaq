@@ -7,8 +7,10 @@ import { Encryption } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SealedColumn from "../src/SealedColumn.ts";
@@ -271,6 +273,80 @@ describe("SealedColumn.codec over SQL", () => {
       assert.strictEqual(yield* raw("r1"), before);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "reveal flags only a legacy-AAD hit as legacy; canonical, stale-key and adopted values are not",
+    () => {
+      const { layer, keys } = setup("sealed_reveal_legacy");
+      return Effect.gen(function* () {
+        const encryption = yield* Encryption.Encryption;
+        const options = { aad: "sealed-probe:r1:secret", legacyAad: ["sealed-probe:r1:legacy"] };
+        const canonical = yield* encryption.encrypt(Redacted.make("v"), options.aad);
+        const viaLegacy = yield* encryption.encrypt(Redacted.make("v"), "sealed-probe:r1:legacy");
+        const fresh = yield* SealedColumn.reveal(encryption, options, canonical);
+        assert.isFalse(fresh.legacy);
+        assert.isTrue(Option.isNone(fresh.refreshed));
+        const hit = yield* SealedColumn.reveal(encryption, options, viaLegacy);
+        assert.isTrue(hit.legacy);
+        assert.isTrue(Option.isSome(hit.refreshed));
+        keys.rotateTo("k2");
+        const stale = yield* SealedColumn.reveal(encryption, options, canonical);
+        assert.isFalse(stale.legacy);
+        assert.isTrue(Option.isSome(stale.refreshed));
+        const adopted = yield* SealedColumn.reveal(
+          encryption,
+          { ...options, adoptPlaintext: true },
+          "plain",
+        );
+        assert.isFalse(adopted.legacy);
+        assert.isTrue(Option.isSome(adopted.refreshed));
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "a read that opens under a legacy AAD is logged with ids only: debug when it re-seals, a warning when re-seal is off",
+    () => {
+      const { layer, prepare } = setup("sealed_legacy_log");
+      return Effect.gen(function* () {
+        yield* prepare;
+        const encryption = yield* Encryption.Encryption;
+        const legacy = yield* encryption.encrypt(
+          Redacted.make("hunter2"),
+          "sealed-probe:r1:secret",
+        );
+        yield* put("r1", legacy);
+        const logged: Array<{ readonly level: string; readonly annotations: string }> = [];
+        const capture = Logger.make<unknown, void>((entry) => {
+          logged.push({
+            level: entry.logLevel,
+            annotations: JSON.stringify(entry.fiber.getRef(References.CurrentLogAnnotations)),
+          });
+        });
+        const swap = yield* SealedColumn.sqlSwap(declared);
+        const resealing = yield* SealedColumn.codec(declared, swap);
+        const frozen = yield* SealedColumn.codec(declared, swap).pipe(
+          Effect.provideService(SealedColumn.SealedColumnConfig, { resealOnRead: false }),
+        );
+        yield* Effect.all([
+          resealing.sealed("r1", legacy).open,
+          frozen.sealed("r1", legacy).open,
+        ]).pipe(
+          Effect.provide(Logger.layer([capture])),
+          Effect.provideService(References.MinimumLogLevel, "Debug"),
+        );
+        assert.deepStrictEqual(
+          logged.map((entry) => entry.level),
+          ["Debug", "Warn"],
+        );
+        for (const entry of logged) {
+          assert.include(entry.annotations, "sealed_probe");
+          assert.include(entry.annotations, "r1");
+          assert.notInclude(entry.annotations, "hunter2");
+        }
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
 
 describe("SealedColumn call-site treatments", () => {
@@ -324,10 +400,111 @@ describe("SealedColumn.sweep", () => {
           yield* encryption.encrypt(Redacted.make("two"), "sealed-probe:b-legacy:secret"),
         );
         const first = yield* SealedColumn.sweep(declared, { batch: 2 });
-        assert.deepStrictEqual(first, { scanned: 4, resealed: 2, unreadable: 1 });
+        assert.deepStrictEqual(first, { scanned: 4, resealed: 2, legacy: 1, unreadable: 1 });
         const second = yield* SealedColumn.sweep(declared, { batch: 2 });
-        assert.deepStrictEqual(second, { scanned: 4, resealed: 0, unreadable: 1 });
+        assert.deepStrictEqual(second, { scanned: 4, resealed: 0, legacy: 0, unreadable: 1 });
         assert.strictEqual(yield* raw("d-garbage"), "not an envelope");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+});
+
+describe("SealedColumn.sweepAll", () => {
+  const twoColumns = [declared, other];
+
+  /** A table with legacy-AAD rows in two columns, and a stale-key row in one. */
+  const seedLegacy = Effect.gen(function* () {
+    const encryption = yield* Encryption.Encryption;
+    const sql = yield* SqlClient.SqlClient;
+    for (const id of ["r1", "r2"]) {
+      yield* sql`INSERT INTO sealed_probe (id, secret, other) VALUES (
+        ${id},
+        ${yield* encryption.encrypt(Redacted.make(`s-${id}`), `sealed-probe:${id}:secret`)},
+        ${yield* encryption.encrypt(Redacted.make(`o-${id}`), `sealed-probe:${id}:other`)})`;
+    }
+  });
+
+  const legacyOther = SealedColumn.column({
+    table: "sealed_probe",
+    column: "other",
+    key: "id",
+    legacyAad: [(id) => `sealed-probe:${id}:other`],
+  });
+
+  it.effect(
+    "reports one entry per column in order and logs one Info summary per column, ids and counts only",
+    () => {
+      const { layer, prepare } = setup("sealed_sweep_all");
+      return Effect.gen(function* () {
+        yield* prepare;
+        yield* seedLegacy;
+        const logged: Array<{ readonly level: string; readonly annotations: string }> = [];
+        const capture = Logger.make<unknown, void>((entry) => {
+          logged.push({
+            level: entry.logLevel,
+            annotations: JSON.stringify(entry.fiber.getRef(References.CurrentLogAnnotations)),
+          });
+        });
+        const reports = yield* SealedColumn.sweepAll([declared, legacyOther], { batch: 1 }).pipe(
+          Effect.provide(Logger.layer([capture])),
+        );
+        assert.deepStrictEqual(reports, [
+          {
+            table: "sealed_probe",
+            column: "secret",
+            scanned: 2,
+            resealed: 2,
+            legacy: 2,
+            unreadable: 0,
+          },
+          {
+            table: "sealed_probe",
+            column: "other",
+            scanned: 2,
+            resealed: 2,
+            legacy: 2,
+            unreadable: 0,
+          },
+        ]);
+        assert.deepStrictEqual(
+          logged.map((entry) => entry.level),
+          ["Info", "Info"],
+        );
+        assert.include(logged[0]?.annotations ?? "", '"column":"secret"');
+        assert.include(logged[1]?.annotations ?? "", '"legacy":2');
+        for (const entry of logged) {
+          assert.notInclude(entry.annotations, "s-r1");
+          assert.notInclude(entry.annotations, "o-r1");
+        }
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  // The sunset gate (plan 05 phase 14): once one `sweepAll` has run, a second reports `legacy: 0`
+  // for every column. Deleting the legacy read is safe only when this holds on the reference deployment.
+  it.effect(
+    "the gate: after sweepAll over a fixture with legacy rows, every column reports legacy: 0",
+    () => {
+      const { layer, prepare } = setup("sealed_sweep_gate");
+      return Effect.gen(function* () {
+        yield* prepare;
+        yield* seedLegacy;
+        const first = yield* SealedColumn.sweepAll([declared, legacyOther]);
+        assert.isTrue(first.every((report) => report.legacy > 0));
+        const gate = yield* SealedColumn.sweepAll([declared, legacyOther]);
+        assert.deepStrictEqual(
+          gate.map((report) => report.legacy),
+          [0, 0],
+        );
+        // And the legacy spelling is no longer needed to read either column.
+        const strict = yield* SealedColumn.sweepAll(twoColumns);
+        assert.deepStrictEqual(
+          strict.map((report) => [report.unreadable, report.resealed]),
+          [
+            [0, 0],
+            [0, 0],
+          ],
+        );
       }).pipe(Effect.provide(layer));
     },
   );
