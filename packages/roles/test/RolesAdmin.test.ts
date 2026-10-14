@@ -1,33 +1,21 @@
-// Hand-wired on purpose: the `RequirePermission` guard is built over `SubjectExtractorLive`, which captures the
-// `SubjectResolver` that `Roles.layer` overrides, so the guard must be built ABOVE the `Roles` layer; `TestAuth.layer`
-// builds `services` beneath the plugins, so it cannot express that order (plan 08 exemption).
 // YL-009: role administration over HTTP, protected by qadi's Path B. The first real
 // `RequirePermission` consumer in the repo: nothing here checks a permission by hand — a
 // subject without `roles:manage` is refused by the guard before the handler runs.
-import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Slots, Users } from "@awthaq/core";
+import { Auth, AuditLog, Sessions, Users } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { EvaluationServicesNone, permission, role } from "@qadi/core";
 import { RequirePermissionLive } from "@qadi/http";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Roles from "../src/Roles.ts";
 import * as RolesAdmin from "../src/RolesAdmin.ts";
 import * as RolesAdminApi from "../src/RolesAdminApi.ts";
 
 const ORIGIN = "http://localhost:3000";
-const CSRF_SECRET = "roles-admin-test-csrf-secret-padded-to-thirty-two-bytes";
 
 const editor = role({ name: "editor", permissions: [permission("project", "read")] });
 const support = role({ name: "platform:support", permissions: [RolesAdminApi.rolesRead] });
@@ -37,69 +25,27 @@ const admin = role({
   inherits: [editor],
 });
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
+// Path B: the guard resolves the subject itself (the `Roles` resolver flattens the roles), so no
+// `Api.Authentication` middleware is involved on this group. `SubjectExtractorLive` captures the `SubjectResolver`
+// slot `Roles.layer` overrides when it is built, so the guard is built over `Roles.layer`: the same layer object the
+// `Roles` plugin of the composition uses, which the memo map builds once.
+const RolesConfig = Roles.config([editor, support, admin]);
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-  // MA-005: `Roles.layer` (built here, not through `Auth.make`) needs a `SlotsRegistry`.
-  Layer.provideMerge(Slots.layer),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CSRF_TOKEN = TestAuth.csrfToken(CSRF_SECRET);
-
-// Path B: the guard resolves the subject itself (the `Roles` resolver flattens the roles),
-// so no `Api.Authentication` middleware is involved on this group.
 const GuardLive = RequirePermissionLive.pipe(
   Layer.provide(EvaluationServicesNone),
   Layer.provide(SubjectExtractor.SubjectExtractorLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const AppLayer = AuthHttp.routes(RolesAdminApi.RolesAdminApi).pipe(
-  Layer.provide(RolesAdmin.RolesAdmin.layer),
-  Layer.provide(GuardLive),
-  Layer.provide(CsrfProtectionLive),
   Layer.provideMerge(Roles.Roles.layer),
-  Layer.provide(Roles.Roles.records.memory),
-  Layer.provide(Roles.config([editor, support, admin])),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
+  Layer.provide(RolesConfig),
 );
 
-const memoMap = Layer.makeMemoMapUnsafe();
-const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+const app = TestAuth.app(
+  TestAuth.layer(Auth.make([Roles.Roles, RolesAdmin.RolesAdmin]), {
+    services: Layer.merge(GuardLive, RolesConfig),
+  }),
+  { baseUrl: ORIGIN },
+);
 
-const withServices = <A, E>(
-  effect: Effect.Effect<A, E, Roles.Roles | Sessions.Sessions | AuditLog.AuditLog>,
-): Promise<A> =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const scope = yield* Effect.scope;
-        const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-        return yield* effect.pipe(Effect.provide(context));
-      }),
-    ),
-  );
+const withServices = app.run;
 
 /** A signed-in user holding `roleNames`, as its session cookie header. */
 const signIn = (userId: string, ...roleNames: ReadonlyArray<string>): Promise<string> =>
@@ -114,17 +60,10 @@ const signIn = (userId: string, ...roleNames: ReadonlyArray<string>): Promise<st
   );
 
 const call = (method: string, path: string, cookie?: string, body?: unknown) =>
-  handler(
-    new Request(`${ORIGIN}${path}`, {
-      method,
-      headers: {
-        "content-type": "application/json",
-        cookie: [cookie, `${Api.CSRF_COOKIE_NAME}=${CSRF_TOKEN}`].filter(Boolean).join("; "),
-        [Api.CSRF_HEADER_NAME]: CSRF_TOKEN,
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }),
-  );
+  app.request(method, path, {
+    ...(cookie === undefined ? {} : { cookie }),
+    ...(body === undefined ? {} : { json: body }),
+  });
 
 const USER = "11111111-1111-4111-8111-111111111111";
 
@@ -195,7 +134,7 @@ describe("RolesAdmin (YL-009)", () => {
 
   it("a state-changing call without a CSRF token is rejected before any permission work", async () => {
     const cookie = await signIn("66666666-6666-4666-8666-666666666666", "platform:admin");
-    const res = await handler(
+    const res = await app.handler(
       new Request(`${ORIGIN}/roles/users/${USER}/assignments`, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },

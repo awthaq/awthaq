@@ -1,4 +1,3 @@
-// Hand-wired on purpose: the Roles guard sits above `Roles.layer` (the `SubjectResolver` slot), and the scenarios are about the harness itself (plan 08 exemption).
 // BEH-EA-193..200 (25-testing-harness.feature): what a plugin author's test suite gets from
 // `@awthaq/test`. Every scenario drives the harness through its public exports only
 // (`TestAuth.layer`, `TestAuth.signInAs`, `TestAuth.runPluginContractTests`) — the same seam a
@@ -122,6 +121,9 @@ class GatedPlugin extends AuthPlugin.Service<GatedPlugin, Record<string, never>>
  * over awthaq's `SubjectExtractorLive`, the `Roles` resolver flattening the catalog, and qadi's real
  * evaluator (`EvaluationServicesNone`: no attribute/relationship ports, none needed by a role policy).
  */
+// The guard is built over `Roles.layer` (`SubjectExtractorLive` captures the `SubjectResolver` slot that layer
+// overrides), as `services` of the composition: no ordering option is needed, because `services` sit above the records
+// and the derived `PrincipalResolver`, and `Roles.layer` is the very layer object the composition's `Roles` uses.
 const GatedServices = RequirePermissionLive.pipe(
   Layer.provide(EvaluationServicesNone),
   Layer.provide(SubjectExtractor.SubjectExtractorLive),

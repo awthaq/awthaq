@@ -1,8 +1,8 @@
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
-// Hand-wired on purpose: `SubjectExtractorLive` shares `Authentication`'s own `PrincipalResolver` (the same
-// principal logic), a short-lived `SessionConfig` is injected beneath the stores and the resolver is read back
-// directly; the wiring is the subject of the test, not a host to compose (plan 08 exemption).
-import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
+// Most cases run over `TestAuth.layer`. The two session-rotation cases below stay hand-wired on purpose: a short-lived
+// `SessionConfig` has to sit beneath the session stores, which `TestAuth.layer` builds with the default one (plan 08
+// exemption).
+import { Auth, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -19,17 +19,14 @@ import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { SubjectExtractor as QadiSubjectExtractor } from "@qadi/http";
 import * as SubjectExtractor from "../src/SubjectExtractor.ts";
+import * as UserClaims from "../src/UserClaims.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const TestLayer = SubjectExtractor.SubjectExtractorLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-);
+// The extractor shares the composition's own `PrincipalResolver` (the same principal logic `Authentication` uses), so
+// it is built over `TestAuth.layer` and the very `Users`/`Sessions` the test signs in against.
+const TestLayer = TestAuth.layer(Auth.make([UserClaims.UserClaims]), {
+  services: SubjectExtractor.SubjectExtractorLive,
+});
 
 // upstream-hardening-followups ticket 03: the same short touchEvery
 // Sessions.test.ts's own rotation tests use, so a single TestClock.adjust
@@ -271,12 +268,10 @@ describe("SubjectExtractor (Path B adapter)", () => {
         claims: (raw) => raw.startsWith("ak_"),
         resolve: () => Effect.succeed(service("from-key")),
       }),
-    ).pipe(Layer.provideMerge(Authentication.CredentialResolversLive));
-    const WithResolvers = SubjectExtractor.SubjectExtractorLive.pipe(
-      Layer.provide(Authentication.PrincipalResolverLive),
-      Layer.provideMerge(contributions),
-      Layer.provideMerge(CoreLive),
     );
+    const WithResolvers = TestAuth.layer(Auth.make([UserClaims.UserClaims]), {
+      services: Layer.mergeAll(SubjectExtractor.SubjectExtractorLive, contributions),
+    });
     const extract = (headers: Record<string, string>) =>
       Effect.gen(function* () {
         const extractor = yield* QadiSubjectExtractor;
