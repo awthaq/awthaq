@@ -8,7 +8,6 @@ import { Auth, AuthPlugin } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { AuthorizedSubject, SubjectApi, SubjectExtractor } from "@awthaq/qadi";
 import { Roles } from "@awthaq/roles";
-import { Authentication } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import { EvaluationServicesNone, hasPermission, permission, role } from "@qadi/core";
 import {
@@ -127,7 +126,6 @@ class GatedPlugin extends AuthPlugin.Service<GatedPlugin, Record<string, never>>
 const GatedServices = RequirePermissionLive.pipe(
   Layer.provide(EvaluationServicesNone),
   Layer.provide(SubjectExtractor.SubjectExtractorLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
   Layer.provideMerge(Roles.Roles.layer),
   Layer.provide(Roles.config([memberRole, adminRole])),
 );

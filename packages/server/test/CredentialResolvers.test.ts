@@ -1,4 +1,4 @@
-// Hand-wired on purpose: the credential-resolver registry is the unit under test (plan 08 exemption).
+// Hand-wired on purpose: the credential-resolver registry is the unit under test; what the suites repeat (resolver, CSRF config and protection, token mint) lives in `test/support/Wiring.ts` (plan 08 exemption).
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-066 (bearer), BEH-EA-072
 // (declaration-order chain). MAPS-001/MAPS-004/OCM-002: plugin-contributed
 // credential resolvers on the `bearer` and `apiKey` carriers (ADR-EA-012 registry).

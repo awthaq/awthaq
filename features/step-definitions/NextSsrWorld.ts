@@ -8,7 +8,6 @@ import { Api } from "@awthaq/api";
 import { Auth } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { SubjectResolver } from "@awthaq/qadi";
-import { Authentication } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
@@ -77,7 +76,6 @@ const countingResolver = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<
 
 const appLayer = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<number>) =>
   countingResolver(roles, calls).pipe(
-    Layer.provideMerge(Authentication.PrincipalResolverLive),
     Layer.provideMerge(TestAuth.layer(nextTuple, { services: NextServices })),
   );
 

@@ -1,4 +1,4 @@
-// Hand-wired on purpose: `@awthaq/server` is below `@awthaq/test` in the package graph, and this suite is about the server's own routing and middleware (plan 08 exemption).
+// Hand-wired on purpose: `@awthaq/server` is below `@awthaq/test` in the package graph, and this suite is about the server's own routing and middleware; what the suites repeat (resolver, CSRF config and protection, token mint) lives in `test/support/Wiring.ts` (plan 08 exemption).
 // spec/behaviors/04-contract-stratum.md, BEH-EA-031.
 // spec/behaviors/11-http-error-mapping.md, BEH-EA-083 through BEH-EA-088.
 //

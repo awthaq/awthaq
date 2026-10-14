@@ -1,4 +1,4 @@
-// Hand-wired on purpose: the authentication middleware is the unit under test (plan 08 exemption).
+// Hand-wired on purpose: the authentication middleware is the unit under test; what the suites repeat (resolver, CSRF config and protection, token mint) lives in `test/support/Wiring.ts` (plan 08 exemption).
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
 import {
   AuditLog,
