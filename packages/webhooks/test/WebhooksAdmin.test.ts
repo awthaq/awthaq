@@ -5,7 +5,6 @@ import { Api } from "@awthaq/api";
 import { AuthEvents, Auth, AuthPlugin, Erasure, DataExport, RateLimits, Users } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
 import { SealedColumn } from "@awthaq/sql";
-import { Authentication, Csrf } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -20,36 +19,15 @@ import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as Webhooks from "../src/Webhooks.ts";
 import { CoreLive, deliveryLayer, EncryptionLive, relay, seedEndpoint } from "./support.ts";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 
 const allow = () => Effect.succeed(true);
 const DateNowUtc = (millis: number) => DateTime.makeUnsafe(millis);
 const nowUtc = DateTime.now;
 
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  ),
-);
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("webhooks-admin-test-csrf-secret-padded-to-32-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 const buildLayer = (
   config: Partial<Webhooks.WebhooksConfigShape> = {},
   limiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
-) =>
-  Webhooks.Webhooks.layer.pipe(
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(deliveryLayer({ config, limiter })),
-  );
+) => deliveryLayer({ config, limiter });
 
 const admin = new Api.UserPrincipal({
   ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),

@@ -6,12 +6,10 @@
 // really-signed tokens and a real JWKS document; the code under test
 // (`../src/edge.ts`) sees only plain cookie headers and an HTTP response.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Persistence, Sessions } from "@awthaq/core";
-import { Jwt, JwtConfig, KeyRing, RevocationStore } from "@awthaq/jwt";
+import { Auth } from "@awthaq/core";
+import { Jwt, JwtConfig } from "@awthaq/jwt";
 import { makeVerifier } from "@awthaq/jwt/verify";
-import { SqlTransaction } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -20,7 +18,6 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { afterEach, vi } from "vitest";
 import { makeSessionVerifier, verifySessionJwt } from "../src/edge.ts";
-import { SigningKeyRecordsLive } from "../../jwt/test/support.ts";
 
 const ISSUER = "https://issuer.test";
 const JWKS_URL = "https://issuer.test/jwt/jwks";
@@ -28,23 +25,9 @@ const MIRROR = "__Host-session-jwt";
 
 afterEach(() => vi.unstubAllGlobals());
 
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const JwtTestLayer = Jwt.Jwt.layer.pipe(
-  Layer.provide(Hooks.HooksLive),
-  Layer.provideMerge(KeyRing.KeyRing.layer),
-  Layer.provideMerge(SigningKeyRecordsLive),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(AuthenticationLive),
-  Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-  Layer.provideMerge(RevocationStore.layerMemory),
-  Layer.provideMerge(NodeCrypto.layer),
-  Layer.provideMerge(JwtConfig.config({ issuer: ISSUER })),
-);
+const JwtTestLayer = TestAuth.layer(Auth.make([Jwt.Jwt]), {
+  services: JwtConfig.config({ issuer: ISSUER }),
+});
 
 const principal = new Api.UserPrincipal({
   ref: new Api.PrincipalRef({ type: "user", id: "user-1" }),
