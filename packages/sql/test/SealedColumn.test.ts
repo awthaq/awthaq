@@ -1,5 +1,5 @@
 // Plan 05, phase 1: the `SealedColumn` mechanism, once. Every branch of `open` (canonical,
-// legacy AAD, stale key, unknown key, tampered row or column, malformed value, adopted plaintext,
+// an old AAD spelling (now Unreadable), stale key, unknown key, tampered row or column, malformed value, adopted plaintext,
 // a lost or failed compare-and-swap, re-seal switched off) and `sweep`, on the SQL swap against
 // a real table. The per-plugin wiring suites (`TestAuth.runSealedColumnTests`) prove a plugin
 // used its declaration; this proves the declaration works.
@@ -21,7 +21,6 @@ const declared = SealedColumn.column({
   table: "sealed_probe",
   column: "secret",
   key: "id",
-  legacyAad: [(id) => `sealed-probe:${id}:secret`],
 });
 
 const other = SealedColumn.column({ table: "sealed_probe", column: "other", key: "id" });
@@ -124,25 +123,26 @@ describe("SealedColumn.codec over SQL", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("a legacy-AAD envelope opens and is re-sealed under the canonical AAD", () => {
-    const { layer, prepare } = setup("sealed_legacy");
-    return Effect.gen(function* () {
-      yield* prepare;
-      const encryption = yield* Encryption.Encryption;
-      const legacy = yield* encryption.encrypt(Redacted.make("hunter2"), "sealed-probe:r1:secret");
-      yield* put("r1", legacy);
-      const codec = yield* SealedColumn.codec(declared, yield* SealedColumn.sqlSwap(declared));
-      assert.strictEqual(Redacted.value(yield* codec.sealed("r1", legacy).open), "hunter2");
-      const after = (yield* raw("r1")) ?? "";
-      assert.notStrictEqual(after, legacy);
-      // Now canonical: a column that declares no legacy spelling opens it too.
-      const strict = yield* SealedColumn.codec(
-        SealedColumn.column({ table: "sealed_probe", column: "secret", key: "id" }),
-        yield* SealedColumn.sqlSwap(declared),
-      );
-      assert.strictEqual(Redacted.value(yield* strict.sealed("r1", after).open), "hunter2");
-    }).pipe(Effect.provide(layer));
-  });
+  it.effect(
+    "an envelope sealed under an old AAD spelling is Unreadable (DecryptionFailed) and untouched",
+    () => {
+      const { layer, prepare } = setup("sealed_old_aad");
+      return Effect.gen(function* () {
+        yield* prepare;
+        const encryption = yield* Encryption.Encryption;
+        const old = yield* encryption.encrypt(Redacted.make("hunter2"), "sealed-probe:r1:secret");
+        yield* put("r1", old);
+        const codec = yield* SealedColumn.codec(declared, yield* SealedColumn.sqlSwap(declared));
+        const unreadable = yield* codec.sealed("r1", old).open.pipe(Effect.flip);
+        assert.strictEqual(unreadable.reason, "DecryptionFailed");
+        assert.deepStrictEqual(
+          [unreadable.table, unreadable.column, unreadable.rowKey],
+          ["sealed_probe", "secret", "r1"],
+        );
+        assert.strictEqual(yield* raw("r1"), old, "an unreadable row is never rewritten");
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("an envelope under a retired key re-seals to the current key on read", () => {
     const { layer, prepare, keys } = setup("sealed_stale");
@@ -275,75 +275,27 @@ describe("SealedColumn.codec over SQL", () => {
   });
 
   it.effect(
-    "reveal flags only a legacy-AAD hit as legacy; canonical, stale-key and adopted values are not",
+    "reveal refreshes a stale-key or adopted value, not a current one, and opens the canonical AAD only",
     () => {
-      const { layer, keys } = setup("sealed_reveal_legacy");
+      const { layer, keys } = setup("sealed_reveal");
       return Effect.gen(function* () {
         const encryption = yield* Encryption.Encryption;
-        const options = { aad: "sealed-probe:r1:secret", legacyAad: ["sealed-probe:r1:legacy"] };
+        const options = { aad: "sealed-probe:r1:secret" };
         const canonical = yield* encryption.encrypt(Redacted.make("v"), options.aad);
-        const viaLegacy = yield* encryption.encrypt(Redacted.make("v"), "sealed-probe:r1:legacy");
         const fresh = yield* SealedColumn.reveal(encryption, options, canonical);
-        assert.isFalse(fresh.legacy);
         assert.isTrue(Option.isNone(fresh.refreshed));
-        const hit = yield* SealedColumn.reveal(encryption, options, viaLegacy);
-        assert.isTrue(hit.legacy);
-        assert.isTrue(Option.isSome(hit.refreshed));
+        const old = yield* encryption.encrypt(Redacted.make("v"), "sealed-probe:r1:old");
+        const failure = yield* SealedColumn.reveal(encryption, options, old).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "DecryptionFailed");
         keys.rotateTo("k2");
         const stale = yield* SealedColumn.reveal(encryption, options, canonical);
-        assert.isFalse(stale.legacy);
         assert.isTrue(Option.isSome(stale.refreshed));
         const adopted = yield* SealedColumn.reveal(
           encryption,
           { ...options, adoptPlaintext: true },
           "plain",
         );
-        assert.isFalse(adopted.legacy);
         assert.isTrue(Option.isSome(adopted.refreshed));
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "a read that opens under a legacy AAD is logged with ids only: debug when it re-seals, a warning when re-seal is off",
-    () => {
-      const { layer, prepare } = setup("sealed_legacy_log");
-      return Effect.gen(function* () {
-        yield* prepare;
-        const encryption = yield* Encryption.Encryption;
-        const legacy = yield* encryption.encrypt(
-          Redacted.make("hunter2"),
-          "sealed-probe:r1:secret",
-        );
-        yield* put("r1", legacy);
-        const logged: Array<{ readonly level: string; readonly annotations: string }> = [];
-        const capture = Logger.make<unknown, void>((entry) => {
-          logged.push({
-            level: entry.logLevel,
-            annotations: JSON.stringify(entry.fiber.getRef(References.CurrentLogAnnotations)),
-          });
-        });
-        const swap = yield* SealedColumn.sqlSwap(declared);
-        const resealing = yield* SealedColumn.codec(declared, swap);
-        const frozen = yield* SealedColumn.codec(declared, swap).pipe(
-          Effect.provideService(SealedColumn.SealedColumnConfig, { resealOnRead: false }),
-        );
-        yield* Effect.all([
-          resealing.sealed("r1", legacy).open,
-          frozen.sealed("r1", legacy).open,
-        ]).pipe(
-          Effect.provide(Logger.layer([capture])),
-          Effect.provideService(References.MinimumLogLevel, "Debug"),
-        );
-        assert.deepStrictEqual(
-          logged.map((entry) => entry.level),
-          ["Debug", "Warn"],
-        );
-        for (const entry of logged) {
-          assert.include(entry.annotations, "sealed_probe");
-          assert.include(entry.annotations, "r1");
-          assert.notInclude(entry.annotations, "hunter2");
-        }
       }).pipe(Effect.provide(layer));
     },
   );
@@ -377,67 +329,64 @@ describe("SealedColumn call-site treatments", () => {
 });
 
 describe("SealedColumn.sweep", () => {
+  it.effect("re-seals stale values, leaves unreadable ones, and a second run does nothing", () => {
+    const { layer, prepare, keys } = setup("sealed_sweep");
+    return Effect.gen(function* () {
+      yield* prepare;
+      yield* sealedInto(declared, "a-canonical", "one");
+      yield* sealedInto(declared, "c-stale", "three");
+      yield* put("d-garbage", "not an envelope");
+      yield* put("e-null", null);
+      // Only c-stale is on the old key if the others are written after the rotation.
+      keys.rotateTo("k2");
+      yield* sealedInto(declared, "a-canonical", "one");
+      const first = yield* SealedColumn.sweep(declared, { batch: 2 });
+      assert.deepStrictEqual(first, { scanned: 3, resealed: 1, unreadable: 1 });
+      const second = yield* SealedColumn.sweep(declared, { batch: 2 });
+      assert.deepStrictEqual(second, { scanned: 3, resealed: 0, unreadable: 1 });
+      assert.strictEqual(yield* raw("d-garbage"), "not an envelope");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect(
-    "re-seals stale and legacy values, leaves unreadable ones, and a second run does nothing",
+    "a row sealed under an old AAD spelling is counted unreadable and never rewritten",
     () => {
-      const { layer, prepare, keys } = setup("sealed_sweep");
+      const { layer, prepare } = setup("sealed_sweep_old_aad");
       return Effect.gen(function* () {
         yield* prepare;
         const encryption = yield* Encryption.Encryption;
-        yield* sealedInto(declared, "a-canonical", "one");
-        yield* put(
-          "b-legacy",
-          yield* encryption.encrypt(Redacted.make("two"), "sealed-probe:b-legacy:secret"),
-        );
-        yield* sealedInto(declared, "c-stale", "three");
-        yield* put("d-garbage", "not an envelope");
-        yield* put("e-null", null);
-        // Only c-stale is on the old key if the others are written after the rotation.
-        keys.rotateTo("k2");
-        yield* sealedInto(declared, "a-canonical", "one");
-        yield* put(
-          "b-legacy",
-          yield* encryption.encrypt(Redacted.make("two"), "sealed-probe:b-legacy:secret"),
-        );
-        const first = yield* SealedColumn.sweep(declared, { batch: 2 });
-        assert.deepStrictEqual(first, { scanned: 4, resealed: 2, legacy: 1, unreadable: 1 });
-        const second = yield* SealedColumn.sweep(declared, { batch: 2 });
-        assert.deepStrictEqual(second, { scanned: 4, resealed: 0, legacy: 0, unreadable: 1 });
-        assert.strictEqual(yield* raw("d-garbage"), "not an envelope");
+        const old = yield* encryption.encrypt(Redacted.make("two"), "sealed-probe:r1:secret");
+        yield* put("r1", old);
+        const report = yield* SealedColumn.sweep(declared);
+        assert.deepStrictEqual(report, { scanned: 1, resealed: 0, unreadable: 1 });
+        assert.strictEqual(yield* raw("r1"), old);
       }).pipe(Effect.provide(layer));
     },
   );
 });
 
 describe("SealedColumn.sweepAll", () => {
-  const twoColumns = [declared, other];
-
-  /** A table with legacy-AAD rows in two columns, and a stale-key row in one. */
-  const seedLegacy = Effect.gen(function* () {
-    const encryption = yield* Encryption.Encryption;
-    const sql = yield* SqlClient.SqlClient;
-    for (const id of ["r1", "r2"]) {
-      yield* sql`INSERT INTO sealed_probe (id, secret, other) VALUES (
-        ${id},
-        ${yield* encryption.encrypt(Redacted.make(`s-${id}`), `sealed-probe:${id}:secret`)},
-        ${yield* encryption.encrypt(Redacted.make(`o-${id}`), `sealed-probe:${id}:other`)})`;
-    }
-  });
-
-  const legacyOther = SealedColumn.column({
-    table: "sealed_probe",
-    column: "other",
-    key: "id",
-    legacyAad: [(id) => `sealed-probe:${id}:other`],
-  });
+  /** Rows in two columns sealed canonically under k1, then the current key moves to k2. */
+  const seedStale = (keys: { readonly rotateTo: (kid: "k2") => void }) =>
+    Effect.gen(function* () {
+      const encryption = yield* Encryption.Encryption;
+      const sql = yield* SqlClient.SqlClient;
+      for (const id of ["r1", "r2"]) {
+        yield* sql`INSERT INTO sealed_probe (id, secret, other) VALUES (
+          ${id},
+          ${yield* encryption.encrypt(Redacted.make(`s-${id}`), SealedColumn.aadOf(declared, id))},
+          ${yield* encryption.encrypt(Redacted.make(`o-${id}`), SealedColumn.aadOf(other, id))})`;
+      }
+      keys.rotateTo("k2");
+    });
 
   it.effect(
     "reports one entry per column in order and logs one Info summary per column, ids and counts only",
     () => {
-      const { layer, prepare } = setup("sealed_sweep_all");
+      const { layer, prepare, keys } = setup("sealed_sweep_all");
       return Effect.gen(function* () {
         yield* prepare;
-        yield* seedLegacy;
+        yield* seedStale(keys);
         const logged: Array<{ readonly level: string; readonly annotations: string }> = [];
         const capture = Logger.make<unknown, void>((entry) => {
           logged.push({
@@ -445,33 +394,19 @@ describe("SealedColumn.sweepAll", () => {
             annotations: JSON.stringify(entry.fiber.getRef(References.CurrentLogAnnotations)),
           });
         });
-        const reports = yield* SealedColumn.sweepAll([declared, legacyOther], { batch: 1 }).pipe(
+        const reports = yield* SealedColumn.sweepAll([declared, other], { batch: 1 }).pipe(
           Effect.provide(Logger.layer([capture])),
         );
         assert.deepStrictEqual(reports, [
-          {
-            table: "sealed_probe",
-            column: "secret",
-            scanned: 2,
-            resealed: 2,
-            legacy: 2,
-            unreadable: 0,
-          },
-          {
-            table: "sealed_probe",
-            column: "other",
-            scanned: 2,
-            resealed: 2,
-            legacy: 2,
-            unreadable: 0,
-          },
+          { table: "sealed_probe", column: "secret", scanned: 2, resealed: 2, unreadable: 0 },
+          { table: "sealed_probe", column: "other", scanned: 2, resealed: 2, unreadable: 0 },
         ]);
         assert.deepStrictEqual(
           logged.map((entry) => entry.level),
           ["Info", "Info"],
         );
         assert.include(logged[0]?.annotations ?? "", '"column":"secret"');
-        assert.include(logged[1]?.annotations ?? "", '"legacy":2');
+        assert.include(logged[1]?.annotations ?? "", '"resealed":2');
         for (const entry of logged) {
           assert.notInclude(entry.annotations, "s-r1");
           assert.notInclude(entry.annotations, "o-r1");
@@ -480,32 +415,20 @@ describe("SealedColumn.sweepAll", () => {
     },
   );
 
-  // The sunset gate (plan 05 phase 14): once one `sweepAll` has run, a second reports `legacy: 0`
-  // for every column. Deleting the legacy read is safe only when this holds on the reference deployment.
-  it.effect(
-    "the gate: after sweepAll over a fixture with legacy rows, every column reports legacy: 0",
-    () => {
-      const { layer, prepare } = setup("sealed_sweep_gate");
-      return Effect.gen(function* () {
-        yield* prepare;
-        yield* seedLegacy;
-        const first = yield* SealedColumn.sweepAll([declared, legacyOther]);
-        assert.isTrue(first.every((report) => report.legacy > 0));
-        const gate = yield* SealedColumn.sweepAll([declared, legacyOther]);
-        assert.deepStrictEqual(
-          gate.map((report) => report.legacy),
+  it.effect("a second sweepAll re-seals nothing", () => {
+    const { layer, prepare, keys } = setup("sealed_sweep_all_again");
+    return Effect.gen(function* () {
+      yield* prepare;
+      yield* seedStale(keys);
+      yield* SealedColumn.sweepAll([declared, other]);
+      const again = yield* SealedColumn.sweepAll([declared, other]);
+      assert.deepStrictEqual(
+        again.map((report) => [report.resealed, report.unreadable]),
+        [
           [0, 0],
-        );
-        // And the legacy spelling is no longer needed to read either column.
-        const strict = yield* SealedColumn.sweepAll(twoColumns);
-        assert.deepStrictEqual(
-          strict.map((report) => [report.unreadable, report.resealed]),
-          [
-            [0, 0],
-            [0, 0],
-          ],
-        );
-      }).pipe(Effect.provide(layer));
-    },
-  );
+          [0, 0],
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  });
 });

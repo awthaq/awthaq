@@ -112,12 +112,11 @@ export interface NewSpKey extends Omit<SpKeyRecord, "createdAt" | "privateKey"> 
   readonly privateKey: Redacted.Redacted<string>;
 }
 
-/** The sealed `privateKey` column (the legacy AAD spelling still opens, then re-seals canonically). */
+/** The sealed `privateKey` column. */
 export const privateKeyColumn = SealedColumn.column({
   table: "saml_sp_key",
   column: "privateKey",
   key: "id",
-  legacyAad: [(id) => `saml-sp-key:${id}:privateKey`],
 });
 
 /** A local session a connection's sign-in created (BEH-EA-315). */

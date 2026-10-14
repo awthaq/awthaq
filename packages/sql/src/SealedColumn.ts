@@ -6,18 +6,16 @@
 // appears, so domain code never sees an envelope or an AAD.
 //
 // - One AAD convention, `<table>:<rowKey>:<column>`, so a ciphertext cannot be moved to another
-//   row or column. Envelopes sealed under an older spelling are listed in `legacyAad`: they still
-//   open, and re-seal to the canonical AAD on the next read.
-// - Lazy re-seal (ADR-EA-019 decision 3): when the stored envelope is under a retired key (or a
-//   legacy AAD), `open` writes the fresh envelope back by compare-and-swap, so a concurrent
+//   row or column. There is no fallback to an older spelling (ADR-EA-019 revision 1.2): an
+//   envelope sealed under one fails as `Unreadable`.
+// - Lazy re-seal (ADR-EA-019 decision 3): when the stored envelope is under a retired key,
+//   `open` writes the fresh envelope back by compare-and-swap, so a concurrent
 //   rotation always wins. A failed or lost swap is logged (ids only) and never fails the read.
 // - A value that does not open is the typed `SealedColumn/Unreadable`, never `null` and never a
 //   defect. Each call site picks one of two treatments: `orDie` (fail closed) or `option`
 //   (degrade this value with a warning).
-// - `sweep` re-seals every stale or legacy value of a column: the operator's batch job. Its report
-//   counts the values re-sealed because a legacy AAD matched (`legacy`), the number the legacy-AAD
-//   sunset (plan 05 phase 14) is gated on; `sweepAll` runs it over every column and logs one
-//   summary per column.
+// - `sweep` re-seals every stale value of a column: the operator's batch job (key rotation);
+//   `sweepAll` runs it over every column and logs one summary per column.
 
 import { Defects, Encryption, KeyProvider } from "@awthaq/ports";
 import * as Context from "effect/Context";
@@ -42,8 +40,6 @@ export interface Column<A> {
   /** The row-key column: its value is bound into the AAD and used by the re-seal compare-and-swap. */
   readonly key: string;
   readonly schema: Schema.Codec<A, string>;
-  /** Read-only AADs for envelopes sealed before this declaration; a hit re-seals under the canonical one. */
-  readonly legacyAad: ReadonlyArray<(rowKey: string) => string>;
   /** Treat a non-envelope stored value as legacy plaintext and seal it on read. */
   readonly adoptPlaintext: boolean;
 }
@@ -52,7 +48,6 @@ interface ColumnOptions {
   readonly table: string;
   readonly column: string;
   readonly key: string;
-  readonly legacyAad?: ReadonlyArray<(rowKey: string) => string>;
   readonly adoptPlaintext?: boolean;
 }
 
@@ -69,7 +64,6 @@ const validated = (options: ColumnOptions) => {
     table: options.table,
     column: options.column,
     key: options.key,
-    legacyAad: options.legacyAad ?? [],
     adoptPlaintext: options.adoptPlaintext ?? false,
   };
 };
@@ -86,10 +80,7 @@ export function column(
 }
 
 /** What the AAD convention and `sweep` need of a column: everything but its value schema. */
-export type Sweepable = Pick<
-  Column<unknown>,
-  "table" | "column" | "key" | "legacyAad" | "adoptPlaintext"
->;
+export type Sweepable = Pick<Column<unknown>, "table" | "column" | "key" | "adoptPlaintext">;
 
 /** ADR-EA-019 decision 6: the one AAD convention. Matches core's `<entity>:<id>:<field>` shape. */
 export const aadOf = (declared: Pick<Sweepable, "table" | "column">, rowKey: string) =>
@@ -133,29 +124,24 @@ export const sqlSwap = (declared: Pick<Sweepable, "table" | "column" | "key">) =
 
 export interface Revealed {
   readonly plaintext: Redacted.Redacted<string>;
-  /** A sealed value to write back: the stored one was stale, legacy-AAD or adopted plaintext. */
+  /** A sealed value to write back: the stored one was stale or adopted plaintext. */
   readonly refreshed: Option.Option<string>;
-  /** The value opened only under a legacy AAD (not the canonical one): what the sunset counts. */
-  readonly legacy: boolean;
 }
 
 export interface RevealOptions {
   readonly aad: string;
-  readonly legacyAad?: ReadonlyArray<string>;
   readonly adoptPlaintext?: boolean;
 }
 
 /**
- * Opens `stored` under `options.aad`. On `DecryptionFailed`, each legacy AAD is tried in turn (an
- * `UnknownKeyId` is never retried: another AAD cannot make an unknown key known). A legacy hit, a
- * stale key, or (with `adoptPlaintext`) a plain value yields a `refreshed` envelope under the
- * canonical AAD. An envelope-shaped value that fails authentication is never read as plaintext.
+ * Opens `stored` under `options.aad` only. A stale key, or (with `adoptPlaintext`) a plain value,
+ * yields a `refreshed` envelope under the canonical AAD. An envelope-shaped value that fails authentication is never read as plaintext.
  */
 export const reveal = (
   encryption: Encryption.EncryptionShape,
   options: RevealOptions,
   stored: string,
-) => {
+): Effect.Effect<Revealed, Encryption.DecryptionFailed | KeyProvider.UnknownKeyId> => {
   const seal = (plaintext: Redacted.Redacted<string>) => encryption.encrypt(plaintext, options.aad);
   if (options.adoptPlaintext === true && !Encryption.looksLikeEnvelope(stored)) {
     const plaintext = Redacted.make(stored);
@@ -163,46 +149,23 @@ export const reveal = (
       Effect.map((sealed): Revealed => ({
         plaintext,
         refreshed: Option.some(sealed),
-        legacy: false,
       })),
     );
   }
-  const viaLegacy = (
-    remaining: ReadonlyArray<string>,
-    failure: Encryption.DecryptionFailed,
-  ): Effect.Effect<Revealed, Encryption.DecryptionFailed | KeyProvider.UnknownKeyId> => {
-    const [next, ...rest] = remaining;
-    if (next === undefined) return Effect.fail(failure);
-    return encryption.decrypt(stored, next).pipe(
-      Effect.flatMap((decrypted) =>
-        seal(decrypted.plaintext).pipe(
-          Effect.map((sealed): Revealed => ({
-            plaintext: decrypted.plaintext,
-            refreshed: Option.some(sealed),
-            legacy: true,
-          })),
-        ),
-      ),
-      Effect.catchTag("DecryptionFailed", () => viaLegacy(rest, failure)),
-    );
-  };
   return encryption.decrypt(stored, options.aad).pipe(
     Effect.flatMap((decrypted) =>
       Option.isNone(decrypted.staleKid)
         ? Effect.succeed<Revealed>({
             plaintext: decrypted.plaintext,
             refreshed: Option.none(),
-            legacy: false,
           })
         : seal(decrypted.plaintext).pipe(
             Effect.map((sealed): Revealed => ({
               plaintext: decrypted.plaintext,
               refreshed: Option.some(sealed),
-              legacy: false,
             })),
           ),
     ),
-    Effect.catchTag("DecryptionFailed", (failure) => viaLegacy(options.legacyAad ?? [], failure)),
   );
 };
 
@@ -210,8 +173,8 @@ export const reveal = (
 
 /**
  * One codec per column per records layer. `seal` for writes; `sealed` wraps a stored value for a
- * record. `open`: canonical AAD first, then each legacy AAD; decode via the column schema
- * (`Malformed`); on a stale key or a legacy hit, re-seal under the canonical AAD by `swap`.
+ * record. `open`: the canonical AAD only; decode via the column schema
+ * (`Malformed`); on a stale key, re-seal under the canonical AAD by `swap`.
  */
 export const codec = <A>(declared: Column<A>, swap: Swap) =>
   Effect.gen(function* () {
@@ -248,23 +211,11 @@ export const codec = <A>(declared: Column<A>, swap: Swap) =>
         ),
       );
 
-    // A read that opens only under a legacy AAD is what the sunset (plan 05 phase 14) counts.
-    // With re-seal on it heals itself on this read (debug); with it off it never will, so the
-    // operator should hear about it (warning). Ids only, never the value.
-    const noteLegacy = (rowKey: string) =>
-      (config.resealOnRead
-        ? Effect.logDebug("awthaq: a sealed column opened under a legacy AAD; re-sealing it")
-        : Effect.logWarning(
-            "awthaq: a sealed column opened under a legacy AAD and re-seal on read is off; run SealedColumn.sweep",
-          )
-      ).pipe(Effect.annotateLogs(ids(rowKey)));
-
     const sealed = (rowKey: string, stored: string): Sealed<A> => ({
       open: reveal(
         encryption,
         {
           aad: aadOf(declared, rowKey),
-          legacyAad: declared.legacyAad.map((legacy) => legacy(rowKey)),
           adoptPlaintext: declared.adoptPlaintext,
         },
         stored,
@@ -278,7 +229,6 @@ export const codec = <A>(declared: Column<A>, swap: Swap) =>
         Effect.flatMap((revealed) =>
           decode(Redacted.value(revealed.plaintext)).pipe(
             Effect.mapError(() => new Unreadable({ ...ids(rowKey), reason: "Malformed" })),
-            Effect.tap(() => (revealed.legacy ? noteLegacy(rowKey) : Effect.void)),
             Effect.tap(() =>
               config.resealOnRead && Option.isSome(revealed.refreshed)
                 ? persist(rowKey, stored, revealed.refreshed.value)
@@ -319,10 +269,9 @@ const unreadableMarker: unique symbol = Symbol("awthaq/sql/SealedColumn/unreadab
 export const option = <A, E, R>(self: Effect.Effect<A, E, R>) =>
   Effect.map(
     Effect.catchIf(self, isUnreadable, (unreadable) =>
-      Effect.logWarning("awthaq: a sealed column cannot be opened").pipe(
-        Effect.annotateLogs(describe(unreadable)),
-        Effect.as(unreadableMarker),
-      ),
+      Effect.logWarning(
+        "awthaq: a sealed column cannot be opened; it may be sealed under a retired legacy AAD; restore from backup or re-enter the secret",
+      ).pipe(Effect.annotateLogs(describe(unreadable)), Effect.as(unreadableMarker)),
     ),
     (value) => (value === unreadableMarker ? Option.none<A>() : Option.some(value)),
   );
@@ -332,16 +281,14 @@ export const option = <A, E, R>(self: Effect.Effect<A, E, R>) =>
 export interface SweepReport {
   readonly scanned: number;
   readonly resealed: number;
-  /** Of `resealed`, the values that opened only under a legacy AAD. The sunset gate is `legacy: 0`. */
-  readonly legacy: number;
   /** Values that did not open (tampered, wrong key). Never touched. */
   readonly unreadable: number;
 }
 
 /**
- * Batch re-seal (ADR-EA-019 decision 3 left a batch out of scope; retiring a kid and sunsetting
- * the legacy AADs are its callers). Keyset-pages `table` by `key`, opens every value, re-seals the
- * stale or legacy ones by compare-and-swap. An operator job, never run by a request.
+ * Batch re-seal (ADR-EA-019 decision 3 left a batch out of scope; retiring a kid is its
+ * caller). Keyset-pages `table` by `key`, opens every value, re-seals the
+ * stale ones by compare-and-swap. An operator job, never run by a request.
  */
 export const sweep = (declared: Sweepable, options?: { readonly batch?: number }) =>
   Effect.gen(function* () {
@@ -351,7 +298,6 @@ export const sweep = (declared: Sweepable, options?: { readonly batch?: number }
     const batch = options?.batch ?? 100;
     let scanned = 0;
     let resealed = 0;
-    let legacy = 0;
     let unreadable = 0;
     let last: string | undefined;
     for (;;) {
@@ -368,7 +314,6 @@ export const sweep = (declared: Sweepable, options?: { readonly batch?: number }
           encryption,
           {
             aad: aadOf(declared, row.rowKey),
-            legacyAad: declared.legacyAad.map((legacy) => legacy(row.rowKey)),
             adoptPlaintext: declared.adoptPlaintext,
           },
           row.stored,
@@ -377,16 +322,13 @@ export const sweep = (declared: Sweepable, options?: { readonly batch?: number }
           unreadable += 1;
         } else if (Option.isSome(outcome.value.refreshed)) {
           const won = yield* swap(row.rowKey, row.stored, outcome.value.refreshed.value);
-          if (won) {
-            resealed += 1;
-            if (outcome.value.legacy) legacy += 1;
-          }
+          if (won) resealed += 1;
         }
         last = row.rowKey;
       }
       if (rows.length < batch) break;
     }
-    return { scanned, resealed, legacy, unreadable } satisfies SweepReport;
+    return { scanned, resealed, unreadable } satisfies SweepReport;
   });
 
 /** One column's name and what its sweep found. */
@@ -397,8 +339,8 @@ export interface ColumnSweep extends SweepReport {
 
 /**
  * Sweeps every column in turn (an operator's whole-deployment pass) and logs one Info summary per
- * column: `scanned`, `resealed`, `legacy`, `unreadable`, ids only. Answers a report per column, in
- * order. A `legacy` of 0 on every column is the precondition for deleting the legacy read.
+ * column: `scanned`, `resealed`, `unreadable`, ids only. Answers a report per column, in
+ * order.
  */
 export const sweepAll = (
   columns: ReadonlyArray<Sweepable>,
@@ -418,7 +360,6 @@ export const sweepAll = (
             column: report.column,
             scanned: report.scanned,
             resealed: report.resealed,
-            legacy: report.legacy,
             unreadable: report.unreadable,
           }),
         ),

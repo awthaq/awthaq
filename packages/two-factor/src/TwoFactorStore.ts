@@ -52,12 +52,11 @@ export interface SecretRecord {
   readonly createdAt: DateTime.Utc;
 }
 
-/** The sealed `secret` column. The legacy AAD (`two_factor_secret:<userId>`) still opens, then re-seals canonically. */
+/** The sealed `secret` column. */
 export const secretColumn = SealedColumn.column({
   table: "two_factor_secret",
   column: "secret",
   key: "userId",
-  legacyAad: [(userId) => `two_factor_secret:${userId}`],
 });
 
 export interface TwoFactorSecretsShape {

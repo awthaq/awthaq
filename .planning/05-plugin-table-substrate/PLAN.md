@@ -1267,16 +1267,9 @@ Files:
 
 Gate: the plan gate `pnpm check` plus `pnpm test:pg`.
 
-### Phase 14 — legacy AAD sunset (a later release; ticket created now, `Status: needs-info`)
+### Phase 14 — legacy AAD sunset (done, 2026-10-14; ADR-EA-019 revision 1.2)
 
-Criteria:
-
-- one minor release has shipped with Phase 4–10;
-- the release notes told operators to run `SealedColumn.sweep` per column (a CLI wrapper
-  `awthaq migration reseal` is optional: open question Q5);
-- `sweep` reports `resealed: 0` on a reference deployment.
-
-Then delete every `legacyAad` entry and the legacy branch of `open`, and record it in ADR-EA-019 revision 1.2.
+Original criteria (a minor release shipped, release notes told operators to run `sweep`, `sweep` reports `resealed: 0` on a reference deployment) were replaced; see "Decisions taken" below. The legacy read is deleted: `legacyAad` entries, the legacy branch of `reveal`/`open`, `Revealed.legacy`, `SweepReport.legacy`.
 
 ---
 
@@ -1597,3 +1590,11 @@ Phase 13:
 
 - The template's `notes_note` is Partitioned: a second migration (`add_notes_note_tenant_id`) adds the nullable, indexed `"tenantId"`, the records ship both adapters (`layerMemory`, `layerSql`), stamp with `TenantScoped.stamp` and filter with `TenantScoped.predicate`/`matches`, and every method fails with `StoreUnavailable`; `@awthaq/sql` becomes a dependency of the template (package.json, tsconfig paths and reference). The list query is a plain statement decoded with `Schema.decodeUnknownEffect`, so the visibility need not ride a `SqlSchema` request.
 - `docs/plugin-authoring.md` gains "Tenancy: declare each table, filter in the store" and "Sealed columns" sections, a `StoreUnavailable` bullet under Contract, the Persistence row, checklist item 4 and a new item 10. No changeset: the template is a private example. `oxfmt` ignores `docs/`, so the guide is hand-formatted.
+
+Phase 14 (decided 2026-10-14, two expert agents):
+
+- Timing: removed now, in the same unreleased batch, in its own commit after `sweepAll`. No tags exist, every package is 0.1.0 and sealed columns plus `sweepAll` never shipped, so no outside operator holds rows under an old AAD. The "one minor release has shipped" criterion is vacuous and waived. Caveat: an internal environment running a pre-release build with sealed rows runs `SealedColumn.sweepAll` first.
+- No reference deployment exists (examples are private): the criterion is the executable gate test, kept until the removal commit deleted it; sign-off is the maintainer's. No boot-time gate; `legacy: 0` stayed advisory (a hard gate would be a read-only `SealedColumn.countLegacy`, not built).
+- No `awthaq migration reseal` CLI (Q5 stays library-effect-only); revisit if a real operator asks.
+- `unreadable` rows are never deleted by the library. After removal a former-legacy row fails `DecryptionFailed` on the canonical AAD, surfacing as the existing `SealedColumn/Unreadable`; call sites keep their treatment (`orDie` for the SAML key and TOTP secret, `option` for webhook secrets/headers and the OAuth client secret). The `option` warning gains a restore/re-enter hint.
+- `adoptPlaintext` is not a legacy-AAD mechanism and stays; only `reveal`'s `legacyAad` option went. Its sunset is a separate ticket (`.scratch/plugin-table-substrate/issues/16-adopt-plaintext-sunset.md`).

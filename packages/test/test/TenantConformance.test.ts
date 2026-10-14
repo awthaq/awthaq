@@ -300,7 +300,6 @@ const secretColumn = SealedColumn.column({
   table: "fx_secret",
   column: "secret",
   key: "id",
-  legacyAad: [(id) => `fx-secret:${id}:secret`],
 });
 
 interface SecretsShape {
@@ -397,7 +396,7 @@ describe("runSealedColumnTests", () => {
       { name: "sqlite", layer: secretsSql(false) },
     ]);
     assert.deepStrictEqual(sink.failed, []);
-    assert.strictEqual(sink.passed.length, 8);
+    assert.strictEqual(sink.passed.length, 6);
   });
 
   it("fails a records module that stores the value unsealed", async () => {

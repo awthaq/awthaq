@@ -181,7 +181,7 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
 
 describe("TwoFactor: secret at rest (THS-004, ADR-EA-020)", () => {
   // That the stored secret is an envelope bound to its row (never the base32 secret), moves nowhere, re-seals
-  // after a key rotation and still opens under the legacy AAD is `runSealedColumnTests`' (TwoFactorStore.test.ts).
+  // after a key rotation is `runSealedColumnTests`' (TwoFactorStore.test.ts).
   it.effect("the stored secret opens to the base32 secret the user was shown", () =>
     Effect.gen(function* () {
       const secrets = yield* TwoFactorStore.TwoFactorSecrets;

@@ -5,7 +5,7 @@
 // `packages/sql/test/SealedColumn.test.ts`; this proves a plugin's records module used its
 // declaration: the stored value is an envelope and never the plaintext, it opens to what was
 // written, a ciphertext moved to another row does not open, an envelope under a retired key
-// re-seals to the current one on read, and a legacy-AAD envelope opens and re-seals.
+// re-seals to the current one on read.
 
 import { Encryption, KeyProvider } from "@awthaq/ports";
 import { SealedColumn } from "@awthaq/sql";
@@ -157,46 +157,6 @@ export const runSealedColumnTests = <A, R>(
             framework.fail(`${label}: the re-sealed envelope is not on the current key`);
         },
       );
-
-      if (column.legacyAad.length > 0) {
-        framework.it(
-          `${label}: an envelope under the legacy AAD opens and is re-sealed canonically`,
-          async () => {
-            const outcome = await run(() =>
-              Effect.gen(function* () {
-                const encryption = yield* Encryption.Encryption;
-                yield* config.write("row-1", config.sample);
-                const legacy = column.legacyAad[0];
-                if (legacy === undefined) return framework.fail(`${label}: no legacy AAD`);
-                const planted = yield* encryption.encrypt(
-                  Redacted.make(yield* text(config.sample)),
-                  legacy("row-1"),
-                );
-                yield* adapter.plant("row-1", planted);
-                const opened = yield* (yield* config.read("row-1")).open;
-                const after = yield* adapter.raw("row-1");
-                const canonical = yield* encryption
-                  .decrypt(after, SealedColumn.aadOf(column, "row-1"))
-                  .pipe(Effect.option);
-                return {
-                  planted,
-                  after,
-                  opened: Redacted.value(opened),
-                  canonical: Option.isSome(canonical),
-                };
-              }),
-            );
-            if (JSON.stringify(outcome.opened) !== JSON.stringify(config.sample)) {
-              framework.fail(`${label}: a legacy envelope did not open to the sealed value`);
-            }
-            if (outcome.after === outcome.planted || !outcome.canonical) {
-              framework.fail(
-                `${label}: a legacy envelope was not re-sealed under the canonical AAD`,
-              );
-            }
-          },
-        );
-      }
     }
   });
 };
