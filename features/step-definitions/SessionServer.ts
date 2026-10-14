@@ -1,3 +1,4 @@
+// Hand-wired on purpose: a real listening socket in front of the shipped middleware; `TestAuth.app` serves no socket (plan 08 exemption).
 // BEH-EA-227/228/318 (26-cli.feature): a REAL auth server for the session commands — core's `session`
 // group and the real `@awthaq/device-authorization` plugin, served by the real handlers behind real bearer
 // authentication and CSRF over in-memory `Users`/`Sessions`, on a real Node HTTP socket. `login` and `whoami`

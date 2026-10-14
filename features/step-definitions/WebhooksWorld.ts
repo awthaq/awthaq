@@ -8,30 +8,10 @@
 // backoff schedule, the rotation grace window, leases, retention) goes through the scenario's
 // `TestClock`. A second, HTTP-served composition is built only by the scenarios about the admin tier.
 import { Api } from "@awthaq/api";
-import {
-  AuditLog,
-  AuthEvents,
-  DataExport,
-  Erasure,
-  EventRelay,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-} from "@awthaq/core";
-import { Encryption, HostResolver, KeyProvider, RateLimiter, Tenant } from "@awthaq/ports";
+import { Auth, AuditLog, AuthEvents, DataExport, Erasure, EventRelay, Users } from "@awthaq/core";
+import { Encryption, HostResolver, RateLimiter, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import {
-  WebhookDelivery,
-  WebhookRecords,
-  WebhookTransport,
-  Webhooks,
-  WebhooksApi,
-} from "@awthaq/webhooks";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { createHmac, randomBytes } from "node:crypto";
-import * as ConfigProvider from "effect/ConfigProvider";
+import { WebhookDelivery, WebhookRecords, WebhookTransport, Webhooks } from "@awthaq/webhooks";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -40,7 +20,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
@@ -48,8 +27,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as TestClock from "effect/testing/TestClock";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
 import { TestAuth } from "@awthaq/test";
 
@@ -183,44 +161,6 @@ const makeResolver = () => {
 
 // ---- the composition ---------------------------------------------------------------------
 
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const CSRF_SECRET = "webhooks-bdd-csrf-secret-padded-to-thirty-two-bytes";
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  ),
-);
-
 export type Gate = "allow" | "deny" | "readOnly";
 
 export interface Options {
@@ -240,21 +180,25 @@ const gateFor = (gate: Gate): Webhooks.WebhooksConfigShape["canManageWebhooks"] 
   }
 };
 
-const baseLayer = (
+const built = Auth.make([Webhooks.Webhooks]);
+
+/** `Auth.make([Webhooks])` through the harness; only the programmable receiver, resolver, limiter and configuration are this World's own. */
+const composition = (
   options: Options,
   receiver: ReturnType<typeof makeReceiver>,
   resolver: ReturnType<typeof makeResolver>,
 ) =>
-  Layer.mergeAll(
-    WebhookRecords.layerMemory.pipe(Layer.provideMerge(EncryptionLive)),
-    receiver.layer,
-    receiver.transportLayer,
-    options.limiter === "memory" ? RateLimiter.layerMemory : RateLimiter.layerPermissive,
-    resolver.layer,
-    Webhooks.config({ canManageWebhooks: gateFor(options.gate), ...options.config }),
-    EventRelay.layerCursorMemory,
-    RateLimits.layer,
-  ).pipe(Layer.provideMerge(CoreLive));
+  TestAuth.layer(built, {
+    rateLimiter: options.limiter === "memory" ? "enforcing" : "permissive",
+    services: Layer.mergeAll(
+      receiver.layer,
+      receiver.transportLayer,
+      resolver.layer,
+      Webhooks.config({ canManageWebhooks: gateFor(options.gate), ...options.config }),
+      WebhookRecords.layerMemory,
+      EventRelay.layerCursorMemory,
+    ),
+  });
 
 /** What the steps may ask of the built app. */
 export type AppServices =
@@ -282,11 +226,7 @@ const buildApp = (options: Options, scope: Scope.Scope) =>
   Effect.gen(function* () {
     const receiver = makeReceiver();
     const resolver = makeResolver();
-    const layer = Webhooks.Webhooks.layer.pipe(
-      Layer.provide(AdminAuthenticationLive),
-      Layer.provide(CsrfProtectionLive),
-      Layer.provideMerge(baseLayer(options, receiver, resolver)),
-    );
+    const layer = composition(options, receiver, resolver);
     const context = yield* Layer.buildWithScope(layer, scope);
     const app: App = { run: (effect) => Effect.provide(effect, context), receiver, resolver };
     return app;
@@ -295,12 +235,6 @@ const buildApp = (options: Options, scope: Scope.Scope) =>
 // ---- the HTTP-served composition (the admin-tier scenarios) --------------------------------
 
 const ORIGIN = "http://localhost:3000";
-
-/** `<iat>.<random>.<hmac(iat.random)>`, computed with `node:crypto`, independent of `Csrf.ts`. */
-const CSRF_VALUE: string = (() => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
-})();
 
 export interface HttpApp {
   readonly sessionCookie: () => Promise<string>;
@@ -317,50 +251,27 @@ export interface HttpApp {
 
 const buildHttpApp = (options: Options): HttpApp => {
   const receiver = makeReceiver();
-  const AppLayer = AuthHttp.routes(WebhooksApi.WebhooksApi).pipe(
-    Layer.provide(Webhooks.Webhooks.layer),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(baseLayer(options, receiver, makeResolver())),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
-  // The web handler runs on the real clock, so the session it authenticates is issued on the real
-  // clock too, against the very services the handler runs on (one shared memo map).
-  const sessionCookie = () =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const sessions = yield* Sessions.Sessions;
-            const issued = yield* sessions.issue({ userId: Users.UserId("admin-1") });
-            return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-          }).pipe(Effect.provide(context));
-        }),
-      ),
-    );
+  // The web handler runs on the real clock, so the session it authenticates is issued on the real clock too, against
+  // the very services the handler runs on (`TestAuth.app` serves and reads one memo map).
+  const http = TestAuth.app(composition(options, receiver, makeResolver()), { baseUrl: ORIGIN });
+  const sessionCookie = async () => (await http.signIn("admin-1@example.com")).cookieHeader;
   const call: HttpApp["call"] = async (method, path, callOptions = {}) => {
-    const withCsrf = callOptions.csrf !== false;
-    const response = await handler(
-      new Request(`${ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(callOptions.body === undefined ? {} : { "content-type": "application/json" }),
-          cookie: [
-            callOptions.cookie,
-            withCsrf ? `${Api.CSRF_COOKIE_NAME}=${CSRF_VALUE}` : undefined,
-          ]
-            .filter((part) => part !== undefined && part !== "")
-            .join("; "),
-          ...(withCsrf ? { "x-csrf-token": CSRF_VALUE } : {}),
-        },
-        ...(callOptions.body === undefined ? {} : { body: JSON.stringify(callOptions.body) }),
-      }),
-    );
+    const response =
+      callOptions.csrf === false
+        ? await http.handler(
+            new Request(`${ORIGIN}${path}`, {
+              method,
+              headers: {
+                ...(callOptions.body === undefined ? {} : { "content-type": "application/json" }),
+                ...(callOptions.cookie === undefined ? {} : { cookie: callOptions.cookie }),
+              },
+              ...(callOptions.body === undefined ? {} : { body: JSON.stringify(callOptions.body) }),
+            }),
+          )
+        : await http.request(method, path, {
+            ...(callOptions.cookie === undefined ? {} : { cookie: callOptions.cookie }),
+            ...(callOptions.body === undefined ? {} : { json: callOptions.body }),
+          });
     const parsed: unknown = await response.json().catch(() => undefined);
     const tag =
       typeof parsed === "object" &&

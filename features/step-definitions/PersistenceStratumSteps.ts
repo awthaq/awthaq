@@ -36,7 +36,7 @@ import {
   RepositoriesLive,
   withDatabase,
 } from "./PersistenceStratumWorld.ts";
-import { TestServices } from "./shared/Harness.ts";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
@@ -233,7 +233,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     const appLayer = AuthHttp.routes(LeakApi).pipe(
       Layer.provide(Handlers),
       Layer.provideMerge(RepositoriesLive),
-      Layer.provideMerge(TestServices),
+      Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
     );
     const { handler } = HttpRouter.toWebHandler(appLayer);

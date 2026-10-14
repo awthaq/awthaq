@@ -12,27 +12,9 @@
 // directly against `Sessions` through the same shared `MemoMap` the app's
 // own handler resolves against — the identical technique
 // `AuthHttp.test.ts`'s own `issueSessionCookieHeader` uses.
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-} from "@awthaq/core";
-import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import {
-  Passkey,
-  PasskeyApi,
-  ChallengeStore,
-  PasskeyCredentials,
-  PasskeyUserHandles,
-} from "@awthaq/passkey";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { Accounts, Auth, Sessions, Users } from "@awthaq/core";
+import { WebAuthn } from "@awthaq/ports";
+import { Passkey, PasskeyCredentials } from "@awthaq/passkey";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -42,8 +24,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import { TestServices } from "./shared/Harness.ts";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import { TestAuth } from "@awthaq/test";
 
 export const RP_ID = "example.com";
 export const ORIGIN = "https://example.com";
@@ -153,28 +134,6 @@ const mockWebAuthn = (
       }),
   });
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(RateLimiter.layerPermissive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
-
 export interface AppOptions {
   readonly rpId?: string;
   readonly origins?: ReadonlyArray<string>;
@@ -189,58 +148,43 @@ export interface AppOptions {
   readonly webAuthnPort?: "mock" | "simplewebauthn";
 }
 
+const built = Auth.make([Passkey.Passkey]);
+
 const buildAppLayer = (
   options: AppOptions,
   webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>,
   verifyCalls: Ref.Ref<ReadonlyArray<VerifyRegistrationCall>>,
 ) =>
-  Layer.mergeAll(
-    AuthHttp.routes(PasskeyApi.PasskeyApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Passkey.Passkey.layer),
-      Layer.provide(
-        Passkey.config({
-          rpId: options.rpId ?? RP_ID,
-          origins: options.origins ?? [ORIGIN],
-          ...(options.attestation === undefined ? {} : { attestation: options.attestation }),
-          ...(options.conditionalCreate === undefined
-            ? {}
-            : { conditionalCreate: options.conditionalCreate }),
-          ...(options.authenticatorSelection === undefined
-            ? {}
-            : { authenticatorSelection: options.authenticatorSelection }),
-          ...(options.counterAnomalyPolicy === undefined
-            ? {}
-            : { counterAnomalyPolicy: options.counterAnomalyPolicy }),
-          ...(options.reauthMaxAgeMillis === undefined
-            ? {}
-            : { reauthMaxAgeSeconds: Duration.millis(options.reauthMaxAgeMillis) }),
-        }),
-      ),
-      Layer.provide(AuthenticationLive),
+  TestAuth.layer(built, {
+    openapiPath: "/openapi.json",
+    docsPath: "/docs",
+    services: Layer.mergeAll(
+      options.webAuthnPort === "simplewebauthn"
+        ? WebAuthn.layerSimpleWebAuthn
+        : mockWebAuthn(webAuthnBehavior, verifyCalls),
+      Passkey.config({
+        rpId: options.rpId ?? RP_ID,
+        origins: options.origins ?? [ORIGIN],
+        ...(options.attestation === undefined ? {} : { attestation: options.attestation }),
+        ...(options.conditionalCreate === undefined
+          ? {}
+          : { conditionalCreate: options.conditionalCreate }),
+        ...(options.authenticatorSelection === undefined
+          ? {}
+          : { authenticatorSelection: options.authenticatorSelection }),
+        ...(options.counterAnomalyPolicy === undefined
+          ? {}
+          : { counterAnomalyPolicy: options.counterAnomalyPolicy }),
+        ...(options.reauthMaxAgeMillis === undefined
+          ? {}
+          : { reauthMaxAgeSeconds: Duration.millis(options.reauthMaxAgeMillis) }),
+      }),
     ),
-    AuthHttp.docs(PasskeyApi.PasskeyApi),
-  ).pipe(
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        options.webAuthnPort === "simplewebauthn"
-          ? WebAuthn.layerSimpleWebAuthn
-          : mockWebAuthn(webAuthnBehavior, verifyCalls),
-        ChallengeStore.layerMemory,
-        PasskeyCredentials.layerMemory,
-        PasskeyUserHandles.layerMemory,
-        ClientAddress.layerDirect,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
-    ),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
+  });
 
 export interface AppHandle {
-  readonly handler: (request: Request) => Promise<Response>;
-  readonly memoMap: Layer.MemoMap;
-  readonly appLayer: ReturnType<typeof buildAppLayer>;
+  /** The composition served and read through one memo map: the handler and `run` share every instance. */
+  readonly app: TestAuth.App<AppServices>;
   readonly webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>;
   readonly verifyCalls: Ref.Ref<ReadonlyArray<VerifyRegistrationCall>>;
 }
@@ -277,10 +221,10 @@ export const configureApp = Effect.fn("features.passkey.configureApp")(function*
   yield* Ref.set(world.appOptions, merged);
   const webAuthnBehavior = Ref.makeUnsafe<MockWebAuthnOverrides>(merged.webAuthn ?? {});
   const verifyCalls = Ref.makeUnsafe<ReadonlyArray<VerifyRegistrationCall>>([]);
-  const appLayer = buildAppLayer(merged, webAuthnBehavior, verifyCalls);
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  yield* Ref.set(world.app, { handler, memoMap, appLayer, webAuthnBehavior, verifyCalls });
+  const app = TestAuth.app(buildAppLayer(merged, webAuthnBehavior, verifyCalls), {
+    baseUrl: ORIGIN,
+  });
+  yield* Ref.set(world.app, { app, webAuthnBehavior, verifyCalls });
 });
 
 /**
@@ -309,20 +253,14 @@ export const request = Effect.fn("features.passkey.request")(function* (
   path: string,
   options?: { readonly body?: unknown; readonly headers?: Record<string, string> },
 ) {
-  const { handler } = yield* appHandle();
+  const { app } = yield* appHandle();
+  const { cookie, ...headers } = options?.headers ?? {};
   const response = yield* Effect.promise(() =>
-    handler(
-      new Request(`${ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(options?.body === undefined ? {} : { "content-type": "application/json" }),
-          ...options?.headers,
-          cookie: withCsrfCookie(options?.headers?.["cookie"]),
-          "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-        },
-        ...(options?.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-      }),
-    ),
+    app.request(method, path, {
+      ...(cookie === undefined ? {} : { cookie }),
+      ...(options?.body === undefined ? {} : { json: options.body }),
+      headers,
+    }),
   );
   const world = yield* World;
   yield* Ref.set(world.lastResponse, response);
@@ -355,24 +293,8 @@ export const request = Effect.fn("features.passkey.request")(function* (
  * calling step (e.g. REQ-EA-367's own `TestClock.adjust`) is in.
  */
 export const signIn = Effect.fn("features.passkey.signIn")(function* (email: string) {
-  const { appLayer, memoMap } = yield* appHandle();
-  return yield* Effect.promise(() =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const users = yield* Users.Users;
-            const sessions = yield* Sessions.Sessions;
-            const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
-            const issued = yield* sessions.issue({ userId: user.id });
-            return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-          }).pipe(Effect.provide(context));
-        }),
-      ),
-    ),
-  );
+  const { app } = yield* appHandle();
+  return yield* Effect.promise(async () => (await app.signIn(email)).cookieHeader);
 });
 
 /**
@@ -383,23 +305,14 @@ export const signIn = Effect.fn("features.passkey.signIn")(function* (email: str
 export const storedCredentials = Effect.fn("features.passkey.storedCredentials")(function* (
   email: string,
 ) {
-  const { appLayer, memoMap } = yield* appHandle();
-  return yield* Effect.promise(() =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const users = yield* Users.Users;
-            const credentials = yield* PasskeyCredentials.PasskeyCredentials;
-            const user = yield* users.findByEmail(email);
-            if (Option.isNone(user)) throw new Error(`no user found for ${email}`);
-            return yield* credentials.listByUser(user.value.id);
-          }).pipe(Effect.provide(context));
-        }),
-      ),
-    ),
+  return yield* inApp(
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+      const user = yield* users.findByEmail(email);
+      if (Option.isNone(user)) throw new Error(`no user found for ${email}`);
+      return yield* credentials.listByUser(user.value.id);
+    }),
   );
 });
 
@@ -410,22 +323,13 @@ export const storedCredentials = Effect.fn("features.passkey.storedCredentials")
 export const inspectSession = Effect.fn("features.passkey.inspectSession")(function* (
   cookie: string,
 ) {
-  const { appLayer, memoMap } = yield* appHandle();
   const token = decodeURIComponent(cookie.replace(/^__Host-session=/, ""));
-  return yield* Effect.promise(() =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const sessions = yield* Sessions.Sessions;
-            const { session } = yield* sessions.verify(Redacted.make(token));
-            return session;
-          }).pipe(Effect.provide(context));
-        }),
-      ),
-    ),
+  return yield* inApp(
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const { session } = yield* sessions.verify(Redacted.make(token));
+      return session;
+    }),
   );
 });
 
@@ -439,27 +343,18 @@ export const linkOtherAccount = Effect.fn("features.passkey.linkOtherAccount")(f
   email: string,
   providerId: string,
 ) {
-  const { appLayer, memoMap } = yield* appHandle();
-  yield* Effect.promise(() =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const users = yield* Users.Users;
-            const accounts = yield* Accounts.Accounts;
-            const userOpt = yield* users.findByEmail(email);
-            if (Option.isNone(userOpt)) throw new Error(`no user found for ${email}`);
-            yield* accounts.link({
-              userId: userOpt.value.id,
-              providerId,
-              subject: `${providerId}-subject-${email}`,
-            });
-          }).pipe(Effect.provide(context));
-        }),
-      ),
-    ),
+  yield* inApp(
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const accounts = yield* Accounts.Accounts;
+      const userOpt = yield* users.findByEmail(email);
+      if (Option.isNone(userOpt)) throw new Error(`no user found for ${email}`);
+      yield* accounts.link({
+        userId: userOpt.value.id,
+        providerId,
+        subject: `${providerId}-subject-${email}`,
+      });
+    }),
   );
 });
 
@@ -467,24 +362,13 @@ export const linkOtherAccount = Effect.fn("features.passkey.linkOtherAccount")(f
 export type AppServices = Layer.Success<ReturnType<typeof buildAppLayer>>;
 
 /**
- * Runs `effect` against the running app's own services (same `MemoMap`, real-clock `runPromise`
- * boundary as `signIn` — see its comment) — for a claim about what is stored or erased, which the
- * wire never shows.
+ * Runs `effect` against the running app's own services (the same memo map, on the real clock the handler is on) — for a
+ * claim about what is stored or erased, which the wire never shows.
  */
 export const inApp = <A, E>(effect: Effect.Effect<A, E, AppServices>) =>
   Effect.gen(function* () {
-    const { appLayer, memoMap } = yield* appHandle();
-    return yield* Effect.promise(() =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const scope = yield* Effect.scope;
-            const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-            return yield* Effect.provide(effect, context);
-          }),
-        ),
-      ),
-    );
+    const { app } = yield* appHandle();
+    return yield* Effect.promise(() => app.run(effect));
   });
 
 /** The `verifyRegistration` calls the plugin has made to the (mocked) `WebAuthn` port so far. */

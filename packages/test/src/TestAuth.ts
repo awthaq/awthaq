@@ -321,6 +321,7 @@ type Provided<P extends ReadonlyArray<AuthPlugin.Any>, M extends "memory" | "sql
   | Layer.Success<typeof HttpServer.layerServices>
   | Layer.Success<typeof HttpRouter.layer>
   | Csrf.CsrfConfig
+  | Authentication.PrincipalResolver
   | AuthPlugin.RecordsOut<P[number]>
   | AuthPlugin.HookPointsOut<P[number]>
   | S
@@ -373,6 +374,9 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
     // plugins, and are *merged*, so the output holds the very instances the plugins used.
     Layer.provideMerge(options.services ?? Layer.empty),
     Layer.provide(middleware),
+    // The resolver the derived middleware uses is part of the output too, so a test that calls
+    // `Authentication.resolvePrincipal` directly reads it instead of hand-building `PrincipalResolverLive`.
+    Layer.provideMerge(options.principalResolver ?? Authentication.PrincipalResolverLive),
     Layer.provideMerge(csrf),
     Layer.provideMerge((options.taps ?? Layer.empty).pipe(Layer.provideMerge(points))),
     Layer.provideMerge(records),

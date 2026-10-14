@@ -39,7 +39,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CsrfConfigForTests } from "./CsrfTestSupport.ts";
+import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CsrfConfigForTests } from "./shared/Csrf.ts";
 
 /** One captured log line: its level, and everything it carried (message parts and annotations), JSON-rendered so a step can search it. */
 export interface LogRecord {
@@ -219,7 +219,7 @@ export const makeHost = Effect.gen(function* () {
 
 /**
  * A JSON POST carrying a double-submit CSRF pair minted at the *current clock reading*.
- * `CsrfTestSupport`'s fixed token is stamped with the real time at module load, which is what
+ * `shared/Csrf.ts`'s fixed token is stamped with the real time at module load, which is what
  * the other Worlds' real-clock handlers accept; a scenario here runs under `TestClock` (time
  * starts at the epoch), where that token's `iat` lies in the future and `CsrfProtection`
  * refuses it. Same construction (`<iat>.<random>.<hmac(iat.random)>`, HMAC-SHA256 over the

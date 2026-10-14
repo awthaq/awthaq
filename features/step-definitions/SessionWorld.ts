@@ -25,8 +25,9 @@ import { Api } from "@awthaq/api";
 import { Auth, Sessions, Users } from "@awthaq/core";
 import type { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
+import type { Authentication } from "@awthaq/server";
 import { RedactionGuard, TestAuth } from "@awthaq/test";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -149,7 +150,8 @@ export type AppServices =
   | Sessions.Sessions
   | Users.Users
   | SqlClient.SqlClient
-  | RedactionGuard.RedactionGuard;
+  | RedactionGuard.RedactionGuard
+  | Authentication.PrincipalResolver;
 
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;

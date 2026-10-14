@@ -1,3 +1,4 @@
+// Hand-wired on purpose: the probe groups re-declare the authentication record and wrap every scheme handler, so `Authentication`'s own composition is what is under test (plan 08 exemption).
 // P20a/AH-003 (decision 36, tier 1): the World for 09-authentication-middleware.feature.
 //
 // A real `HttpRouter.toWebHandler` app whose probe groups declare the shipped
@@ -42,8 +43,8 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
-import { TestServices } from "./shared/Harness.ts";
+import { CsrfConfigForTests } from "./shared/Csrf.ts";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 import { EncryptionLive } from "./shared/TestEncryption.ts";
 
 /**
@@ -268,7 +269,7 @@ const buildApp = (options: AppOptions) => {
       Layer.provideMerge(RateLimiter.layerPermissive),
       Layer.provideMerge(ClientAddress.layerDirect),
       Layer.provideMerge(NodeCrypto.layer),
-      Layer.provideMerge(TestServices),
+      Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
       Layer.provideMerge(ApiKey.config({})),
       Layer.provideMerge(

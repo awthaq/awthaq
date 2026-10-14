@@ -3,8 +3,9 @@
 // does, for 21-qadi-resolvers-obligations.feature (BEH-EA-162). The one seam an application owns is
 // `ResourceOrganizationLookup` (which organization a resource belongs to); `probe` lets a scenario
 // steer and observe it.
-import { Persistence, Sessions, Users } from "@awthaq/core";
+import { Auth } from "@awthaq/core";
 import {
+  DomainClaims,
   Organization,
   OrganizationActiveContext,
   OrganizationAuthority,
@@ -14,27 +15,23 @@ import {
   OrganizationInvitations,
   OrganizationMembers,
   OrganizationQadi,
-  OrganizationMemory,
   OrganizationRoles,
   OrganizationTeams,
 } from "@awthaq/organization";
 import {
   ActiveContextRecords,
+  ConnectionRecords,
   InvitationRecords,
   MembershipRecords,
   OrganizationRecords,
   OrgRoleRecords,
   TeamRecords,
 } from "@awthaq/organization/records";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { TestAuth } from "@awthaq/test";
 
 /** What a scenario steers and observes about the application's resource -> organization walk. */
@@ -56,30 +53,9 @@ export const makeWalkProbe = (): WalkProbe => ({
   failing: Ref.makeUnsafe(false),
 });
 
-const CoreLive = Layer.mergeAll(
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const OrganizationLive = Organization.Organization.layer.pipe(
-  Layer.provide(Organization.config({})),
-  Layer.provide(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-  Layer.provideMerge(OrganizationMemory.layer),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(Mailer.layerMemory),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-);
+const OrganizationLive = TestAuth.layer(Auth.make([Organization.Organization]), {
+  services: Organization.config({}),
+});
 
 export const organizationFixture = (probe: WalkProbe) => {
   const lookup = Layer.succeed(
@@ -121,6 +97,9 @@ export type OrganizationServiceNames =
   | MembershipRecords.MembershipRecords
   | OrganizationRecords.OrganizationRecords
   | OrgRoleRecords.OrgRoleRecords
-  | TeamRecords.TeamRecords;
+  | TeamRecords.TeamRecords
+  | ConnectionRecords.ConnectionRecords
+  | DomainClaims.DomainClaims
+  | OrganizationHooks.AfterCreateOrganization;
 
 export type OrganizationFixtureServices = Layer.Success<ReturnType<typeof organizationFixture>>;

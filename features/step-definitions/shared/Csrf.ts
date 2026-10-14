@@ -1,4 +1,5 @@
-// features/step-definitions — CSRF test support
+// features/step-definitions/shared — the CSRF pair a hand-wired World posts with (plan 08: the token is `TestAuth.csrfToken`;
+// a World built on `TestAuth.app` never needs this, `app.request` mints its own)
 //
 // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every mutating
 // production group now carries `Api.CsrfProtection` (see each plugin's own

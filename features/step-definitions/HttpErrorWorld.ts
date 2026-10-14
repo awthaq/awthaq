@@ -30,7 +30,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 
 // ---- the World's own plugins ------------------------------------------------------------
 
@@ -148,35 +148,17 @@ export const DOCS_PATH = "/auth/docs";
  * A running composition: the web handler `HttpRouter.toWebHandler` gives a Next.js/Hono host,
  * and a way to reach the very services that handler runs against (same memo map).
  */
-const makeApp = <A, E>(appLayer: Layer.Layer<A, E>) => {
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  // The handler's own runtime builds the layer lazily and keeps it alive; reaching the services
-  // *after* it has (a request to no route builds it) shares those very instances through the memo
-  // map. Building first and releasing would make the handler rebuild — and re-register every route.
-  const warm = Effect.promise(() => handler(new Request("http://localhost/__warm-up")));
-  const withContext = <X, EX>(effect: Effect.Effect<X, EX, A>) =>
-    warm.pipe(
-      Effect.andThen(
-        Effect.promise(() =>
-          Effect.runPromise(
-            Effect.scoped(
-              Effect.gen(function* () {
-                const scope = yield* Effect.scope;
-                const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-                return yield* effect.pipe(Effect.provide(context));
-              }),
-            ),
-          ),
-        ),
-      ),
-    );
+const makeApp = <A, E>(appLayer: Layer.Layer<A | TestAuth.AppNeeds, E>) => {
+  const app = TestAuth.app(appLayer);
+  const { handler } = app;
+  const withContext = <X, EX>(effect: Effect.Effect<X, EX, A | TestAuth.AppNeeds>) =>
+    Effect.promise(() => app.run(effect));
   /**
    * The `HttpApiGroup` services the composition's plugin layers provide: their key (derived from
    * the group id alone) and the endpoints each one implements.
    */
   const groups = withContext(
-    Effect.context<A>().pipe(
+    Effect.context<A | TestAuth.AppNeeds>().pipe(
       Effect.map((context) => {
         const found = new Map<string, ReadonlyArray<string>>();
         for (const [key, value] of context.mapUnsafe) {
@@ -247,9 +229,7 @@ export const imperativeMe = async (
   const principal = await runtime.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver.pipe(
-        Effect.provide(Authentication.PrincipalResolverLive),
-      );
+      const resolver = yield* Authentication.PrincipalResolver;
       return yield* Authentication.resolvePrincipal(
         sessions,
         resolver,

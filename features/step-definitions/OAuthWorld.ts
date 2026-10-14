@@ -17,16 +17,9 @@
 // depends on (e.g. `DateTime.now`) see the same simulated `TestClock` every
 // other step does. Several of this feature's own scenarios (REQ-EA-334's
 // flow-TTL expiry) depend on that.
-import { TestEncryption } from "@awthaq/test";
-import { Accounts, Persistence, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import { ClientAddress, RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Accounts, Auth, Sessions, Users, Verification } from "@awthaq/core";
 import { OAuth, OAuthProvider } from "@awthaq/oauth";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as Config from "effect/Config";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -34,11 +27,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as Migrator from "effect/unstable/sql/Migrator";
 import { TestAuth } from "@awthaq/test";
-
-/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
-const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 // ---- fake HttpClient: routes by URL substring ----
 
@@ -117,50 +106,21 @@ export const discoveryFor = (id: string): Record<string, unknown> => ({
   jwks_uri: `https://${id}.example.com/jwks`,
 });
 
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Verification.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+const built = Auth.make([OAuth.OAuth]);
 
 /**
- * REQ-EA-345: `Users`/`Accounts` over a real in-memory SQLite database migrated by core's own
- * migrations — the `(provider, subject, issuer)` UNIQUE constraint is the only thing that can
- * arbitrate two concurrent links, which the memory `Accounts` (one atomic `Ref` update) cannot
- * show. `AccountStoreSql` inserts with no application-level pre-check, so a rejected duplicate
- * is the constraint's doing.
+ * REQ-EA-345: `Users`/`Accounts` over a real in-memory SQLite database migrated by core's own migrations — the
+ * `(provider, subject, issuer)` UNIQUE constraint is the only thing that can arbitrate two concurrent links, which the
+ * memory `Accounts` (one atomic `Ref` update) cannot show.
  */
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
-const Migrated = Layer.effectDiscard(
-  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
-).pipe(Layer.provide(SqlLive));
-
-export const SqliteIdentityStores = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(SqlStores)),
-  Accounts.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
-).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
+export const SqliteIdentityStores = TestAuth.layer(built, {
+  records: "sql",
+  suite: "oauth_world",
+  services: Layer.mergeAll(
+    fakeHttpClient({}),
+    OAuth.config({ providers: [], baseUrl: "https://app.example.com" }),
+  ),
+});
 
 export interface BuildOptions {
   readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
@@ -173,28 +133,9 @@ export interface BuildOptions {
 }
 
 const buildLayer = (options: BuildOptions) =>
-  OAuth.OAuth.layer.pipe(
-    // `OAuthApi.OAuthGroup`'s own `.middleware(Api.OptionalAuthentication)`
-    // is part of what `OAuth.layer` merges its handlers with — required
-    // even here, where no HTTP request is ever actually issued, because
-    // `AuthPlugin.layer` ties a plugin's own service and its handlers
-    // together in one `Layer.provideMerge`. Order matters, matching
-    // `OAuth.test.ts`'s own `buildLayer`: `CoreLive` (which satisfies
-    // `OptionalAuthenticationLive`'s own `Sessions` need) has to come after
-    // these, not before.
-    Layer.provide(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(RateLimiter.layerPermissive),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    // AGA-001/NHS-003: `OAuth`'s callback handler now resolves through
-    // `ClientAddress` — the direct passthrough is byte-for-byte today's
-    // `remoteAddress` behavior.
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provide(fakeHttpClient(options.httpRoutes ?? {})),
-    Layer.provide(
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      fakeHttpClient(options.httpRoutes ?? {}),
       OAuth.config({
         providers: options.providers,
         linking: options.linking ?? "explicit",
@@ -205,7 +146,8 @@ const buildLayer = (options: BuildOptions) =>
           : { nativeRedirectURLs: options.nativeRedirectURLs }),
       }),
     ),
-  );
+    rateLimiter: "permissive",
+  });
 
 export interface WorldShape {
   readonly oauth: Ref.Ref<OAuth.OAuthShape | undefined>;

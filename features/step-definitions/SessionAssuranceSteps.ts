@@ -82,9 +82,7 @@ export const sessionAssuranceSteps = defineSteps<World>(({ Given, When, Then }) 
     const { views, principals } = yield* World;
     const view = yield* views.get(yield* views.current);
     const principal = yield* inApp(
-      Effect.flatMap(Authentication.PrincipalResolver, (resolver) => resolver.resolve(view)).pipe(
-        Effect.provide(Authentication.PrincipalResolverLive),
-      ),
+      Effect.flatMap(Authentication.PrincipalResolver, (resolver) => resolver.resolve(view)),
     );
     assert.ok(principal instanceof Api.UserPrincipal);
     yield* principals.set("principal", principal);
@@ -95,9 +93,7 @@ export const sessionAssuranceSteps = defineSteps<World>(({ Given, When, Then }) 
     const { views, principals, texts } = yield* World;
     const view = yield* views.get(yield* views.current);
     const principal = yield* inApp(
-      Effect.flatMap(Authentication.PrincipalResolver, (resolver) => resolver.resolve(view)).pipe(
-        Effect.provide(Authentication.PrincipalResolverLive),
-      ),
+      Effect.flatMap(Authentication.PrincipalResolver, (resolver) => resolver.resolve(view)),
     );
     assert.ok(principal instanceof Api.UserPrincipal);
     yield* principals.set("principal", principal);

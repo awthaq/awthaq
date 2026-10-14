@@ -1,3 +1,4 @@
+// Hand-wired on purpose: the identity, organization and connection stacks are built on separate memo maps, on the real clock, outside the step's `TestClock` (plan 08 exemption).
 // P20a (tenancy follow-up to AH-003): the compositions 28-tenancy.feature runs against.
 //
 // Three independent stacks, each rebuilt per scenario, because the rules under test live in
@@ -67,7 +68,8 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 import { TestAuth } from "@awthaq/test";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
@@ -360,7 +362,7 @@ const buildGateway = (
         Layer.provide(Layer.succeed(OrganizationRecords.OrganizationRecords, records)),
         Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
         Layer.provide(TenantConfig.layer),
-        Layer.provideMerge(TestServices),
+        Layer.provideMerge(HttpServer.layerServices),
         Layer.provideMerge(HttpRouter.layer),
       ),
     );

@@ -1,5 +1,9 @@
 // P20a/AH-003, decision 36 Tier 4: the World for 01-contract-and-persistence/04-contract-stratum.feature.
 //
+// Hand-wired on purpose: `authProbeApp` re-declares the authentication record and wraps every scheme handler, so the
+// composition of `Authentication` itself is what is under test (plan 08 exemption). The other two apps are
+// `TestAuth.app` compositions.
+//
 // Three real apps, each a `HttpRouter.toWebHandler` over memory services:
 //  - `authProbeApp`: probe groups behind the shipped `Authentication`, `OptionalAuthentication` and a
 //    re-declared (bearer-before-cookie) record, with every scheme handler wrapped by `traced` so a
@@ -29,9 +33,9 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import { PasswordFixture } from "./PluginFixtures.ts";
-import { TestServices } from "./shared/Harness.ts";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 
 /** BEH-EA-028: the same two schemes declared in the opposite order — only the record differs, the handlers are `Authentication`'s own. */
 export class ReorderedAuthentication extends HttpApiMiddleware.Service<
@@ -127,7 +131,7 @@ const buildAuthProbe = () => {
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(TestAuth.memoryFoundation),
-    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
   );
   const memoMap = Layer.makeMemoMapUnsafe();
@@ -156,30 +160,22 @@ const NoBreachHttpClient = Layer.succeed(
 
 const buildPasswordApp = () => {
   // `requireVerifiedEmail: false`: BEH-EA-027 is about credential errors, not the verification gate.
-  const appLayer = TestAuth.layer(Auth.make([Password.Password]), {
-    services: Layer.mergeAll(NoBreachHttpClient, Password.config({ requireVerifiedEmail: false })),
-  });
-  const { handler } = HttpRouter.toWebHandler(appLayer);
-  return { handler };
+  const app = TestAuth.app(
+    TestAuth.layer(Auth.make([Password.Password]), {
+      services: Layer.mergeAll(
+        NoBreachHttpClient,
+        Password.config({ requireVerifiedEmail: false }),
+      ),
+    }),
+  );
+  return { handler: app.handler };
 };
 
 const buildCoreOnlyApp = () => {
-  const appLayer = TestAuth.layer(Auth.make([PasswordFixture]));
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  const withServices = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof appLayer>>) =>
-    Effect.promise(() =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const scope = yield* Effect.scope;
-            const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-            return yield* effect.pipe(Effect.provide(context));
-          }),
-        ),
-      ),
-    );
-  return { handler, withServices };
+  const app = TestAuth.app(TestAuth.layer(Auth.make([PasswordFixture])));
+  const withServices = <A, E>(effect: Effect.Effect<A, E, Sessions.Sessions | Users.Users>) =>
+    Effect.promise(() => app.run(effect));
+  return { handler: app.handler, withServices };
 };
 
 export type AppKind = "auth-probe" | "password" | "core-only";

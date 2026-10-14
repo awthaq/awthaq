@@ -1,3 +1,4 @@
+// Hand-wired on purpose: qadi's `RequirePermission` guard must be built above `Roles.layer` to read the `SubjectResolver` slot, which `TestAuth.layer` cannot order (plan 08 exemption).
 // AH-003 (decision 36, Tier 2): the shared World for the qadi authorization-bridge features
 // (18-roles-subject-resolver, 19-qadi-bridge-path-a, 20-qadi-bridge-path-b,
 // 21-qadi-resolvers-obligations).
@@ -93,7 +94,8 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type { OrganizationFixtureServices, WalkProbe } from "./QadiOrganizationFixture.ts";
 import { makeWalkProbe } from "./QadiOrganizationFixture.ts";
-import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 
 // ---- the fixture's authorization vocabulary ----
 
@@ -736,7 +738,7 @@ const buildApp = (world: WorldShape, options: BridgeOptions) => {
     Layer.provide(Authentication.OptionalAuthenticationLive),
     Layer.provideMerge(requestServices),
     Layer.provideMerge(captureLogs(world)),
-    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
   );
   return { appLayer, requestServices };

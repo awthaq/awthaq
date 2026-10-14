@@ -15,7 +15,7 @@ import { mailedToken } from "./MailedToken.ts";
 import { letForkedFibersRun, makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";

@@ -27,7 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import assert from "node:assert/strict";
-import { CSRF_COOKIE_NAME, CSRF_TEST_COOKIE_VALUE } from "./CsrfTestSupport.ts";
+import { CSRF_COOKIE_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
 import { headersWithCookie, SESSION_COOKIE, send, World } from "./NextSsrWorld.ts";
 import { isBoolean, isNumber, isString, isStringArray } from "./shared/Outcomes.ts";
 

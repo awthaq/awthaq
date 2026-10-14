@@ -1,3 +1,4 @@
+// Hand-wired on purpose: one memo map shared by the web handler and a `ManagedRuntime`, with the application's `SubjectResolver` above the harness composition (plan 08 exemption).
 // BEH-EA-185..192 (24-nextjs-ssr.feature): what a Next.js app's server side does with awthaq.
 // `getSession`, `hasSessionCookie` and `withNextCookies` are called exactly as a Server Component,
 // `proxy.ts` and a server action call them: `getSession` over a real `ManagedRuntime` built from a
@@ -29,7 +30,7 @@ const NoBreachHttpClient = Layer.succeed(
 );
 
 // `TestAuth.layer` derives `Authentication` and `CsrfProtection` over `TestAuth.TestCsrfConfig`, the secret
-// every BDD World shares (CsrfTestSupport.ts), so a cookie pair minted there is accepted by this composition.
+// every BDD World shares (shared/Csrf.ts), so a cookie pair minted there is accepted by this composition.
 const NextServices = NoBreachHttpClient;
 
 const nextTuple = Auth.make([Password.Password]);
