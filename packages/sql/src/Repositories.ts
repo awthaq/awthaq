@@ -37,17 +37,13 @@ import {
 import type {
   Account,
   AccountInsert,
-  AccountUpdate,
   Session,
   SessionInsert,
-  SessionUpdate,
   SqlModels,
   User,
   UserInsert,
-  UserUpdate,
   VerificationToken,
   VerificationTokenInsert,
-  VerificationTokenUpdate,
 } from "./Models.ts";
 
 /** BEH-EA-036: the one cursor shape every paginated repository query accepts. */
@@ -151,16 +147,7 @@ export interface UsersRepositoryShape {
     id: UserId,
     columns: ReadonlyArray<UserFieldColumn>,
   ) => Effect.Effect<Option.Option<Readonly<Record<string, UserFieldScalar>>>, RepositoryError>;
-  /**
-   * SAM-004: writes declared-field columns in one `UPDATE` (`null` clears); `false` when there is no
-   * such user. It touches nothing else on the row.
-   */
-  readonly writeFields: (
-    id: UserId,
-    values: Readonly<Record<string, UserFieldScalar | null>>,
-  ) => Effect.Effect<boolean, RepositoryError>;
   readonly insert: (input: UserInsert) => Effect.Effect<User, RepositoryError>;
-  readonly update: (input: UserUpdate) => Effect.Effect<User, RepositoryError>;
   /**
    * GC-004: one `UPDATE ... RETURNING *` on `name`, and on `metadata`/`image` when given (`null`
    * clears, `undefined` leaves the column), so a row deleted since the caller last read it is
@@ -189,38 +176,6 @@ export interface UsersRepositoryShape {
    */
   readonly insertIfAbsent: (
     input: UserInsert,
-  ) => Effect.Effect<Option.Option<User>, RepositoryError>;
-  /**
-   * BEH-EA-042: `emailVerified` is excluded from `update`/`jsonUpdate` (see
-   * `Models.ts`), so flipping it needs its own repository operation rather
-   * than the generic `update`. AAPS-005: the statement applies only to a row that has an email
-   * and is not yet verified, so of two concurrent callers exactly one gets `Some` (and announces
-   * the change); `None` means no such row, no email, or already verified.
-   */
-  readonly verifyEmail: (id: UserId) => Effect.Effect<Option.Option<User>, RepositoryError>;
-  /** FAMS-002: `phoneVerified`'s only writer, mirroring `verifyEmail`. */
-  readonly verifyPhone: (
-    id: UserId,
-  ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
-  /**
-   * FAMS-002: sets an identity on a row that has none (an Anonymous user) —
-   * `None` when the row is missing *or already has an email/phone*. A duplicate
-   * surfaces as `SqlError`'s `UniqueViolation`.
-   */
-  readonly promoteIdentity: (
-    id: UserId,
-    identity:
-      | { readonly _tag: "Email"; readonly email: string }
-      | { readonly _tag: "Phone"; readonly phone: string },
-  ) => Effect.Effect<Option.Option<User>, RepositoryError>;
-  /**
-   * BAM-009: replaces an email and clears `emailVerified` in one statement —
-   * the only write that may lower it. `None` when the row is missing or has no
-   * email identity.
-   */
-  readonly changeEmail: (
-    id: UserId,
-    email: string,
   ) => Effect.Effect<Option.Option<User>, RepositoryError>;
   /** SCP-001: `status`, its reason and expiry have no other writer. */
   readonly setStatus: (
@@ -360,19 +315,6 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
             traced("Users.readFields", { id }),
           );
 
-    const writeFields: UsersRepositoryShape["writeFields"] = (id, values) => {
-      const stored = Object.fromEntries(
-        Object.entries(values).map(([name, value]) => [
-          name,
-          dialect === "sqlite" && typeof value === "boolean" ? (value ? 1 : 0) : value,
-        ]),
-      );
-      return sql`UPDATE users SET ${sql.update(stored)} WHERE id = ${id} RETURNING id`.pipe(
-        Effect.map((rows) => rows.length > 0),
-        traced("Users.writeFields", { id }),
-      );
-    };
-
     // CSG-006: `users.metadata` is the one free-form personal-data column. With
     // the default repository these are all no-ops; the encrypted variant seals
     // it on write and reveals it on every row that comes back.
@@ -412,12 +354,6 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         Effect.flatMap((metadata) =>
           Effect.flatMap(Tenant.stamp(input), (stamped) => repo.insert({ ...stamped, metadata })),
         ),
-        Effect.flatMap(revealUser),
-      );
-
-    const update: UsersRepositoryShape["update"] = (input) =>
-      concealMetadata(input.id, input.metadata).pipe(
-        Effect.flatMap((metadata) => repo.update({ ...input, metadata })),
         Effect.flatMap(revealUser),
       );
 
@@ -565,119 +501,6 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         });
       }).pipe(traced("Users.updateProfile", { id: input.id }));
 
-    // PPS-007: one `UPDATE ... RETURNING *`, decoded through the dialect
-    // model. The boolean binds through the dialect's own wire codec (`TRUE`
-    // on pg, `1` on SQLite), so there is no per-dialect literal branch (TS-002).
-    const verifyEmailQuery = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        id: UserId,
-        verified: models.wire.boolean,
-        unverified: models.wire.boolean,
-        updatedAt: models.wire.dateTime,
-      }),
-      Result: models.User,
-      execute: (r) =>
-        sql`UPDATE users SET "emailVerified" = ${r.verified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND "emailVerified" = ${r.unverified} AND email IS NOT NULL RETURNING *`,
-    });
-
-    const verifyEmail: UsersRepositoryShape["verifyEmail"] = (id) =>
-      DateTime.now.pipe(
-        Effect.flatMap((updatedAt) =>
-          verifyEmailQuery({ id, verified: true, unverified: false, updatedAt }),
-        ),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeedNone,
-            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
-          }),
-        ),
-        traced("Users.verifyEmail", { id }),
-      );
-
-    const verifyPhoneQuery = SqlSchema.findOne({
-      Request: Schema.Struct({
-        id: UserId,
-        verified: models.wire.boolean,
-        updatedAt: models.wire.dateTime,
-      }),
-      Result: models.User,
-      execute: (r) =>
-        sql`UPDATE users SET "phoneVerified" = ${r.verified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
-    });
-
-    const verifyPhone: UsersRepositoryShape["verifyPhone"] = (id) =>
-      DateTime.now.pipe(
-        Effect.flatMap((updatedAt) => verifyPhoneQuery({ id, verified: true, updatedAt })),
-        Effect.flatMap(revealUser),
-        traced("Users.verifyPhone", { id }),
-      );
-
-    // Both promote statements guard on "no identity yet" in the WHERE clause,
-    // so two racing promotions cannot both win.
-    const promoteEmailQuery = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        id: UserId,
-        email: Schema.String,
-        updatedAt: models.wire.dateTime,
-      }),
-      Result: models.User,
-      execute: (r) =>
-        sql`UPDATE users SET email = ${r.email}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NULL AND phone IS NULL RETURNING *`,
-    });
-
-    const promotePhoneQuery = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        id: UserId,
-        phone: Schema.String,
-        updatedAt: models.wire.dateTime,
-      }),
-      Result: models.User,
-      execute: (r) =>
-        sql`UPDATE users SET phone = ${r.phone}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NULL AND phone IS NULL RETURNING *`,
-    });
-
-    const promoteIdentity: UsersRepositoryShape["promoteIdentity"] = (id, identity) =>
-      DateTime.now.pipe(
-        Effect.flatMap((updatedAt) =>
-          identity._tag === "Email"
-            ? promoteEmailQuery({ id, email: identity.email, updatedAt })
-            : promotePhoneQuery({ id, phone: identity.phone, updatedAt }),
-        ),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeedNone,
-            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
-          }),
-        ),
-        traced("Users.promoteIdentity", { id }),
-      );
-
-    const changeEmailQuery = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        id: UserId,
-        email: Schema.String,
-        unverified: models.wire.boolean,
-        updatedAt: models.wire.dateTime,
-      }),
-      Result: models.User,
-      execute: (r) =>
-        sql`UPDATE users SET email = ${r.email}, "emailVerified" = ${r.unverified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NOT NULL RETURNING *`,
-    });
-
-    const changeEmail: UsersRepositoryShape["changeEmail"] = (id, email) =>
-      DateTime.now.pipe(
-        Effect.flatMap((updatedAt) =>
-          changeEmailQuery({ id, email, unverified: false, updatedAt }),
-        ),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeedNone,
-            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
-          }),
-        ),
-        traced("Users.changeEmail", { id }),
-      );
-
     const setStatusQuery = SqlSchema.findOne({
       Request: Schema.Struct({
         id: UserId,
@@ -805,19 +628,13 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
     return {
       models,
       readFields,
-      writeFields,
       insert,
-      update,
       findById,
       delete: repo.delete,
       findByEmail,
       findByPhone,
       insertIfAbsent,
       updateProfile,
-      verifyEmail,
-      verifyPhone,
-      promoteIdentity,
-      changeEmail,
       setStatus,
       deleteReturning,
       casIdentity,
@@ -854,24 +671,6 @@ export interface AccountsRepositoryShape {
   readonly models: SqlModels;
   readonly insert: (input: AccountInsert) => Effect.Effect<Account, RepositoryError>;
   /**
-   * BEH-EA-116 (`@awthaq/password`'s rehash-on-login): the generic write
-   * path — `passwordHash`/`accessToken`/`refreshToken` are all
-   * `Model.Sensitive` (included in `update`, not excluded), so a caller
-   * updating one must pass the other two through unchanged.
-   *
-   * PPS-001: `aad` (the row's own `providerId`/`userId`, immutable and
-   * excluded from `Account.update.Type` itself) is required from the
-   * caller rather than re-derived via an internal `findById` — the only
-   * caller (`@awthaq/core`'s `updateCredentialHash`) already has both from
-   * its own prior read, so re-reading them here was a pure duplicate
-   * round trip on the login hot path, not a genuine second source of
-   * truth.
-   */
-  readonly update: (
-    input: AccountUpdate,
-    aad: { readonly providerId: string; readonly userId: string },
-  ) => Effect.Effect<Account, RepositoryError>;
-  /**
    * Identity read (SMS-002): a token column that can no longer be decrypted
    * (retired key, tampered ciphertext) is degraded to `null` and logged
    * rather than killing the fiber, so one bad row never takes down sign-in
@@ -892,42 +691,6 @@ export interface AccountsRepositoryShape {
     Account,
     Cause.NoSuchElementError | RepositoryError | AccountTokenUndecryptable
   >;
-  /**
-   * SMS-002: writes only the password hash — never reads (so never decrypts)
-   * the token columns, unlike the generic `update`, which forces the caller to
-   * read and pass them through.
-   */
-  readonly updatePasswordHash: (
-    id: AccountId,
-    passwordHash: string,
-  ) => Effect.Effect<Account, Cause.NoSuchElementError | RepositoryError>;
-  /**
-   * RRS-006: the row's encryption AAD (`providerId`/`userId`, immutable) via a
-   * token-free read — it neither decrypts nor lazily re-encrypts the token
-   * columns, so a caller about to overwrite them (`updateProviderTokens`) never
-   * reads a secret it is not going to keep.
-   */
-  readonly findAad: (
-    id: AccountId,
-  ) => Effect.Effect<
-    { readonly providerId: string; readonly userId: string },
-    Cause.NoSuchElementError | RepositoryError
-  >;
-  /**
-   * SMS-002: overwrites the whole provider-token group without decrypting the
-   * previous value, so a row whose old ciphertext is unreadable heals on the
-   * next OAuth sign-in.
-   */
-  readonly updateProviderTokens: (
-    id: AccountId,
-    aad: { readonly providerId: string; readonly userId: string },
-    tokens: AccountTokenColumns,
-  ) => Effect.Effect<Account, Cause.NoSuchElementError | RepositoryError>;
-  readonly findByProviderSubject: (
-    providerId: string,
-    subject: string,
-    issuer: string,
-  ) => Effect.Effect<Option.Option<Account>, RepositoryError>;
   readonly listByUser: (userId: UserId) => Effect.Effect<ReadonlyArray<Account>, RepositoryError>;
   readonly delete: (id: AccountId) => Effect.Effect<void, RepositoryError>;
   /**
@@ -1225,25 +988,6 @@ export const AccountsRepositoryLive: Layer.Layer<
         return yield* decryptRow(row);
       });
 
-    const update: AccountsRepositoryShape["update"] = (input, aad) =>
-      Effect.gen(function* () {
-        const accessToken = yield* encryptToken(
-          aad.providerId,
-          aad.userId,
-          "accessToken",
-          input.accessToken,
-        );
-        const refreshToken = yield* encryptToken(
-          aad.providerId,
-          aad.userId,
-          "refreshToken",
-          input.refreshToken,
-        );
-        const idToken = yield* encryptToken(aad.providerId, aad.userId, "idToken", input.idToken);
-        const row = yield* repo.update({ ...input, accessToken, refreshToken, idToken });
-        return yield* decryptRow(row);
-      });
-
     const findById: AccountsRepositoryShape["findById"] = (id) =>
       repo.findById(id).pipe(Effect.flatMap(decryptRow));
 
@@ -1254,105 +998,10 @@ export const AccountsRepositoryLive: Layer.Layer<
 
     // SMS-002: targeted writes — neither reads (or decrypts) the old token
     // columns, so an undecryptable row can still be repaired by a fresh write.
-    const updatePasswordHashQuery = SqlSchema.findOne({
-      Request: Schema.Struct({
-        id: AccountId,
-        passwordHash: Schema.String,
-        updatedAt: models.wire.dateTime,
-      }),
-      Result: models.Account,
-      execute: (request) => sql`
-        UPDATE accounts
-        SET "passwordHash" = ${request.passwordHash}, "updatedAt" = ${request.updatedAt}
-        WHERE id = ${request.id}
-        RETURNING *
-      `,
-    });
-
-    const updatePasswordHash: AccountsRepositoryShape["updatePasswordHash"] = (id, passwordHash) =>
-      DateTime.now.pipe(
-        Effect.flatMap((updatedAt) => updatePasswordHashQuery({ id, passwordHash, updatedAt })),
-        Effect.flatMap(decryptRow),
-        traced("Accounts.updatePasswordHash", { id }),
-      );
-
     const findAadQuery = SqlSchema.findOne({
       Request: AccountId,
       Result: Schema.Struct({ providerId: Schema.String, userId: Schema.String }),
       execute: (id) => sql`SELECT "providerId", "userId" FROM accounts WHERE id = ${id}`,
-    });
-
-    const findAad: AccountsRepositoryShape["findAad"] = (id) =>
-      findAadQuery(id).pipe(traced("Accounts.findAad", { id }));
-
-    const updateProviderTokensQuery = SqlSchema.findOne({
-      Request: Schema.Struct({
-        id: AccountId,
-        accessToken: Schema.NullOr(Schema.String),
-        refreshToken: Schema.NullOr(Schema.String),
-        idToken: Schema.NullOr(Schema.String),
-        accessTokenExpiresAt: models.wire.nullableDateTime,
-        refreshTokenExpiresAt: models.wire.nullableDateTime,
-        scope: Schema.NullOr(Schema.String),
-        tokenType: Schema.NullOr(Schema.String),
-        updatedAt: models.wire.dateTime,
-      }),
-      Result: models.Account,
-      execute: (request) => sql`
-        UPDATE accounts
-        SET "accessToken" = ${request.accessToken},
-            "refreshToken" = ${request.refreshToken},
-            "idToken" = ${request.idToken},
-            "accessTokenExpiresAt" = ${request.accessTokenExpiresAt},
-            "refreshTokenExpiresAt" = ${request.refreshTokenExpiresAt},
-            scope = ${request.scope},
-            "tokenType" = ${request.tokenType},
-            "updatedAt" = ${request.updatedAt}
-        WHERE id = ${request.id}
-        RETURNING *
-      `,
-    });
-
-    const updateProviderTokens: AccountsRepositoryShape["updateProviderTokens"] = (
-      id,
-      aad,
-      tokens,
-    ) =>
-      Effect.gen(function* () {
-        const accessToken = yield* encryptToken(
-          aad.providerId,
-          aad.userId,
-          "accessToken",
-          tokens.accessToken,
-        );
-        const refreshToken = yield* encryptToken(
-          aad.providerId,
-          aad.userId,
-          "refreshToken",
-          tokens.refreshToken,
-        );
-        const idToken = yield* encryptToken(aad.providerId, aad.userId, "idToken", tokens.idToken);
-        const updatedAt = yield* DateTime.now;
-        const row = yield* updateProviderTokensQuery({
-          ...tokens,
-          id,
-          accessToken,
-          refreshToken,
-          idToken,
-          updatedAt,
-        });
-        return yield* decryptRow(row);
-      }).pipe(traced("Accounts.updateProviderTokens", { id }));
-
-    const findByProviderSubject = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        providerId: Schema.String,
-        subject: Schema.String,
-        issuer: Schema.String,
-      }),
-      Result: models.Account,
-      execute: (request) =>
-        sql`SELECT * FROM accounts WHERE "providerId" = ${request.providerId} AND subject = ${request.subject} AND issuer = ${request.issuer}`,
     });
 
     const listByUser = SqlSchema.findAll({
@@ -1608,12 +1257,8 @@ export const AccountsRepositoryLive: Layer.Layer<
     return {
       models,
       insert,
-      update,
       findById,
       findTokensById,
-      updatePasswordHash,
-      findAad,
-      updateProviderTokens,
       lockByUser,
       findIdentityById,
       findIdentityByKey,
@@ -1623,18 +1268,6 @@ export const AccountsRepositoryLive: Layer.Layer<
       writePasswordHash,
       writeTokens,
       delete: repo.delete,
-      // `subject`/`issuer` identify a person at an IdP: only `providerId` is
-      // safe as a span attribute.
-      findByProviderSubject: (providerId, subject, issuer) =>
-        findByProviderSubject({ providerId, subject, issuer }).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.succeedNone,
-              onSome: (row) => decryptRow(row).pipe(Effect.map(Option.some)),
-            }),
-          ),
-          traced("Accounts.findByProviderSubject", { providerId }),
-        ),
       listByUser: (userId) =>
         listByUser(userId).pipe(
           Effect.flatMap((rows) => Effect.forEach(rows, decryptRow)),
@@ -1651,7 +1284,6 @@ export interface SessionsRepositoryShape {
   /** TS-001: the dialect-resolved models this repository decodes with. */
   readonly models: SqlModels;
   readonly insert: (input: SessionInsert) => Effect.Effect<Session, RepositoryError>;
-  readonly update: (input: SessionUpdate) => Effect.Effect<Session, RepositoryError>;
   readonly findById: (
     id: SessionId,
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
@@ -1889,9 +1521,6 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         ),
         Effect.flatMap(revealSession),
       );
-
-    const update: SessionsRepositoryShape["update"] = (input) =>
-      repo.update(input).pipe(Effect.flatMap(revealSession));
 
     const findById: SessionsRepositoryShape["findById"] = (id) =>
       repo.findById(id).pipe(Effect.flatMap(revealSession));
@@ -2199,7 +1828,6 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
     return {
       models,
       insert,
-      update,
       findById,
       delete: repo.delete,
       listByUser,
@@ -2245,9 +1873,6 @@ export interface VerificationRepositoryShape {
   readonly models: SqlModels;
   readonly insert: (
     input: VerificationTokenInsert,
-  ) => Effect.Effect<VerificationToken, RepositoryError>;
-  readonly update: (
-    input: VerificationTokenUpdate,
   ) => Effect.Effect<VerificationToken, RepositoryError>;
   readonly findById: (
     id: VerificationTokenId,
@@ -2477,7 +2102,6 @@ export const VerificationRepositoryLive: Layer.Layer<
     return {
       models,
       insert: (input) => Effect.flatMap(Tenant.stamp(input), repo.insert),
-      update: repo.update,
       findById: repo.findById,
       delete: repo.delete,
       findByIdentifier,

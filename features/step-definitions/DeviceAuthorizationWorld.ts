@@ -39,9 +39,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
 import { makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
@@ -99,19 +97,8 @@ interface App {
 
 const startApp = (options: AppOptions): Promise<App> => {
   const appLayer = buildApp(options);
-  const scope = Scope.makeUnsafe();
-  const memoMap = Layer.makeMemoMapUnsafe();
-  return Effect.runPromise(Layer.buildWithMemoMap(appLayer, memoMap, scope)).then((ctx) => {
-    const web = HttpRouter.toWebHandler(appLayer, { memoMap });
-    return {
-      handler: web.handler,
-      ctx,
-      dispose: async () => {
-        await Effect.runPromise(Scope.close(scope, Exit.void));
-        await web.dispose();
-      },
-    };
-  });
+  const app = TestAuth.app(appLayer);
+  return app.context().then((ctx) => ({ handler: app.handler, ctx, dispose: app.dispose }));
 };
 
 /** The scenario's own scratch pad: typed cells, so a step narrows nothing by assertion. */

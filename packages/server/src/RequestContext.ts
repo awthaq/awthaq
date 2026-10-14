@@ -16,8 +16,10 @@
 
 import { AuthRequestContext, Observability } from "@awthaq/core";
 import { ClientAddress } from "@awthaq/ports";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Headers from "effect/unstable/http/Headers";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -37,8 +39,30 @@ export const correlationIdFrom = (
   return traceId === undefined || /^0+$/.test(traceId) ? Option.none() : Option.some(traceId);
 };
 
-/** ALF-006: the global request-context middleware. */
-export const layer = HttpRouter.middleware(
+// The routers `layer` was built on. `AuthHttp.coreHandlers` asks it (`isInstalledOn`) so a composition that serves
+// session-minting routes without the middleware is told, at build time, that its sessions will record no address or
+// user agent. A router is never a string key, so a `WeakSet` keeps no router alive.
+const installedRouters = new WeakSet<HttpRouter.HttpRouter>();
+
+/** True once `layer` was built on `router`. */
+export const isInstalledOn = (router: HttpRouter.HttpRouter) => installedRouters.has(router);
+
+/**
+ * Whether `AuthHttp.coreHandlers` warns, at build time, that this middleware is absent. On by default; a composition
+ * that deliberately runs without it (an in-process test harness) provides `false`.
+ */
+export const warnWhenAbsent = Context.Reference("awthaq/server/RequestContext.warnWhenAbsent", {
+  defaultValue: () => true,
+});
+
+const registration = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const router = yield* HttpRouter.HttpRouter;
+    installedRouters.add(router);
+  }),
+);
+
+const middleware = HttpRouter.middleware(
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const address = yield* Effect.serviceOption(ClientAddress.ClientAddress);
@@ -66,3 +90,10 @@ export const layer = HttpRouter.middleware(
   }),
   { global: true },
 );
+
+/**
+ * ALF-006: the global request-context middleware. Opt-in (`Api` handlers fall back to an empty
+ * `AuthRequestContext`): without it a session records no address or user agent and an event carries no
+ * correlation id, and `AuthHttp.coreHandlers` logs a warning at build time saying so.
+ */
+export const layer = Layer.merge(registration, middleware);

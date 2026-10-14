@@ -25,6 +25,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

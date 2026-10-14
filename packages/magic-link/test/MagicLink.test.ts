@@ -17,7 +17,13 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as MagicLink from "../src/MagicLink.ts";
-import { buildLayer, letForkedFibersRun, realLimiter, secretOf } from "./support/harness.ts";
+import {
+  awaitMails,
+  buildLayer,
+  letForkedFibersRun,
+  realLimiter,
+  secretOf,
+} from "./support/harness.ts";
 
 const outage = Ref.makeUnsafe(true);
 
@@ -30,8 +36,10 @@ const link = Effect.gen(function* () {
 const requestAndRead = (email: string) =>
   Effect.gen(function* () {
     const magicLink = yield* MagicLink.MagicLink;
+    const mailer = yield* Mailer.Mailer;
+    const before = (yield* mailer.sent).length;
     yield* magicLink.requestLink({ email });
-    yield* letForkedFibersRun;
+    yield* awaitMails(mailer.sent, before + 1);
     return yield* link;
   });
 
@@ -49,6 +57,7 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
         const known = yield* magicLink.requestLink({ email: "ada@example.com" });
         const unknown = yield* magicLink.requestLink({ email: "nobody@example.com" });
         assert.strictEqual(known, unknown);
+        yield* awaitMails(mailer.sent, 1);
         yield* letForkedFibersRun;
 
         const sent = yield* mailer.sent;
@@ -88,10 +97,12 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
       const magicLink = yield* MagicLink.MagicLink;
       const mailer = yield* Mailer.Mailer;
       for (let i = 0; i < 3; i += 1) yield* magicLink.requestLink({ email: "again@example.com" });
+      yield* awaitMails(mailer.sent, 1);
       yield* letForkedFibersRun;
       assert.strictEqual((yield* mailer.sent).length, 1);
       yield* TestClock.adjust(Duration.seconds(61));
       yield* magicLink.requestLink({ email: "again@example.com" });
+      yield* awaitMails(mailer.sent, 2);
       yield* letForkedFibersRun;
       assert.strictEqual((yield* mailer.sent).length, 2);
     }).pipe(Effect.provide(buildLayer())),

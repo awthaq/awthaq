@@ -30,7 +30,7 @@ import {
   withContext,
   World,
 } from "./ScimWorld.ts";
-import { letForkedFibersRun } from "./shared/Harness.ts";
+import { awaitStable } from "./shared/Harness.ts";
 import { isRecord, objectOf, type Snapshot } from "./shared/WireJson.ts";
 
 /** A platform administrator's suspension of an organization reads and writes across organizations. */
@@ -201,10 +201,11 @@ const idOfResponse = (response: Snapshot) => stringOf(objectOf(response), "id");
 
 const auditRecords = Effect.fn("features.scim.auditRecords")(function* (tag: string) {
   if (!isScimEventTag(tag)) throw new Error(`"${tag}" is not one of the SCIM events`);
-  yield* letForkedFibersRun;
-  return yield* withContext(
+  const list = withContext(
     Effect.flatMap(AuditLog.AuditLog, (log) => log.list({ eventTag: tag })).pipe(Effect.orDie),
   );
+  yield* awaitStable(list);
+  return yield* list;
 });
 
 const payloadOf = (payload: unknown) => {

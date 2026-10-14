@@ -107,7 +107,14 @@ describe("the URL is judged before any request", () => {
 });
 
 describe("the request, once the URL is allowed (development mode reaches loopback)", () => {
+  // A generous deadline for every test that expects an answer: a tight one makes a loaded machine (coverage, a
+  // shared CI runner) time out a loopback request that is merely slow. Only the never-answering server needs a short one.
   const dev = fetcherLayer({
+    allowPrivateTargets: true,
+    maxMetadataBytes: 4_000,
+    metadataTimeout: Duration.seconds(10),
+  });
+  const devShortDeadline = fetcherLayer({
     allowPrivateTargets: true,
     maxMetadataBytes: 4_000,
     metadataTimeout: Duration.millis(300),
@@ -173,6 +180,6 @@ describe("the request, once the URL is allowed (development mode reaches loopbac
           const dead = yield* get(1).pipe(Effect.flip);
           assert.strictEqual(dead.failure, "connect");
         }),
-    ).pipe(Effect.provide(dev)),
+    ).pipe(Effect.provide(devShortDeadline)),
   );
 });

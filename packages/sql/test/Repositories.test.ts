@@ -128,7 +128,7 @@ describe("Repositories (SQLite specifics)", () => {
       yield* Effect.provideService(
         Effect.gen(function* () {
           yield* users.findByEmail("secret-email@example.com");
-          yield* accounts.findByProviderSubject("github", "subject-secret", "");
+          yield* accounts.findIdentityByKey("github", "subject-secret", "");
           yield* accounts.listByUser(user.id);
           yield* verification.findByIdentifier("verify-email:identifier-secret");
           yield* verification.tryConsume({
@@ -169,39 +169,41 @@ describe("Repositories (SQLite specifics)", () => {
       return spans.filter((s) => s.name === "sql.execute").length;
     });
 
-  it.effect("PPS-007: verifyEmail returns the updated row from a single statement", () =>
+  it.effect("PPS-007: casIdentity returns the updated row from a single statement", () =>
     Effect.gen(function* () {
       const users = yield* Repositories.UsersRepository;
       const user = yield* insertUser("verify-once@example.com");
       let verified = user;
       const statements = yield* statementsOf(
-        users.verifyEmail(user.id).pipe(
-          Effect.tap((row) =>
-            Effect.sync(() => {
-              verified = Option.getOrThrow(row);
-            }),
+        users
+          .casIdentity({
+            id: user.id,
+            expected: {
+              email: user.email,
+              emailVerified: false,
+              phone: user.phone,
+              phoneVerified: false,
+            },
+            next: {
+              email: user.email,
+              emailVerified: true,
+              phone: user.phone,
+              phoneVerified: false,
+            },
+            updatedAt: DateTime.add(user.updatedAt, { seconds: 1 }),
+          })
+          .pipe(
+            Effect.tap((row) =>
+              Effect.sync(() => {
+                verified = Option.getOrThrow(row);
+              }),
+            ),
           ),
-        ),
       );
       assert.strictEqual(statements, 1);
       assert.isTrue(verified.emailVerified);
       assert.isTrue(DateTime.isGreaterThanOrEqualTo(verified.updatedAt, user.updatedAt));
     }).pipe(Effect.provide(RepositoriesLive)),
-  );
-
-  it.effect(
-    "PPS-007/AAPS-005: verifyEmail on an unknown id, or an already verified one, is None",
-    () =>
-      Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        const unknown = yield* users.verifyEmail(
-          Schema.decodeUnknownSync(Models.UserId)("missing"),
-        );
-        assert.isTrue(Option.isNone(unknown));
-        const user = yield* insertUser("verify-twice@example.com");
-        assert.isTrue(Option.isSome(yield* users.verifyEmail(user.id)));
-        assert.isTrue(Option.isNone(yield* users.verifyEmail(user.id)));
-      }).pipe(Effect.provide(RepositoriesLive)),
   );
 
   // ---- SEA-005: the TEXT-timestamp encoding invariant ----------------------------
@@ -223,7 +225,17 @@ describe("Repositories (SQLite specifics)", () => {
 
         // Every write path that encodes a timestamp.
         const user = yield* insertUser("sea005@example.com");
-        yield* users.verifyEmail(user.id);
+        yield* users.casIdentity({
+          id: user.id,
+          expected: {
+            email: user.email,
+            emailVerified: false,
+            phone: user.phone,
+            phoneVerified: false,
+          },
+          next: { email: user.email, emailVerified: true, phone: user.phone, phoneVerified: false },
+          updatedAt: now,
+        });
         const session = yield* insertSession(user.id, "h1", now);
         yield* sessions.touch({
           id: session.id,
@@ -253,10 +265,9 @@ describe("Repositories (SQLite specifics)", () => {
             refreshToken: null,
           }),
         );
-        const account = yield* accounts.findByProviderSubject("github", "sea005", "");
-        yield* accounts.updateProviderTokens(
+        const account = yield* accounts.findIdentityByKey("github", "sea005", "");
+        yield* accounts.writeTokens(
           Option.getOrThrow(account).id,
-          { providerId: "github", userId: user.id },
           {
             accessToken: "a",
             refreshToken: "r",
@@ -266,6 +277,7 @@ describe("Repositories (SQLite specifics)", () => {
             scope: null,
             tokenType: null,
           },
+          now,
         );
         yield* verification.upsertLive({
           id: Schema.decodeUnknownSync(Models.VerificationTokenId)("t1"),

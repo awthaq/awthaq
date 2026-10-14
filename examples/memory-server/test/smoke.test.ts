@@ -10,8 +10,8 @@
 import { Api } from "@awthaq/api";
 import { Users } from "@awthaq/core";
 import { Roles } from "@awthaq/roles";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -45,11 +45,8 @@ const CaptureMail = Logger.layer([
 
 const { handler, run: withServices } = buildApp(NoBreachHttpClient, CaptureMail);
 
-// `<iat>.<random>.<hmac(iat.random)>` — the double-submit pair CSRF protection requires on a mutation.
-const csrfToken = (() => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", demoCsrfSecret).update(signed).digest("hex")}`;
-})();
+// The double-submit pair CSRF protection requires on a mutation, minted against the example's own secret.
+const csrfToken = TestAuth.csrfToken(demoCsrfSecret);
 
 const call = (method: string, path: string, options?: { cookie?: string; body?: unknown }) =>
   handler(

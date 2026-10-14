@@ -12,7 +12,12 @@
 import { Accounts, Auth, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { mailedToken } from "./MailedToken.ts";
-import { letForkedFibersRun, makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
+import {
+  awaitMail,
+  awaitStable,
+  makeCapturingMailer,
+  makeNamedRegistry,
+} from "./shared/Harness.ts";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
 import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
@@ -350,9 +355,8 @@ export const publishedEvents = Effect.fn("features.password.publishedEvents")(fu
  * runtime, so a few cooperative turns plus one real timer tick let both settle before a read.
  */
 export const settle = Effect.gen(function* () {
-  yield* letForkedFibersRun;
-  yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
-  yield* letForkedFibersRun;
+  const app = yield* appHandle();
+  yield* awaitStable(Effect.zip(app.sentMail, app.publishedEvents));
 });
 
 /**
@@ -365,11 +369,10 @@ export const settle = Effect.gen(function* () {
 export const verifyLatestSignUp = Effect.fn("features.password.verifyLatestSignUp")(function* (
   email?: string,
 ) {
-  yield* letForkedFibersRun;
-  const mail = (yield* sentMail()).findLast(
-    (message) =>
-      message.template === "verify-email" && (email === undefined || message.to === email),
-  );
+  const verifyMail = (message: Mailer.MailMessage) =>
+    message.template === "verify-email" && (email === undefined || message.to === email);
+  yield* awaitMail(sentMail(), verifyMail);
+  const mail = (yield* sentMail()).findLast(verifyMail);
   if (mail === undefined) throw new Error("expected a verify-email mail");
   const token = mailedToken(mail);
   const response = yield* request("/verify-email", { token });

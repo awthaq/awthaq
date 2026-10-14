@@ -35,7 +35,7 @@ import {
   PasswordHasher,
   RateLimiter,
 } from "@awthaq/ports";
-import { AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
+import { AuthHttp, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
 import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -193,11 +193,11 @@ export const buildApp = (
   return { handler, dispose };
 };
 
-// 8. A real listening server. `BodyLimit.layer` bounds every request body (256 KiB by default).
+// 8. A real listening server. `BodyLimit.layer` bounds every request body (256 KiB by default); `RequestContext.layer` records the client address and user agent on the sessions and audit rows a request causes.
 const serverLayer = (port: number) =>
-  HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppLayer))).pipe(
-    Layer.provide(NodeHttpServer.layer(createServer, { port })),
-  );
+  HttpRouter.serve(
+    Layer.mergeAll(BodyLimit.layer, RequestContext.layer).pipe(Layer.provideMerge(AppLayer)),
+  ).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port })));
 
 /** Serve on `port` until interrupted. */
 export const main = (port: number) =>

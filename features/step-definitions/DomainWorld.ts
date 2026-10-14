@@ -30,11 +30,9 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { Profile } from "./UserFieldsFixture.ts";
 import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
@@ -293,20 +291,11 @@ export const WorldLive = Layer.effect(
     // the clock when it is *built*) would otherwise be pinned to 1970 and reject the real-clock CSRF cookie. The
     // context is kept: a direct step runs on the CALLER's fiber (so its `TestClock` moves what it reads), against the
     // very instances the handler serves from (one memo map).
-    const scope = Scope.makeUnsafe();
-    const memoMap = Layer.makeMemoMapUnsafe();
-    const ctx = yield* Effect.promise(() =>
-      Effect.runPromise(Layer.buildWithMemoMap(appLayer, memoMap, scope)),
-    );
-    const web = HttpRouter.toWebHandler(appLayer, { memoMap });
-    yield* Effect.addFinalizer(() =>
-      Effect.andThen(
-        Scope.close(scope, Exit.void),
-        Effect.promise(() => web.dispose()),
-      ),
-    );
+    const app = TestAuth.app(appLayer);
+    const ctx = yield* Effect.promise(() => app.context());
+    yield* Effect.addFinalizer(() => Effect.promise(() => app.dispose()));
     return World.of({
-      handler: web.handler,
+      handler: app.handler,
       ctx,
       probes,
       sentMail,

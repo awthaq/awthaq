@@ -25,7 +25,7 @@ import {
   World,
 } from "./TwoFactorWorld.ts";
 import { answer, field, setAnswer, successValue } from "./TwoFactorSupport.ts";
-import { letForkedFibersRun } from "./shared/Harness.ts";
+import { awaitMail } from "./shared/Harness.ts";
 
 const NEW_PASSWORD = "a brand new strong password";
 
@@ -47,7 +47,10 @@ export const twoFactorResetSteps = defineSteps<World>(({ Given, When, Then }) =>
         const password = yield* Password.Password;
         const mailer = yield* Mailer.Mailer;
         yield* password.requestReset({ email: person.email });
-        yield* letForkedFibersRun;
+        yield* awaitMail(
+          mailer.sent,
+          (message) => message.template === "reset-password" && message.to === person.email,
+        );
         const mail = (yield* mailer.sent).findLast(
           (message) => message.template === "reset-password" && message.to === person.email,
         );

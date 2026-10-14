@@ -1,11 +1,10 @@
-// Hand-wired on purpose: the CSRF middleware is the unit under test, built over several configurations (plan 08 exemption).
+// Hand-wired on purpose: the CSRF middleware is the unit under test, built over several configurations; what the suites repeat (resolver, CSRF config and protection, token mint) lives in `test/support/Wiring.ts` (plan 08 exemption).
 // spec/behaviors/10-csrf.md, BEH-EA-073 through BEH-EA-080.
 import { Api } from "@awthaq/api";
 import { SessionCookie } from "@awthaq/core";
 import { Hmac } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -31,6 +30,7 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import type * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Csrf from "../src/Csrf.ts";
+import * as Wiring from "./support/Wiring.ts";
 
 // `HttpApiTest.groups` needs these platform services regardless of which
 // middleware is under test — the same bundle effect's own HttpApiBuilder
@@ -42,14 +42,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 // A reference HMAC computed independently of `Csrf.ts`'s own implementation
 // (Node's `node:crypto`, not `effect/Crypto`) so a passing "valid double-submit"
 // test actually exercises RFC 2104 compatibility, not just self-consistency.
-const secret = "test-csrf-secret-padded-to-thirty-two-bytes";
-// CDS-006: `<iat>.<random>.<hmac(iat.random)>`. `it.effect` runs under a
-// TestClock that starts at 0, so a default `iat` of 0 is a token minted "now".
-const validCookieValue = (iat = 0): string => {
-  const signed = `${iat}.${randomBytes(32).toString("hex")}`;
-  const signature = createHmac("sha256", secret).update(signed).digest("hex");
-  return `${signed}.${signature}`;
-};
+const validCookieValue = (iat = 0): string => Wiring.mintCsrfToken(iat);
 
 const RequestHeaders = {
   "sec-fetch-site": Schema.optional(Schema.String),
@@ -84,12 +77,7 @@ const CsrfClientPassthrough = HttpApiMiddleware.layerClient(
 const TestLayer = GroupLayer.pipe(
   Layer.provideMerge(Csrf.CsrfProtectionLive),
   Layer.provideMerge(CsrfClientPassthrough),
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(secret),
-      allowedOrigins: ["https://example.com"],
-    }),
-  ),
+  Layer.provide(Wiring.csrfConfig(["https://example.com"])),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(TestServices),
 );
@@ -217,13 +205,7 @@ describe("Csrf cookie-less requests (native first sign-in)", () => {
     GroupLayer.pipe(
       Layer.provideMerge(Csrf.CsrfProtectionLive),
       Layer.provideMerge(CsrfClientPassthrough),
-      Layer.provide(
-        Layer.succeed(Csrf.CsrfConfig, {
-          secret: Redacted.make(secret),
-          allowedOrigins: ["https://example.com"],
-          ...extra,
-        }),
-      ),
+      Layer.provide(Wiring.csrfConfig(["https://example.com"], extra)),
       Layer.provide(NodeCrypto.layer),
       Layer.provideMerge(TestServices),
     );
@@ -353,12 +335,7 @@ describe("Csrf cookie attributes follow the session cookie mode (AGA-004)", () =
       Layer.provide(GroupLayer),
       Layer.provideMerge(Csrf.CsrfProtectionLive),
       Layer.provideMerge(CsrfClientPassthrough),
-      Layer.provide(
-        Layer.succeed(Csrf.CsrfConfig, {
-          secret: Redacted.make(secret),
-          allowedOrigins: ["https://example.com"],
-        }),
-      ),
+      Layer.provide(Wiring.csrfConfig(["https://example.com"])),
       Layer.provide(NodeCrypto.layer),
       Layer.provideMerge(cookieConfig),
       Layer.provideMerge(TestServices),
@@ -485,12 +462,7 @@ describe("Csrf token lifetime (CDS-006)", () => {
       Layer.provide(GroupLayer),
       Layer.provideMerge(Csrf.CsrfProtectionLive),
       Layer.provideMerge(CsrfClientPassthrough),
-      Layer.provide(
-        Layer.succeed(Csrf.CsrfConfig, {
-          secret: Redacted.make(secret),
-          allowedOrigins: ["https://example.com"],
-        }),
-      ),
+      Layer.provide(Wiring.csrfConfig(["https://example.com"])),
       Layer.provide(NodeCrypto.layer),
       Layer.provideMerge(TestServices),
       Layer.provideMerge(HttpRouter.layer),

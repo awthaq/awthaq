@@ -1,4 +1,4 @@
-// Hand-wired on purpose: `@awthaq/server` is below `@awthaq/test` in the package graph, and this suite is about the server's own routing and middleware (plan 08 exemption).
+// Hand-wired on purpose: `@awthaq/server` is below `@awthaq/test` in the package graph, and this suite is about the server's own routing and middleware; what the suites repeat (resolver, CSRF config and protection, token mint) lives in `test/support/Wiring.ts` (plan 08 exemption).
 // spec/behaviors/04-contract-stratum.md, BEH-EA-031.
 // spec/behaviors/11-http-error-mapping.md, BEH-EA-083 through BEH-EA-088.
 //
@@ -25,7 +25,6 @@ import {
 import { SqlTransaction, RateLimiter } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -48,10 +47,10 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Account from "../src/Account.ts";
 import * as Authentication from "../src/Authentication.ts";
 import * as AuthHttp from "../src/AuthHttp.ts";
-import * as Csrf from "../src/Csrf.ts";
 import { currentUser } from "../src/internal/CurrentUser.ts";
 import { HandlerInvariantViolation } from "../src/internal/Defects.ts";
 import * as Session from "../src/Session.ts";
+import * as Wiring from "./support/Wiring.ts";
 
 const SessionsInMemory = Sessions.layer.pipe(Layer.provide(Persistence.memory));
 
@@ -66,24 +65,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 // `validCookieValue()`: an HMAC computed independently of `Csrf.ts`'s own
 // implementation (Node's `node:crypto`), so a passing run exercises RFC
 // 2104 compatibility, not just self-consistency with the code under test.
-const CSRF_TEST_SECRET = "server-authhttp-test-csrf-secret";
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_TEST_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The router runs under `it.effect`'s TestClock, which starts at 0.
-  const signed = `0.${randomBytes(32).toString("hex")}`;
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
-  return `${signed}.${signature}`;
-})();
+const CSRF_TEST_COOKIE_VALUE: string = Wiring.mintCsrfToken();
 
 const withCsrfCookie = (cookie?: string): string =>
   cookie
@@ -108,8 +90,8 @@ const makeAppLayer = (
     AuthHttp.docs(AuthCore.AuthCoreApi),
   ).pipe(
     Layer.provideMerge(Authentication.AuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provide(CsrfProtectionLive),
+    Layer.provide(Wiring.resolver),
+    Layer.provide(Wiring.csrfLive()),
     // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
     Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
     // CSG-005: the export endpoint rate-limits per account.

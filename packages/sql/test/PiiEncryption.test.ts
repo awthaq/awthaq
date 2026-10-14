@@ -204,16 +204,26 @@ describe("PII column encryption (CSG-006)", () => {
           assert.strictEqual((yield* users.findById(created.id)).metadata, '{"plan":"pro"}');
           const byEmail = yield* users.findByEmail("META@example.com");
           assert.strictEqual(Option.getOrThrow(byEmail).metadata, '{"plan":"pro"}');
-          assert.strictEqual(
-            Option.getOrThrow(yield* users.verifyEmail(created.id)).metadata,
-            '{"plan":"pro"}',
-          );
+          const identity = {
+            email: created.email,
+            emailVerified: false,
+            phone: created.phone,
+            phoneVerified: false,
+          };
+          const verified = yield* users.casIdentity({
+            id: created.id,
+            expected: identity,
+            next: { ...identity, emailVerified: true },
+            updatedAt: yield* DateTime.now,
+          });
+          assert.strictEqual(Option.getOrThrow(verified).metadata, '{"plan":"pro"}');
 
-          const updated = yield* users.update(
-            yield* M.User.update.makeEffect({
+          const updated = Option.getOrThrow(
+            yield* users.updateProfile({
               id: created.id,
               name: "M2",
               metadata: '{"plan":"team"}',
+              image: undefined,
             }),
           );
           assert.strictEqual(updated.metadata, '{"plan":"team"}');

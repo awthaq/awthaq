@@ -91,7 +91,7 @@ import {
   RateLimiter,
   SqlTransaction,
 } from "@awthaq/ports";
-import { AuthHttp, Authentication, Csrf } from "@awthaq/server";
+import { AuthHttp, Authentication, Csrf, RequestContext } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
@@ -101,13 +101,17 @@ import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { createHmac, randomBytes } from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -366,7 +370,13 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
       ? Layer.empty
       : AuthHttp.docs(built.api, { path: options.docsPath });
   return Layer.merge(AuthHttp.routes(built.api, { openapiPath: options.openapiPath }), docs).pipe(
-    Layer.provide(AuthHttp.coreHandlers),
+    // The in-process harness deliberately serves without `RequestContext.layer` (E1), so `coreHandlers`' build-time
+    // warning that it is absent would fire on every test app.
+    Layer.provide(
+      AuthHttp.coreHandlers.pipe(
+        Layer.provide(Layer.succeed(RequestContext.warnWhenAbsent, false)),
+      ),
+    ),
     // The plugins' own services stay in the output (`provideMerge`), so a test can
     // `yield* Password.Password` from the same composition it serves over HTTP.
     Layer.provideMerge(built.layer),
@@ -543,7 +553,7 @@ export interface RequestInit {
  * BEH-EA-T3: the composition served and read through one memo map, so the handler and the test's own
  * context share every instance (a session minted through `run` authenticates a request through `handler`).
  */
-export interface App<A> {
+export interface App<A, E = never> {
   /** The raw `(Request) => Promise<Response>` the composition serves. */
   readonly handler: (request: Request) => Promise<Response>;
   /** Runs an effect against the composition's own context (the instances the plugins use). */
@@ -562,6 +572,29 @@ export interface App<A> {
       readonly onSignedUp?: (userId: Users.UserId) => Effect.Effect<void>;
     },
   ) => Promise<SignedInSession>;
+  /**
+   * The composition's context, built once on the real clock: for a World that runs effects *directly* on its own fiber
+   * (under a step's `TestClock`) against the very instances `handler` serves from. A service that reads the clock when
+   * it is built (`CsrfProtection`) is therefore not pinned to a `TestClock`'s epoch.
+   */
+  readonly context: () => Promise<Context.Context<A>>;
+  /**
+   * The memo map the handler and `run` share. A caller that builds more layers beside the app (a hand-made router, a
+   * second stack that must see the same `Sessions`) builds them with `Layer.buildWithMemoMap(layer, app.memoMap, scope)`.
+   */
+  readonly memoMap: Layer.MemoMap;
+  /**
+   * A `ManagedRuntime` over the same composition and memo map, for code that takes a runtime instead of a context
+   * (`getSession(headers, runtime)`): a session issued through `handler`, `run` or this runtime is visible to the others.
+   * Built lazily; `dispose` releases it.
+   */
+  readonly runtime: ManagedRuntime.ManagedRuntime<A, E>;
+  /**
+   * Moves the composition's clock forward: with `testClock: true` the handler, `run` and `runtime` all read one
+   * `TestClock`, so a session expires, a window resets, a token lapses when the test says so. Without the option
+   * there is no `TestClock` to move and the promise rejects.
+   */
+  readonly advance: (by: Duration.Input) => Promise<void>;
   /** Releases everything the composition built. */
   readonly dispose: () => Promise<void>;
 }
@@ -575,14 +608,25 @@ export type AppNeeds = Csrf.CsrfConfig | Users.Users | Sessions.Sessions;
  * + `buildWithMemoMap` blocks and the per-suite CSRF token mint.
  */
 export const app = <A, E>(
-  appLayer: Layer.Layer<A | AppNeeds, E>,
+  composition: Layer.Layer<A | AppNeeds, E>,
   options: {
     /** The origin `request` addresses (default `http://localhost`): a plugin that derives a URL from the request's host sees it. */
     readonly baseUrl?: string;
+    /**
+     * Serve the composition over one `TestClock` (time starts at the epoch): `advance` moves it for the handler and
+     * for `run` alike, and `request` stamps its CSRF pair with the clock's current reading.
+     */
+    readonly testClock?: boolean;
+    /** An existing memo map to build into, so several apps (or a hand-made router) share the instances they have in common. */
+    readonly memoMap?: Layer.MemoMap;
   } = {},
-): App<A | AppNeeds> => {
+): App<A | AppNeeds, E> => {
   const baseUrl = options.baseUrl ?? "http://localhost";
-  const memoMap = Layer.makeMemoMapUnsafe();
+  const memoMap = options.memoMap ?? Layer.makeMemoMapUnsafe();
+  const appLayer = Layer.merge(
+    composition,
+    options.testClock === true ? TestClock.layer() : Layer.empty,
+  );
   const scope = Scope.makeUnsafe();
   const web = HttpRouter.toWebHandler(appLayer, { memoMap, disableLogger: true });
   let context: Promise<Context.Context<A | AppNeeds>> | undefined;
@@ -590,10 +634,20 @@ export const app = <A, E>(
     context ??= Effect.runPromise(Layer.buildWithMemoMap(appLayer, memoMap, scope));
     return context;
   };
-  const run: App<A | AppNeeds>["run"] = (effect) =>
+  const run: App<A | AppNeeds, E>["run"] = (effect) =>
     built().then((services) => Effect.runPromiseWith(services)(effect));
+  const runtime = ManagedRuntime.make(appLayer, { memoMap });
   let token: Promise<string> | undefined;
   const csrf = () => {
+    if (options.testClock === true) {
+      return run(
+        Effect.gen(function* () {
+          const config = yield* Csrf.CsrfConfig;
+          const now = yield* Clock.currentTimeMillis;
+          return csrfToken(config.secret, { issuedAt: Math.floor(now / 1000) });
+        }),
+      );
+    }
     token ??= run(
       Effect.map(Effect.service(Csrf.CsrfConfig), (config) => csrfToken(config.secret)),
     );
@@ -628,12 +682,34 @@ export const app = <A, E>(
       );
     },
     signIn: (email, options = {}) => run(signInAs({ email, ...options })),
+    context: built,
+    memoMap,
+    runtime,
+    advance: (by) =>
+      options.testClock === true
+        ? run(TestClock.adjust(by))
+        : Promise.reject(new Error("TestAuth.app: `advance` needs the `testClock: true` option")),
     dispose: async () => {
       await web.dispose();
+      await runtime.dispose();
       await Effect.runPromise(Scope.close(scope, Exit.void));
     },
   };
 };
+
+/**
+ * Builds `layer` into a context on the real clock and resolves it, for a World that runs effects *directly* on its own
+ * fiber (under a step's `TestClock`) against services that must be constructed on the real one: a service that reads
+ * the clock when it is built (`CsrfProtection`) would otherwise be pinned to 1970. Each call gets its own memo map
+ * unless `memoMap` is given; `scope` owns the build (closing it releases the layer).
+ */
+export const buildContext = <A, E>(
+  layer: Layer.Layer<A, E>,
+  options: { readonly scope: Scope.Scope; readonly memoMap?: Layer.MemoMap },
+): Promise<Context.Context<A>> =>
+  Effect.runPromise(
+    Layer.buildWithMemoMap(layer, options.memoMap ?? Layer.makeMemoMapUnsafe(), options.scope),
+  );
 
 /** `Encryption` over a fixed test key (also in every composition's base); for a store suite that builds `Persistence.sql()` alone. */
 export const encryption = TestEncryption.layer;

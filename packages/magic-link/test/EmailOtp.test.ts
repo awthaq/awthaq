@@ -16,14 +16,21 @@ import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Layer from "effect/Layer";
 import * as EmailOtp from "../src/EmailOtp.ts";
-import { buildLayer, letForkedFibersRun, realLimiter, secretOf } from "./support/harness.ts";
+import {
+  awaitMails,
+  buildLayer,
+  letForkedFibersRun,
+  realLimiter,
+  secretOf,
+} from "./support/harness.ts";
 
 const codeFor = (email: string) =>
   Effect.gen(function* () {
     const emailOtp = yield* EmailOtp.EmailOtp;
     const mailer = yield* Mailer.Mailer;
+    const before = (yield* mailer.sent).length;
     yield* emailOtp.requestCode({ email });
-    yield* letForkedFibersRun;
+    yield* awaitMails(mailer.sent, before + 1);
     const mail = (yield* mailer.sent).findLast(
       (message) => message.template === "email-otp" && message.to === email,
     );
@@ -51,6 +58,7 @@ describe("EmailOtp.requestCode (BEH-EA-272)", () => {
         const known = yield* emailOtp.requestCode({ email: "ada@example.com" });
         const unknown = yield* emailOtp.requestCode({ email: "nobody@example.com" });
         assert.strictEqual(known, unknown);
+        yield* awaitMails(mailer.sent, 1);
         yield* letForkedFibersRun;
         assert.deepStrictEqual(
           (yield* mailer.sent).map((sent) => sent.to),

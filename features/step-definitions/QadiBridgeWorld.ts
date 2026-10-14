@@ -1,4 +1,7 @@
-// Hand-wired on purpose: qadi's `RequirePermission` guard must be built above `Roles.layer` to read the `SubjectResolver` slot, which `TestAuth.layer` cannot order (plan 08 exemption).
+// Hand-wired on purpose: the fixture is not an `Auth.make` composition. It serves a bespoke `HttpApi` (Path A and Path B groups,
+// bare routes outside the contract, a decision stream) behind a counting `SubjectResolver`, and passes qadi's per-request
+// evaluation context to the web handler as its second argument, on one memo map shared with the services a step runs (plan 08
+// exemption; a guard built over `Roles.layer` is NOT the reason: `services` can order that, see `RolesAdmin.test.ts`).
 // AH-003 (decision 36, Tier 2): the shared World for the qadi authorization-bridge features
 // (18-roles-subject-resolver, 19-qadi-bridge-path-a, 20-qadi-bridge-path-b,
 // 21-qadi-resolvers-obligations).

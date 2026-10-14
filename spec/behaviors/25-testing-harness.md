@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-25 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added an honest note that BEH-EA-199's redaction check is not yet mechanically verifiable (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-14): BEH-EA-331..333 and 336: `TestAuth.layer` derives the host middleware, runs over memory or SQL, and `TestAuth.app` serves it; every plugin runs the contract suite, which checks its records bundle; BEH-EA-193 and 198 revised (architecture plan 08) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added an honest note that BEH-EA-199's redaction check is not yet mechanically verifiable (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-14): BEH-EA-331..333 and 336: `TestAuth.layer` derives the host middleware, runs over memory or SQL, and `TestAuth.app` serves it; every plugin runs the contract suite, which checks its records bundle; BEH-EA-193 and 198 revised (architecture plan 08) <br> 1.4 (2026-10-14): BEH-EA-333 gains `memoMap`, `runtime`, `context`, and the `testClock`/`memoMap` options with `advance`, plus `TestAuth.buildContext` (plan 08 follow-up) |
 ---
 
 > Implemented in `@awthaq/test` (`TestAuth.layer`, `signInAs`, `runPluginContractTests`, the `RedactionGuard`; tests `packages/test/test`); BEH-EA-194 through 196 describe patterns built from Effect's and qadi's own helpers, not awthaq exports; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -236,7 +236,16 @@ REQUIREMENT: The handler and the context runner of `TestAuth.app` MUST share
              `request` MUST satisfy CSRF double-submit for the composition's
              own `CsrfConfig` (read once through `run`), computed independently
              of `Csrf.ts` (`TestAuth.csrfToken`, `node:crypto`). `dispose` MUST
-             release everything the composition built.
+             release everything the composition built. `runtime` (a
+             `ManagedRuntime`), `memoMap` and `context()` (the composition built
+             once on the real clock, for a World that runs effects on its own
+             fiber) MUST resolve against the same instances as `handler`.
+             With `{ testClock: true }` the handler, `run` and `runtime` MUST
+             read one `TestClock` that `advance` moves, and `request` stamps its
+             CSRF pair from that clock; `advance` without the option MUST
+             reject. `{ memoMap }` lets two apps share instances.
+             `TestAuth.buildContext(layer, { scope, memoMap? })` builds any
+             layer into a context on the real clock.
 ```
 
 This replaces the hand-rolled memo-map handles and the per-suite CSRF token mints (22 `createHmac` copies).

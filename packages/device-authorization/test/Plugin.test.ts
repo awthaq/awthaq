@@ -271,4 +271,35 @@ describe("DeviceGrantRecords compare-and-swap primitives", () => {
       assert.isTrue(Option.isNone(yield* records.consume("g1", owner)));
     }).pipe(Effect.provide(DeviceGrantRecords.layerMemory)),
   );
+
+  it.effect("two concurrent consumes hand the approved row to exactly one caller", () =>
+    Effect.gen(function* () {
+      const records = yield* DeviceGrantRecords.DeviceGrantRecords;
+      const now = yield* DateTime.now;
+      const owner = Users.UserId("owner");
+      yield* records.insert({
+        id: "g1",
+        deviceCodeHash: "d1",
+        userCodeHash: "u1",
+        clientId: "c",
+        scopes: [],
+        status: "pending",
+        userId: Option.none(),
+        amr: [],
+        pollInterval: 5,
+        createdAt: now,
+        expiresAt: DateTime.addDuration(now, Duration.minutes(15)),
+        lastPolledAt: Option.none(),
+      });
+      yield* records.claim("g1", owner);
+      yield* records.decide({ id: "g1", userId: owner, status: "approved", amr: [], now });
+      const results = yield* Effect.all(
+        [records.consume("g1", owner), records.consume("g1", owner)],
+        {
+          concurrency: 2,
+        },
+      );
+      assert.strictEqual(results.filter(Option.isSome).length, 1);
+    }).pipe(Effect.provide(DeviceGrantRecords.layerMemory)),
+  );
 });

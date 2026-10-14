@@ -1,4 +1,4 @@
-// Hand-wired on purpose: `@awthaq/server` is below `@awthaq/test` in the package graph, and this suite is about the server's own CORS layer (plan 08 exemption).
+// Hand-wired on purpose: `@awthaq/server` is below `@awthaq/test` in the package graph, and this suite is about the server's own CORS layer; what the suites repeat (resolver, CSRF config and protection, token mint) lives in `test/support/Wiring.ts` (plan 08 exemption).
 // AGA-002/CDS-008: `AuthHttp.cors`, the blessed CORS preset (spec/behaviors/10-csrf.md,
 // BEH-EA-073/074, and 11-http-error-mapping.md BEH-EA-083). Its origin allowlist is
 // `CsrfConfig.allowedOrigins`, the same value the CSRF origin check reads, so the edge
@@ -24,7 +24,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -33,6 +32,7 @@ import * as Authentication from "../src/Authentication.ts";
 import * as AuthHttp from "../src/AuthHttp.ts";
 import * as Csrf from "../src/Csrf.ts";
 import * as Session from "../src/Session.ts";
+import * as Wiring from "./support/Wiring.ts";
 
 const APP_ORIGIN = "https://app.example.com";
 const OTHER_ORIGIN = "https://evil.example.com";
@@ -40,12 +40,6 @@ const OTHER_ORIGIN = "https://evil.example.com";
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
-
-const csrfConfig = (allowedOrigins: ReadonlyArray<string>) =>
-  Layer.succeed(Csrf.CsrfConfig, {
-    secret: Redacted.make("server-cors-test-csrf-secret-padded-to-thirty-two-bytes"),
-    allowedOrigins,
-  });
 
 /** The real core session/account routes behind `CsrfProtection`, with `AuthHttp.cors` installed over the same `CsrfConfig`. */
 const appLayer = (allowedOrigins: ReadonlyArray<string>) =>
@@ -57,7 +51,7 @@ const appLayer = (allowedOrigins: ReadonlyArray<string>) =>
     AuthHttp.cors(),
   ).pipe(
     Layer.provideMerge(Authentication.AuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provide(Wiring.resolver),
     Layer.provide(Csrf.CsrfProtectionLive),
     // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
     Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
@@ -73,7 +67,7 @@ const appLayer = (allowedOrigins: ReadonlyArray<string>) =>
     Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provide(NodeCrypto.layer),
-    Layer.provide(csrfConfig(allowedOrigins)),
+    Layer.provide(Wiring.csrfConfig(allowedOrigins)),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );

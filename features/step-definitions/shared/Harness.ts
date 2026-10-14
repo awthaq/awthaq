@@ -49,18 +49,65 @@ export const setCookieFrom = (response: Response): string => {
 };
 
 /**
- * A few cooperative scheduler turns so a detached fiber (e.g. `signUp`'s never-awaited
- * verification mail, BEH-EA-113) runs to completion, mirroring `AuthHttp.test.ts`'s own
- * `letForkedFibersRun`.
+ * A few cooperative scheduler turns, so a detached fiber that does no I/O (e.g. `signUp`'s never-awaited
+ * verification mail over the in-memory store, BEH-EA-113) runs to completion. A step that needs a fiber's
+ * *result* over a real database should use `awaitCondition` instead: yielding alone does not outwait socket I/O.
  */
 export const letForkedFibersRun = Effect.gen(function* () {
   for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-  // Over a real Postgres (`AWTHAQ_POSTGRES_URL`) a forked dispatch crosses socket I/O, which yielding
-  // alone does not outwait: give the real clock a moment so the fiber finishes before a step reads.
-  if (process.env["AWTHAQ_POSTGRES_URL"] !== undefined) {
-    yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
-  }
 });
+
+const realTick = (ms: number) =>
+  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+/**
+ * A bounded poll for the condition a step is about to read (a mail dispatched by a detached fiber, an event
+ * published by a subscriber): cooperative turns first, then a short real tick between checks, so a forked
+ * dispatch that crosses Postgres socket I/O is outwaited exactly as long as it takes and no longer. Resolves
+ * `true` once `check` holds, `false` at the deadline; the caller keeps its own assertion and message.
+ */
+export const awaitCondition = <E, R>(
+  check: Effect.Effect<boolean, E, R>,
+  options?: { readonly timeoutMs?: number },
+) =>
+  Effect.gen(function* () {
+    const deadline = Date.now() + (options?.timeoutMs ?? 5000);
+    for (;;) {
+      yield* letForkedFibersRun;
+      if (yield* check) return true;
+      if (Date.now() >= deadline) return false;
+      yield* realTick(2);
+    }
+  });
+
+/** True once a mail matching `predicate` has been captured. */
+export const awaitMail = <R>(
+  sent: Effect.Effect<ReadonlyArray<Mailer.MailMessage>, never, R>,
+  predicate: (message: Mailer.MailMessage) => boolean,
+) => awaitCondition(Effect.map(sent, (messages) => messages.some(predicate)));
+
+/**
+ * For a read with no known expected value (an audit trail, an event count): polls until two consecutive reads
+ * agree, bounded by `timeoutMs`. Over the in-memory store a few cooperative turns already settle it, so only a
+ * run against a real Postgres (`AWTHAQ_POSTGRES_URL`) ever takes a real tick.
+ */
+export const awaitStable = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
+  options?: { readonly timeoutMs?: number },
+) =>
+  Effect.gen(function* () {
+    yield* letForkedFibersRun;
+    if (process.env["AWTHAQ_POSTGRES_URL"] === undefined) return;
+    const deadline = Date.now() + (options?.timeoutMs ?? 2000);
+    let previous = JSON.stringify(yield* read);
+    while (Date.now() < deadline) {
+      yield* realTick(5);
+      yield* letForkedFibersRun;
+      const current = JSON.stringify(yield* read);
+      if (current === previous) return;
+      previous = current;
+    }
+  });
 
 /**
  * A capture cell built *outside* the layer graph, so a step can read what was sent after the

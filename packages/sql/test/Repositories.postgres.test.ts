@@ -96,22 +96,34 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
   // SQLite's identifier resolution is case-insensitive regardless of
   // quoting.
 
-  it.effect("Users.verifyEmail sets emailVerified/updatedAt via the quoted columns", () =>
+  it.effect("Users.casIdentity sets emailVerified/updatedAt via the quoted columns", () =>
     Effect.gen(function* () {
       const users = yield* Repositories.UsersRepository;
       const user = yield* users.insert(
         yield* M.User.insert.makeEffect({ email: "verify@example.com", name: "V" }),
       );
       assert.strictEqual(user.emailVerified, false);
-      const verified = Option.getOrThrow(yield* users.verifyEmail(user.id));
+      const identity = {
+        email: user.email,
+        emailVerified: false,
+        phone: user.phone,
+        phoneVerified: false,
+      };
+      const verify = users.casIdentity({
+        id: user.id,
+        expected: identity,
+        next: { ...identity, emailVerified: true },
+        updatedAt: DateTime.add(user.updatedAt, { seconds: 1 }),
+      });
+      const verified = Option.getOrThrow(yield* verify);
       assert.strictEqual(verified.emailVerified, true);
-      // AAPS-005: a second verification finds nothing to change.
-      assert.isTrue(Option.isNone(yield* users.verifyEmail(user.id)));
+      // AAPS-005: a second verification expecting the old state finds nothing to change.
+      assert.isTrue(Option.isNone(yield* verify));
     }).pipe(Effect.provide(RepositoriesLive)),
   );
 
   it.effect(
-    "Accounts.findByProviderSubject/listByUser/deleteAllByUser all resolve the quoted providerId/userId columns",
+    "Accounts.findIdentityByKey/listByUser/deleteAllByUser all resolve the quoted providerId/userId columns",
     () =>
       Effect.gen(function* () {
         const users = yield* Repositories.UsersRepository;
@@ -131,7 +143,7 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
           }),
         );
 
-        const found = yield* accounts.findByProviderSubject("password", user.id, "");
+        const found = yield* accounts.findIdentityByKey("password", user.id, "");
         assert.isTrue(Option.isSome(found));
 
         const listed = yield* accounts.listByUser(user.id);

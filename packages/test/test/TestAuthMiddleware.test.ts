@@ -83,7 +83,7 @@ const machineKey = Authentication.contribute("apiKey", {
 
 const withApp = async <A>(
   layer: Parameters<typeof TestAuth.app>[0],
-  use: (app: TestAuth.App<never>) => Promise<A>,
+  use: (app: ReturnType<typeof TestAuth.app>) => Promise<A>,
 ) => {
   const app = TestAuth.app(layer);
   try {
