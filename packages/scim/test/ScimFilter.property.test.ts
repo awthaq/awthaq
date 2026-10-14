@@ -13,6 +13,14 @@ import { ScimLive, seedConnection } from "./support.ts";
 
 const quote = (value: string): string => `"${value.replace(/[\\"]/g, "\\$&")}"`;
 
+// Runs share one composition, so each seeds an organization of its own (the slug derives from the name, and an
+// owner is limited in how many organizations they may hold).
+let runs = 0;
+const seedFresh = () => {
+  runs += 1;
+  return seedConnection(`run-${runs}`, `owner-${runs}`);
+};
+
 const noDefect = <A, E>(exit: Exit.Exit<A, E>): void => {
   if (Exit.isFailure(exit)) {
     assert.isFalse(Cause.hasDies(exit.cause), "a filter must never become a defect");
@@ -22,96 +30,101 @@ const noDefect = <A, E>(exit: Exit.Exit<A, E>): void => {
 /** A value that survives SCIM's own `trim()` unchanged and is non-empty. */
 const Value = Schema.String.check(Schema.isPattern(/^\S(?:[\s\S]{0,30}\S)?$/));
 
+// One composition for all the runs of a property: building the layer per run (100 runs a property) is what made these
+// tests slow enough to hit the default timeout on a loaded machine. Every run seeds its own connection, so runs share
+// nothing but the (in-memory) stores.
 describe("SCIM filter parsing properties", () => {
-  it.effect.prop(
-    "any filter text yields a ListResponse or a typed ScimBadRequest, never a defect",
-    { filter: Schema.String },
-    ({ filter }) =>
-      Effect.gen(function* () {
-        const { connection } = yield* seedConnection();
-        const scim = yield* Scim.Scim;
-        noDefect(yield* Effect.exit(scim.listUsers(connection, { filter })));
-        noDefect(yield* Effect.exit(scim.listGroups(connection, { filter })));
-      }).pipe(Effect.provide(ScimLive())),
-  );
+  it.layer(ScimLive())((it) => {
+    it.effect.prop(
+      "any filter text yields a ListResponse or a typed ScimBadRequest, never a defect",
+      { filter: Schema.String },
+      ({ filter }) =>
+        Effect.gen(function* () {
+          const { connection } = yield* seedFresh();
+          const scim = yield* Scim.Scim;
+          noDefect(yield* Effect.exit(scim.listUsers(connection, { filter })));
+          noDefect(yield* Effect.exit(scim.listGroups(connection, { filter })));
+        }),
+    );
 
-  it.effect.prop(
-    'only `attr eq "value"` is supported: any other operator on a supported attribute is 400 invalidFilter',
-    {
-      attribute: Schema.Literals(["userName", "externalId"]),
-      operator: Schema.Literals([
-        "ne",
-        "co",
-        "sw",
-        "ew",
-        "gt",
-        "ge",
-        "lt",
-        "le",
-        "and",
-        "or",
-        "pr",
-      ]),
-      value: Value,
-    },
-    ({ attribute, operator, value }) =>
-      Effect.gen(function* () {
-        const { connection } = yield* seedConnection();
-        const scim = yield* Scim.Scim;
-        const failure = yield* scim
-          .listUsers(connection, { filter: `${attribute} ${operator} ${quote(value)}` })
-          .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
-        assert.strictEqual(failure._tag, "ScimBadRequest");
-        assert.strictEqual(failure.scimType, "invalidFilter");
-      }).pipe(Effect.provide(ScimLive())),
-  );
+    it.effect.prop(
+      'only `attr eq "value"` is supported: any other operator on a supported attribute is 400 invalidFilter',
+      {
+        attribute: Schema.Literals(["userName", "externalId"]),
+        operator: Schema.Literals([
+          "ne",
+          "co",
+          "sw",
+          "ew",
+          "gt",
+          "ge",
+          "lt",
+          "le",
+          "and",
+          "or",
+          "pr",
+        ]),
+        value: Value,
+      },
+      ({ attribute, operator, value }) =>
+        Effect.gen(function* () {
+          const { connection } = yield* seedFresh();
+          const scim = yield* Scim.Scim;
+          const failure = yield* scim
+            .listUsers(connection, { filter: `${attribute} ${operator} ${quote(value)}` })
+            .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
+          assert.strictEqual(failure._tag, "ScimBadRequest");
+          assert.strictEqual(failure.scimType, "invalidFilter");
+        }),
+    );
 
-  it.effect.prop(
-    "an `externalId eq` filter finds exactly the user provisioned with that value, for any quoted/escaped text and any spacing/case of the keywords",
-    {
-      value: Value,
-      attributeCase: Schema.Literals(["externalId", "EXTERNALID", "externalid"]),
-      operatorCase: Schema.Literals(["eq", "EQ", "Eq"]),
-      lead: Schema.Literals(["", " ", "  "]),
-      gap: Schema.Literals([" ", "  ", "\t"]),
-    },
-    ({ value, attributeCase, operatorCase, lead, gap }) =>
-      Effect.gen(function* () {
-        const { connection } = yield* seedConnection();
-        const scim = yield* Scim.Scim;
-        const created = yield* scim.createUser(connection, {
-          userName: "someone@acme.example",
-          externalId: value,
-        });
-        const decoy = yield* scim.createUser(connection, {
-          userName: "decoy@acme.example",
-          externalId: `${value}-decoy`,
-        });
-        const found = yield* scim.listUsers(connection, {
-          filter: `${lead}${attributeCase}${gap}${operatorCase}${gap}${quote(value)}${lead}`,
-        });
-        assert.strictEqual(found.totalResults, 1);
-        assert.strictEqual(found.Resources[0]?.id, created.id);
-        assert.strictEqual(found.Resources[0]?.externalId, value);
-        assert.notStrictEqual(found.Resources[0]?.id, decoy.id);
-      }).pipe(Effect.provide(ScimLive())),
-  );
+    it.effect.prop(
+      "an `externalId eq` filter finds exactly the user provisioned with that value, for any quoted/escaped text and any spacing/case of the keywords",
+      {
+        value: Value,
+        attributeCase: Schema.Literals(["externalId", "EXTERNALID", "externalid"]),
+        operatorCase: Schema.Literals(["eq", "EQ", "Eq"]),
+        lead: Schema.Literals(["", " ", "  "]),
+        gap: Schema.Literals([" ", "  ", "\t"]),
+      },
+      ({ value, attributeCase, operatorCase, lead, gap }) =>
+        Effect.gen(function* () {
+          const { connection } = yield* seedFresh();
+          const scim = yield* Scim.Scim;
+          const created = yield* scim.createUser(connection, {
+            userName: `someone-${runs}@acme.example`,
+            externalId: value,
+          });
+          const decoy = yield* scim.createUser(connection, {
+            userName: `decoy-${runs}@acme.example`,
+            externalId: `${value}-decoy`,
+          });
+          const found = yield* scim.listUsers(connection, {
+            filter: `${lead}${attributeCase}${gap}${operatorCase}${gap}${quote(value)}${lead}`,
+          });
+          assert.strictEqual(found.totalResults, 1);
+          assert.strictEqual(found.Resources[0]?.id, created.id);
+          assert.strictEqual(found.Resources[0]?.externalId, value);
+          assert.notStrictEqual(found.Resources[0]?.id, decoy.id);
+        }),
+    );
 
-  it.effect.prop(
-    "an attribute the resource type does not support (userName on Groups, displayName on Users) is 400 invalidFilter, whatever the value",
-    { value: Value },
-    ({ value }) =>
-      Effect.gen(function* () {
-        const { connection } = yield* seedConnection();
-        const scim = yield* Scim.Scim;
-        const onUsers = yield* scim
-          .listUsers(connection, { filter: `displayName eq ${quote(value)}` })
-          .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
-        assert.strictEqual(onUsers.scimType, "invalidFilter");
-        const onGroups = yield* scim
-          .listGroups(connection, { filter: `userName eq ${quote(value)}` })
-          .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
-        assert.strictEqual(onGroups.scimType, "invalidFilter");
-      }).pipe(Effect.provide(ScimLive())),
-  );
+    it.effect.prop(
+      "an attribute the resource type does not support (userName on Groups, displayName on Users) is 400 invalidFilter, whatever the value",
+      { value: Value },
+      ({ value }) =>
+        Effect.gen(function* () {
+          const { connection } = yield* seedFresh();
+          const scim = yield* Scim.Scim;
+          const onUsers = yield* scim
+            .listUsers(connection, { filter: `displayName eq ${quote(value)}` })
+            .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
+          assert.strictEqual(onUsers.scimType, "invalidFilter");
+          const onGroups = yield* scim
+            .listGroups(connection, { filter: `userName eq ${quote(value)}` })
+            .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
+          assert.strictEqual(onGroups.scimType, "invalidFilter");
+        }),
+    );
+  });
 });

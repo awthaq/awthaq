@@ -47,7 +47,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { mailedToken } from "./MailedToken.ts";
 import {
   cookieFrom,
-  letForkedFibersRun,
+  awaitMail,
   makeCapturingMailer,
   makeNamedRegistry,
   setCookieFrom,
@@ -371,7 +371,10 @@ export const signUp = Effect.fn("features.session.signUp")(function* (name: stri
     setCookie: setCookieFrom(response),
   });
 
-  yield* letForkedFibersRun;
+  yield* awaitMail(
+    sentMail,
+    (message) => message.template === "verify-email" && message.to === email,
+  );
   const verifyMail = (yield* sentMail).findLast(
     (message) => message.template === "verify-email" && message.to === email,
   );
@@ -390,7 +393,7 @@ export const mailedTo = Effect.fn("features.session.mailedTo")(function* (
   template: string,
 ) {
   const { sentMail } = yield* appHandle();
-  yield* letForkedFibersRun;
+  yield* awaitMail(sentMail, (message) => message.template === template && message.to === address);
   const found = (yield* sentMail).findLast(
     (message) => message.template === template && message.to === address,
   );

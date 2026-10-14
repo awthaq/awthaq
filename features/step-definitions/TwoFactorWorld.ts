@@ -46,7 +46,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { mailedToken } from "./MailedToken.ts";
-import { letForkedFibersRun, makeNamedRegistry, STRONG_PASSWORD } from "./shared/Harness.ts";
+import { awaitMail, makeNamedRegistry, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
@@ -322,7 +322,10 @@ export const register = Effect.fn("features.twoFactor.register")(function* (name
       const password = yield* Password.Password;
       const mailer = yield* Mailer.Mailer;
       const issued = yield* password.signUp({ email, password: PASSWORD });
-      yield* letForkedFibersRun;
+      yield* awaitMail(
+        mailer.sent,
+        (message) => message.template === "verify-email" && message.to === email,
+      );
       const mail = (yield* mailer.sent).findLast(
         (message) => message.template === "verify-email" && message.to === email,
       );

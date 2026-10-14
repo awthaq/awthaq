@@ -64,13 +64,13 @@ const ownerPrincipal = (id: string): Api.UserPrincipal =>
     sessionId: `${id}-session`,
   });
 
-/** An organization owned by `owner-1`, and a SCIM connection for it (its identity and bearer token). */
-export const seedConnection = (name = "Okta") =>
+/** An organization owned by `owner` (default `owner-1`), and a SCIM connection for it (its identity and bearer token). */
+export const seedConnection = (name = "Okta", owner = "owner-1") =>
   Effect.gen(function* () {
     const organization = yield* Organization.Organization;
     const store = yield* ScimConnections.ScimConnectionStore;
     const org = yield* organization.create({
-      caller: ownerPrincipal("owner-1"),
+      caller: ownerPrincipal(owner),
       name: "Acme",
       slug: `acme-${name.toLowerCase()}`,
     });

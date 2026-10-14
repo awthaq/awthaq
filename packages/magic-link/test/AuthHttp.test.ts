@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as EmailOtp from "../src/EmailOtp.ts";
 import * as MagicLink from "../src/MagicLink.ts";
-import { letForkedFibersRun, secretOf } from "./support/harness.ts";
+import { awaitMails, secretOf } from "./support/harness.ts";
 
 const built = Auth.make([MagicLink.MagicLink, EmailOtp.EmailOtp]);
 
@@ -51,9 +51,10 @@ describe("MagicLink and EmailOtp over HTTP", () => {
     "a link is requested (202), never consumable by GET, and POST /magic-link/verify signs in once",
     () =>
       Effect.gen(function* () {
+        const before = (yield* Effect.promise(sentMail)).length;
         const requested = yield* call("POST", "/magic-link/request", { email: "ada@example.com" });
         assert.strictEqual(requested.status, 202);
-        yield* letForkedFibersRun;
+        yield* awaitMails(Effect.promise(sentMail), before + 1);
         const mail = (yield* Effect.promise(sentMail)).findLast((m) => m.template === "magic-link");
         const token = secretOf(mail, "token");
         // The mailed URL carries the token in the fragment.
@@ -92,9 +93,10 @@ describe("MagicLink and EmailOtp over HTTP", () => {
     "an emailed code signs in over POST /email-otp/verify, and a wrong one is 401 InvalidEmailOtp",
     () =>
       Effect.gen(function* () {
+        const before = (yield* Effect.promise(sentMail)).length;
         const requested = yield* call("POST", "/email-otp/request", { email: "otp@example.com" });
         assert.strictEqual(requested.status, 202);
-        yield* letForkedFibersRun;
+        yield* awaitMails(Effect.promise(sentMail), before + 1);
         const mail = (yield* Effect.promise(sentMail)).findLast((m) => m.template === "email-otp");
         const code = secretOf(mail, "code");
 

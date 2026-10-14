@@ -376,7 +376,7 @@ for (const options of suites) {
       );
 
       it.effect(
-        "two concurrent polls after approval issue exactly one session; the loser gets invalid_grant",
+        "two concurrent polls after approval issue exactly one session; the loser is refused (invalid_grant, or slow_down when the winner's poll landed first)",
         () =>
           Effect.gen(function* () {
             const { issued, caller } = yield* approvedGrant("racer@example.com");
@@ -396,8 +396,14 @@ for (const options of suites) {
             assert.strictEqual(wins.length, 1);
             assert.strictEqual(losses.length, 1);
             const failure = losses[0] === undefined ? undefined : Exit.findErrorOption(losses[0]);
+            // The loser's refusal depends on interleaving, and both answers are RFC 8628 §3.5 correct: it read the
+            // row after the winner consumed it (`invalid_grant`), or after the winner recorded its poll but before
+            // the consume (`slow_down`: the interval check is a read, by design). What may never vary is the count.
             assert.isTrue(
-              Option.exists(failure ?? Option.none(), (error) => error._tag === "InvalidGrant"),
+              Option.exists(
+                failure ?? Option.none(),
+                (error) => error._tag === "InvalidGrant" || error._tag === "SlowDown",
+              ),
             );
             const after = (yield* sessions.list(
               caller.userId,

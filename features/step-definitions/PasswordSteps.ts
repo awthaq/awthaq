@@ -49,7 +49,7 @@ import {
   cheapArgon2id,
   cheapScrypt,
   cookieFrom,
-  letForkedFibersRun,
+  awaitMail,
   STRONG_PASSWORD,
 } from "./shared/Harness.ts";
 
@@ -154,7 +154,10 @@ export const signInAs = Effect.fn("features.password.signInAs")(function* (
 export const latestResetToken = Effect.fn("features.password.latestResetToken")(function* (
   email: string,
 ) {
-  yield* letForkedFibersRun;
+  yield* awaitMail(
+    sentMail(),
+    (message) => message.template === "reset-password" && message.to === email,
+  );
   const mail = (yield* sentMail()).findLast(
     (message) => message.template === "reset-password" && message.to === email,
   );
@@ -236,7 +239,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Then("the mail is dispatched as a detached, fire-and-forget effect", function* () {
-    yield* letForkedFibersRun;
+    yield* awaitMail(sentMail(), (message) => message.template === "verify-email");
     const messages = yield* sentMail();
     assert.ok(
       messages.some((m) => m.template === "verify-email"),
@@ -844,7 +847,10 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a verification token that has already been consumed", function* () {
     const email = "replay-token@example.com";
     yield* signUpActor("replay", email, STRONG_PASSWORD);
-    yield* letForkedFibersRun;
+    yield* awaitMail(
+      sentMail(),
+      (message) => message.template === "verify-email" && message.to === email,
+    );
     const verifyMail = (yield* sentMail()).findLast(
       (m) => m.template === "verify-email" && m.to === email,
     );
