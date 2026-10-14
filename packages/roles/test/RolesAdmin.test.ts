@@ -1,3 +1,6 @@
+// Hand-wired on purpose: the `RequirePermission` guard is built over `SubjectExtractorLive`, which captures the
+// `SubjectResolver` that `Roles.layer` overrides, so the guard must be built ABOVE the `Roles` layer; `TestAuth.layer`
+// builds `services` beneath the plugins, so it cannot express that order (plan 08 exemption).
 // YL-009: role administration over HTTP, protected by qadi's Path B. The first real
 // `RequirePermission` consumer in the repo: nothing here checks a permission by hand — a
 // subject without `roles:manage` is refused by the guard before the handler runs.

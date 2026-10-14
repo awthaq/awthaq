@@ -1,3 +1,4 @@
+// Hand-wired on purpose: `getSession` over exactly the services it needs, without a router (plan 08 exemption).
 // spec/behaviors/24-nextjs-ssr.md, BEH-EA-185.
 //
 // `getSession` is a plain `Promise`-returning function, the shape a Next.js

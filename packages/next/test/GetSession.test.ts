@@ -1,3 +1,4 @@
+// Hand-wired on purpose: `getSession` over exactly the services it needs, without a router (plan 08 exemption).
 // spec/behaviors/24-nextjs-ssr.md, BEH-EA-185.
 //
 // The database-verified `getSession` contract is tested where it lives, in

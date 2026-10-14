@@ -18,7 +18,6 @@ export * as OrganizationDirectory from "./OrganizationDirectory.ts";
 export * as OrganizationHooks from "./OrganizationHooks.ts";
 export * as OrganizationInvitations from "./OrganizationInvitations.ts";
 export * as OrganizationMembers from "./OrganizationMembers.ts";
-export * as OrganizationMemory from "./OrganizationMemory.ts";
 export * as OrganizationApi from "./OrganizationApi.ts";
 export * as OrganizationQadi from "./OrganizationQadi.ts";
 export * as OrganizationRoles from "./OrganizationRoles.ts";

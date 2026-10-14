@@ -1,3 +1,4 @@
+// Hand-wired on purpose: the one over-HTTP case serves the SSO endpoints from a hand-built router sharing a memo map with the seeded services (plan 08 exemption).
 // BEH-EA-317 (spec/behaviors/29-saml-sp.md, ADR-EA-023 Decision 4): the `Sso` dispatcher. An email domain (or an organization id) routes
 // to an organization's OIDC connection or its SAML connection, and the answer is the URL of the owning protocol plugin's own login
 // route; which protocol wins when both route the same hint is configured, and `discoverAll` shows the conflict instead of hiding it.

@@ -1,3 +1,4 @@
+// Hand-wired on purpose: a real HTTP listener the CLI talks to over a socket (plan 08 exemption).
 // A REAL auth server for the session commands: core's own `session` and `account` groups
 // (`AuthCore.AuthCoreApi`) served by the real handlers, real `Authentication` middleware and real CSRF
 // protection over in-memory `Users`/`Sessions`, on a real Node HTTP socket. `whoami` and `login`
