@@ -665,24 +665,26 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignUpPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        // MNA-001: validated before anything is minted.
-        const delivery = yield* SessionDelivery.mode(request);
-        const resolvedAddress = yield* clientAddress.resolve(request);
-        const signUpInput = {
-          ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-          ...requestUserAgent(request),
-        };
+        const signUpInput = Effect.gen(function* () {
+          const resolvedAddress = yield* clientAddress.resolve(request);
+          return {
+            ...payload,
+            ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+            ...requestUserAgent(request),
+          };
+        });
         // TMS-005: `conceal` answers 202 with no session for a fresh and an
-        // existing address alike (ADR-EA-026).
+        // existing address alike (ADR-EA-026). It mints nothing, so it is the one
+        // endpoint outside `respond`; MNA-001's validation still runs first.
         if ((yield* configNow).signUpEnumeration === "conceal") {
-          return yield* password.signUpConcealed(signUpInput);
+          yield* SessionDelivery.mode(request);
+          return yield* password.signUpConcealed(yield* signUpInput);
         }
-        const issued = yield* password.signUp(signUpInput);
+        // MNA-001: the delivery is validated before anything is minted.
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
-          delivery,
-          issued,
+        const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
+          request,
+          Effect.flatMap(signUpInput, password.signUp),
         );
         return response;
       }),
@@ -694,21 +696,21 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignInPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const delivery = yield* SessionDelivery.mode(request);
-        // AGA-001/NHS-003: resolved through the application-provided
-        // `ClientAddress` port rather than `request.remoteAddress`
-        // directly, so a trusted-proxy-aware composition gets a real
-        // client IP here too, not just for `OAuth`'s own callback.
-        const resolvedAddress = yield* clientAddress.resolve(request);
-        const issued = yield* password.signIn({
-          ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-          ...requestUserAgent(request),
-        });
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
-          delivery,
-          issued,
+        const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
+          request,
+          Effect.gen(function* () {
+            // AGA-001/NHS-003: resolved through the application-provided
+            // `ClientAddress` port rather than `request.remoteAddress`
+            // directly, so a trusted-proxy-aware composition gets a real
+            // client IP here too, not just for `OAuth`'s own callback.
+            const resolvedAddress = yield* clientAddress.resolve(request);
+            return yield* password.signIn({
+              ...payload,
+              ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+              ...requestUserAgent(request),
+            });
+          }),
         );
         return response;
       }),
@@ -811,20 +813,20 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
             `awthaq: change-password reached with a non-User principal: ${principal._tag}`,
           );
         }
-        const delivery = yield* SessionDelivery.mode(request);
-        const resolvedAddress = yield* clientAddress.resolve(request);
-        const issued = yield* password.changePassword({
-          userId: Users.UserId(principal.ref.id),
-          currentSessionId: Sessions.SessionId(principal.sessionId),
-          currentPassword: payload.currentPassword,
-          newPassword: payload.newPassword,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-          ...requestUserAgent(request),
-        });
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
-          delivery,
-          issued,
+        const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
+          request,
+          Effect.gen(function* () {
+            const resolvedAddress = yield* clientAddress.resolve(request);
+            return yield* password.changePassword({
+              userId: Users.UserId(principal.ref.id),
+              currentSessionId: Sessions.SessionId(principal.sessionId),
+              currentPassword: payload.currentPassword,
+              newPassword: payload.newPassword,
+              ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+              ...requestUserAgent(request),
+            });
+          }),
         );
         return response;
       }),

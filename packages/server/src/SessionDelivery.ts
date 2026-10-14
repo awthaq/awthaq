@@ -17,7 +17,10 @@
 //   no-store` (it holds a long-lived secret, MAPS-008).
 //
 // `mode` is its own step, run before the session is issued, so an unknown
-// header value is a 400 that mints nothing.
+// header value is a 400 that mints nothing. `respond(request, mint)` is that
+// ordering as one call (mode -> mint -> deliver): a plugin hands over the
+// request and the effect that mints, and cannot get the order wrong. Only an
+// endpoint that mints no session (a concealed sign-up) calls `mode` itself.
 
 import { Api, SessionContract } from "@awthaq/api";
 import { SessionCookie, Sessions } from "@awthaq/core";
@@ -63,3 +66,26 @@ export const deliver = Effect.fnUntraced(function* (
   );
   return new SessionContract.SessionDto({ ...dto, token: Redacted.value(issued.token) });
 });
+
+/**
+ * MNA-001, one call: resolves the delivery mode, and only then runs `mint`, then delivers what it
+ * issued. An unknown `X-Awthaq-Token-Delivery` value fails `InvalidTokenDelivery` before `mint` runs,
+ * so nothing was minted for a request that is refused. The result is the response DTO; a handler
+ * types its local as `SessionContract.SessionDto` (TS2883) when it returns it.
+ */
+export const respond = <E, R>(
+  request: HttpServerRequest.HttpServerRequest,
+  mint: Effect.Effect<
+    {
+      readonly session: Sessions.SessionView;
+      readonly token: Redacted.Redacted<string>;
+    },
+    E,
+    R
+  >,
+) =>
+  Effect.gen(function* () {
+    const deliveryMode = yield* mode(request);
+    const issued = yield* mint;
+    return yield* deliver(deliveryMode, issued);
+  });

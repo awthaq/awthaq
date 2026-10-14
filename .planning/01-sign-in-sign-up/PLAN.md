@@ -1146,3 +1146,10 @@ Open questions were answered with the plan's recommended default; where the plan
 6. **The two remaining `orDie` on `Sessions.issue`** (`changePassword`, `Admin.impersonate`) became the typed `StoreUnavailable` their Shapes already declared.
 
 Not done: phase 6 (the HTTP edge, conditional on Q1 and plan 06 and not taken here); `pnpm test:pg` (no Docker daemon in this environment) for phases 3 to 5, so the SQL composition of `SignUp` is covered only by `SignUpSql.test.ts` over SQLite.
+
+## Decisions taken (phase 6, `SessionDelivery.respond` half)
+
+7. **Q1 = no: `RequestContext.layer` stays opt-in** (an expert decision). Phase 6 is limited to `SessionDelivery.respond`; plugin Shapes keep their explicit `ip`/`userAgent`, and `Phase 6 step 2` (dropping the threading) is not done. To make the opt-in visible, `AuthHttp.coreHandlers` logs one warning at layer build when the router has no `RequestContext.layer` (silenced by `RequestContext.warnWhenAbsent` = `false`, which `TestAuth` provides), and `examples/sql-server` now installs the middleware like `examples/memory-server`.
+8. **`respond(request, mint)`** is mode, then mint, then deliver, for the seven session-minting handlers (password sign-up/sign-in/change-password, two-factor `complete`, magic link, email OTP, passkey). The device grant keeps `deliver("bearer", ...)` (its delivery is fixed by the RFC) and the concealed sign-up keeps one direct `mode` call (it mints nothing but still refuses a bad header first); `server/test/SessionDelivery.seam.test.ts` pins both exceptions.
+9. **Typed `SessionContract.SessionDto` locals stay** at every call site (TS2883 declaration emit).
+10. **Additive changeset**, no `Migration:` line: nothing a host wrote stops working.

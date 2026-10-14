@@ -318,17 +318,17 @@ export const TwoFactorHandlers = Layer.mergeAll(
           context: { readonly userAgent?: string },
         ) => Effect.Effect<IssuedSession, VerifyError>,
       ) {
-        const delivery = yield* SessionDelivery.mode(request);
-        const resolvedAddress = yield* clientAddress.resolve(request);
-        const userAgent = Headers.get(request.headers, "user-agent");
-        const issued = yield* run(
-          Option.getOrUndefined(resolvedAddress),
-          Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
-        );
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
-          delivery,
-          issued,
+        const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
+          request,
+          Effect.gen(function* () {
+            const resolvedAddress = yield* clientAddress.resolve(request);
+            const userAgent = Headers.get(request.headers, "user-agent");
+            return yield* run(
+              Option.getOrUndefined(resolvedAddress),
+              Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
+            );
+          }),
         );
         return response;
       });

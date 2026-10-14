@@ -201,16 +201,16 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
         payload: EmailOtpApi.VerifyPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const delivery = yield* SessionDelivery.mode(request);
-        const client = yield* currentClient(clientAddress, request);
-        const issued = yield* emailOtp.verify(
-          { email: payload.email, code: payload.code, ip: client.ip },
-          client.context,
-        );
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
-          delivery,
-          issued,
+        const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
+          request,
+          Effect.gen(function* () {
+            const client = yield* currentClient(clientAddress, request);
+            return yield* emailOtp.verify(
+              { email: payload.email, code: payload.code, ip: client.ip },
+              client.context,
+            );
+          }),
         );
         return response;
       }),

@@ -91,7 +91,7 @@ import {
   RateLimiter,
   SqlTransaction,
 } from "@awthaq/ports";
-import { AuthHttp, Authentication, Csrf } from "@awthaq/server";
+import { AuthHttp, Authentication, Csrf, RequestContext } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
@@ -366,7 +366,13 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
       ? Layer.empty
       : AuthHttp.docs(built.api, { path: options.docsPath });
   return Layer.merge(AuthHttp.routes(built.api, { openapiPath: options.openapiPath }), docs).pipe(
-    Layer.provide(AuthHttp.coreHandlers),
+    // The in-process harness deliberately serves without `RequestContext.layer` (E1), so `coreHandlers`' build-time
+    // warning that it is absent would fire on every test app.
+    Layer.provide(
+      AuthHttp.coreHandlers.pipe(
+        Layer.provide(Layer.succeed(RequestContext.warnWhenAbsent, false)),
+      ),
+    ),
     // The plugins' own services stay in the output (`provideMerge`), so a test can
     // `yield* Password.Password` from the same composition it serves over HTTP.
     Layer.provideMerge(built.layer),
