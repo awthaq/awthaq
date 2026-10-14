@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-014 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Consequences now state the single-process boundary of every core `layerMemory` (TRBS-005) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Consequences now state the single-process boundary of every core `layerMemory` (TRBS-005) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): `Sessions` is a port means `SessionStore` in `@awthaq/ports`: a backend implements its nine primitives and passes `StoreContract.sessions`; the single-process paragraph names `Persistence.memory` (plan 02, ADR-EA-041) |
 
 ---
 
@@ -37,7 +37,7 @@
 
 **Negative**: Every `Sessions` backend implementation — including any third-party one — carries a real, non-trivial correctness burden that a naive KV port would not: it must implement domain-level absolute/idle expiry checks itself rather than delegating fully to the store's native TTL, and it must guarantee revocation is visible on the very next read, which for a KV store deployed for read-scaling (replicas, eventually-consistent caches) is a genuinely hard property to hold — a naive read-replica-backed `Sessions` implementation is exactly the shape of bug this ADR exists to rule out, and ruling it out is a real implementation constraint on whoever writes that backend, not a paperwork requirement.
 
-**Memory layers are single-process (TRBS-005)**: every core `layerMemory` (`Sessions`, `Users`, `Accounts`, `Verification`) is a per-process `Ref` — adequate for one process and for tests (BEH-EA-109 says the same of `RateLimiter`'s memory store), but a revocation on one instance does not propagate to another, state is lost on restart, and growth is unbounded until a retention sweep prunes it. A multi-instance deployment MUST use `layerSql` (or a future KV layer satisfying the two properties above). `AuthEvents`' in-process `PubSub` has the same boundary.
+**Memory layers are single-process (TRBS-005)**: `Persistence.memory` (the `Ref` adapters of `SessionStore`, `UserStore`, `AccountStore`, `VerificationStore` and `AuditLogStore`) is per-process state — adequate for one process and for tests (BEH-EA-109 says the same of `RateLimiter`'s memory store), but a revocation on one instance does not propagate to another, state is lost on restart, and growth is unbounded until a retention sweep prunes it. A multi-instance deployment MUST use `Persistence.sql()` (or a `SessionStore` adapter satisfying the two properties above). `AuthEvents`' in-process `PubSub` has the same boundary.
 
 **The token is location-blind on purpose (DRS-004).** `id.secret` carries no region or shard hint, and `verify` is one keyed point lookup by `id`. Partitioning is therefore a property of the `Sessions` backend, not of the token: a sharded deployment provides a `Sessions`/`SessionsRepository` layer that routes by a hash of the session id (a UUIDv7, so cheap and stable) and answers the user-scoped operations (`list`, `revokeAll`, `revokeOthers`) by scatter-gather, or keeps the small, hot session table in one store while users and organizations shard. A hint baked into the token would freeze a residency layout into every cookie already issued, and residency in this design is decided a level up — a tenant is an organization with a config-validated `homeRegion`, the organization-to-shard mapping is data ([ADR-EA-018](018-tenancy-is-an-organization.md) Decisions 4 and 9), and each session already records its `tenantId` (DRS-001) so a host can refuse a cookie minted for another tenant — while replica reads are opt-in and never used for liveness ([ADR-EA-024](024-read-replica-routing.md)).
 

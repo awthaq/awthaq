@@ -1,7 +1,7 @@
 // BEH-EA-009 (spec/behaviors/02-plugin-composition-validate.md): `Auth.make`
 // composes any real plugin satisfying `AuthPlugin.Any` — mirrors
 // `@awthaq/passkey`'s own `AuthComposition.test.ts`.
-import { Auth } from "@awthaq/core";
+import { Auth, AuthPlugin } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import { Organization } from "@awthaq/organization";
 import * as Admin from "../src/Admin.ts";
@@ -17,6 +17,12 @@ describe("Auth.make([Admin])", () => {
         id: "admin",
         apiVersion: 1,
         tables: ["admin_impersonation", "admin_impersonation_chain"],
+        tenancy: {
+          admin_impersonation: AuthPlugin.Table.partitioned("tenantId"),
+          admin_impersonation_chain: AuthPlugin.Table.global(
+            "append-only hash chain over every tenant's episodes; verifyChain reads it whole",
+          ),
+        },
         dependsOn: [],
         groups: ["admin"],
       },

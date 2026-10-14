@@ -18,7 +18,7 @@
 //   directory's `userName` for a user (unique per connection); `externalId` is the
 //   directory's own key (unique per connection and kind, when present).
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -79,17 +79,26 @@ export interface ScimRecordsShape {
     readonly organizationId: string;
     readonly name: string;
     readonly tokenHash: string;
-  }) => Effect.Effect<ConnectionRecord>;
+  }) => Effect.Effect<ConnectionRecord, StoreFailure.StoreUnavailable>;
   readonly findConnectionByTokenHash: (
+    grant: TenantScoped.CrossTenant,
+
     tokenHash: string,
-  ) => Effect.Effect<Option.Option<ConnectionRecord>>;
+  ) => Effect.Effect<Option.Option<ConnectionRecord>, StoreFailure.StoreUnavailable>;
   readonly listConnections: (
     organizationId: string,
-  ) => Effect.Effect<ReadonlyArray<ConnectionRecord>>;
+  ) => Effect.Effect<ReadonlyArray<ConnectionRecord>, StoreFailure.StoreUnavailable>;
   readonly revokeConnection: (
     organizationId: string,
     id: string,
-  ) => Effect.Effect<ConnectionRecord, ScimRecordNotFound>;
+  ) => Effect.Effect<ConnectionRecord, ScimRecordNotFound | StoreFailure.StoreUnavailable>;
+  /**
+   * Plan 04 (F7): removes every connection of an organization with the mappings of those connections, for
+   * `OrganizationDirectory.delete`'s transaction. Keyed by the organization, so no witness. Idempotent.
+   */
+  readonly removeAllForOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   // ---- resource links
   readonly link: (input: {
     readonly connectionId: string;
@@ -97,44 +106,60 @@ export interface ScimRecordsShape {
     readonly resourceId: string;
     readonly name?: string | undefined;
     readonly externalId?: string | undefined;
-  }) => Effect.Effect<ResourceLink, ScimLinkConflict>;
+  }) => Effect.Effect<ResourceLink, ScimLinkConflict | StoreFailure.StoreUnavailable>;
   readonly find: (
     connectionId: string,
     kind: ResourceKind,
     resourceId: string,
-  ) => Effect.Effect<Option.Option<ResourceLink>>;
+  ) => Effect.Effect<Option.Option<ResourceLink>, StoreFailure.StoreUnavailable>;
   readonly findByName: (
     connectionId: string,
     kind: ResourceKind,
     name: string,
-  ) => Effect.Effect<Option.Option<ResourceLink>>;
+  ) => Effect.Effect<Option.Option<ResourceLink>, StoreFailure.StoreUnavailable>;
   readonly findByExternalId: (
     connectionId: string,
     kind: ResourceKind,
     externalId: string,
-  ) => Effect.Effect<Option.Option<ResourceLink>>;
+  ) => Effect.Effect<Option.Option<ResourceLink>, StoreFailure.StoreUnavailable>;
   /** Oldest first, offset-paged (`startIndex` is an offset in SCIM; the set is bounded by what one directory provisions). */
   readonly list: (
     connectionId: string,
     kind: ResourceKind,
     page: { readonly offset: number; readonly limit: number },
-  ) => Effect.Effect<ResourcePage>;
+  ) => Effect.Effect<ResourcePage, StoreFailure.StoreUnavailable>;
   /** `externalId: null` clears it. */
   readonly setExternalId: (
     connectionId: string,
     kind: ResourceKind,
     resourceId: string,
     externalId: string | null,
-  ) => Effect.Effect<ResourceLink, ScimRecordNotFound | ScimLinkConflict>;
+  ) => Effect.Effect<
+    ResourceLink,
+    ScimRecordNotFound | ScimLinkConflict | StoreFailure.StoreUnavailable
+  >;
   readonly unlink: (
     connectionId: string,
     kind: ResourceKind,
     resourceId: string,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  /** ADR-EA-031: every link to `resourceId` of `kind`, across all connections (erasure and export). */
+  readonly linksOfResource: (
+    grant: TenantScoped.CrossTenant,
+
+    kind: ResourceKind,
+    resourceId: string,
+  ) => Effect.Effect<ReadonlyArray<ResourceLink>, StoreFailure.StoreUnavailable>;
+  /** ADR-EA-031: drops every link to `resourceId` of `kind`, across all connections. Idempotent. */
+  readonly unlinkResource: (
+    grant: TenantScoped.CrossTenant,
+    kind: ResourceKind,
+    resourceId: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class ScimRecords extends Context.Service<ScimRecords, ScimRecordsShape>()(
-  "awthaq/scim/ScimRecords",
+  "awthaq/scim/records/ScimRecords",
 ) {}
 
 const notFound = (id: string): ScimRecordNotFound => new ScimRecordNotFound({ id });
@@ -181,7 +206,10 @@ export const layerMemory = Layer.effect(
         return record;
       });
 
-    const findConnectionByTokenHash: ScimRecordsShape["findConnectionByTokenHash"] = (tokenHash) =>
+    const findConnectionByTokenHash: ScimRecordsShape["findConnectionByTokenHash"] = (
+      _grant,
+      tokenHash,
+    ) =>
       Ref.get(state).pipe(
         Effect.map((s) =>
           Option.fromNullishOr(
@@ -226,6 +254,24 @@ export const layerMemory = Layer.effect(
           },
         );
         return yield* Effect.fromResult(outcome);
+      });
+
+    const removeAllForOrganization: ScimRecordsShape["removeAllForOrganization"] = (
+      organizationId,
+    ) =>
+      Ref.update(state, (s) => {
+        const doomed = new Set(
+          Array.from(HashMap.values(s.connections))
+            .filter((row) => row.organizationId === organizationId)
+            .map((row) => row.id),
+        );
+        return {
+          connections: HashMap.filter(
+            s.connections,
+            (row) => row.organizationId !== organizationId,
+          ),
+          links: s.links.filter((row) => !doomed.has(row.connectionId)),
+        };
       });
 
     const sameResource = (
@@ -385,11 +431,28 @@ export const layerMemory = Layer.effect(
         links: s.links.filter((row) => !sameResource(row, connectionId, kind, resourceId)),
       }));
 
+    const linksOfResource: ScimRecordsShape["linksOfResource"] = (_grant, kind, resourceId) =>
+      Ref.get(state).pipe(
+        Effect.map((s) =>
+          byCreation(
+            s.links.filter((row) => row.kind === kind && row.resourceId === resourceId),
+            (row) => row.connectionId,
+          ),
+        ),
+      );
+
+    const unlinkResource: ScimRecordsShape["unlinkResource"] = (_grant, kind, resourceId) =>
+      Ref.update(state, (s) => ({
+        ...s,
+        links: s.links.filter((row) => !(row.kind === kind && row.resourceId === resourceId)),
+      }));
+
     return {
       createConnection,
       findConnectionByTokenHash,
       listConnections,
       revokeConnection,
+      removeAllForOrganization,
       link,
       find,
       findByName,
@@ -397,6 +460,8 @@ export const layerMemory = Layer.effect(
       list,
       setExternalId,
       unlink,
+      linksOfResource,
+      unlinkResource,
     };
   }),
 );
@@ -428,6 +493,8 @@ export const layerSql = Layer.effect(
   ScimRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`ScimRecords.${operation}`);
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const ConnectionRow = makeConnectionRow(wire);
@@ -530,6 +597,15 @@ export const layerSql = Layer.effect(
           ORDER BY "createdAt", "resourceId" LIMIT ${r.limit} OFFSET ${r.offset}
         `,
     });
+    const linksOfResourceQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        kind: Schema.Literals(["User", "Group"]),
+        resourceId: Schema.String,
+      }),
+      Result: ResourceRow,
+      execute: (r) =>
+        sql`SELECT * FROM scim_resource WHERE kind = ${r.kind} AND "resourceId" = ${r.resourceId} ORDER BY "createdAt", "scimConnectionId"`,
+    });
     const countLinks = SqlSchema.findOne({
       Request: Schema.Struct({
         connectionId: Schema.String,
@@ -584,22 +660,29 @@ export const layerSql = Layer.effect(
           }),
         ),
         Effect.map(toConnection),
-        Effect.orDie,
+        unavailable("createConnection"),
       );
 
-    const findConnectionByTokenHash: ScimRecordsShape["findConnectionByTokenHash"] = (tokenHash) =>
-      connectionByHash(tokenHash).pipe(Effect.map(Option.map(toConnection)), Effect.orDie);
+    const findConnectionByTokenHash: ScimRecordsShape["findConnectionByTokenHash"] = (
+      grant,
+      tokenHash,
+    ) =>
+      connectionByHash(tokenHash).pipe(
+        Effect.map(Option.map(toConnection)),
+        TenantScoped.liftOn(sql, grant),
+        unavailable("findConnectionByTokenHash"),
+      );
 
     const listConnections: ScimRecordsShape["listConnections"] = (organizationId) =>
       connectionsOf(organizationId).pipe(
         Effect.map((rows) => rows.map(toConnection)),
-        Effect.orDie,
+        unavailable("listConnections"),
       );
 
     const revokeConnection: ScimRecordsShape["revokeConnection"] = Effect.fnUntraced(
       function* (organizationId, id) {
         const now = yield* DateTime.now;
-        const row = yield* revoke({ organizationId, id, revokedAt: now }).pipe(Effect.orDie);
+        const row = yield* revoke({ organizationId, id, revokedAt: now }).pipe(unavailable("row"));
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
         return toConnection(row.value);
       },
@@ -619,25 +702,21 @@ export const layerSql = Layer.effect(
           }),
         ),
         Effect.map(toLink),
-        Effect.catchTag("SqlError", (error) =>
-          error.reason._tag === "UniqueViolation"
-            ? Effect.fail(conflict(conflictField(error.reason)))
-            : Effect.die(error),
+        StoreFailure.orConflict("ScimRecords.link", (error) =>
+          conflict(conflictField(error.reason)),
         ),
-        Effect.catchTag("SchemaError", Effect.die),
-        Effect.catchTag("NoSuchElementError", Effect.die),
       );
 
     const find: ScimRecordsShape["find"] = (connectionId, kind, resourceId) =>
       findLink({ connectionId, kind, value: resourceId }).pipe(
         Effect.map(Option.map(toLink)),
-        Effect.orDie,
+        unavailable("find"),
       );
 
     const findByName: ScimRecordsShape["findByName"] = (connectionId, kind, name) =>
       findLinkByName({ connectionId, kind, value: name }).pipe(
         Effect.map(Option.map(toLink)),
-        Effect.orDie,
+        unavailable("findByName"),
       );
 
     const findByExternalId: ScimRecordsShape["findByExternalId"] = (
@@ -647,7 +726,7 @@ export const layerSql = Layer.effect(
     ) =>
       findLinkByExternalId({ connectionId, kind, value: externalId }).pipe(
         Effect.map(Option.map(toLink)),
-        Effect.orDie,
+        unavailable("findByExternalId"),
       );
 
     const list: ScimRecordsShape["list"] = (connectionId, kind, page) =>
@@ -656,7 +735,7 @@ export const layerSql = Layer.effect(
         total: countLinks({ connectionId, kind }),
       }).pipe(
         Effect.map(({ rows, total }) => ({ items: rows.map(toLink), total: total.count })),
-        Effect.orDie,
+        unavailable("list"),
       );
 
     const setExternalId: ScimRecordsShape["setExternalId"] = Effect.fnUntraced(
@@ -668,22 +747,38 @@ export const layerSql = Layer.effect(
           resourceId,
           externalId,
           updatedAt: now,
-        }).pipe(
-          Effect.catchTag("SqlError", (error) =>
-            error.reason._tag === "UniqueViolation"
-              ? Effect.fail(conflict("externalId"))
-              : Effect.die(error),
-          ),
-          Effect.catchTag("SchemaError", Effect.die),
-        );
+        }).pipe(StoreFailure.orConflict("ScimRecords.setExternalId", () => conflict("externalId")));
         if (Option.isNone(row)) return yield* Effect.fail(notFound(resourceId));
         return toLink(row.value);
       },
     );
 
+    const removeAllForOrganization: ScimRecordsShape["removeAllForOrganization"] = (
+      organizationId,
+    ) =>
+      sql`DELETE FROM scim_resource WHERE "scimConnectionId" IN (SELECT id FROM scim_connection WHERE "organizationId" = ${organizationId})`.pipe(
+        Effect.andThen(sql`DELETE FROM scim_connection WHERE "organizationId" = ${organizationId}`),
+        unavailable("removeAllForOrganization"),
+        Effect.asVoid,
+      );
+
     const unlink: ScimRecordsShape["unlink"] = (connectionId, kind, resourceId) =>
       sql`DELETE FROM scim_resource WHERE "scimConnectionId" = ${connectionId} AND kind = ${kind} AND "resourceId" = ${resourceId}`.pipe(
-        Effect.orDie,
+        unavailable("unlink"),
+        Effect.asVoid,
+      );
+
+    const linksOfResource: ScimRecordsShape["linksOfResource"] = (grant, kind, resourceId) =>
+      linksOfResourceQuery({ kind, resourceId }).pipe(
+        Effect.map((rows) => rows.map(toLink)),
+        TenantScoped.liftOn(sql, grant),
+        unavailable("linksOfResource"),
+      );
+
+    const unlinkResource: ScimRecordsShape["unlinkResource"] = (grant, kind, resourceId) =>
+      sql`DELETE FROM scim_resource WHERE kind = ${kind} AND "resourceId" = ${resourceId}`.pipe(
+        TenantScoped.liftOn(sql, grant),
+        unavailable("unlinkResource"),
         Effect.asVoid,
       );
 
@@ -692,6 +787,7 @@ export const layerSql = Layer.effect(
       findConnectionByTokenHash,
       listConnections,
       revokeConnection,
+      removeAllForOrganization,
       link,
       find,
       findByName,
@@ -699,6 +795,11 @@ export const layerSql = Layer.effect(
       list,
       setExternalId,
       unlink,
+      linksOfResource,
+      unlinkResource,
     };
   }),
 );
+
+/** Plan 08 (BEH-EA-T4): the plugin's record store as two matched layers, `Scim.records`. */
+export const records = { memory: layerMemory, sql: layerSql };

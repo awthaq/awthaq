@@ -3,6 +3,7 @@
 // SSRF refusal at attempt time, rate deferral, secret rotation overlap and endpoint auto-disable.
 import { AuthEvents, EventRelay, Users } from "@awthaq/core";
 import { Encryption, RateLimiter } from "@awthaq/ports";
+import { SealedColumn } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -14,7 +15,6 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as WebhookDelivery from "../src/WebhookDelivery.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
-import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as WebhookSignature from "../src/WebhookSignature.ts";
 import {
   deliveryLayer,
@@ -23,6 +23,7 @@ import {
   published,
   seedEndpoint,
   signedIn,
+  relay,
 } from "./support.ts";
 
 // One receiver per test that inspects it (a receiver records everything it is sent).
@@ -257,7 +258,7 @@ describe("retry, backoff and dead-letter", () => {
       Effect.gen(function* () {
         const records = yield* WebhookRecords.WebhookRecords;
         const { endpoint } = yield* seedEndpoint();
-        yield* records.bumpDead(endpoint.id);
+        yield* records.bumpDead(relay, endpoint.id);
         yield* enqueueAndDrain(yield* published(signedIn()));
         yield* TestClock.adjust(Duration.seconds(10));
         yield* WebhookDelivery.drainDue;
@@ -437,17 +438,11 @@ describe("rate limits and secrets", () => {
     () =>
       Effect.gen(function* () {
         const records = yield* WebhookRecords.WebhookRecords;
-        const encryption = yield* Encryption.Encryption;
         const { endpoint, secret: oldSecret } = yield* seedEndpoint();
         const newSecret = yield* WebhookSignature.generateSecret;
         const rotated = yield* records.setSecrets(endpoint.id, {
-          secret: yield* WebhookSecrets.seal(encryption, endpoint.id, "secret", newSecret),
-          previousSecret: yield* WebhookSecrets.seal(
-            encryption,
-            endpoint.id,
-            "previousSecret",
-            oldSecret,
-          ),
+          secret: newSecret,
+          previousSecret: oldSecret,
           previousSecretExpiresAt: DateTime.addDuration(yield* DateTime.now, Duration.hours(1)),
         });
         assert.isTrue(Option.isSome(rotated.previousSecret));
@@ -484,21 +479,15 @@ describe("rate limits and secrets", () => {
     "a secret that no longer decrypts (wrong AAD: copied from another endpoint) fails as `secret`, never sends",
     () =>
       Effect.gen(function* () {
-        const records = yield* WebhookRecords.WebhookRecords;
         const encryption = yield* Encryption.Encryption;
+        const envelopes = yield* WebhookRecords.MemoryEnvelopes;
         const { endpoint } = yield* seedEndpoint({ id: "victim" });
-        // The sealed secret of ANOTHER endpoint, pasted into this row.
-        const foreign = yield* WebhookSecrets.seal(
-          encryption,
-          "someone-else",
-          "secret",
+        // The sealed secret of ANOTHER endpoint, pasted into this row (bypassing the records, as tampering would).
+        const foreign = yield* encryption.encrypt(
           Redacted.make("whsec_x"),
+          SealedColumn.aadOf(WebhookRecords.secretColumn, "someone-else"),
         );
-        yield* records.setSecrets(endpoint.id, {
-          secret: foreign,
-          previousSecret: null,
-          previousSecretExpiresAt: null,
-        });
+        yield* envelopes.plant(endpoint.id, "secret", foreign);
         yield* enqueueAndDrain(yield* published(signedIn()));
         assert.strictEqual(tampered.sent.length, 0);
         assert.deepStrictEqual(
@@ -506,13 +495,5 @@ describe("rate limits and secrets", () => {
           Option.some("secret"),
         );
       }).pipe(Effect.provide(deliveryLayer({ receiver: tampered.layer }))),
-  );
-
-  it.effect("the stored secret is an Encryption envelope, never the plaintext", () =>
-    Effect.gen(function* () {
-      const { endpoint, secret } = yield* seedEndpoint();
-      assert.notInclude(endpoint.secret, Redacted.value(secret));
-      assert.notInclude(endpoint.secret, "whsec_");
-    }).pipe(Effect.provide(deliveryLayer())),
   );
 });

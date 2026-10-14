@@ -5,6 +5,7 @@
 // BAM-002 (.issues/high) verification, the same
 // `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -12,7 +13,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Organization from "../src/Organization.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
+import { ambientOrganization, vitestFramework } from "./support.ts";
 
 const MemoryLayer = OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
@@ -109,3 +111,107 @@ const suite = (
 
 suite("OrgRoleRecords (layerMemory)", MemoryLayer);
 suite("OrgRoleRecords (layerSql)", SqlLayer);
+
+// Plan 05: the tenant-isolation conformance suite. `organization_role` is Keyed by `organizationId`
+// and every method takes it, so every method is `keyed`: it can only reach that organization's rows.
+let isolationCounter = 0;
+interface Row {
+  readonly id: string;
+  readonly organizationId: string;
+}
+const orgOf = (row: Row, as: "owner" | "other") =>
+  as === "owner" ? row.organizationId : "another-organization";
+
+const isolationCase: TestAuth.TableCase<
+  OrgRoleRecords.OrgRoleRecordsShape,
+  Row,
+  OrgRoleRecords.OrgRoleRecords
+> = {
+  table: "organization_role",
+  insert: Effect.gen(function* () {
+    const records = yield* OrgRoleRecords.OrgRoleRecords;
+    isolationCounter += 1;
+    const organizationId = yield* ambientOrganization;
+    const created = yield* records.create({
+      organizationId,
+      role: `isolation-${isolationCounter}`,
+      permission: { billing: ["read"] },
+    });
+    return { id: created.id, organizationId };
+  }),
+  methods: {
+    create: { insert: true },
+    findById: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(OrgRoleRecords.OrgRoleRecords, (records) =>
+            Effect.map(records.findById(orgOf(row, as), row.id), Option.isSome),
+          ),
+      },
+    },
+    listByOrganization: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(OrgRoleRecords.OrgRoleRecords, (records) =>
+            Effect.map(records.listByOrganization(orgOf(row, as)), (rows) =>
+              rows.some((found) => found.id === row.id),
+            ),
+          ),
+      },
+    },
+    countByOrganization: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(OrgRoleRecords.OrgRoleRecords, (records) =>
+            Effect.map(records.countByOrganization(orgOf(row, as)), (count) => count > 0),
+          ),
+      },
+    },
+    update: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(OrgRoleRecords.OrgRoleRecords, (records) =>
+            records.update(orgOf(row, as), row.id, { billing: ["update"] }).pipe(
+              Effect.as(true),
+              Effect.catchTag("OrgRoleRecordNotFound", () => Effect.succeed(false)),
+            ),
+          ),
+      },
+    },
+    remove: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(OrgRoleRecords.OrgRoleRecords, (records) =>
+            records.remove(orgOf(row, as), row.id).pipe(
+              Effect.as(true),
+              Effect.catchTag("OrgRoleRecordNotFound", () => Effect.succeed(false)),
+            ),
+          ),
+      },
+    },
+    removeAllForOrganization: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(OrgRoleRecords.OrgRoleRecords, (records) =>
+            Effect.gen(function* () {
+              const before = yield* records.findById(row.organizationId, row.id);
+              yield* records.removeAllForOrganization(orgOf(row, as));
+              const after = yield* records.findById(row.organizationId, row.id);
+              return Option.isSome(before) && Option.isNone(after);
+            }),
+          ),
+      },
+    },
+  },
+};
+
+TestAuth.runTenantIsolationTests(vitestFramework, {
+  plugin: Organization.Organization,
+  covers: ["organization_role"],
+  adapters: [
+    { name: "layerMemory", layer: MemoryLayer },
+    { name: "layerSql", layer: SqlLayer },
+  ],
+  cases: [isolationCase],
+  rls: { layer: SqlLayer },
+});

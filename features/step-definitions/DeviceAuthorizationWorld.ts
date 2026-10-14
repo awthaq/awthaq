@@ -14,25 +14,22 @@
 import { Api } from "@awthaq/api";
 import {
   AuditLog,
+  Auth,
   DataExport,
   Erasure,
   RateLimits,
+  Retention,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
 import {
   DeviceAuthorization,
-  DeviceAuthorizationApi,
   DeviceClientRecords,
   DeviceGrantRecords,
 } from "@awthaq/device-authorization";
-import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import { SecondFactor, Totp, TwoFactor, TwoFactorStore } from "@awthaq/two-factor";
+import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -45,13 +42,8 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import {
-  CSRF_COOKIE_NAME,
-  CSRF_HEADER_NAME,
-  CSRF_TEST_COOKIE_VALUE,
-  CsrfConfigForTests,
-} from "./CsrfTestSupport.ts";
-import { cheapArgon2id, makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
 
@@ -75,77 +67,29 @@ export type DeviceServices =
   | Erasure.ErasureRegistry
   | DataExport.DataExportRegistry
   | RateLimits.RateLimitsRegistry
+  | Retention.RetentionRegistry
+  | Verification.Verification
   | TwoFactor.TwoFactor
   | Crypto.Crypto;
 
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString("base64") },
-          }),
-        ),
+const built = Auth.make([TwoFactor.TwoFactor, DeviceAuthorization.DeviceAuthorization]);
+
+/**
+ * `Auth.make([TwoFactor, DeviceAuthorization])` through `TestAuth.layer` (the same composition
+ * `packages/device-authorization/test/support/harness.ts` builds): the real plugin over in-memory grant and client
+ * records, `Users` and `Sessions`, `@awthaq/two-factor`'s gates (always installed: a confirmed second factor really
+ * diverts a session issue) and the contract served behind the derived CSRF and authentication middleware.
+ */
+const buildApp = (options: AppOptions) =>
+  TestAuth.layer(built, {
+    rateLimiter: options.realLimits === true ? "enforcing" : "permissive",
+    services: Layer.merge(
+      DeviceAuthorization.config(options.config ?? {}),
+      Layer.mergeAll(TwoFactor.sessionGate, TwoFactor.credentialResetGate).pipe(
+        Layer.provideMerge(SecondFactor.layer),
       ),
     ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
-
-/** `@awthaq/two-factor`, gate included, so a confirmed second factor really diverts a session issue. */
-const TwoFactorLive = TwoFactor.TwoFactor.layer.pipe(
-  Layer.provideMerge(TwoFactor.sessionGate),
-  Layer.provideMerge(TwoFactor.credentialResetGate),
-  Layer.provideMerge(SecondFactor.layer),
-  Layer.provideMerge(
-    Layer.mergeAll(TwoFactorStore.layerSecretsMemory, TwoFactorStore.layerRecoveryCodesMemory),
-  ),
-  Layer.provideMerge(EncryptionLive),
-);
-
-const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
-
-const buildApp = (options: AppOptions) => {
-  // One build of the plugin serves both the routes and the direct steps (the same layer object, so the
-  // memo map shares the instance).
-  const plugin = DeviceAuthorization.DeviceAuthorization.layer;
-  const routes = AuthHttp.routes(DeviceAuthorizationApi.DeviceAuthorizationApi).pipe(
-    Layer.provide(plugin),
-  );
-  return Layer.merge(routes, plugin).pipe(
-    Layer.provideMerge(TwoFactorLive),
-    Layer.provideMerge(DeviceAuthorization.DeviceAuthorizationHooksLive),
-    Layer.provideMerge(
-      Layer.mergeAll(DeviceGrantRecords.layerMemory, DeviceClientRecords.layerMemory),
-    ),
-    Layer.provideMerge(Authentication.AuthenticationLive),
-    Layer.provideMerge(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        Users.layerMemory,
-        Sessions.layerMemory,
-        Verification.layerMemory,
-        cheapArgon2id,
-      ),
-    ),
-    Layer.provideMerge(TestAuth.memoryFoundation),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provideMerge(options.realLimits === true ? realLimiter : RateLimiter.layerPermissive),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-    Layer.provideMerge(DeviceAuthorization.config(options.config ?? {})),
-  );
-};
+  });
 
 interface App {
   readonly handler: (request: Request) => Promise<Response>;

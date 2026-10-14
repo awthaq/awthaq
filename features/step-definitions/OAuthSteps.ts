@@ -947,7 +947,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       });
       const sql = Context.get(context, SqlClient.SqlClient);
       const rows = yield* sql<{ readonly n: number }>`
-        SELECT count(*) AS n FROM accounts WHERE providerId = ${providerId} AND subject = ${subject}`.pipe(
+        SELECT CAST(count(*) AS INTEGER) AS n FROM accounts WHERE "providerId" = ${providerId} AND subject = ${subject}`.pipe(
         Effect.orDie,
       );
       yield* setOutcome("raceResults", results);
@@ -971,7 +971,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       >;
       const failure = results.find(Exit.isFailure);
       assert.ok(failure !== undefined, "expected one attempt to be rejected");
-      // `Accounts.layerSql` maps the UNIQUE violation itself to this tag; it does no lookup first.
+      // `AccountStoreSql` maps the UNIQUE violation itself to this tag; it does no lookup first.
       assert.match(String(failure.cause), /AccountAlreadyLinked/);
     },
   );

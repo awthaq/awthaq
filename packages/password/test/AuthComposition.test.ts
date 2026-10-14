@@ -18,6 +18,7 @@ describe("Auth.make([Password])", () => {
         id: "password",
         apiVersion: 1,
         tables: [],
+        tenancy: {},
         dependsOn: [],
         groups: ["password", "password.account"],
       },

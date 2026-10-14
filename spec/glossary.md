@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.2 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) |
 
 ---
 
@@ -48,7 +48,7 @@ A `Model.Class` entity representing one authenticated device or client instance.
 
 ### VerificationToken
 
-A `Model.Class` entity for a purpose-scoped, single-use token — email verification, password reset, and similar flows. A token is valid for one purpose only and is consumed exactly once, in the same transaction as the action it authorizes; a replay is a distinct, published event (`auth.token.replay`), not a silent failure. See: [BEH-EA-057](behaviors/08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose).
+A `Model.Class` entity for a purpose-scoped, single-use token — email verification, password reset, and similar flows. A token is valid for one purpose only and is consumed exactly once, through `Verification.redeem`, in the same transaction as the action it authorizes; a replay is a distinct, published event (`auth.token.replay`), not a silent failure. See: [BEH-EA-057](behaviors/08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose).
 
 ### CsrfProtection
 
@@ -99,6 +99,26 @@ A `Context.Reference` with a fail-closed default that at most one installed plug
 ### Hook point
 
 A service holding a registry cell that other plugins may tap. A veto hook point may abort or amend the value flowing through it; an observe hook point is fail-isolated, so a failing tap cannot fail the operation it observes. Tapping a hook point nobody defines is a compile error, since the point's service type remains unsatisfied. See: [BEH-EA-017](behaviors/03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value), [BEH-EA-089](behaviors/12-hooks.md#beh-ea-089-a-hook-point-is-declared-as-a-service-carrying-its-own-kind).
+
+### Erasure initiator
+
+Who asked for an account erasure: `Self` (the account holder), `Admin { adminUserId }` or `Directory { connectionId, organizationId }` (a SCIM connection). `AccountErasure.eraseAccount(userId, initiator)` requires one and records it on `auth.user.deleted` (`deletedBy` and the initiator's ids).
+
+### Erasure clearance
+
+The proof that `AccountErasure` consulted the `BeforeUserDelete` veto for one user and no tap vetoed. `UserRemoval.remove` accepts nothing else, and only core can mint one, so no code outside `AccountErasure` can delete a user row. Exported as a type only.
+
+### Clearance
+
+A sign-in that passed the user lookup, the suspension gate, the `BeforeSignIn` veto and the `BeforeSessionIssue` divert (`SignIn.clear`, or `SignIn.resume` after a resolved divert). `SignIn.issue` accepts nothing else, and only core can mint one, so a session for a proven credential cannot exist without having passed the gate. See: [BEH-EA-322](behaviors/06-domain-users-accounts.md), [ADR-EA-038](decisions/038-sign-in-and-sign-up-are-core-modules.md).
+
+### Handoff
+
+What a `BeforeSessionIssue` divert carries back to `SignIn.resume`: the ambient tenant when the first factor cleared and the first factor's optional continuation. The second-factor plugin stores it with its challenge, so the session it finally mints is the session the first factor would have minted.
+
+### Sign-in continuation
+
+Work a first-factor flow owes once its session exists, whichever request finally mints that session (SAML: the Single Logout record and role mapping). Registered by kind through `SignIn.continuation` in an aggregating registry; an unregistered kind is a defect.
 
 ### Registry
 

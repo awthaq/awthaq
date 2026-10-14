@@ -1,5 +1,15 @@
+// Hand-wired on purpose: the authentication middleware is the unit under test (plan 08 exemption).
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
-import { AuditLog, AuthEvents, Errors, Hooks, SessionCookie, Sessions, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Errors,
+  Hooks,
+  Persistence,
+  SessionCookie,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -108,10 +118,10 @@ const TestLayer = Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provideMerge(Authentication.OptionalAuthenticationLive),
   Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(Sessions.layerMemory),
+  Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(TestServices),
 );
@@ -135,6 +145,7 @@ const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Session
   isLive: () => Effect.die("not used in this test"),
   purgeExpired: () => Effect.die("not used in this test"),
   reauthenticate: () => Effect.die("not used in this test"),
+  requireFresh: () => Effect.die("not used in this test"),
 });
 
 describe("Authentication", () => {
@@ -321,10 +332,10 @@ describe("Authentication", () => {
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Authentication.PrincipalResolverLive),
           Layer.provide(TappedHook),
-          Layer.provideMerge(Sessions.layerMemory),
+          Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
           Layer.provideMerge(AuthEvents.layer),
-          Layer.provideMerge(AuditLog.layerMemory),
+          Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provide(NodeCrypto.layer),
           Layer.provideMerge(TestServices),
         ),
@@ -360,9 +371,9 @@ describe("Authentication", () => {
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Authentication.PrincipalResolverLive),
           Layer.provide(TappedHook),
-          Layer.provideMerge(Sessions.layerMemory),
+          Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provideMerge(AuthEvents.layer),
-          Layer.provideMerge(AuditLog.layerMemory),
+          Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provide(NodeCrypto.layer),
           Layer.provideMerge(TestServices),
         ),
@@ -399,10 +410,10 @@ describe("Authentication", () => {
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Authentication.PrincipalResolverLive),
           Layer.provide(TappedHook),
-          Layer.provideMerge(Sessions.layerMemory),
+          Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
           Layer.provideMerge(AuthEvents.layer),
-          Layer.provideMerge(AuditLog.layerMemory),
+          Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provide(NodeCrypto.layer),
           Layer.provideMerge(TestServices),
         ),
@@ -455,9 +466,9 @@ const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(RotationHandlers),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(Sessions.layerMemory),
+  Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
@@ -501,9 +512,9 @@ const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
     Layer.provide(RotationHandlers),
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(cookieConfig),
     Layer.provideMerge(TestServices),
@@ -696,6 +707,7 @@ describe("Authentication per-request cache (TS-003/NHS-006)", () => {
       isLive: () => Effect.die("not used in this test"),
       purgeExpired: () => Effect.die("not used in this test"),
       reauthenticate: () => Effect.die("not used in this test"),
+      requireFresh: () => Effect.die("not used in this test"),
     });
 
   const sessionsWith = (verifies: Ref.Ref<number>) =>
@@ -868,12 +880,12 @@ describe("Authentication challenges (JR-007)", () => {
 describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
   const factsLayer = Layer.mergeAll(
     Authentication.PrincipalResolverLive,
-    Sessions.layerMemory,
-    Users.layerMemory,
+    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
   ).pipe(
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provide(NodeCrypto.layer),
   );
 

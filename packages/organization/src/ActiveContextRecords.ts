@@ -33,7 +33,7 @@
 // harmless (the next read simply finds no matching session).
 
 import { Users } from "@awthaq/core";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -61,43 +61,48 @@ export interface ActiveContextRecordsShape {
   readonly setOrganization: (
     sessionId: string,
     membership: MembershipRecord,
-  ) => Effect.Effect<ActiveContextRecord>;
+  ) => Effect.Effect<ActiveContextRecord, StoreFailure.StoreUnavailable>;
   /** Unsets the session's active organization; the active team is left alone. */
   readonly unsetOrganization: (
     sessionId: string,
     userId: Users.UserId,
-  ) => Effect.Effect<ActiveContextRecord>;
+  ) => Effect.Effect<ActiveContextRecord, StoreFailure.StoreUnavailable>;
   /** Points the session at the team `membership` belongs to; the witness proves the user is on it. */
   readonly setTeam: (
     sessionId: string,
     membership: TeamMembershipRecord,
-  ) => Effect.Effect<ActiveContextRecord>;
+  ) => Effect.Effect<ActiveContextRecord, StoreFailure.StoreUnavailable>;
   /** Unsets the session's active team; the active organization is left alone. */
   readonly unsetTeam: (
     sessionId: string,
     userId: Users.UserId,
-  ) => Effect.Effect<ActiveContextRecord>;
+  ) => Effect.Effect<ActiveContextRecord, StoreFailure.StoreUnavailable>;
   /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findBySessionId: (
     sessionId: string,
-  ) => Effect.Effect<Option.Option<ActiveContextRecord>>;
+  ) => Effect.Effect<Option.Option<ActiveContextRecord>, StoreFailure.StoreUnavailable>;
   /** CWM-003: the organization is gone — null the active organization (and its team) of every session on it. */
-  readonly clearOrganization: (organizationId: string) => Effect.Effect<void>;
+  readonly clearOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** CWM-003: the user left/was removed from the organization — null it (and its team) for that user's sessions only. */
   readonly clearOrganizationForUser: (
     userId: Users.UserId,
     organizationId: string,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** CWM-003: the team is gone — null the active team of every session on it. */
-  readonly clearTeam: (teamId: string) => Effect.Effect<void>;
+  readonly clearTeam: (teamId: string) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** DRS-008: erasure — deletes every row for a user, across every session. */
-  readonly deleteAllByUser: (userId: Users.UserId) => Effect.Effect<void>;
+  readonly deleteAllByUser: (
+    grant: TenantScoped.CrossTenant,
+    userId: Users.UserId,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class ActiveContextRecords extends Context.Service<
   ActiveContextRecords,
   ActiveContextRecordsShape
->()("awthaq/organization/ActiveContextRecords") {}
+>()("awthaq/organization/records/ActiveContextRecords") {}
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -196,7 +201,7 @@ export const layerMemory = Layer.effect(
           : row,
       );
 
-    const deleteAllByUser: ActiveContextRecordsShape["deleteAllByUser"] = (userId) =>
+    const deleteAllByUser: ActiveContextRecordsShape["deleteAllByUser"] = (_grant, userId) =>
       Ref.update(state, (s) =>
         HashMap.filter(s, (row) => !Option.exists(row.userId, (id) => id === userId)),
       );
@@ -240,6 +245,8 @@ export const layerSql = Layer.effect(
   ActiveContextRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`ActiveContextRecords.${operation}`);
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const ActiveContextRow = makeActiveContextRow(wire);
@@ -305,7 +312,9 @@ export const layerSql = Layer.effect(
       activeOrganizationId: string | null,
     ) {
       const now = yield* DateTime.now;
-      const existing = yield* findBySessionIdQuery(sessionId).pipe(Effect.orDie);
+      const existing = yield* findBySessionIdQuery(sessionId).pipe(
+        unavailable("writeOrganization"),
+      );
       if (Option.isNone(existing)) {
         const row = yield* insert({
           sessionId,
@@ -313,7 +322,7 @@ export const layerSql = Layer.effect(
           activeOrganizationId,
           activeTeamId: null,
           updatedAt: now,
-        }).pipe(Effect.orDie);
+        }).pipe(unavailable("writeOrganization"));
         return toRecord(row);
       }
       const row = yield* updateOrganizationQuery({
@@ -321,7 +330,7 @@ export const layerSql = Layer.effect(
         userId,
         activeOrganizationId,
         updatedAt: now,
-      }).pipe(Effect.orDie, Effect.map(Option.getOrThrow));
+      }).pipe(unavailable("writeOrganization"), Effect.map(Option.getOrThrow));
       return toRecord(row);
     });
 
@@ -331,7 +340,7 @@ export const layerSql = Layer.effect(
       activeTeamId: string | null,
     ) {
       const now = yield* DateTime.now;
-      const existing = yield* findBySessionIdQuery(sessionId).pipe(Effect.orDie);
+      const existing = yield* findBySessionIdQuery(sessionId).pipe(unavailable("writeTeam"));
       if (Option.isNone(existing)) {
         const row = yield* insert({
           sessionId,
@@ -339,11 +348,11 @@ export const layerSql = Layer.effect(
           activeOrganizationId: null,
           activeTeamId,
           updatedAt: now,
-        }).pipe(Effect.orDie);
+        }).pipe(unavailable("writeTeam"));
         return toRecord(row);
       }
       const row = yield* updateTeamQuery({ sessionId, userId, activeTeamId, updatedAt: now }).pipe(
-        Effect.orDie,
+        unavailable("writeTeam"),
         Effect.map(Option.getOrThrow),
       );
       return toRecord(row);
@@ -362,11 +371,14 @@ export const layerSql = Layer.effect(
       writeTeam(sessionId, userId, null);
 
     const findBySessionId: ActiveContextRecordsShape["findBySessionId"] = (sessionId) =>
-      findBySessionIdQuery(sessionId).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+      findBySessionIdQuery(sessionId).pipe(
+        Effect.map(Option.map(toRecord)),
+        unavailable("findBySessionId"),
+      );
 
     const clearOrganization: ActiveContextRecordsShape["clearOrganization"] = (organizationId) =>
       sql`UPDATE organization_active_context SET "activeOrganizationId" = NULL, "activeTeamId" = NULL WHERE "activeOrganizationId" = ${organizationId}`.pipe(
-        Effect.orDie,
+        unavailable("clearOrganization"),
         Effect.asVoid,
       );
 
@@ -375,19 +387,20 @@ export const layerSql = Layer.effect(
       organizationId,
     ) =>
       sql`UPDATE organization_active_context SET "activeOrganizationId" = NULL, "activeTeamId" = NULL WHERE "userId" = ${userId} AND "activeOrganizationId" = ${organizationId}`.pipe(
-        Effect.orDie,
+        unavailable("clearOrganizationForUser"),
         Effect.asVoid,
       );
 
     const clearTeam: ActiveContextRecordsShape["clearTeam"] = (teamId) =>
       sql`UPDATE organization_active_context SET "activeTeamId" = NULL WHERE "activeTeamId" = ${teamId}`.pipe(
-        Effect.orDie,
+        unavailable("clearTeam"),
         Effect.asVoid,
       );
 
-    const deleteAllByUser: ActiveContextRecordsShape["deleteAllByUser"] = (userId) =>
+    const deleteAllByUser: ActiveContextRecordsShape["deleteAllByUser"] = (grant, userId) =>
       sql`DELETE FROM organization_active_context WHERE "userId" = ${userId}`.pipe(
-        Effect.orDie,
+        TenantScoped.liftOn(sql, grant),
+        unavailable("deleteAllByUser"),
         Effect.asVoid,
       );
 

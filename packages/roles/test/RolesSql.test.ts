@@ -1,4 +1,4 @@
-// BAM-006 (.issues/high): proves `Roles.Roles.layerSql` genuinely persists
+// BAM-006 (.issues/high): proves `Roles.Roles.layer` over `Roles.records.sql` genuinely persists
 // role assignments — assign/revoke/listRoleNames round-trip through a real
 // SQLite database migrated via this plugin's own `Migrations.run`, not a
 // hand-rolled fixture, the same `packages/jwt/test/RevocationStore.test.ts`
@@ -8,7 +8,16 @@
 // `layerMemory`'s own "assigning an already-held role name is a no-op"
 // contract — the one property `Roles.test.ts`'s in-memory suite cannot
 // itself prove.
-import { AuditLog, AuthEvents, DataExport, Erasure, Migrations, Slots, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  DataExport,
+  Erasure,
+  Migrations,
+  Persistence,
+  Slots,
+  Users,
+} from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -19,7 +28,7 @@ import { permission, role } from "@qadi/core";
 import { Api } from "@awthaq/api";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Roles from "../src/Roles.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const SqlLive = TestSql.layer("roles_RolesSql");
 
@@ -38,14 +47,15 @@ const owner = role({
 // assignments against the catalog (RRM-003), so it needs `AuthEvents` and a catalog.
 // MA-005: a plugin layer built outside `Auth.make` (which provides one itself) needs a `SlotsRegistry`.
 const CoreLive = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Slots.layer),
   // CSG-001/CSG-005: the plugin contributes its erasure and export to the composition's registries.
   Layer.provideMerge(Erasure.registryLayer),
   Layer.provideMerge(DataExport.registryLayer),
 );
 
-const TestLayer = Roles.Roles.layerSql.pipe(
+const TestLayer = Roles.Roles.layer.pipe(
+  Layer.provide(Roles.Roles.records.sql),
   Layer.provide(Roles.config([editor, owner])),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(SqlLive),
@@ -59,7 +69,7 @@ const CaptureLogs = Logger.layer([
   }),
 ]);
 
-describe("Roles.Roles.layerSql", () => {
+describe("Roles.Roles.layer over Roles.records.sql", () => {
   it.effect("assign persists a role assignment, listRoleNames reads it back", () =>
     Effect.gen(function* () {
       const roles = yield* Roles.Roles;
@@ -220,6 +230,22 @@ describe("Roles.Roles.layerSql", () => {
         yield* roleSection!.collect({ userId: mine, email: "m@example.com" }),
         { roles: ["owner"] },
       );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+// Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
+describe("Roles over Roles.records.sql: a store outage", () => {
+  it.effect("assign fails with StoreUnavailable naming the operation", () =>
+    Effect.gen(function* () {
+      yield* TestSql.injectFailure({
+        name: "roles_fail_insert",
+        table: "roles_assignments",
+        event: "INSERT",
+      });
+      const roles = yield* Roles.Roles;
+      const failure = yield* roles.assign(Users.UserId("outage-user"), "editor").pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
     }).pipe(Effect.provide(TestLayer)),
   );
 });

@@ -32,6 +32,7 @@
 // redirect landing on another process). `withCausalToken` is the seeding
 // primitive that middleware would call.
 
+import { Store } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -43,14 +44,12 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 /**
  * How stale a read may be. `"authoritative"` (the default everywhere) always
  * reads the primary; `"eventual"` may read the replica when one is configured
- * and read-your-writes allows it.
+ * and read-your-writes allows it. Declared with the store ports (plan 02), re-exported here.
  */
-export type Consistency = "authoritative" | "eventual";
+export type Consistency = Store.Consistency;
 
 /** Per-call read classification accepted by replica-eligible repository methods. */
-export interface ReadOptions {
-  readonly consistency?: Consistency;
-}
+export type ReadOptions = Store.ReadOptions;
 
 // ---- the replica client -----------------------------------------------------------
 
@@ -140,23 +139,35 @@ export const ReplicationPosition = Context.Reference<ReplicationPositionShape>(
  * primary instead of failing the write.
  */
 export const captureToken = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.tap(effect, () =>
-    Effect.gen(function* () {
-      const replicaClient = yield* ReplicaSqlClient;
-      if (Option.isNone(replicaClient)) return;
-      const primary = yield* SqlClient.SqlClient;
-      const position = yield* ReplicationPosition;
-      const token = yield* position
-        .current(primary)
-        .pipe(Effect.orElseSucceed(() => Option.some(UNKNOWN_POSITION)));
-      if (Option.isNone(token)) return;
-      yield* Effect.withFiber((fiber) =>
-        Effect.sync(() => {
-          fiber.setContext(Context.add(fiber.context, CurrentCausalToken, token));
-        }),
-      );
-    }),
-  );
+  Effect.tap(effect, () => captureFrom(Effect.service(SqlClient.SqlClient)));
+
+/**
+ * `captureToken` over a primary client the caller already holds (a store adapter built over one
+ * `SqlClient`), so the wrapped effect's requirements stay empty. It must not be implemented by providing
+ * the client to `captureToken`: a `provideService` region restores the fiber's context on exit, which
+ * would discard the very token this sets.
+ */
+export const captureTokenOn =
+  (primary: SqlClient.SqlClient) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.tap(effect, () => captureFrom(Effect.succeed(primary)));
+
+const captureFrom = <R>(primaryClient: Effect.Effect<SqlClient.SqlClient, never, R>) =>
+  Effect.gen(function* () {
+    const replicaClient = yield* ReplicaSqlClient;
+    if (Option.isNone(replicaClient)) return;
+    const primary = yield* primaryClient;
+    const position = yield* ReplicationPosition;
+    const token = yield* position
+      .current(primary)
+      .pipe(Effect.orElseSucceed(() => Option.some(UNKNOWN_POSITION)));
+    if (Option.isNone(token)) return;
+    yield* Effect.withFiber((fiber) =>
+      Effect.sync(() => {
+        fiber.setContext(Context.add(fiber.context, CurrentCausalToken, token));
+      }),
+    );
+  });
 
 /** Seeds `CurrentCausalToken` for `effect` — what a middleware carrying a token across requests would call. */
 export const withCausalToken =

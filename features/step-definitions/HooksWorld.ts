@@ -1,14 +1,12 @@
 // AH-003 tier 3: 12-hooks.feature's World. Taps and their effects are exercised through the
 // real flows that run them — `Password.signUp`/`signIn` (BeforeSignUp, AfterSignUp,
-// BeforeSessionIssue) and `Users.delete` (BeforeUserDelete) — over `TestAuth`'s bundle, with a
+// BeforeSessionIssue) and `AccountErasure.eraseAccount` (BeforeUserDelete) — over `TestAuth`'s bundle, with a
 // tap layer handed to the composition the way a host application's `Point.tap(...)` is. The
 // plugin-declared side of BEH-EA-091/096 (dependency order, the static manifest) uses real
 // `AuthPlugin`s with `taps` declared on `AuthPlugin.layer`, composed by the real `Auth.make`.
 import { Auth, AuthPlugin, HookPoint, Hooks, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
-import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -19,7 +17,6 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { type Contribution, type Host, makeHost } from "./CrossCuttingApp.ts";
 import { STRONG_PASSWORD } from "./shared/Harness.ts";
 
@@ -121,7 +118,7 @@ export class AcmeInvite extends AuthPlugin.Service<AcmeInvite, Record<string, ne
   {
     apiVersion: 1,
     contract: InviteApi,
-    tables: ["acme.invite_invitation"],
+    tables: { "acme.invite_invitation": AuthPlugin.Table.global("test fixture") },
   },
 ) {
   static readonly layer = AuthPlugin.layer(AcmeInvite, {
@@ -146,22 +143,12 @@ export const InviteClaimingUsersTable: AuthPlugin.Any = {
 
 // ---- composing the fixture plugins without running anything ----
 
-const FixtureAuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const FixtureCsrfLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
-
 /** `Auth.make` requires a dependency to be listed before its dependent; `acme.audit` comes last in the tuple yet runs before `acme.gate`, so tuple position is not what orders the chain. */
 export const fixturePlugins = Auth.make([AcmeNormalize, AcmeGate, AcmeAudit]);
 
 /** The resolved tap chain of `BeforeSignUp`, read from a composition of the fixture plugins built for real (`TestAuth.layer`). */
 export const resolvedBeforeSignUp = Effect.gen(function* () {
-  const context = yield* Layer.build(
-    TestAuth.layer(fixturePlugins, Layer.mergeAll(FixtureAuthenticationLive, FixtureCsrfLive)),
-  );
+  const context = yield* Layer.build(TestAuth.layer(fixturePlugins));
   return yield* Effect.flatMap(Hooks.BeforeSignUp, (point) => point.resolved).pipe(
     Effect.provide(context),
   );

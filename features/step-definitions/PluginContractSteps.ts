@@ -106,6 +106,51 @@ const configLayers = new Map<string, Layer.Layer<never>>([
 ]);
 
 export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) => {
+  // ---- BEH-EA-334 (the records-* gates in PluginTypeGates.ts) ---------------------------------
+
+  Given(
+    "a plugin whose layer requires a {string} store that its {string} bundle does not provide",
+    function* (_segment: string, _bundle: string) {
+      yield* Effect.void;
+    },
+  );
+
+  Given(
+    "a plugin declaring a {string} bundle whose {string} provides a store its {string} does not",
+    function* (_bundle: string, _side: string, _other: string) {
+      yield* Effect.void;
+    },
+  );
+
+  Given(
+    "a plugin declaring a {string} bundle that also provides a port",
+    function* (_bundle: string) {
+      yield* Effect.void;
+    },
+  );
+
+  When("the plugin's {string} is type-checked", function* (_entry: string) {
+    yield* Effect.void;
+  });
+
+  When("the plugin class is type-checked", function* () {
+    yield* Effect.void;
+  });
+
+  Then("it fails to compile, naming the missing record store", function* () {
+    yield* Effect.void;
+    assertTypeGate("records-complete", GATES, ["@ts-expect-error", "GateStoreOne"]);
+  });
+
+  Then("it fails to compile, naming the store", function* () {
+    yield* Effect.void;
+    assertTypeGate("records-matched", GATES, ["@ts-expect-error", "memory", "sql"]);
+  });
+
+  Then("it fails to compile, naming the service", function* () {
+    yield* Effect.void;
+    assertTypeGate("records-only-records", GATES, ["@ts-expect-error", "GatePort"]);
+  });
   // ---- BEH-EA-001 ----
 
   Given("a plugin class {string} produced by {string}", function* (label: string, factory: string) {
@@ -167,7 +212,11 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
       "layer",
       "manifest",
       "migrations",
+      // Plan 08: the plugin tuple as given, so a harness reads each plugin's `records` and `hookPoints`.
+      "plugins",
       "publicApi",
+      // Plan 05: every plugin table's declared tenancy.
+      "tenancy",
       // SAM-004: the typed user-field schema and the layer that registers it.
       "userFields",
       "userFieldsLayer",
@@ -337,7 +386,7 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
     if (gate === "contract-group-in-own-namespace") {
       assertTypeGate(gate, GATES, ["InviteFixture.contract.groups"]);
     } else {
-      assertTypeGate(gate, GATES, ['tables: ["password_account"]']);
+      assertTypeGate(gate, GATES, ['password_account: AuthPlugin.Table.global("test fixture")']);
     }
   });
 
@@ -365,9 +414,15 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
       const { gate, accepted } = yield* take(claim);
       assert.equal(accepted, false);
       if (gate === "table-foreign-prefix") {
-        assertTypeGate(gate, GATES, ["@ts-expect-error", 'tables: ["oauth_account"]']);
+        assertTypeGate(gate, GATES, [
+          "@ts-expect-error",
+          'oauth_account: AuthPlugin.Table.global("test fixture")',
+        ]);
       } else {
-        assertTypeGate(gate, GATES, ["@ts-expect-error", 'tables: ["account"]']);
+        assertTypeGate(gate, GATES, [
+          "@ts-expect-error",
+          'account: AuthPlugin.Table.global("test fixture")',
+        ]);
       }
     },
   );

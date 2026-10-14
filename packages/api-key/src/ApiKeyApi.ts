@@ -259,7 +259,14 @@ export const ApiKeyTokenGroup = HttpApiGroup.make("apikey.token")
     HttpApiEndpoint.post("token", "/api-key/token", {
       payload: TokenPayload,
       success: TokenResponse,
-      error: [InvalidClient, InvalidScope, UnsupportedGrantType, InvalidRequest, Api.RateLimited],
+      error: [
+        InvalidClient,
+        InvalidScope,
+        UnsupportedGrantType,
+        InvalidRequest,
+        Api.RateLimited,
+        Api.StoreUnavailable,
+      ],
     }),
   )
   // BEH-EA-201: a back-channel POST authorized by the client secret in the request, no CSRF (see `Api.BackChannel`).

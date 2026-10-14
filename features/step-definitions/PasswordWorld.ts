@@ -9,30 +9,14 @@
 // state (credential hash, session liveness) the wire never exposes, and the
 // reset scenario can run over a real SQLite transaction with an injectable
 // fault.
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  PasswordHasher,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { Accounts, Auth, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
+import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { mailedToken } from "./MailedToken.ts";
-import {
-  cheapArgon2id,
-  letForkedFibersRun,
-  makeCapturingMailer,
-  makeNamedRegistry,
-  TestServices,
-} from "./shared/Harness.ts";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import { Password, PasswordApi } from "@awthaq/password";
+import { letForkedFibersRun, makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
+import { Password } from "@awthaq/password";
+import { TestAuth } from "@awthaq/test";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
@@ -42,13 +26,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import { TestAuth } from "@awthaq/test";
 
 /** Which fault, if any, the fault-injecting `Sessions` wrapper raises when the flow reaches it (TIR-005). */
 export type Fault = "none" | "sessionIssue" | "revokeAll";
@@ -87,72 +67,6 @@ const faultInjectingSessions = (fault: Ref.Ref<Fault>) =>
       });
     }),
   );
-
-const memoryCore = (fault: Ref.Ref<Fault>) =>
-  Layer.mergeAll(
-    Users.layerMemory,
-    Accounts.layerMemory,
-    faultInjectingSessions(fault).pipe(Layer.provide(Sessions.layerMemory)),
-    Verification.layerMemory,
-    // ARF-001: `confirmReset` runs inside a `SqlTransaction` — a no-op wrapper for this
-    // in-memory composition, same as `SessionWorld.ts`'s own precedent.
-    SqlTransaction.layerNoop,
-  ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-/** `AccountsRepositoryLive` encrypts provider tokens at rest, so it needs `Encryption`: a fixed test key read through an isolated `ConfigProvider`. */
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-/** TIR-005: the same four core stores over a fresh in-memory SQLite database, migrated by `@awthaq/sql`'s `CoreMigrations`, with a *real* `SqlTransaction` — so atomicity is observable. */
-const sqliteCore = (fault: Ref.Ref<Fault>) => {
-  const SqlLive = SqliteClient.layer({ filename: ":memory:" });
-  const Migrated = Layer.effectDiscard(
-    Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
-  ).pipe(Layer.provide(SqlLive));
-  return Layer.mergeAll(
-    Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
-    Accounts.layerSql.pipe(
-      Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-    ),
-    faultInjectingSessions(fault).pipe(
-      Layer.provide(Sessions.layerSql.pipe(Layer.provide(Repositories.SessionsRepositoryLive))),
-    ),
-    Verification.layerSql.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Repositories.VerificationRepositoryLive,
-          Repositories.VerificationReservationsRepositoryLive,
-        ),
-      ),
-    ),
-    SqlTransaction.layerSql,
-  ).pipe(
-    Layer.provideMerge(TestAuth.memoryFoundation),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
-  );
-};
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
 
 /** BEH-EA-119: a corpus nothing ever matches, the same default `AuthHttp.test.ts` uses — a Scenario opting into a real breach lookup overrides this via `configureBreach`. */
 const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
@@ -198,6 +112,8 @@ export interface AppHandle {
   ) => Promise<A>;
 }
 
+const built = Auth.make([Password.Password]);
+
 /**
  * Mirrors `AuthHttp.test.ts`'s own `capturingMailer` — a capture cell built
  * *outside* the layer graph so a step can read it after the graph is torn
@@ -223,54 +139,37 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
     }),
   );
 
-  const core = options.storage === "sqlite" ? sqliteCore(fault) : memoryCore(fault);
-
-  const appLayer = Layer.mergeAll(
-    AuthHttp.routes(PasswordApi.PasswordApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Password.Password.layer),
+  const common = {
+    // The plugin's own configuration, the breach transport, the mailer and the event subscriber are this world's
+    // `services`; the fault-injecting `Sessions` (and a scenario's own hasher) wrap the base for the plugin and the
+    // read handles alike (`decorate`). `Layer.fresh`: the base already built a hasher on the shared memo map.
+    services: Layer.mergeAll(
+      Password.config(options.passwordConfig ?? {}),
+      options.breachHttpClient ?? NoBreachHttpClient,
+      capturingMailer,
+      eventsLayer,
     ),
-    AuthHttp.docs(PasswordApi.PasswordApi),
-  ).pipe(
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(eventsLayer),
-    Layer.provideMerge(core),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        options.hasher ?? cheapArgon2id,
-        capturingMailer,
-        RateLimiter.layerPermissive,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+    decorate: Layer.mergeAll(
+      faultInjectingSessions(fault),
+      options.hasher === undefined ? Layer.empty : Layer.orDie(Layer.fresh(options.hasher)),
     ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(options.breachHttpClient ?? NoBreachHttpClient),
-    Layer.provide(ClientAddress.layerDirect),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-    Layer.provideMerge(Password.config(options.passwordConfig ?? {})),
-  );
+    openapiPath: "/openapi.json" as const,
+    docsPath: "/docs" as const,
+  };
+  // TIR-005: `"sqlite"` runs the core stores over a real migrated SQLite database with real transactions, so
+  // atomicity is observable; the default is memory.
+  const appLayer =
+    options.storage === "sqlite"
+      ? TestAuth.layer(built, { ...common, records: "sql", suite: "features_PasswordWorld" })
+      : TestAuth.layer(built, common);
 
-  // Built eagerly and held open: the handler's own (lazy) build then finds these layers in the
-  // shared memo map, so a read handle used before the first request neither builds a second
-  // copy nor tears the first down when its scope closes. Run on the real clock, like the
-  // handler's own runtime (a step's fiber may sit under a `TestClock`).
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const context = yield* Effect.promise(() =>
-    Effect.runPromise(Layer.buildWithMemoMap(appLayer, memoMap, Scope.makeUnsafe())),
-  );
-  const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  const inApp = <A, E>(
-    effect: Effect.Effect<
-      A,
-      E,
-      | Users.Users
-      | Accounts.Accounts
-      | Sessions.Sessions
-      | Verification.Verification
-      | PasswordHasher.PasswordHasher
-    >,
-  ) => Effect.runPromise(effect.pipe(Effect.provide(context)));
-  return { handler, sentMail: sent, publishedEvents: Ref.get(events), fault, inApp };
+  // Built eagerly and held open: the handler's own (lazy) build then finds these layers in the shared memo map, so
+  // a read handle used before the first request neither builds a second copy nor tears the first down. Run on the
+  // real clock, like the handler's own runtime (a step's fiber may sit under a `TestClock`).
+  const app = TestAuth.app(appLayer);
+  yield* Effect.promise(() => app.run(Effect.void));
+  const inApp: AppHandle["inApp"] = (effect) => app.run(effect);
+  return { handler: app.handler, sentMail: sent, publishedEvents: Ref.get(events), fault, inApp };
 });
 
 export interface ActorState {

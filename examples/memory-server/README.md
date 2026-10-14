@@ -4,7 +4,7 @@ A runnable example, additional to (never a replacement for) the
 [repository README's own quickstart](../../README.md#quickstart). Where that
 one shows a single plugin (Password) over a real, migrated Postgres backend,
 this one shows a **multi-plugin composition** — `Password` + `Organization`
-together — over `@awthaq/test`'s real, production-quality memory backend.
+together — over the in-memory persistence bundle (`Persistence.memory` and each plugin's `records.memory`).
 
 No `DATABASE_URL`, no migration run, no `AWTHAQ_ENCRYPTION_KEY`. Just:
 
@@ -70,6 +70,6 @@ boots this exact composition in-process and asserts both, plus the walkthrough a
 (sign-up, token from the console mail, verify, sign-in) and the `429` (`pnpm test`).
 
 See `app.ts`'s own comments for what each composition step is doing and
-why (`index.ts` only starts it). Backed entirely by `@awthaq/test`'s `TestAuth.layer` — the same memory
-machinery this repository's own HTTP integration tests and BDD suite already
-exercise, not new stub scaffolding built just for this example.
+why (`index.ts` only starts it). It uses nothing from `@awthaq/test`: the host middleware is derived from the composed api
+(`AuthHttp.middlewareFor`), each plugin's stores come from its own `records.memory` bundle, and
+the same composition over Postgres swaps `Persistence.sql()` and `records.sql` in.

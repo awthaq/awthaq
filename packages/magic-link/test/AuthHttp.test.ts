@@ -4,78 +4,26 @@
 import { Api } from "@awthaq/api";
 import { Auth } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as EmailOtp from "../src/EmailOtp.ts";
 import * as MagicLink from "../src/MagicLink.ts";
 import { letForkedFibersRun, secretOf } from "./support/harness.ts";
 
 const built = Auth.make([MagicLink.MagicLink, EmailOtp.EmailOtp]);
 
-const CSRF_SECRET = "magic-link-authhttp-test-csrf-secret-padded-32";
-const CSRF_TOKEN = (() => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
-})();
+const AppLayer = TestAuth.layer(built, {
+  services: MagicLink.config({ baseUrl: "https://app.example.com" }),
+});
 
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+const testApp = TestAuth.app(AppLayer);
 
-const AppLayer = TestAuth.layer(
-  built,
-  Layer.mergeAll(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-    CsrfProtectionLive,
-    MagicLink.config({ baseUrl: "https://app.example.com" }),
-  ),
-);
-
-const memoMap = Layer.makeMemoMapUnsafe();
-const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
-
-const sentMail = () =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const scope = yield* Effect.scope;
-        const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-        return yield* Effect.gen(function* () {
-          const mailer = yield* Mailer.Mailer;
-          return yield* mailer.sent;
-        }).pipe(Effect.provide(context));
-      }),
-    ),
-  );
+const sentMail = () => testApp.run(Effect.flatMap(Mailer.Mailer, (mailer) => mailer.sent));
 
 const call = (method: string, path: string, body?: unknown) =>
-  Effect.promise(() =>
-    handler(
-      new Request(`http://localhost${path}`, {
-        method,
-        headers: {
-          "content-type": "application/json",
-          cookie: `${Api.CSRF_COOKIE_NAME}=${CSRF_TOKEN}`,
-          [Api.CSRF_HEADER_NAME]: CSRF_TOKEN,
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      }),
-    ),
-  );
+  Effect.promise(() => testApp.request(method, path, body === undefined ? {} : { json: body }));
 
 const Tagged = Schema.Struct({ _tag: Schema.String });
 const SessionBody = Schema.Struct({ id: Schema.String, amr: Schema.Array(Schema.String) });

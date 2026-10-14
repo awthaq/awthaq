@@ -2,7 +2,7 @@
 // `evaluate` reaches the sink exactly once, the decision itself is untouched
 // (a sink cannot change it — BEH-EA-167), and audit mode lands the denial in
 // the durable `AuditLog` as `auth.authz.denied`.
-import { AuditLog, AuthEvents } from "@awthaq/core";
+import { AuditLog, AuthEvents, Persistence } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import {
   currentSubjectLayer,
@@ -18,7 +18,9 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as DecisionLogging from "../src/DecisionLogging.ts";
 
-const CoreLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+const CoreLive = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+);
 
 const denied = evaluate(hasRole("admin"), { action: "delete-project" }).pipe(
   Effect.provide(currentSubjectLayer(makeSubject({ id: "user:u-1" }))),

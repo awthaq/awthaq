@@ -94,6 +94,18 @@ export class EmailDeliveryFailed extends Schema.TaggedError<EmailDeliveryFailed>
 ) {}
 
 /**
+ * BEH-EA-320: starting an email change needs a session that proved a credential recently, so a
+ * hijacked cookie cannot point the account at the attacker's mailbox. `403`, like
+ * `PasskeyReauthRequired` and `TwoFactorReauthRequired`: the session is live, its freshness
+ * forbids this action; step up (`/password/reauthenticate`, `/passkey/reauthenticate/*`) and retry.
+ */
+export class PasswordReauthRequired extends Schema.TaggedError<PasswordReauthRequired>()(
+  "PasswordReauthRequired",
+  { maxAgeSeconds: Schema.Number },
+  { httpApiStatus: 403 },
+) {}
+
+/**
  * BAM-009: the account has no email identity to replace (a phone-only or anonymous user): the
  * change-email flow replaces an address, it does not introduce one.
  */
@@ -233,6 +245,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
         EmailAlreadyExists,
         Api.RateLimited,
         HookPoint.HookAborted,
+        // ADR-EA-038: the first session is a cleared sign-in, so a divert tap can ask for a second factor.
+        Hooks.TwoFactorRequired,
         Api.InvalidTokenDelivery,
       ],
     }),
@@ -362,7 +376,12 @@ export const PasswordAccountGroup = HttpApiGroup.make("password.account")
     HttpApiEndpoint.post("changeEmail", "/change-email", {
       payload: ChangeEmailPayload,
       success: HttpApiSchema.Empty(202),
-      error: [EmailChangeNotSupported, EmailDeliveryFailed, Api.RateLimited],
+      error: [
+        PasswordReauthRequired,
+        EmailChangeNotSupported,
+        EmailDeliveryFailed,
+        Api.RateLimited,
+      ],
     }),
   )
   .add(

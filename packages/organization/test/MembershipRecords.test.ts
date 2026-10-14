@@ -5,6 +5,7 @@
 // BAM-002 (.issues/high) verification, the same
 // `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations, Users } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -14,7 +15,8 @@ import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
+import { ambientOrganization, grant, vitestFramework } from "./support.ts";
 
 const MemoryLayer = MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
@@ -105,7 +107,7 @@ const suite = (
         const records = yield* MembershipRecords.MembershipRecords;
         yield* records.create({ userId: userA, organizationId: "org-1", role: ["owner"] });
         yield* records.create({ userId: userA, organizationId: "org-2", role: ["member"] });
-        const found = yield* records.listByUser(userA);
+        const found = yield* records.listByUser(grant, userA);
         assert.strictEqual(found.length, 2);
       }).pipe(Effect.provide(layer)),
     );
@@ -158,3 +160,130 @@ const suite = (
 
 suite("MembershipRecords (layerMemory)", MemoryLayer);
 suite("MembershipRecords (layerSql)", SqlLayer);
+
+// Plan 05: the tenant-isolation conformance suite. `organization_membership` is Keyed by
+// `organizationId`: a method that takes an organization id can only reach that organization's rows;
+// the two that read or erase a user across organizations take a witness.
+let isolationCounter = 0;
+interface Row {
+  readonly userId: Users.UserId;
+  readonly organizationId: string;
+}
+/** Runs `change` against the row and reports whether the row stopped being as it was (gone, or its roles changed). */
+const changed = (
+  row: Row,
+  change: (records: MembershipRecords.MembershipRecordsShape) => Effect.Effect<unknown, unknown>,
+) =>
+  Effect.flatMap(MembershipRecords.MembershipRecords, (records) =>
+    Effect.gen(function* () {
+      const before = yield* records.findByUserAndOrg(row.userId, row.organizationId);
+      yield* change(records).pipe(
+        Effect.catchTags({
+          MembershipRecordNotFound: () => Effect.void,
+        }),
+      );
+      const after = yield* records.findByUserAndOrg(row.userId, row.organizationId);
+      return (
+        Option.isSome(before) &&
+        (Option.isNone(after) || after.value.role.join() !== before.value.role.join())
+      );
+    }),
+  );
+const orgOf = (row: Row, as: "owner" | "other") =>
+  as === "owner" ? row.organizationId : "another-organization";
+
+const isolationCase: TestAuth.TableCase<
+  MembershipRecords.MembershipRecordsShape,
+  Row,
+  MembershipRecords.MembershipRecords
+> = {
+  table: "organization_membership",
+  insert: Effect.gen(function* () {
+    const records = yield* MembershipRecords.MembershipRecords;
+    isolationCounter += 1;
+    const organizationId = yield* ambientOrganization;
+    const userId = Users.UserId(`isolation-user-${isolationCounter}`);
+    yield* records.create({ userId, organizationId, role: ["owner"] });
+    return { userId, organizationId };
+  }),
+  methods: {
+    create: { insert: true },
+    findByUserAndOrg: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(MembershipRecords.MembershipRecords, (records) =>
+            Effect.map(records.findByUserAndOrg(row.userId, orgOf(row, as)), Option.isSome),
+          ),
+      },
+    },
+    listByOrganization: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(MembershipRecords.MembershipRecords, (records) =>
+            Effect.map(records.listByOrganization(orgOf(row, as)), (rows) =>
+              rows.some((found) => found.userId === row.userId),
+            ),
+          ),
+      },
+    },
+    listByUser: {
+      crossTenant: {
+        run: (row) =>
+          Effect.flatMap(MembershipRecords.MembershipRecords, (records) =>
+            Effect.map(records.listByUser(grant, row.userId), (rows) =>
+              rows.some((found) => found.organizationId === row.organizationId),
+            ),
+          ),
+      },
+    },
+    countByOrganization: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(MembershipRecords.MembershipRecords, (records) =>
+            Effect.map(records.countByOrganization(orgOf(row, as)), (count) => count > 0),
+          ),
+      },
+    },
+    countOwners: {
+      keyed: {
+        run: (row, as) =>
+          Effect.flatMap(MembershipRecords.MembershipRecords, (records) =>
+            Effect.map(records.countOwners(orgOf(row, as)), (count) => count > 0),
+          ),
+      },
+    },
+    updateRole: {
+      keyed: {
+        run: (row, as) =>
+          changed(row, (records) => records.updateRole(row.userId, orgOf(row, as), ["member"])),
+      },
+    },
+    remove: {
+      keyed: {
+        run: (row, as) => changed(row, (records) => records.remove(row.userId, orgOf(row, as))),
+      },
+    },
+    removeAllForOrganization: {
+      keyed: {
+        run: (row, as) =>
+          changed(row, (records) => records.removeAllForOrganization(orgOf(row, as))),
+      },
+    },
+    deleteAllByUser: {
+      crossTenant: {
+        run: (row) => changed(row, (records) => records.deleteAllByUser(grant, row.userId)),
+      },
+    },
+  },
+};
+
+TestAuth.runTenantIsolationTests(vitestFramework, {
+  plugin: Organization.Organization,
+  covers: ["organization_membership"],
+  adapters: [
+    { name: "layerMemory", layer: MemoryLayer },
+    { name: "layerSql", layer: SqlLayer },
+  ],
+  cases: [isolationCase],
+  rls: { layer: SqlLayer },
+});

@@ -290,3 +290,27 @@ Feature: Sessions
       And a session is issued for "alice" that recorded "pwd,otp,mfa"
       When a principal token is minted for that session
       Then the token carries "amr" and "auth_time" of that session
+
+  # BEH-EA-319 — spec/behaviors/07-sessions.md
+  @BEH-EA-319
+  Rule: Reauthenticating advances the authentication time of a live session the caller owns, and nothing else
+
+    @REQ-EA-1276
+    Scenario: Reauthenticating a superseded session is refused and leaves it unchanged
+      Given a signed-in user "alice" with session "s0"
+      When "alice" performs a "password change"
+      And "alice" reauthenticates the superseded session "s0" a minute later
+      Then the reauthentication of "alice" is refused as a missing session
+      And session "s0"'s row keeps its original authentication time
+
+  # BEH-EA-320 — spec/behaviors/07-sessions.md
+  @BEH-EA-320
+  Rule: requireFresh is the one gate for "this session proved a credential recently"
+
+    @REQ-EA-1277
+    Scenario: A session is fresh only within the window since it last proved a credential
+      Given a signed-in user "alice" with session "s0"
+      When 10 minutes pass without "alice" proving a credential
+      Then session "s0" is not fresh within 5 minutes
+      When "alice" reauthenticates session "s0"
+      Then session "s0" is fresh within 5 minutes

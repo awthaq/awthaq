@@ -178,7 +178,7 @@ describe("Repositories (SQLite specifics)", () => {
         users.verifyEmail(user.id).pipe(
           Effect.tap((row) =>
             Effect.sync(() => {
-              verified = row;
+              verified = Option.getOrThrow(row);
             }),
           ),
         ),
@@ -189,14 +189,19 @@ describe("Repositories (SQLite specifics)", () => {
     }).pipe(Effect.provide(RepositoriesLive)),
   );
 
-  it.effect("PPS-007: verifyEmail on an unknown id fails NoSuchElementError", () =>
-    Effect.gen(function* () {
-      const users = yield* Repositories.UsersRepository;
-      const failure = yield* users
-        .verifyEmail(Schema.decodeUnknownSync(Models.UserId)("missing"))
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "NoSuchElementError");
-    }).pipe(Effect.provide(RepositoriesLive)),
+  it.effect(
+    "PPS-007/AAPS-005: verifyEmail on an unknown id, or an already verified one, is None",
+    () =>
+      Effect.gen(function* () {
+        const users = yield* Repositories.UsersRepository;
+        const unknown = yield* users.verifyEmail(
+          Schema.decodeUnknownSync(Models.UserId)("missing"),
+        );
+        assert.isTrue(Option.isNone(unknown));
+        const user = yield* insertUser("verify-twice@example.com");
+        assert.isTrue(Option.isSome(yield* users.verifyEmail(user.id)));
+        assert.isTrue(Option.isNone(yield* users.verifyEmail(user.id)));
+      }).pipe(Effect.provide(RepositoriesLive)),
   );
 
   // ---- SEA-005: the TEXT-timestamp encoding invariant ----------------------------
@@ -228,9 +233,15 @@ describe("Repositories (SQLite specifics)", () => {
           idleExpiresAt: now,
         });
         const next = yield* insertSession(user.id, "h3", now);
-        yield* sessions.tombstone({ id: session.id, supersededBy: next.id, supersededAt: now });
-        yield* sessions.markReused(session.id, now);
-        yield* sessions.reauthenticate(next.id, now);
+        yield* sessions.tombstone({
+          id: session.id,
+          userId: user.id,
+          supersededBy: next.id,
+          supersededAt: now,
+        });
+        yield* sessions.markReusedOnce(session.id, now);
+        // `next` expires at `now`; reauthenticate judges liveness at its instant, so use one second earlier.
+        yield* sessions.reauthenticate(next.id, user.id, DateTime.subtract(now, { seconds: 1 }));
         yield* accounts.insert(
           yield* M.Account.insert.makeEffect({
             userId: user.id,
@@ -263,7 +274,7 @@ describe("Repositories (SQLite specifics)", () => {
           valueHash: "vh",
           expiresAt: DateTime.add(now, { minutes: 5 }),
           createdAt: now,
-          payload: null,
+          payload: "null",
           maxAttempts: null,
           attempts: 0,
         });
@@ -277,13 +288,13 @@ describe("Repositories (SQLite specifics)", () => {
           expiresAt: DateTime.add(now, { minutes: 1 }),
           now,
         });
-        yield* auditLog.insert({
+        yield* auditLog.insertIfAbsent({
           id: "a1",
           eventTag: "test",
           actorUserId: null,
           occurredAt: now,
           correlationId: null,
-          payload: {},
+          payload: "{}",
         });
 
         const columns: ReadonlyArray<readonly [table: string, column: string]> = [

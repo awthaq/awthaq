@@ -1,17 +1,26 @@
 // BEH-EA-247 through 250 (spec/behaviors/30-scim.md): SCIM Users — provisioning,
 // ownership, immutability, deactivation and deletion — driven at the domain level over
 // the same layer graph an application builds (`support.ts`).
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { MembershipRecords } from "@awthaq/organization";
+import { Accounts, AuditLog, AuthEvents, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
+import { OrganizationHooks } from "@awthaq/organization";
+import { InvitationRecords, MembershipRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashSet from "effect/HashSet";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Scim from "../src/Scim.ts";
 import * as ScimApi from "../src/ScimApi.ts";
 import { ScimLive, seedConnection } from "./support.ts";
+import { TenantScoped } from "@awthaq/sql";
+
+/** The witness these tests present where a cross-organization caller would. */
+const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const provision = (
   connection: ScimApi.ScimConnectionIdentity,
@@ -219,18 +228,67 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
   );
 
   it.effect(
-    "an organization at its membership limit refuses the POST and leaves no user behind",
+    "an organization at its membership limit refuses the POST and leaves no user, no mapping and every invitation to that address behind",
     () =>
       Effect.gen(function* () {
         const { connection } = yield* seedConnection();
         const users = yield* Users.Users;
         const scim = yield* Scim.Scim;
+        const invitations = yield* InvitationRecords.InvitationRecords;
+        // An administrator invited this address to another organization before the user existed:
+        // abandoning the half-made user is not an erasure and must not sweep it (plan 03 section 3.5).
+        const invitation = yield* invitations.create({
+          organizationId: "another-organization",
+          email: "extra@acme.example",
+          role: ["member"],
+          inviterId: Users.UserId("another-inviter"),
+          tokenHash: "hash-extra",
+          expiresAt: DateTime.addDuration(DateTime.nowUnsafe(), "1 hour"),
+        });
         // The owner already fills the organization's single seat.
         const refused = yield* provision(connection, "extra@acme.example").pipe(Effect.flip);
         assert.strictEqual(refused._tag, "ScimForbidden");
         assert.isTrue(Option.isNone(yield* users.findByEmail("extra@acme.example")));
         assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
+        assert.isTrue(Option.isSome(yield* invitations.findById(grant, invitation.id)));
       }).pipe(Effect.provide(ScimLive({}, { membershipLimit: 1 }))),
+  );
+
+  it.effect(
+    "a BeforeSignUp veto refuses the POST with a 403 and leaves no user and no mapping (ADR-EA-038)",
+    () =>
+      Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const users = yield* Users.Users;
+        const scim = yield* Scim.Scim;
+        const refused = yield* provision(connection, "veto@acme.example").pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "ScimForbidden");
+        assert.isTrue(Option.isNone(yield* users.findByEmail("veto@acme.example")));
+        assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
+      }).pipe(
+        Effect.provide(
+          ScimLive(
+            {},
+            {},
+            undefined,
+            Hooks.BeforeSignUp.tap((input) =>
+              Effect.fail(new HookPoint.HookAbort({ code: `NO_SIGNUP_${input.strategy}` })),
+            ),
+          ),
+        ),
+      ),
+  );
+
+  it.effect("a provisioned user is announced as auth.user.created (ADR-EA-038)", () =>
+    Effect.gen(function* () {
+      const { connection } = yield* seedConnection();
+      const auditLog = yield* AuditLog.AuditLog;
+      const created = yield* provision(connection, "new@acme.example");
+      const recorded = yield* auditLog.list({ eventTag: "auth.user.created" });
+      assert.strictEqual(recorded.length, 1);
+      const payload = recorded[0]?.payload;
+      assert.isTrue(payload?._tag === "auth.user.created" && payload.userId === created.id);
+    }).pipe(Effect.provide(ScimLive())),
   );
 
   it.effect("provisioning is audited as an event naming the connection and organization", () =>
@@ -441,6 +499,61 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
   );
 });
 
+/**
+ * The race made deterministic: the real in-memory `Users`, except that once `ownedUser` has read a
+ * user, every later read of the same id reports `UserNotFound`, as if another erasure had landed
+ * in between. It wraps the composition's own `Users` (`TestAuth.layer`'s `decorate`).
+ */
+const ErasedBetweenReads = Layer.effect(
+  Users.Users,
+  Effect.gen(function* () {
+    const real = yield* Users.Users;
+    const reads = yield* Ref.make(HashSet.empty<string>());
+    return Users.Users.of({
+      ...real,
+      findById: (id) =>
+        Ref.modify(reads, (seen) => [HashSet.has(seen, id), HashSet.add(seen, id)]).pipe(
+          Effect.flatMap((already) =>
+            already
+              ? Effect.fail(new Users.UserNotFound({ id, message: `no user ${id}` }))
+              : real.findById(id),
+          ),
+        ),
+    });
+  }),
+);
+
+describe("SCIM Users: membership goes through OrganizationMembers (plan 04)", () => {
+  it.effect(
+    "provisioning fires AfterAddMember with a Directory actor naming the connection",
+    () => {
+      const seen: Array<string> = [];
+      return Effect.gen(function* () {
+        const { connection } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        yield* scim.createUser(connection, { userName: "ada@acme.example" });
+        // The creator's own membership fired first (D7), by the organization's creator.
+        assert.deepStrictEqual(seen.slice(1), [`Directory:${connection.id}`]);
+        assert.strictEqual(seen[0]?.startsWith("User:"), true);
+      }).pipe(
+        Effect.provide(
+          ScimLive(
+            {},
+            {},
+            undefined,
+            OrganizationHooks.AfterAddMember.tap((input) => {
+              seen.push(
+                `${input.actor._tag}:${"connectionId" in input.actor ? input.actor.connectionId : ""}`,
+              );
+              return Effect.void;
+            }),
+          ),
+        ),
+      );
+    },
+  );
+});
+
 describe("SCIM Users: DELETE (BEH-EA-250)", () => {
   it.effect("by default DELETE deactivates: the user, its accounts and history remain", () =>
     Effect.gen(function* () {
@@ -462,31 +575,101 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
     }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("configured to erase, DELETE removes the user, its sessions and the mapping", () =>
+  it.effect(
+    "configured to erase, DELETE runs the account erasure: memberships, accounts, tokens and the mapping go with the user",
+    () =>
+      Effect.gen(function* () {
+        const { connection, organizationId } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const accounts = yield* Accounts.Accounts;
+        const members = yield* MembershipRecords.MembershipRecords;
+        const created = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });
+        const id = Users.UserId(created.id);
+        const session = yield* sessions.issue({ userId: id });
+        yield* accounts.link({ userId: id, providerId: "saml:x", subject: "nameid-1" });
+        assert.strictEqual((yield* members.listByUser(grant, id)).length, 1);
+
+        yield* scim.deleteUser(connection, created.id);
+
+        assert.strictEqual((yield* users.findById(id).pipe(Effect.flip))._tag, "UserNotFound");
+        assert.deepStrictEqual(yield* members.listByUser(grant, id), []);
+        assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("saml:x", "nameid-1")));
+        assert.strictEqual(
+          (yield* sessions.verify(session.token).pipe(Effect.flip))._tag,
+          "Sessions/NotFound",
+        );
+        assert.strictEqual(
+          (yield* scim.getUser(connection, created.id).pipe(Effect.flip))._tag,
+          "ScimNotFound",
+        );
+        // The seat is free again (the organization is limited to the owner plus one member) and so is
+        // the external id: a re-provision succeeds and creates a new user.
+        const fresh = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });
+        assert.notStrictEqual(fresh.id, created.id);
+        assert.isTrue(
+          Option.isSome(yield* members.findByUserAndOrg(Users.UserId(fresh.id), organizationId)),
+        );
+      }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }, { membershipLimit: 2 }))),
+  );
+
+  it.effect(
+    "an erasing DELETE is announced as auth.user.deleted by the directory, then auth.scim.userDeleted",
+    () =>
+      Effect.gen(function* () {
+        const { connection, organizationId } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        const auditLog = yield* AuditLog.AuditLog;
+        const created = yield* provision(connection);
+        yield* scim.deleteUser(connection, created.id);
+        const deleted = yield* auditLog.list({ eventTag: "auth.user.deleted" });
+        assert.strictEqual(deleted.length, 1);
+        assert.deepStrictEqual(deleted[0]?.payload, {
+          _tag: "auth.user.deleted",
+          userId: Users.UserId(created.id),
+          deletedBy: "directory",
+          connectionId: connection.id,
+          organizationId,
+        });
+        const scimDeleted = yield* auditLog.list({ eventTag: "auth.scim.userDeleted" });
+        assert.strictEqual(scimDeleted.length, 1);
+        const first = deleted[0];
+        const second = scimDeleted[0];
+        assert.isTrue(first !== undefined && second !== undefined && first.id < second.id);
+      }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }))),
+  );
+
+  it.effect("an erasing DELETE pseudonymizes the user's audit trail", () =>
     Effect.gen(function* () {
       const { connection } = yield* seedConnection();
       const scim = yield* Scim.Scim;
-      const users = yield* Users.Users;
-      const sessions = yield* Sessions.Sessions;
       const auditLog = yield* AuditLog.AuditLog;
-      const created = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });
-      const id = Users.UserId(created.id);
-      const session = yield* sessions.issue({ userId: id });
+      const created = yield* provision(connection);
       yield* scim.deleteUser(connection, created.id);
-      assert.strictEqual((yield* users.findById(id).pipe(Effect.flip))._tag, "UserNotFound");
-      assert.strictEqual(
-        (yield* sessions.verify(session.token).pipe(Effect.flip))._tag,
-        "Sessions/NotFound",
+      const provisioned = yield* auditLog.list({ eventTag: "auth.scim.userProvisioned" });
+      assert.strictEqual(provisioned.length, 1);
+      assert.isFalse(JSON.stringify(provisioned).includes(created.id));
+      // The erasure receipt keeps the id (ADR-EA-029 section 4).
+      assert.isTrue(
+        JSON.stringify(yield* auditLog.list({ eventTag: "auth.user.deleted" })).includes(
+          created.id,
+        ),
       );
-      assert.strictEqual(
-        (yield* scim.getUser(connection, created.id).pipe(Effect.flip))._tag,
-        "ScimNotFound",
-      );
-      assert.strictEqual((yield* auditLog.list({ eventTag: "auth.scim.userDeleted" })).length, 1);
-      // The external id is free again: a re-provision creates a new user.
-      const fresh = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });
-      assert.notStrictEqual(fresh.id, created.id);
     }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }))),
+  );
+
+  it.effect("DELETE of a user erased in between is 404 and publishes nothing", () =>
+    Effect.gen(function* () {
+      const { connection } = yield* seedConnection();
+      const scim = yield* Scim.Scim;
+      const auditLog = yield* AuditLog.AuditLog;
+      const created = yield* provision(connection);
+      const failure = yield* scim.deleteUser(connection, created.id).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "ScimNotFound");
+      assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.scim.userDeleted" }), []);
+      assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.deleted" }), []);
+    }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, ErasedBetweenReads))),
   );
 });
 

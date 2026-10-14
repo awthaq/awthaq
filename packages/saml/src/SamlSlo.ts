@@ -21,9 +21,10 @@
 // Outbound messages (our request, our response) are signed with the connection's SP key whenever it has one.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, RateLimits, Sessions, Tenant, Verification } from "@awthaq/core";
-import { RateLimiter, XmlSignature } from "@awthaq/ports";
+import { AuthEvents, Sessions, Tenant, Verification } from "@awthaq/core";
+import { XmlSignature } from "@awthaq/ports";
 import * as Crypto from "effect/Crypto";
+import { TenantScoped } from "@awthaq/sql";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -39,6 +40,11 @@ import * as SamlLogout from "./SamlLogout.ts";
 import { logoutRequestXml, logoutResponseXml, postFormHtml, redirectUrl } from "./SamlProtocol.ts";
 import type * as SamlRecords from "./SamlRecords.ts";
 import * as SamlSpKeys from "./SamlSpKeys.ts";
+
+/** An ACS response, a logout request or SP metadata names its connection before any tenant is known (public endpoints). */
+export const protocolGrant = TenantScoped.crossTenant(
+  "saml: the protocol message names the connection before any tenant is known",
+);
 
 export const LOGOUT_COOKIE = "__Host-saml-logout";
 const LOGOUT_PREFIX = "saml-logout:";
@@ -96,7 +102,7 @@ export interface SloDeps {
   readonly settings: SamlConfig.SamlConfigShape;
   readonly usableConnection: (
     connectionId: string,
-  ) => Effect.Effect<Option.Option<SamlRecords.ConnectionRecord>>;
+  ) => Effect.Effect<Option.Option<SamlRecords.ConnectionRecord>, Api.StoreUnavailable>;
   readonly records: SamlRecords.SamlRecordsShape;
   readonly sessions: Sessions.SessionsShape;
   readonly verification: Verification.VerificationShape;
@@ -104,27 +110,13 @@ export interface SloDeps {
   readonly xmlSignature: XmlSignature.XmlSignatureShape;
   readonly spKeys: SamlSpKeys.SamlSpKeysShape;
   readonly crypto: Crypto.Crypto;
-  readonly limiter: RateLimiter.RateLimiterShape;
+  /** The `slo` rule of `Saml`'s budget, spent per source address (a closure: this module must not import `Saml.ts`). */
+  readonly rateLimit: (ip: string | undefined) => Effect.Effect<void, Api.RateLimited>;
   readonly resolveCallbackURL: (raw: string | undefined) => string;
 }
 
 export const makeSlo = (deps: SloDeps) => {
   const { settings, records, sessions, verification, events, xmlSignature, spKeys, crypto } = deps;
-
-  const rateLimit = (ip: string | undefined) =>
-    RateLimits.enforce({
-      key: `saml:slo:${ip ?? "unknown"}`,
-      limit: settings.rateLimits.slo.limit,
-      window: settings.rateLimits.slo.window,
-      meta: { group: "saml", endpoint: "slo", rule: "slo", dimension: "ip" },
-    }).pipe(
-      Effect.provideService(RateLimiter.RateLimiter, deps.limiter),
-      Effect.provideService(AuthEvents.AuthEvents, events),
-      Effect.catchTag(
-        "RateLimitExceeded",
-        (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-      ),
-    );
 
   /** Signs and encodes one outbound message for the IdP's binding, with the SP key when the connection has one. */
   const outbound = Effect.fnUntraced(function* (input: {
@@ -177,7 +169,7 @@ export const makeSlo = (deps: SloDeps) => {
     const row = yield* records.findSession(sessionId);
     const owner = Option.isNone(row)
       ? Option.none()
-      : yield* records.findById(row.value.connectionId);
+      : yield* records.findById(protocolGrant, row.value.connectionId);
     // The local session ends first, whatever the IdP does or says next, and as the connection's tenant (like the IdP's own request).
     const revoke = sessions
       .revoke(sessionId, "signOut")
@@ -370,7 +362,7 @@ export const makeSlo = (deps: SloDeps) => {
   });
 
   const slo = Effect.fnUntraced(function* (input: SloInput) {
-    yield* rateLimit(input.ip);
+    yield* deps.rateLimit(input.ip);
     let strategy = "saml";
     const reject = (reason: string) =>
       Effect.all(
@@ -440,6 +432,8 @@ export const makeSlo = (deps: SloDeps) => {
       if (!identifier.startsWith(LOGOUT_PREFIX) || secret === "") {
         return yield* Effect.fail(new SamlLogout.LogoutInvalid({ reason: "logoutStateMalformed" }));
       }
+      // ADR-EA-039: burn-first on purpose (BEH-EA-315: the local session ended before the request left;
+      // no state change follows this consume).
       const consumed = yield* verification
         .consume(identifier, Redacted.make(secret))
         .pipe(
@@ -474,5 +468,5 @@ export const makeSlo = (deps: SloDeps) => {
     return yield* chain.pipe(Effect.catchTag("LogoutInvalid", (invalid) => reject(invalid.reason)));
   });
 
-  return { slo, logout, rateLimit };
+  return { slo, logout };
 };

@@ -20,6 +20,7 @@ import {
   DataExport,
   Erasure,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -33,10 +34,9 @@ import {
   Mailer,
   PasswordHasher,
   RateLimiter,
-  SqlTransaction,
 } from "@awthaq/ports";
-import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
-import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
+import { AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
+import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as PgClient from "@effect/sql-pg/PgClient";
@@ -62,7 +62,9 @@ const auth = Auth.make([Password.Password]);
 
 // 2. The database, chosen by configuration. Both branches provide the same `SqlClient`, which is
 //    all the repositories and the migrator ask for; the dialect is read from the client.
-const PostgresLive = PgClient.layerConfig({ url: Config.Redacted("DATABASE_URL") });
+const PostgresLive = PgClient.layerConfig({
+  url: Config.Redacted("DATABASE_URL"),
+});
 const SqliteLive = SqliteClient.layerConfig({
   filename: Config.String("SQLITE_FILE").pipe(Config.withDefault("./awthaq.sqlite")),
 });
@@ -96,30 +98,19 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const RepositoriesLive = Layer.mergeAll(
-  Repositories.UsersRepositoryLive,
-  Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
-  Repositories.SessionsRepositoryLive,
-  Repositories.VerificationRepositoryLive,
-  Repositories.VerificationReservationsRepositoryLive,
-  Repositories.AuditLogRepositoryLive,
-).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
-
-// 4. The domain services over those repositories; `AuthEvents` writes every event into the
-//    durable `AuditLog` table.
+// 4. The domain services over the SQL stores (`Persistence.sql()`); `AuthEvents` writes every
+//    event into the durable `AuditLog` table.
 const CoreLive = Layer.mergeAll(
-  Users.layerSql,
-  Accounts.layerSql,
-  Sessions.layerSql,
-  Verification.layerSql,
+  Users.layer,
+  Accounts.layer,
+  Sessions.layer,
+  Verification.layer,
 ).pipe(
-  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerSql))),
-  Layer.provideMerge(RepositoriesLive),
+  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layer))),
+  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(EncryptionLive))),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
   Layer.provideMerge(NodeCrypto.layer),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
 );
 
 // 5. The rate limiter enforces the rules the plugin registers, against a shared SQL store so the
@@ -135,15 +126,11 @@ const RateLimiterLive = RateLimiter.layer.pipe(
 
 // 6. Cross-cutting services: erasure and export over the hook registries, one SQL transaction
 //    domain, the client-address resolver (`layerDirect` reads the socket peer; behind a proxy
-//    use `layerTrustedProxy`) and CSRF protection keyed by `AWTHAQ_CSRF_SECRET` (>= 32 bytes).
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Csrf.layerConfig),
-  Layer.provide(NodeCrypto.layer),
-);
+//    use `layerTrustedProxy`). The host middleware (`Authentication`, `CsrfProtection`) is derived from the
+//    groups the composed api declares: CSRF keyed by `AWTHAQ_CSRF_SECRET` (>= 32 bytes).
+const MiddlewareLive = AuthHttp.middlewareFor(auth.api, { csrf: Csrf.layerConfig });
 const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect, SqlTransaction.layerSql),
-  ),
+  Layer.provideMerge(ClientAddress.layerDirect),
 );
 
 // 7. Mount the composed api. The OpenAPI document and Scalar UI are unauthenticated, so they are
@@ -165,7 +152,7 @@ const DocsLive = Layer.unwrap(
 // needs no inbox. Never for production: a real deployment provides its own `Mailer`.
 const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
   Layer.mergeAll(RoutesLive, DocsLive).pipe(
-    Layer.provideMerge(AuthenticationLive),
+    Layer.provide(MiddlewareLive),
     Layer.provideMerge(ServicesLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Hooks.HooksLive),

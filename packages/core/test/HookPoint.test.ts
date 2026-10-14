@@ -7,6 +7,7 @@
 // composes `Tap.pipe(Layer.provideMerge(Point.layer))` — the tap requires its
 // point — and two builds never share taps or a frozen state (proven by the
 // "independently built compositions" case, which reuses one class).
+import { SqlTransaction } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -20,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as HookPoint from "../src/HookPoint.ts";
 import * as Observability from "../src/Observability.ts";
+import { TenantContext } from "../src/Tenant.ts";
 
 class SignUpInput extends Schema.Class<SignUpInput>("SignUpInput")({ email: Schema.String }) {}
 
@@ -106,6 +108,54 @@ describe("HookPoint.observe (BEH-EA-092)", () => {
       const point = yield* AfterSignIn;
       yield* point.run("user-2");
       assert.deepStrictEqual(yield* Ref.get(seen), ["user-2"]);
+    }).pipe(Effect.provide(Recording.pipe(Layer.provideMerge(AfterSignIn.layer))));
+  });
+});
+
+describe("HookPoint.observe inside a unit of work (ADR-EA-037)", () => {
+  // The unit's own commit/rollback is `transactional`'s job (tested over SQLite in
+  // `@awthaq/sql`); a pass-through `withTransaction` is enough to drive both lanes here.
+  const unit = SqlTransaction.transactional({ withTransaction: (effect) => effect });
+
+  it.effect("a tap runs after the unit commits, not before", () => {
+    class AfterSignIn extends HookPoint.observe<AfterSignIn>()("auth.signIn", Schema.String) {}
+    const seen = Effect.runSync(Ref.make<ReadonlyArray<string>>([]));
+    const Recording = AfterSignIn.tap((userId) => Ref.update(seen, (s) => [...s, userId]));
+    return Effect.gen(function* () {
+      const point = yield* AfterSignIn;
+      yield* unit(
+        Effect.gen(function* () {
+          yield* point.run("user-1");
+          assert.deepStrictEqual(yield* Ref.get(seen), []);
+        }),
+      );
+      assert.deepStrictEqual(yield* Ref.get(seen), ["user-1"]);
+    }).pipe(Effect.provide(Recording.pipe(Layer.provideMerge(AfterSignIn.layer))));
+  });
+
+  it.effect("a tap does not run when the unit rolls back", () => {
+    class AfterSignIn extends HookPoint.observe<AfterSignIn>()("auth.signIn", Schema.String) {}
+    const seen = Effect.runSync(Ref.make<ReadonlyArray<string>>([]));
+    const Recording = AfterSignIn.tap((userId) => Ref.update(seen, (s) => [...s, userId]));
+    return Effect.gen(function* () {
+      const point = yield* AfterSignIn;
+      yield* Effect.exit(unit(Effect.andThen(point.run("user-1"), Effect.fail("rolled back"))));
+      assert.deepStrictEqual(yield* Ref.get(seen), []);
+    }).pipe(Effect.provide(Recording.pipe(Layer.provideMerge(AfterSignIn.layer))));
+  });
+
+  it.effect("the deferred tap still sees the tenant and request context of the call", () => {
+    class AfterSignIn extends HookPoint.observe<AfterSignIn>()("auth.signIn", Schema.String) {}
+    const seen = Effect.runSync(Ref.make<ReadonlyArray<Option.Option<string>>>([]));
+    const Recording = AfterSignIn.tap(() =>
+      Effect.flatMap(TenantContext, (tenantId) => Ref.update(seen, (s) => [...s, tenantId])),
+    );
+    return Effect.gen(function* () {
+      const point = yield* AfterSignIn;
+      yield* unit(point.run("user-1")).pipe(
+        Effect.provideService(TenantContext, Option.some("tenant-a")),
+      );
+      assert.deepStrictEqual(yield* Ref.get(seen), [Option.some("tenant-a")]);
     }).pipe(Effect.provide(Recording.pipe(Layer.provideMerge(AfterSignIn.layer))));
   });
 });

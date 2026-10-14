@@ -9,7 +9,7 @@
 // permission directly into `PermissionEngine.statementsByRoleFrom`'s
 // `dynamicStatements` argument with no reshaping.
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -48,36 +48,44 @@ export interface OrgRoleRecordsShape {
     readonly organizationId: string;
     readonly role: string;
     readonly permission: PermissionEngine.Statements;
-  }) => Effect.Effect<OrgRoleRecord, OrgRoleRecordNameTaken>;
+  }) => Effect.Effect<OrgRoleRecord, OrgRoleRecordNameTaken | StoreFailure.StoreUnavailable>;
   /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findById: (
     organizationId: string,
     id: string,
-  ) => Effect.Effect<Option.Option<OrgRoleRecord>>;
+  ) => Effect.Effect<Option.Option<OrgRoleRecord>, StoreFailure.StoreUnavailable>;
   /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly listByOrganization: (
     organizationId: string,
-  ) => Effect.Effect<ReadonlyArray<OrgRoleRecord>>;
-  readonly countByOrganization: (organizationId: string) => Effect.Effect<number>;
+  ) => Effect.Effect<ReadonlyArray<OrgRoleRecord>, StoreFailure.StoreUnavailable>;
+  readonly countByOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   readonly update: (
     organizationId: string,
     id: string,
     permission: PermissionEngine.Statements,
-  ) => Effect.Effect<OrgRoleRecord, OrgRoleRecordNotFound>;
+  ) => Effect.Effect<OrgRoleRecord, OrgRoleRecordNotFound | StoreFailure.StoreUnavailable>;
   readonly remove: (
     organizationId: string,
     id: string,
-  ) => Effect.Effect<void, OrgRoleRecordNotFound>;
-  readonly removeAllForOrganization: (organizationId: string) => Effect.Effect<void>;
+  ) => Effect.Effect<void, OrgRoleRecordNotFound | StoreFailure.StoreUnavailable>;
+  readonly removeAllForOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class OrgRoleRecords extends Context.Service<OrgRoleRecords, OrgRoleRecordsShape>()(
-  "awthaq/organization/OrgRoleRecords",
+  "awthaq/organization/records/OrgRoleRecords",
 ) {}
 
 const notFound = (id: string): OrgRoleRecordNotFound => new OrgRoleRecordNotFound({ id });
 const nameTaken = (organizationId: string, role: string): OrgRoleRecordNameTaken =>
   new OrgRoleRecordNameTaken({ organizationId, role });
+
+/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
+const mintId = <E>(operation: string, minted: Effect.Effect<string, E>) =>
+  Effect.catch(minted, StoreFailure.storeUnavailable(`OrgRoleRecords.${operation}`));
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -95,7 +103,7 @@ export const layerMemory = Layer.effect(
       );
 
     const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const outcome = yield* Ref.modify(
         state,
@@ -211,6 +219,8 @@ export const layerSql = Layer.effect(
   OrgRoleRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`OrgRoleRecords.${operation}`);
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const OrgRoleRow = makeOrgRoleRow(wire);
@@ -278,7 +288,7 @@ export const layerSql = Layer.effect(
     });
 
     const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const row = yield* insert({
         id,
@@ -288,30 +298,29 @@ export const layerSql = Layer.effect(
         createdAt: now,
         updatedAt: now,
       }).pipe(
-        Effect.catchTag("SqlError", (error) =>
-          error.reason._tag === "UniqueViolation"
-            ? Effect.fail(nameTaken(input.organizationId, input.role))
-            : Effect.die(error),
+        StoreFailure.orConflict("OrgRoleRecords.create", () =>
+          nameTaken(input.organizationId, input.role),
         ),
-        Effect.catchTag("SchemaError", Effect.die),
-        Effect.catchTag("NoSuchElementError", Effect.die),
       );
       return toRecord(row);
     });
 
     const findById: OrgRoleRecordsShape["findById"] = (organizationId, id) =>
-      findByIdQuery({ organizationId, id }).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+      findByIdQuery({ organizationId, id }).pipe(
+        Effect.map(Option.map(toRecord)),
+        unavailable("findById"),
+      );
 
     const listByOrganization: OrgRoleRecordsShape["listByOrganization"] = (organizationId) =>
       listByOrganizationQuery(organizationId).pipe(
         Effect.map((rows) => rows.map(toRecord)),
-        Effect.orDie,
+        unavailable("listByOrganization"),
       );
 
     const countByOrganization: OrgRoleRecordsShape["countByOrganization"] = (organizationId) =>
       countByOrganizationQuery(organizationId).pipe(
         Effect.map((row) => row.count),
-        Effect.orDie,
+        unavailable("countByOrganization"),
       );
 
     const update: OrgRoleRecordsShape["update"] = Effect.fnUntraced(
@@ -322,14 +331,14 @@ export const layerSql = Layer.effect(
           id,
           permission: JSON.stringify(permission),
           updatedAt: now,
-        }).pipe(Effect.orDie);
+        }).pipe(unavailable("update"));
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
         return toRecord(row.value);
       },
     );
 
     const remove: OrgRoleRecordsShape["remove"] = Effect.fnUntraced(function* (organizationId, id) {
-      const row = yield* removeQuery({ organizationId, id }).pipe(Effect.orDie);
+      const row = yield* removeQuery({ organizationId, id }).pipe(unavailable("remove"));
       if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
     });
 
@@ -337,7 +346,7 @@ export const layerSql = Layer.effect(
       organizationId,
     ) =>
       sql`DELETE FROM organization_role WHERE "organizationId" = ${organizationId}`.pipe(
-        Effect.orDie,
+        unavailable("removeAllForOrganization"),
         Effect.asVoid,
       );
 

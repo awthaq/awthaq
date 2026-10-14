@@ -1,3 +1,4 @@
+// Hand-wired on purpose: `@awthaq/server` is below `@awthaq/test` in the package graph, and this suite is about the server's own CORS layer (plan 08 exemption).
 // AGA-002/CDS-008: `AuthHttp.cors`, the blessed CORS preset (spec/behaviors/10-csrf.md,
 // BEH-EA-073/074, and 11-http-error-mapping.md BEH-EA-083). Its origin allowlist is
 // `CsrfConfig.allowedOrigins`, the same value the CSRF origin check reads, so the edge
@@ -6,10 +7,12 @@ import { Api, AuthCore } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  AuthEvents,
   DataExport,
   Erasure,
-  AuthEvents,
   Hooks,
+  Persistence,
+  RateLimits,
   Sessions,
   Users,
   Verification,
@@ -60,13 +63,14 @@ const appLayer = (allowedOrigins: ReadonlyArray<string>) =>
     Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
     // CSG-005: the export endpoint rate-limits per account.
     Layer.provide(RateLimiter.layerPermissive),
+    Layer.provide(RateLimits.layer),
     Layer.provide(SqlTransaction.layerNoop),
-    Layer.provideMerge(Sessions.layerMemory),
-    Layer.provideMerge(Users.layerMemory),
-    Layer.provideMerge(Accounts.layerMemory),
-    Layer.provideMerge(Verification.layerMemory),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Verification.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(csrfConfig(allowedOrigins)),

@@ -55,7 +55,7 @@ export const pluginMigrationsTable = "awthaq_plugin_migrations";
  * see each plugin's own `src/*.ts`, and `packages/core/test/AuthPlugin.test.ts`'s
  * `Auth.make` suite for the aggregation itself under test), each plugin's
  * own test suite runs its real migrations rather than a hand-rolled inline
- * `CREATE TABLE`, and `oauth`/`password` deliberately keep `tables: []`
+ * `CREATE TABLE`, and `oauth`/`password` deliberately keep `tables: {}`
  * (see either plugin's own comment for why). This module's own `run` still
  * has no PRODUCTION call site — no bootstrap/CLI/deployment path invokes
  * it yet — because that requires `AuthCore` (M1 Core, this module's own

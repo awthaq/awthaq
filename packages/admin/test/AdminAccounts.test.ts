@@ -7,18 +7,16 @@
 import { Api } from "@awthaq/api";
 import {
   Accounts,
+  Auth,
   AuthEvents,
   EmailChange,
-  Erasure,
   HookPoint,
   Hooks,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -31,29 +29,6 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 import { TestAuth } from "@awthaq/test";
-
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("admin-accounts-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
 
 const failingMailer = Layer.succeed(
   Mailer.Mailer,
@@ -89,23 +64,14 @@ const buildLayer = (
     readonly veto?: boolean;
     readonly resetVeto?: boolean;
   } = {},
-) => {
-  const withHold = options.veto ? legalHold.pipe(Layer.provideMerge(CoreLive)) : CoreLive;
-  const stores = options.resetVeto ? secondFactorGate.pipe(Layer.provideMerge(withHold)) : withHold;
-  return AdminAccounts.AdminAccounts.layer.pipe(
-    Layer.provide(Admin.config(config)),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(Erasure.layer.pipe(Layer.provideMerge(stores))),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        PasswordHasher.layerArgon2id,
-        options.mailer ?? Mailer.layerMemory,
-        SqlTransaction.layerNoop,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+) =>
+  TestAuth.layer(Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]), {
+    services: Layer.mergeAll(Admin.config(config), options.mailer ?? Layer.empty),
+    taps: Layer.mergeAll(
+      options.veto ? legalHold : Layer.empty,
+      options.resetVeto ? secondFactorGate : Layer.empty,
     ),
-  );
-};
+  });
 
 const manageAll = {
   canDeleteUsers: () => Effect.succeed(true),
@@ -246,7 +212,10 @@ describe("AdminAccounts: deleteUser (BAM-005)", () => {
         assert.isTrue(
           events.some(
             (e) =>
-              e._tag === "auth.user.deleted" && e.userId === targetId && e.deletedBy === "admin",
+              e._tag === "auth.user.deleted" &&
+              e.userId === targetId &&
+              e.deletedBy === "admin" &&
+              e.adminUserId === adminId,
           ),
         );
         assert.isTrue(

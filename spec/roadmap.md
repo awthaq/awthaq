@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-RMP |
-> | Revision | 1.3 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.5 |
+> | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed gate-count and M7 Bearer omission; clarified milestone-to-gate mapping (gates cluster at M0/M1/M6/M8, other milestones certified retroactively); reworded M0 to not overclaim gate 5's mechanized proof (CCR-EA-002) <br> 1.2 (2026-09-14): Replaced the stale "pre-implementation, no source exists" current-state line — implementation has since progressed through M4 and beyond; pointed readers to `README.md` and the shipping-gaps map instead of restating a milestone checklist here <br> 1.3 (2026-09-29): Reconciled with the shipped state: each milestone carries an implementation status (M0-M6 implemented; M7 partly: TwoFactor, MagicLink and EmailOtp remain; M8 not started), the gate table separates implementation status from gate status and takes gate status from `definitions-of-done.md`'s "Wired as" column, and the capabilities that shipped outside the original milestone list (tenancy, SCIM, events outbox, erasure, observability, read replicas) are recorded (DTWS-005, MM-005, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed gate-count and M7 Bearer omission; clarified milestone-to-gate mapping (gates cluster at M0/M1/M6/M8, other milestones certified retroactively); reworded M0 to not overclaim gate 5's mechanized proof (CCR-EA-002) <br> 1.2 (2026-09-14): Replaced the stale "pre-implementation, no source exists" current-state line — implementation has since progressed through M4 and beyond; pointed readers to `README.md` and the shipping-gaps map instead of restating a milestone checklist here <br> 1.3 (2026-09-29): Reconciled with the shipped state: each milestone carries an implementation status (M0-M6 implemented; M7 partly: TwoFactor, MagicLink and EmailOtp remain; M8 not started), the gate table separates implementation status from gate status and takes gate status from `definitions-of-done.md`'s "Wired as" column, and the capabilities that shipped outside the original milestone list (tenancy, SCIM, events outbox, erasure, observability, read replicas) are recorded (DTWS-005, MM-005, CCR-EA-006) <br> 1.4 (2026-10-13): M7 lists TwoFactor, MagicLink, EmailOtp and SAML as implemented, and webhooks as shipped (plan 10 item 8) <br> 1.5 (2026-10-14): M0 gate 3 lists `check:contract-tests` (architecture plan 08) |
 
 ---
 
@@ -19,10 +19,10 @@ Current state: this specification remains the normative source of *why* things a
 - **M0-M4** (architecture, core, Password, the qadi bridge, OAuth and Passkey): implemented in `@awthaq/core`, `api`, `server`, `sql`, `ports`, `password`, `oauth`, `passkey`, `qadi` and `roles`. Persistence runs on SQLite, libSQL and Postgres, with opt-in read-replica routing ([ADR-EA-024](decisions/024-read-replica-routing.md)).
 - **M5** (client, React, Next.js): implemented in `@awthaq/client`, `react` and `next`.
 - **M6** (tooling): `@awthaq/test` (`TestAuth`, `runPluginContractTests`, the redaction guard) and the `awthaq` CLI (`@awthaq/cli`) are implemented; the gates that certify tooling are only partly wired (see "Gate status").
-- **M7** (phase-2 plugins): `Organization` (teams, invitations, tenancy), `Admin` (impersonation, tenants), `Jwt`, `ApiKey` (keys and `client_credentials` service tokens) and the `Bearer` seam (a built-in `Authentication` scheme fed by `CredentialResolvers`, not a separate plugin) are implemented. `TwoFactor` and `MagicLink` are placeholder packages and `EmailOtp` has no package; all three are specified only.
+- **M7** (phase-2 plugins): `Organization` (teams, invitations, tenancy), `Admin` (impersonation, tenants), `Jwt`, `ApiKey` (keys and `client_credentials` service tokens), `TwoFactor` (TOTP and recovery codes, the `BeforeSessionIssue` divert), `MagicLink` and `EmailOtp` (both in `@awthaq/magic-link`) and the `Bearer` seam (a built-in `Authentication` scheme fed by `CredentialResolvers`, not a separate plugin) are implemented.
 - **M8** (stable): not started. No security review has been done, the documentation for the three audiences is partial, and the plugin API is not frozen. No package is published to npm (the root [`README.md`](../README.md)'s "Publishing status").
 
-Capabilities shipped beyond the original milestone list: multi-tenancy ([ADR-EA-018](decisions/018-tenancy-is-an-organization.md)), inbound SCIM provisioning (`@awthaq/scim`, [ADR-EA-023](decisions/023-enterprise-federation-packages.md)), the audit-log outbox relay, account erasure and export, retention, breach-signal detection, and the observability substrate ([ADR-EA-029](decisions/029-event-pii-posture.md) through [ADR-EA-032](decisions/032-observability-substrate.md)), and three migration packages (`migrate-auth0`, `migrate-firebase`, `migrate-better-auth`). SAML (`@awthaq/saml`, service provider only) is specified ([behaviors/29-saml-sp.md](behaviors/29-saml-sp.md)) but not built, as is an OIDC provider; device authorization (RFC 8628) shipped as `@awthaq/device-authorization` ([behaviors/37-device-authorization.md](behaviors/37-device-authorization.md)) with the CLI's interactive `login` as its first consumer. This document still records the milestone plan and each phase's done-criteria; for the most recent gap-closure pass see [`.scratch/shipping-gaps/map.md`](../.scratch/shipping-gaps/map.md).
+Capabilities shipped beyond the original milestone list: multi-tenancy ([ADR-EA-018](decisions/018-tenancy-is-an-organization.md)), inbound SCIM provisioning (`@awthaq/scim`, [ADR-EA-023](decisions/023-enterprise-federation-packages.md)), the audit-log outbox relay, account erasure and export, retention, breach-signal detection, and the observability substrate ([ADR-EA-029](decisions/029-event-pii-posture.md) through [ADR-EA-032](decisions/032-observability-substrate.md)), and three migration packages (`migrate-auth0`, `migrate-firebase`, `migrate-better-auth`). SAML (`@awthaq/saml`, service provider only, with the `Sso` dispatcher) shipped ([behaviors/29-saml-sp.md](behaviors/29-saml-sp.md)), and so did outbound webhooks (`@awthaq/webhooks`); an OIDC provider is specified but not built; device authorization (RFC 8628) shipped as `@awthaq/device-authorization` ([behaviors/37-device-authorization.md](behaviors/37-device-authorization.md)) with the CLI's interactive `login` as its first consumer. This document still records the milestone plan and each phase's done-criteria; for the most recent gap-closure pass see [`.scratch/shipping-gaps/map.md`](../.scratch/shipping-gaps/map.md).
 
 This document restates the milestone roadmap of `archive/PRD.md` §23 as this specification's own phases, records what gates each phase must pass (`spec/process/definitions-of-done.md` enforces them), and carries forward the open decisions of `archive/PRD.md` §25 and the non-goals of `archive/PRD.md` §4 as things this roadmap deliberately does not resolve or include.
 
@@ -113,14 +113,14 @@ Gates do not attach one-per-milestone: they cluster at four checkpoints (gates 1
 
 | Milestone | Implementation | Gates that attach here | Gate status |
 |---|---|---|---|
-| M0 Architecture | Implemented | 1-3 | 1 Active; 2 Active; 3 Active-partial (`check:error-tags`, `check:readmes`) |
+| M0 Architecture | Implemented | 1-3 | 1 Active; 2 Active; 3 Active-partial (`check:error-tags`, `check:readmes`, `check:contract-tests`) |
 | M1 Core | Implemented | 4-6 | 4 Active; 5 Active-partial (`@ts-expect-error` cases inside `pnpm typecheck`, no type-testing tool); 6 Active (coverage thresholds enforced) |
 | M2 Password | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9; does not yet run `runPluginContractTests` (gate 7) |
 | M3 qadi bridge | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9 |
 | M4 OAuth and Passkey | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9; neither runs `runPluginContractTests` |
 | M5 Client and React | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9 |
 | M6 Tooling | Implemented | 7-10 | 7 Active-partial (admin, jwt, organization, the template); 8 Active-partial (root README quickstart only); 9 Active; 10 Active-partial (core HttpApi and Ports inventories) |
-| M7 Phase-2 plugins | Partly implemented (TwoFactor, MagicLink, EmailOtp not built) | none directly — certified via M6's or M8's gates | Covered by gates 6 and 9 for what exists |
+| M7 Phase-2 plugins | Implemented | none directly — certified via M6's or M8's gates | Covered by gates 6 and 9 for what exists |
 | M8 Stable | Not started | 11-14 | 11 Active (`package:smoke`); 12 Active but a no-op while packages are private; 13 Not wired; 14 Not wired |
 
 ---

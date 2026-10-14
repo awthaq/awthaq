@@ -78,6 +78,17 @@ describe("plugin list --graph", () => {
     }),
   );
 
+  it.effect("prints each table with its declared tenancy (plan 05)", () =>
+    Effect.gen(function* () {
+      const text = yield* captureStdout(
+        Plugin.show(passwordAndRoles, { graph: true, format: "text" }),
+      );
+      assert.isTrue(
+        text.some((line) => line.includes("roles_assignments (global: global roles, ADR-EA-025)")),
+      );
+    }),
+  );
+
   it.effect(
     "--format dot emits one edge per dependsOn and --format json the same graph as data",
     () =>
@@ -153,11 +164,16 @@ describe("plugin list --graph: ports and hook taps", () => {
         { point: "cli.test.normalize", position: 1, order: 5 },
       ]);
       const beta = Plugin.graph(hookedApp).find((node) => node.id === "beta");
+      assert.deepStrictEqual(alpha?.exposes, ["awthaq/plugin/alpha/Lamp"]);
+      assert.deepStrictEqual(beta?.exposes, []);
       assert.deepStrictEqual(beta?.ports, []);
       assert.deepStrictEqual(beta?.hooks, [{ point: "cli.test.normalize", position: 2, order: 0 }]);
       const text = yield* captureStdout(Plugin.show(hookedApp, { graph: true, format: "text" }));
       assert.isTrue(
         text.some((line) => line.includes("ports:") && line.includes("awthaq/ports/Mailer")),
+      );
+      assert.isTrue(
+        text.some((line) => line.includes("exposes:") && line.includes("awthaq/plugin/alpha/Lamp")),
       );
       assert.isTrue(
         text.some((line) => line.includes("hook taps:") && line.includes("cli.test.normalize #1")),
@@ -187,7 +203,7 @@ describe("plugin list --graph: ports and hook taps", () => {
 // PV-241/BEH-EA-111: `plugin list --rules` prints `manifest.rateLimits`, the statically declared rules.
 describe("plugin list --rules", () => {
   it.effect(
-    "prints every declared rule with its plugin, endpoint, dimension, limit and window",
+    "prints every declared rule with its plugin, endpoint, dimension, key strategy, mode, limit and window",
     () =>
       Effect.gen(function* () {
         const signIn = Plugin.rules(passwordAndRoles).find(
@@ -199,16 +215,20 @@ describe("plugin list --rules", () => {
           endpoint: "signIn",
           name: "signIn",
           dimension: "identity",
+          key: "email",
+          mode: "attempts",
           limit: 5,
           window: "15m",
         });
         const text = yield* captureStdout(
           Plugin.show(passwordAndRoles, { graph: false, rules: true, format: "text" }),
         );
-        assert.match(text[0] ?? "", /^PLUGIN\s+RULE\s+ENDPOINT\s+DIMENSION\s+LIMIT/);
+        assert.match(text[0] ?? "", /^PLUGIN\s+RULE\s+ENDPOINT\s+DIMENSION\s+KEY\s+MODE\s+LIMIT/);
         assert.isTrue(
           text.some((line) =>
-            /^password\s+signIn\s+password\.signIn\s+identity\s+5 per 15m/.test(line),
+            /^password\s+signIn\s+password\.signIn\s+identity\s+email\s+attempts\s+5 per 15m/.test(
+              line,
+            ),
           ),
         );
       }),

@@ -3,17 +3,15 @@
 // and subject attributes are what the running app's `PrincipalResolver` and the default
 // `SubjectResolver` produce from a real session row.
 import { Api } from "@awthaq/api";
-import { Assurance, AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
-import { SqlTransaction } from "@awthaq/ports";
+import { Assurance, Auth, Sessions, Users } from "@awthaq/core";
+import { Jwt, JwtConfig } from "@awthaq/jwt";
 import { SubjectResolver } from "@awthaq/qadi";
 import { Authentication } from "@awthaq/server";
+import { TestAuth } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { inApp, World } from "./SessionWorld.ts";
 
@@ -29,21 +27,10 @@ const field = (value: unknown, key: string): unknown =>
 const epochSeconds = (view: Sessions.SessionView) =>
   Math.floor(DateTime.toEpochMillis(view.authenticatedAt) / 1000);
 
-/** A real `Jwt` service (the unit tests' composition), standing beside the sessions app: it only signs the principal it is handed. */
-const JwtSigner = Jwt.Jwt.layer.pipe(
-  Layer.provide(KeyRing.KeyRing.layer),
-  Layer.provide(SigningKeyRecords.layerMemory),
-  Layer.provide(SqlTransaction.layerNoop),
-  Layer.provide(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  ),
-  Layer.provideMerge(Sessions.layerMemory),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(RevocationStore.layerMemory),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(JwtConfig.config({ issuer: "https://issuer.test" })),
-);
+/** A real `Jwt` service through `TestAuth.layer`, standing beside the sessions app: it only signs the principal it is handed. */
+const JwtSigner = TestAuth.layer(Auth.make([Jwt.Jwt]), {
+  services: JwtConfig.config({ issuer: "https://issuer.test" }),
+});
 
 export const sessionAssuranceSteps = defineSteps<World>(({ Given, When, Then }) => {
   When("the assurance of a session that recorded {string} is derived", function* (methods: string) {
@@ -95,9 +82,7 @@ export const sessionAssuranceSteps = defineSteps<World>(({ Given, When, Then }) 
     const { views, principals } = yield* World;
     const view = yield* views.get(yield* views.current);
     const principal = yield* inApp(
-      Effect.flatMap(Authentication.PrincipalResolver, (resolver) => resolver.resolve(view)).pipe(
-        Effect.provide(Authentication.PrincipalResolverLive),
-      ),
+      Effect.flatMap(Authentication.PrincipalResolver, (resolver) => resolver.resolve(view)),
     );
     assert.ok(principal instanceof Api.UserPrincipal);
     yield* principals.set("principal", principal);
@@ -108,9 +93,7 @@ export const sessionAssuranceSteps = defineSteps<World>(({ Given, When, Then }) 
     const { views, principals, texts } = yield* World;
     const view = yield* views.get(yield* views.current);
     const principal = yield* inApp(
-      Effect.flatMap(Authentication.PrincipalResolver, (resolver) => resolver.resolve(view)).pipe(
-        Effect.provide(Authentication.PrincipalResolverLive),
-      ),
+      Effect.flatMap(Authentication.PrincipalResolver, (resolver) => resolver.resolve(view)),
     );
     assert.ok(principal instanceof Api.UserPrincipal);
     yield* principals.set("principal", principal);

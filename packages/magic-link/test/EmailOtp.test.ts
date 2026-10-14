@@ -2,6 +2,7 @@
 // domain level — a six-digit code that is hashed, single-use, attempt-budgeted and resend-windowed.
 import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
+import { SignInProbe } from "@awthaq/test";
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -10,6 +11,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Layer from "effect/Layer";
@@ -27,6 +29,8 @@ const codeFor = (email: string) =>
     );
     return { mail, code: secretOf(mail, "code") };
   });
+
+const flag = Ref.makeUnsafe(true);
 
 const wrongCodeFor = (code: string) => (code === "000000" ? "111111" : "000000");
 
@@ -134,6 +138,26 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(replay._tag, "InvalidEmailOtp");
       }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect(
+    "ADR-EA-038 wiring: hands SignIn strategy emailOtp and amr [otp, email], and a new address reaches BeforeSignUp with that strategy",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const probe = yield* SignInProbe.SignInProbe;
+        const { code } = yield* codeFor("probe@example.com");
+        yield* emailOtp.verify({ email: "probe@example.com", code: Redacted.make(code) });
+        const recorded = yield* probe.recorded;
+        assert.deepStrictEqual(
+          recorded.beforeSignUp.map((input) => [input.email, input.strategy]),
+          [["probe@example.com", "emailOtp"]],
+        );
+        assert.deepStrictEqual(
+          recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
+          [["emailOtp", ["otp", "email"]]],
+        );
+      }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(buildLayer())))),
   );
 
   it.effect("SOS-004: three wrong guesses burn the code — the correct one no longer works", () =>
@@ -253,5 +277,31 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "TwoFactorRequired");
       }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+  );
+});
+
+describe("EmailOtp.verify redeems the code (ADR-EA-039)", () => {
+  it.effect(
+    "an outage while issuing the session leaves the code usable and its attempt budget unspent",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const users = yield* Users.Users;
+        yield* users.create({
+          identity: { _tag: "Email", email: "otp-out@example.com" },
+          name: "O",
+        });
+        const { code } = yield* codeFor("otp-out@example.com");
+        const down = yield* emailOtp
+          .verify({ email: "otp-out@example.com", code: Redacted.make(code) })
+          .pipe(Effect.flip);
+        assert.strictEqual(down._tag, "StoreUnavailable");
+        yield* Ref.set(flag, false);
+        const ok = yield* emailOtp.verify({
+          email: "otp-out@example.com",
+          code: Redacted.make(code),
+        });
+        assert.isDefined(ok.session);
+      }).pipe(Effect.provide(buildLayer({ failSessionIssue: flag }))),
   );
 });

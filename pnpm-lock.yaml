@@ -140,9 +140,6 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../../packages/server
-      '@awthaq/test':
-        specifier: workspace:*
-        version: link:../../packages/test
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
@@ -174,22 +171,22 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@awthaq/ports':
+        specifier: workspace:*
+        version: link:../../packages/ports
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../../packages/sql
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/server':
-        specifier: workspace:*
-        version: link:../../packages/server
       '@awthaq/test':
         specifier: workspace:*
         version: link:../../packages/test
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
-      '@effect/sql-sqlite-node':
-        specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
@@ -446,9 +443,9 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@effect/platform-node':
-        specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../test
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
@@ -742,6 +739,9 @@ importers:
         specifier: 'catalog:'
         version: 4.12.0
     devDependencies:
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
@@ -810,9 +810,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@awthaq/ports':
+      '@awthaq/test':
         specifier: workspace:*
-        version: link:../ports
+        version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
@@ -890,9 +890,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/server':
-        specifier: workspace:*
-        version: link:../server
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
@@ -930,6 +927,9 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
@@ -961,6 +961,9 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
@@ -976,6 +979,9 @@ importers:
 
   packages/ports:
     dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
       '@simplewebauthn/server':
         specifier: ^14.0.3
         version: 14.0.3
@@ -1115,6 +1121,9 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../test
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
@@ -1161,9 +1170,9 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
-      '@effect/platform-node':
-        specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../test
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
@@ -1176,6 +1185,9 @@ importers:
 
   packages/scim:
     dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
@@ -1192,15 +1204,9 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/api':
+      '@awthaq/test':
         specifier: workspace:*
-        version: link:../api
-      '@awthaq/server':
-        specifier: workspace:*
-        version: link:../server
-      '@effect/platform-node':
-        specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+        version: link:../test
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
@@ -1241,6 +1247,9 @@ importers:
 
   packages/sql:
     dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
@@ -1272,6 +1281,9 @@ importers:
 
   packages/test:
     dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
@@ -1287,6 +1299,9 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@effect/sql-pg':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)
@@ -1294,9 +1309,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/api':
-        specifier: workspace:*
-        version: link:../api
       '@awthaq/password':
         specifier: workspace:*
         version: link:../password
@@ -1402,9 +1414,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/server':
-        specifier: workspace:*
-        version: link:../server
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
@@ -2742,9 +2751,6 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
-
-  '@types/node@22.20.2':
-    resolution: {integrity: sha512-xlvWf4Vs9n1PEVYwP1n4vvG07M6y8WgvJ2t0vbrWTmijsIHp1cS+uJ2kMIRdY3nHZK0nCYKrPeD171+SzF4/zw==}
 
   '@types/node@22.20.4':
     resolution: {integrity: sha512-zJRE40jpHtKqE/C4fgHrAKQLJuSpzEnP9ff9Y7YtoR3Wd2pwqzlekDeEuUQXjRd+QCYnVnNwuJYmhdk9XV8gvA==}
@@ -5227,10 +5233,6 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
-  '@types/node@22.20.2':
-    dependencies:
-      undici-types: 6.21.0
-
   '@types/node@22.20.4':
     dependencies:
       undici-types: 6.21.0
@@ -5247,7 +5249,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 22.20.2
+      '@types/node': 22.20.4
 
   '@typescript-eslint/project-service@8.70.0(supports-color@7.2.0)(typescript@5.9.3)':
     dependencies:
@@ -5467,7 +5469,7 @@ snapshots:
 
   buffer-image-size@0.6.4:
     dependencies:
-      '@types/node': 22.20.2
+      '@types/node': 22.20.4
 
   buffer@5.7.1:
     dependencies:
@@ -5742,7 +5744,7 @@ snapshots:
 
   happy-dom@20.14.5:
     dependencies:
-      '@types/node': 22.20.2
+      '@types/node': 22.20.4
       '@types/whatwg-mimetype': 3.0.2
       '@types/ws': 8.18.1
       buffer-image-size: 0.6.4

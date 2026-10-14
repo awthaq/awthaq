@@ -12,7 +12,7 @@ import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
 import { Auth, AuthPlugin, Sessions, Users } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { Password } from "@awthaq/password";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Authentication } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,7 +30,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 
 // ---- the World's own plugins ------------------------------------------------------------
 
@@ -45,7 +45,7 @@ const InviteHandlers = HttpApiBuilder.group(InviteApi, "invite", (handlers) =>
 );
 export class InvitePlugin extends AuthPlugin.Service<InvitePlugin, Record<string, never>>()(
   "invite",
-  { apiVersion: 1, contract: InviteApi, tables: [] },
+  { apiVersion: 1, contract: InviteApi, tables: {} },
 ) {
   static readonly layer = AuthPlugin.layer(InvitePlugin, {
     make: Effect.succeed({}),
@@ -86,7 +86,7 @@ const ErrorsHandlers = HttpApiBuilder.group(ErrorsApi, "errors", (handlers) =>
 );
 export class ErrorsPlugin extends AuthPlugin.Service<ErrorsPlugin, Record<string, never>>()(
   "errors",
-  { apiVersion: 1, contract: ErrorsApi, tables: [] },
+  { apiVersion: 1, contract: ErrorsApi, tables: {} },
 ) {
   static readonly layer = AuthPlugin.layer(ErrorsPlugin, {
     make: Effect.succeed({}),
@@ -119,12 +119,8 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-/** The layers that are genuinely the host's own: middleware and the outbound client. */
-export const hostServices = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests))),
-  NoBreachHttpClient,
-);
+/** What is genuinely the host's own: the outbound client (`TestAuth.layer` derives the middleware). */
+export const hostServices = NoBreachHttpClient;
 
 /**
  * A plugin from a separate package with existence-sensitive endpoints (REQ-EA-237): `@awthaq/api-key`
@@ -133,7 +129,6 @@ export const hostServices = Layer.mergeAll(
 export const builtApiKey = Auth.make([Jwt.Jwt, ApiKey.ApiKey]);
 const apiKeyServices = Layer.mergeAll(
   hostServices,
-  Authentication.CredentialResolversLive,
   RevocationStore.layerMemory,
   ApiKeyRecords.layerMemory,
   ApiKeyClientRecords.layerMemory,
@@ -153,35 +148,17 @@ export const DOCS_PATH = "/auth/docs";
  * A running composition: the web handler `HttpRouter.toWebHandler` gives a Next.js/Hono host,
  * and a way to reach the very services that handler runs against (same memo map).
  */
-const makeApp = <A, E>(appLayer: Layer.Layer<A, E>) => {
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  // The handler's own runtime builds the layer lazily and keeps it alive; reaching the services
-  // *after* it has (a request to no route builds it) shares those very instances through the memo
-  // map. Building first and releasing would make the handler rebuild — and re-register every route.
-  const warm = Effect.promise(() => handler(new Request("http://localhost/__warm-up")));
-  const withContext = <X, EX>(effect: Effect.Effect<X, EX, A>) =>
-    warm.pipe(
-      Effect.andThen(
-        Effect.promise(() =>
-          Effect.runPromise(
-            Effect.scoped(
-              Effect.gen(function* () {
-                const scope = yield* Effect.scope;
-                const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
-                return yield* effect.pipe(Effect.provide(context));
-              }),
-            ),
-          ),
-        ),
-      ),
-    );
+const makeApp = <A, E>(appLayer: Layer.Layer<A | TestAuth.AppNeeds, E>) => {
+  const app = TestAuth.app(appLayer);
+  const { handler } = app;
+  const withContext = <X, EX>(effect: Effect.Effect<X, EX, A | TestAuth.AppNeeds>) =>
+    Effect.promise(() => app.run(effect));
   /**
    * The `HttpApiGroup` services the composition's plugin layers provide: their key (derived from
    * the group id alone) and the endpoints each one implements.
    */
   const groups = withContext(
-    Effect.context<A>().pipe(
+    Effect.context<A | TestAuth.AppNeeds>().pipe(
       Effect.map((context) => {
         const found = new Map<string, ReadonlyArray<string>>();
         for (const [key, value] of context.mapUnsafe) {
@@ -198,31 +175,34 @@ const makeApp = <A, E>(appLayer: Layer.Layer<A, E>) => {
 
 export const GROUP_KEY_PREFIX = "effect/httpapi/HttpApiGroup/";
 
-export const passwordRoutes = TestAuth.layer(builtPassword, hostServices, {
+export const passwordRoutes = TestAuth.layer(builtPassword, {
+  services: hostServices,
   openapiPath: OPENAPI_PATH,
   docsPath: DOCS_PATH,
 });
 export const passwordApp = () => makeApp(passwordRoutes);
-export const inviteApp = () => makeApp(TestAuth.layer(builtInvite, hostServices));
+export const inviteApp = () => makeApp(TestAuth.layer(builtInvite, { services: hostServices }));
 export const passwordInviteApp = () =>
   makeApp(
-    TestAuth.layer(builtPasswordInvite, hostServices, {
+    TestAuth.layer(builtPasswordInvite, {
+      services: hostServices,
       openapiPath: OPENAPI_PATH,
       docsPath: DOCS_PATH,
     }),
   );
-export const errorsApp = () => makeApp(TestAuth.layer(builtErrors, hostServices));
+export const errorsApp = () => makeApp(TestAuth.layer(builtErrors, { services: hostServices }));
 export const passwordWithAppApp = () =>
   makeApp(
-    TestAuth.layer(builtPasswordWithApp, Layer.mergeAll(hostServices, WidgetHandlers), {
+    TestAuth.layer(builtPasswordWithApp, {
+      services: Layer.mergeAll(hostServices, WidgetHandlers),
       openapiPath: OPENAPI_PATH,
     }),
   );
-export const apiKeyApp = () => makeApp(TestAuth.layer(builtApiKey, apiKeyServices));
+export const apiKeyApp = () => makeApp(TestAuth.layer(builtApiKey, { services: apiKeyServices }));
 
 /** BEH-EA-087: `ManagedRuntime.make(AuthLive)` over the same layer the routed composition serves. */
 export const makeRuntimeAndRouted = () => {
-  const authLive = TestAuth.layer(builtPassword, hostServices);
+  const authLive = TestAuth.layer(builtPassword, { services: hostServices });
   const runtime = ManagedRuntime.make(authLive);
   const { handler } = HttpRouter.toWebHandler(authLive, { memoMap: runtime.memoMap });
   return { runtime, routed: handler };
@@ -249,9 +229,7 @@ export const imperativeMe = async (
   const principal = await runtime.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver.pipe(
-        Effect.provide(Authentication.PrincipalResolverLive),
-      );
+      const resolver = yield* Authentication.PrincipalResolver;
       return yield* Authentication.resolvePrincipal(
         sessions,
         resolver,

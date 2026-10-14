@@ -7,6 +7,7 @@
 // `CREATE TABLE`s — BAM-002 (.issues/high) verification, the same
 // `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations, Users } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -16,7 +17,8 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Organization from "../src/Organization.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
+import { ambientOrganization, grant, vitestFramework } from "./support.ts";
 
 const MemoryLayer = TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
@@ -428,4 +430,279 @@ describe("TeamRecords (layerSql) closure table", () => {
         );
       }).pipe(Effect.provide(LegacySqlLayer)),
   );
+});
+
+// Plan 05: the tenant-isolation conformance suite, for the three tables `TeamRecords` owns.
+// `organization_team` is Keyed by `organizationId`; `organization_team_membership` is Derived (through
+// its team); `organization_team_closure` is Derived and written only by the hierarchy methods. One
+// records interface serves all three, so each case classifies every method: the ones that belong to
+// another table are `derived` and probed in that table's case.
+let isolationCounter = 0;
+interface Row {
+  /** The child team: the row under test. */
+  readonly id: string;
+  readonly parentId: string;
+  readonly organizationId: string;
+  readonly userId: Users.UserId;
+}
+const orgOf = (row: Row, as: "owner" | "other") =>
+  as === "owner" ? row.organizationId : "another-organization";
+
+const insertRow = Effect.gen(function* () {
+  const records = yield* TeamRecords.TeamRecords;
+  isolationCounter += 1;
+  const organizationId = yield* ambientOrganization;
+  const parent = yield* records.createTeam({ organizationId, name: `parent ${isolationCounter}` });
+  const child = yield* records.createTeam({
+    organizationId,
+    name: `child ${isolationCounter}`,
+    parentId: parent.id,
+  });
+  const userId = Users.UserId(`isolation-user-${isolationCounter}`);
+  yield* records.addTeamMember({ teamId: child.id, userId });
+  return { id: child.id, parentId: parent.id, organizationId, userId };
+});
+
+const using = <A, E, R>(use: (records: TeamRecords.TeamRecordsShape) => Effect.Effect<A, E, R>) =>
+  Effect.flatMap(TeamRecords.TeamRecords, use);
+const notFound = <A>(effect: Effect.Effect<A, unknown>) =>
+  effect.pipe(
+    Effect.as(true),
+    Effect.catchTags({
+      TeamRecordNotFound: () => Effect.succeed(false),
+      TeamMembershipRecordNotFound: () => Effect.succeed(false),
+    }),
+  );
+const hasTeam = (row: Row) =>
+  using((records) => Effect.map(records.findTeamById(row.organizationId, row.id), Option.isSome));
+const hasMembership = (row: Row) =>
+  using((records) => Effect.map(records.findTeamMembership(row.id, row.userId), Option.isSome));
+
+const derivedElsewhere = (table: string) => ({
+  derived: `operates on ${table}; classified in that table's case`,
+});
+
+type Methods = {
+  readonly [K in keyof TeamRecords.TeamRecordsShape]: TestAuth.MethodClass<
+    Row,
+    TeamRecords.TeamRecords
+  >;
+};
+
+const teamMethods: Methods = {
+  createTeam: { insert: true },
+  findTeamById: {
+    keyed: {
+      run: (row, as) =>
+        using((records) => Effect.map(records.findTeamById(orgOf(row, as), row.id), Option.isSome)),
+    },
+  },
+  findTeamByIdAnyOrg: {
+    crossTenant: {
+      run: (row) =>
+        using((records) => Effect.map(records.findTeamByIdAnyOrg(grant, row.id), Option.isSome)),
+    },
+  },
+  listTeamsByOrganization: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.map(records.listTeamsByOrganization(orgOf(row, as)), (rows) =>
+            rows.some((team) => team.id === row.id),
+          ),
+        ),
+    },
+  },
+  countTeamsByOrganization: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.map(records.countTeamsByOrganization(orgOf(row, as)), (count) => count > 0),
+        ),
+    },
+  },
+  updateTeam: {
+    keyed: {
+      run: (row, as) =>
+        using((records) => notFound(records.updateTeam(orgOf(row, as), row.id, "Renamed"))),
+    },
+  },
+  moveTeam: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          notFound(
+            records.moveTeam({
+              organizationId: orgOf(row, as),
+              id: row.id,
+              parentId: Option.none(),
+            }),
+          ),
+        ),
+    },
+  },
+  getAncestors: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.map(records.getAncestors(orgOf(row, as), row.id), (rows) =>
+            rows.some((team) => team.id === row.parentId),
+          ),
+        ),
+    },
+  },
+  getDescendants: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.map(records.getDescendants(orgOf(row, as), row.parentId), (rows) =>
+            rows.some((team) => team.id === row.id),
+          ),
+        ),
+    },
+  },
+  getSubtree: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.map(records.getSubtree(orgOf(row, as), row.parentId), (rows) =>
+            rows.some((team) => team.id === row.id),
+          ),
+        ),
+    },
+  },
+  removeTeam: {
+    keyed: {
+      run: (row, as) => using((records) => notFound(records.removeTeam(orgOf(row, as), row.id))),
+    },
+  },
+  removeAllTeamsForOrganization: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.gen(function* () {
+            const before = yield* hasTeam(row);
+            yield* records.removeAllTeamsForOrganization(orgOf(row, as));
+            return before && !(yield* hasTeam(row));
+          }),
+        ),
+    },
+  },
+  addTeamMember: derivedElsewhere("organization_team_membership"),
+  updateTeamMemberRole: derivedElsewhere("organization_team_membership"),
+  removeTeamMember: derivedElsewhere("organization_team_membership"),
+  removeUserFromOrganizationTeams: derivedElsewhere("organization_team_membership"),
+  removeUserFromAllTeams: derivedElsewhere("organization_team_membership"),
+  findTeamMembership: derivedElsewhere("organization_team_membership"),
+  listTeamMembers: derivedElsewhere("organization_team_membership"),
+  listTeamsByUser: derivedElsewhere("organization_team_membership"),
+};
+
+const membershipMethods: Methods = {
+  createTeam: { insert: true },
+  findTeamById: derivedElsewhere("organization_team"),
+  findTeamByIdAnyOrg: derivedElsewhere("organization_team"),
+  listTeamsByOrganization: derivedElsewhere("organization_team"),
+  countTeamsByOrganization: derivedElsewhere("organization_team"),
+  updateTeam: derivedElsewhere("organization_team"),
+  moveTeam: derivedElsewhere("organization_team"),
+  getAncestors: derivedElsewhere("organization_team"),
+  getDescendants: derivedElsewhere("organization_team"),
+  getSubtree: derivedElsewhere("organization_team"),
+  removeTeam: derivedElsewhere("organization_team"),
+  removeAllTeamsForOrganization: derivedElsewhere("organization_team"),
+  addTeamMember: { insert: true },
+  updateTeamMemberRole: {
+    derived:
+      "keyed by a team id the caller already resolved through an organization-keyed team read",
+  },
+  removeTeamMember: {
+    derived:
+      "keyed by a team id the caller already resolved through an organization-keyed team read",
+  },
+  removeUserFromOrganizationTeams: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.gen(function* () {
+            const before = yield* hasMembership(row);
+            yield* records.removeUserFromOrganizationTeams(orgOf(row, as), row.userId);
+            return before && !(yield* hasMembership(row));
+          }),
+        ),
+    },
+  },
+  removeUserFromAllTeams: {
+    crossTenant: {
+      run: (row) =>
+        using((records) =>
+          Effect.gen(function* () {
+            const before = yield* hasMembership(row);
+            yield* records.removeUserFromAllTeams(grant, row.userId);
+            return before && !(yield* hasMembership(row));
+          }),
+        ),
+    },
+  },
+  findTeamMembership: {
+    derived:
+      "keyed by a team id the caller already resolved through an organization-keyed team read",
+  },
+  listTeamMembers: {
+    derived:
+      "keyed by a team id the caller already resolved through an organization-keyed team read",
+  },
+  listTeamsByUser: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.map(records.listTeamsByUser(orgOf(row, as), row.userId), (rows) =>
+            rows.some((team) => team.id === row.id),
+          ),
+        ),
+    },
+  },
+};
+
+const viaHierarchy = {
+  derived:
+    "closure rows are written and read only through the hierarchy methods, keyed by team ids resolved under their organization",
+};
+
+const closureMethods: Methods = {
+  createTeam: { insert: true },
+  findTeamById: viaHierarchy,
+  findTeamByIdAnyOrg: viaHierarchy,
+  listTeamsByOrganization: viaHierarchy,
+  countTeamsByOrganization: viaHierarchy,
+  updateTeam: viaHierarchy,
+  moveTeam: viaHierarchy,
+  getAncestors: viaHierarchy,
+  getDescendants: viaHierarchy,
+  getSubtree: viaHierarchy,
+  removeTeam: viaHierarchy,
+  removeAllTeamsForOrganization: viaHierarchy,
+  addTeamMember: viaHierarchy,
+  updateTeamMemberRole: viaHierarchy,
+  removeTeamMember: viaHierarchy,
+  removeUserFromOrganizationTeams: viaHierarchy,
+  removeUserFromAllTeams: viaHierarchy,
+  findTeamMembership: viaHierarchy,
+  listTeamMembers: viaHierarchy,
+  listTeamsByUser: viaHierarchy,
+};
+
+TestAuth.runTenantIsolationTests(vitestFramework, {
+  plugin: Organization.Organization,
+  covers: ["organization_team", "organization_team_membership", "organization_team_closure"],
+  adapters: [
+    { name: "layerMemory", layer: MemoryLayer },
+    { name: "layerSql", layer: SqlLayer },
+  ],
+  cases: [
+    { table: "organization_team", insert: insertRow, methods: teamMethods },
+    { table: "organization_team_membership", insert: insertRow, methods: membershipMethods },
+    { table: "organization_team_closure", insert: insertRow, methods: closureMethods },
+  ],
+  rls: { layer: SqlLayer },
 });

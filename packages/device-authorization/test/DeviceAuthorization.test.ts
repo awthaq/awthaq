@@ -1,12 +1,25 @@
 // BEH-EA-299 to BEH-EA-306, spec/models/13-device-authorization.md "Design constraints": the plugin at the
 // service level, over both record stores (memory, and a real migrated database), under `TestClock` so an expiry
 // or an interval is a `TestClock.adjust`, never a sleep.
-import { AuditLog, DataExport, Erasure, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  DataExport,
+  Erasure,
+  Persistence,
+  RateLimits,
+  Retention,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -14,6 +27,15 @@ import * as DeviceAuthorization from "../src/DeviceAuthorization.ts";
 import * as DeviceGrantRecords from "../src/DeviceGrantRecords.ts";
 import * as UserCode from "../src/UserCode.ts";
 import { buildLayer, CLI_CLIENT_ID, type HarnessOptions } from "./support/harness.ts";
+
+/** An erasure that runs the core cascade but none of the plugins' contributions: a deliberate orphan. */
+const OrphaningErasure = Erasure.layer.pipe(
+  // `Layer.fresh`: the composition's own registry (holding this plugin's contribution) is memoized by
+  // reference and `Effect.provide` forks the current memo map, so without `fresh` it would be reused.
+  Layer.provide(Layer.fresh(Erasure.registryLayer)),
+  Layer.provide(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
+  Layer.provide(Verification.layer.pipe(Layer.provide(Persistence.memory))),
+);
 
 const VERIFICATION_BASE = "https://app.test/device";
 const DEVICE_IP = "203.0.113.7";
@@ -594,31 +616,43 @@ for (const options of suites) {
           }).pipe(Effect.provide(layer({ rateLimiter: "enforcing" }))),
       );
 
-      it.effect("polling with codes that never existed spends a per-source budget", () =>
-        Effect.gen(function* () {
-          const plugin = yield* service;
-          const bogus = {
-            deviceCode: Redacted.make("nope"),
-            clientId: CLI_CLIENT_ID,
-            ip: DEVICE_IP,
-          };
-          for (let i = 0; i < 3; i++) {
-            const miss = yield* plugin.poll(bogus).pipe(Effect.flip);
-            assert.strictEqual(miss._tag, "InvalidGrant");
-          }
-          const refused = yield* plugin.poll(bogus).pipe(Effect.flip);
-          assert.strictEqual(refused._tag, "RateLimited");
-        }).pipe(
-          Effect.provide(
-            layer({
-              rateLimiter: "enforcing",
-              config: {
-                ...DeviceAuthorization.DeviceAuthorizationConfig.defaultValue(),
-                invalidGrantRateLimit: { limit: 3, window: Duration.minutes(15) },
-              },
-            }),
+      it.effect(
+        "polling with codes that never existed spends a per-source budget, and a refusal is counted",
+        () =>
+          Effect.gen(function* () {
+            const plugin = yield* service;
+            const bogus = {
+              deviceCode: Redacted.make("nope"),
+              clientId: CLI_CLIENT_ID,
+              ip: DEVICE_IP,
+            };
+            // D6: a refused failure-budget lookup used to publish the event but skip the metric.
+            const counter = Metric.withAttributes(RateLimits.exceededCounter, {
+              group: "device_authorization",
+              endpoint: "token",
+              rule: "invalidGrantByIp",
+              dimension: "ip",
+            });
+            const before = (yield* Metric.value(counter)).count;
+            for (let i = 0; i < 3; i++) {
+              const miss = yield* plugin.poll(bogus).pipe(Effect.flip);
+              assert.strictEqual(miss._tag, "InvalidGrant");
+            }
+            assert.strictEqual((yield* Metric.value(counter)).count, before);
+            const refused = yield* plugin.poll(bogus).pipe(Effect.flip);
+            assert.strictEqual(refused._tag, "RateLimited");
+            assert.strictEqual((yield* Metric.value(counter)).count, before + 1);
+          }).pipe(
+            Effect.provide(
+              layer({
+                rateLimiter: "enforcing",
+                config: {
+                  ...DeviceAuthorization.DeviceAuthorizationConfig.defaultValue(),
+                  invalidGrantRateLimit: { limit: 3, window: Duration.minutes(15) },
+                },
+              }),
+            ),
           ),
-        ),
       );
 
       it.effect("every budget is introspectable through the rate-limit registry", () =>
@@ -658,8 +692,9 @@ for (const options of suites) {
         () =>
           Effect.gen(function* () {
             const { issued, caller } = yield* approvedGrant("gone@example.com");
-            const users = yield* Users.Users;
-            yield* users.delete(caller.userId).pipe(Effect.orDie);
+            yield* Erasure.AccountErasure.use((erasure) =>
+              erasure.eraseAccount(caller.userId, Erasure.ErasureInitiator.Self()),
+            ).pipe(Effect.provide(OrphaningErasure), Effect.orDie);
             const refused = yield* poll(issued).pipe(Effect.flip);
             assert.strictEqual(refused._tag, "InvalidGrant");
             assert.isTrue(Option.isNone(yield* grantOf(issued)));
@@ -749,6 +784,25 @@ for (const options of suites) {
           assert.notInclude(text, Redacted.value(issued.deviceCode));
           assert.notMatch(text, /[0-9a-f]{64}/);
         }).pipe(Effect.provide(layer())),
+      );
+
+      it.effect(
+        "Retention.sweep runs the plugin's contribution and purges the expired grants",
+        () =>
+          Effect.gen(function* () {
+            const old = yield* requestCode();
+            yield* TestClock.adjust(Duration.minutes(5));
+            const fresh = yield* requestCode({ ip: "203.0.113.61" });
+            yield* TestClock.adjust(Duration.minutes(11));
+            // `old` expired a minute ago, `fresh` has four minutes left.
+            const report = yield* Retention.sweep;
+            assert.deepStrictEqual(
+              report.plugins.find((entry) => entry.id === "device_authorization.grants"),
+              { id: "device_authorization.grants", deleted: 1, failed: false },
+            );
+            assert.isTrue(Option.isNone(yield* grantOf(old)));
+            assert.isTrue(Option.isSome(yield* grantOf(fresh)));
+          }).pipe(Effect.provide(layer())),
       );
 
       it.effect("purgeExpired deletes only rows past their expiry, and reports how many", () =>

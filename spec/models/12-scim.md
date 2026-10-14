@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-12 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): record the identity and lifecycle decisions of wayfinder tickets 08/09 (SCP-005) <br> 1.2 (2026-09-29): implemented as `@awthaq/scim`; the contract, the ownership rules and the interim deprovisioning recipe (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): record the identity and lifecycle decisions of wayfinder tickets 08/09 (SCP-005) <br> 1.2 (2026-09-29): implemented as `@awthaq/scim`; the contract, the ownership rules and the interim deprovisioning recipe (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.3 (2026-10-13): `DELETE` in `erase` mode is `AccountErasure.eraseAccount`, the ADR-EA-031 cascade, not `Users.delete` (architecture plan 03) |
 ---
 
 ## What it is
@@ -59,7 +59,7 @@ The mapping and lifecycle questions below the "What is missing" heading were lar
 - **Resource id.** The SCIM resource `id` is the awthaq `UserId` (an identifier, never a capability — INV-EA-018).
 - **`externalId`.** The directory's `externalId` is persisted in a table owned by the `scim` package — `scim_resource(scimConnectionId, kind, resourceId, name, externalId)`, which is also the record of *which users and groups a connection provisioned* (the plan named it `scim_external_id`; `externalId` is optional in SCIM, so the row is per provisioned resource, not per external id) — deliberately not as an `Accounts` link and not as a column on `Users`, so no SCIM-specific concept leaks into `@awthaq/core` (ticket 08).
 - **`active: false` is suspension, not deletion.** It maps to `Users.setStatus(userId, "suspended")` composed with `Sessions.revokeAll(userId, "suspended")`; `active: true` maps to `setStatus(userId, "active")`. The `UserSuspended` sign-in gate (`Users.assertCanSignIn`, BEH-EA-46) then refuses every sign-in path while every Account, the identity and the session history remain (ticket 09, SCP-001). This also answers "how a SCIM-deactivated user interacts with already-issued sessions": they are revoked at deactivation, and no new one can be issued.
-- **`DELETE /Users/:id` is a different act.** It unlinks the `scim_external_id` mapping and then, by configuration, either erases the user (`Users.delete`, BEH-EA-46's cascade, running the `BeforeUserDelete` erasure taps) or suspends it; the observable postconditions differ from a deactivation (a deleted user's row, accounts and history are gone).
+- **`DELETE /Users/:id` is a different act.** By configuration it either erases the user (`AccountErasure.eraseAccount`, the ADR-EA-031 cascade, which also removes the mapping) or suspends it; the observable postconditions differ from a deactivation (a deleted user's row, accounts and history are gone).
 - **Email-less directory users.** A directory record without an email creates an `Anonymous` or `Phone` identity user (BEH-EA-41), never a synthetic address; `createOrGet` (SCP-003) makes a retried `POST /Users` idempotent.
 
 See the design records: `.scratch/resolve-ready-for-human-findings/issues/08-saml-scim-roadmap-scope.md` and `.../09-userrecord-model-extension.md`.
@@ -67,7 +67,7 @@ See the design records: `.scratch/resolve-ready-for-human-findings/issues/08-sam
 ## The contract (`ScimApi`)
 `/scim/v2` per RFC 7644, bearer-token authenticated, content type `application/scim+json` (a request as `application/json` is accepted too — Okta sends that):
 
-- `GET /Users?filter=userName eq "…"|externalId eq "…"&startIndex&count`, `POST /Users`, `GET`/`PUT`/`PATCH`/`DELETE /Users/:id`; `GET /Groups`, `POST /Groups`, `GET`/`PUT`/`PATCH`/`DELETE /Groups/:id` (a SCIM Group is an organization team of the connection's organization; members are that organization's users this connection provisioned).
+- `GET /Users?filter=userName eq "…"|externalId eq "…"&startIndex&count`, `POST /Users`, `GET`/`PUT`/`PATCH`/`DELETE /Users/:id`; `GET /Groups`, `POST /Groups`, `GET`/`PUT`/`PATCH`/`DELETE /Groups/:id` (a SCIM Group is an organization team of the connection's organization, written through the exposed `OrganizationTeams` module with a `Directory` actor, ADR-EA-040; members are that organization's users this connection provisioned).
 - Discovery: `GET /ServiceProviderConfig`, `/ResourceTypes`, `/Schemas`.
 - Errors are RFC 7644 §3.12 (`schemas`, `status`, `scimType`, `detail`).
 

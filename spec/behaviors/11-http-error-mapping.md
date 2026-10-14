@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-11 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-013 (error taxonomy and HTTP status mapping) (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-013 (error taxonomy and HTTP status mapping) (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): *Implementation* note on BEH-EA-088: every sign-in completion answers 503 on a session-store outage (plan 10 item 2) |
 
 ---
 
@@ -158,6 +158,8 @@ REQUIREMENT: The HTTP status code a client observes for any contract error
 ```
 
 Because every error in the contract stratum already carries its status as an annotation on its own schema (BEH-EA-027), the HTTP layer's job is reduced to reading that annotation off whichever tagged error a handler fails with — there is deliberately no second mapping (a `switch` over error tags to status codes, maintained separately from the error definitions) that could drift out of sync with the errors it maps, which is exactly the kind of duplicated source of truth `archive/PRD.md` §5 (Design principle 5) rules out project-wide.
+
+*Implementation* (plan 10 item 2): `Api.StoreUnavailable` is `httpApiStatus: 503` ([ADR-EA-028](../decisions/028-infrastructure-error-policy.md)), and every sign-in completion lets it through: a session-store (or user/credential-store) outage during `password` sign-in, `passkey` `authenticateVerify`, `oauth` `callback` and `saml` `acs` answers 503, not a 500 defect. The body carries only the static `operation` label, never a cause. (`magic-link`, `email-otp` and `device` already propagated it.) Tests: `packages/password/test/AuthHttp.test.ts` and the `ADR-EA-028:` cases of each plugin.
 
 _Previous: [BEH-EA-080](10-csrf.md#beh-ea-080-the-csrf-cookie-name-and-header-name-are-fixed-not-per-plugin-configurable)_
 _Next: [BEH-EA-089](12-hooks.md#beh-ea-089-a-hook-point-is-declared-as-a-service-carrying-its-own-kind)_

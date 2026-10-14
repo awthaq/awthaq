@@ -18,7 +18,12 @@
 //
 // - `…WithRls` also runs each tenanted request inside `TenantScope.withTenant`, so
 //   on Postgres with `TenantScope.enableRls()` the whole request is confined to its
-//   tenant at the database — one transaction per tenanted request, hence separate.
+//   tenant at the database — one transaction per tenanted request, hence separate. What that
+//   confines is whatever `enableRls` covered: the core tables, and with
+//   `enableRls({ plugins: auth.tenancy })` every plugin's Partitioned table (webhooks, admin)
+//   and Derived table beneath it, plus the organization-keyed tables under `includeKeyed`. A
+//   records method that must cross tenants presents a `CrossTenant` witness and is lifted
+//   (`TenantScoped.lift`), so a platform listing or an erasure sweep still sees every tenant.
 // - `…WithConfig(TenantConfig)` also provides that tenant's configuration layers
 //   for the request (BEH-EA-236, ADR-EA-005's `LayerMap.Service` seam). `TenantConfig`
 //   is the application's own `LayerMap.Service` keyed by tenant id, whose `lookup`
@@ -27,7 +32,7 @@
 //   inside one composition.
 
 import { Tenant } from "@awthaq/ports";
-import { TenantScope } from "@awthaq/sql";
+import { type StoreFailure, TenantScope } from "@awthaq/sql";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type * as LayerMap from "effect/LayerMap";
@@ -65,6 +70,16 @@ const unavailableResponse = (cause: unknown) =>
     ),
   );
 
+/**
+ * ADR-EA-028: the organization lookup that resolves the tenant could not run. `StoreUnavailable`
+ * already carries its static operation label and was logged where it happened.
+ */
+const storeUnavailableResponse = (error: StoreFailure.StoreUnavailable) =>
+  HttpServerResponse.jsonUnsafe(
+    { _tag: "StoreUnavailable", operation: error.operation },
+    { status: 503 },
+  );
+
 /** Resolves the request's organization; fails `"unknown-tenant"` when the resolver names none that exists. */
 const resolveTenant = Effect.gen(function* () {
   const resolver = yield* TenantResolver.TenantResolver;
@@ -92,7 +107,12 @@ export const layer = HttpRouter.middleware(
           onNone: () => app,
           onSome: (id) => Tenant.withTenant(id)(app),
         });
-      }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
+      }).pipe(
+        Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())),
+        Effect.catchTag("StoreUnavailable", (error) =>
+          Effect.succeed(storeUnavailableResponse(error)),
+        ),
+      );
   }),
   { global: true },
 );
@@ -115,7 +135,12 @@ export const layerWithRls = HttpRouter.middleware(
               Effect.catchTag("SqlError", unavailableResponse),
             ),
         });
-      }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
+      }).pipe(
+        Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())),
+        Effect.catchTag("StoreUnavailable", (error) =>
+          Effect.succeed(storeUnavailableResponse(error)),
+        ),
+      );
   }),
   { global: true },
 );
@@ -134,7 +159,12 @@ export const layerWithConfig = <Self>(tenantConfig: TenantConfigTag<Self>) =>
             onNone: () => app,
             onSome: (id) => Tenant.withTenant(id)(app).pipe(Effect.provide(configs.get(id))),
           });
-        }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
+        }).pipe(
+          Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())),
+          Effect.catchTag("StoreUnavailable", (error) =>
+            Effect.succeed(storeUnavailableResponse(error)),
+          ),
+        );
     }),
     { global: true },
   );
@@ -159,7 +189,12 @@ export const layerWithConfigAndRls = <Self>(tenantConfig: TenantConfigTag<Self>)
                 Effect.catchTag("SqlError", unavailableResponse),
               ),
           });
-        }).pipe(Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())));
+        }).pipe(
+          Effect.catchIf(isUnknownTenant, () => Effect.succeed(unknownTenant())),
+          Effect.catchTag("StoreUnavailable", (error) =>
+            Effect.succeed(storeUnavailableResponse(error)),
+          ),
+        );
     }),
     { global: true },
   );

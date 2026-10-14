@@ -132,10 +132,11 @@ describe("PII column encryption (CSG-006)", () => {
             expectedSecretHash: "h",
             secretHash: "h2",
             lastActiveAt: now,
-            idleExpiresAt: now,
+            // Still live afterwards: `reauthenticate` refuses a dead row (BEH-EA-319).
+            idleExpiresAt: DateTime.add(now, { hours: 1 }),
           });
           assert.strictEqual(Option.getOrThrow(touched).ipAddress, "203.0.113.9");
-          const reauthenticated = yield* sessions.reauthenticate(session.id, now);
+          const reauthenticated = yield* sessions.reauthenticate(session.id, userId, now);
           assert.strictEqual(reauthenticated.userAgent, "Agent/1.0");
           // Writes that never touch the columns leave the ciphertext alone.
           assert.deepStrictEqual(yield* rawSession(session.id), raw);
@@ -203,7 +204,10 @@ describe("PII column encryption (CSG-006)", () => {
           assert.strictEqual((yield* users.findById(created.id)).metadata, '{"plan":"pro"}');
           const byEmail = yield* users.findByEmail("META@example.com");
           assert.strictEqual(Option.getOrThrow(byEmail).metadata, '{"plan":"pro"}');
-          assert.strictEqual((yield* users.verifyEmail(created.id)).metadata, '{"plan":"pro"}');
+          assert.strictEqual(
+            Option.getOrThrow(yield* users.verifyEmail(created.id)).metadata,
+            '{"plan":"pro"}',
+          );
 
           const updated = yield* users.update(
             yield* M.User.update.makeEffect({

@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Persistence from "../src/Persistence.ts";
 import * as Accounts from "../src/Accounts.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
@@ -28,14 +29,14 @@ const layerWith = <E>(contributions: Layer.Layer<never, E, DataExport.DataExport
   Layer.mergeAll(DataExport.layer, contributions).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
-        Users.layerMemory,
-        Accounts.layerMemory,
-        Sessions.layerMemory,
-        Verification.layerMemory,
+        Users.layer.pipe(Layer.provide(Persistence.memory)),
+        Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+        Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+        Verification.layer.pipe(Layer.provide(Persistence.memory)),
       ),
     ),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(NodeCrypto.layer),
   );

@@ -592,6 +592,19 @@ Feature: SAML Service Provider
         | SAML      |
         | OIDC      |
 
+    @REQ-EA-1306
+    Scenario Outline: Another organization cannot claim a domain the first one routes over the other protocol
+      Given the organization "acme" has a <owned> connection for the domain "acme.example"
+      And the organization "mallory" exists
+      When the organization "mallory" tries a <claimed> connection for the domain "acme.example"
+      Then the attempt is refused as "<refusal>"
+      And the dispatcher still answers the <owned> login URL of "acme" for "ada@acme.example"
+
+      Examples:
+        | owned | claimed | refusal                |
+        | OIDC  | SAML    | SamlDomainTaken        |
+        | SAML  | OIDC    | ConnectionDomainTaken  |
+
     @REQ-EA-1237
     Scenario: Nothing routing is one uniform not-found, whatever the reason
       Given the organization "acme" has a SAML connection for the domain "acme.example"

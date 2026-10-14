@@ -4,8 +4,10 @@
 // XML-signature adapter, sealed SP keys over a real `Encryption`) and play the IdP's side of each protocol message themselves.
 import { Api } from "@awthaq/api";
 import { AuditLog, Sessions, Tenant, Users } from "@awthaq/core";
-import { MembershipRecords, Organization, OrganizationConnections } from "@awthaq/organization";
+import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
+import { MembershipRecords } from "@awthaq/organization/records";
 import { Encryption } from "@awthaq/ports";
+import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import {
   Saml,
   SamlConnections,
@@ -42,6 +44,9 @@ import {
   World,
 } from "./SamlWorld.ts";
 import { isNumber, isString } from "./shared/Outcomes.ts";
+
+/** The steps read a connection by its own id, as a protocol message or the admin surface does. */
+const grant = TenantScoped.crossTenant("feature step: a connection named by its own id");
 
 const IDP_SLO = "https://idp.example.com/slo";
 const NOW = DateTime.makeUnsafe(NOW_MILLIS);
@@ -478,12 +483,17 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     "the stored signing key of {string} is a sealed envelope holding no private key material",
     function* (name: string) {
       const connection = yield* connectionState(name);
-      const rows = yield* inApp(
-        Effect.flatMap(SamlRecords.SamlRecords, (records) => records.listSpKeys(connection.id)),
+      const stored = yield* inApp(
+        Effect.gen(function* () {
+          const records = yield* SamlRecords.SamlRecords;
+          const envelopes = yield* SamlRecords.MemoryEnvelopes;
+          const rows = yield* records.listSpKeys(connection.id);
+          assert.equal(rows.length, 1);
+          return yield* envelopes.stored(rows[0]?.id ?? "");
+        }),
       );
-      assert.equal(rows.length, 1);
-      assert.ok(!rows[0]?.privateKey.includes("PRIVATE KEY"));
-      assert.ok(Encryption.looksLikeEnvelope(rows[0]?.privateKey ?? ""));
+      assert.ok(!stored.includes("PRIVATE KEY"));
+      assert.ok(Encryption.looksLikeEnvelope(stored));
     },
   );
   Then("it opens only under its own key id", function* () {
@@ -492,16 +502,16 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       Effect.gen(function* () {
         const records = yield* SamlRecords.SamlRecords;
         const encryption = yield* Encryption.Encryption;
+        const envelopes = yield* SamlRecords.MemoryEnvelopes;
         const [row] = yield* records.listSpKeys(connection.id);
         assert.ok(row !== undefined);
-        const own = yield* encryption
-          .decrypt(row.privateKey, SamlSpKeys.aad(row.id))
-          .pipe(Effect.option);
+        const stored = yield* envelopes.stored(row.id);
+        const own = yield* row.privateKey.open.pipe(Effect.option);
         const other = yield* encryption
-          .decrypt(row.privateKey, SamlSpKeys.aad("another-key"))
+          .decrypt(stored, SealedColumn.aadOf(SamlRecords.privateKeyColumn, "another-key"))
           .pipe(Effect.option);
         return {
-          own: Option.map(own, (value) => Redacted.value(value.plaintext)),
+          own: Option.map(own, Redacted.value),
           other: Option.isSome(other),
         };
       }),
@@ -544,10 +554,20 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     yield* inApp(
       Effect.gen(function* () {
         const records = yield* SamlRecords.SamlRecords;
+        const envelopes = yield* SamlRecords.MemoryEnvelopes;
         const [row] = yield* records.listSpKeys(connection.id);
         assert.ok(row !== undefined);
         // A sealed key bound to ANOTHER key id: the newest row, and it cannot be opened.
-        yield* records.saveSpKey({ ...row, id: "swapped-key" });
+        yield* records.saveSpKey({
+          id: "swapped-key",
+          connectionId: row.connectionId,
+          certificate: row.certificate,
+          fingerprint: row.fingerprint,
+          notBefore: row.notBefore,
+          notAfter: row.notAfter,
+          privateKey: Redacted.make("replaced below"),
+        });
+        yield* envelopes.plant("swapped-key", yield* envelopes.stored(row.id));
       }),
     );
   });
@@ -964,7 +984,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       yield* inApp(
         Effect.flatMap(SamlRecords.SamlRecords, (records) =>
           records
-            .update(connection.id, {
+            .update(connection.organizationId, connection.id, {
               roleMapping: {
                 rules: [{ attribute: "groups", value: group, roles: ["owner"] }],
                 ceiling: [ceiling],
@@ -998,7 +1018,9 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
           yield* members
             .remove(Users.UserId(ownerPrincipal.ref.id), connection.organizationId)
             .pipe(Effect.orDie);
-          yield* records.update(connection.id, { trustsEmail: true }).pipe(Effect.orDie);
+          yield* records
+            .update(connection.organizationId, connection.id, { trustsEmail: true })
+            .pipe(Effect.orDie);
           return created.id;
         }),
       );
@@ -1038,7 +1060,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       const view = yield* inApp(
         Effect.flatMap(OrganizationConnections.OrganizationConnectionStore, (store) =>
           store
-            .create({
+            .create(OrganizationActor.application("bdd"), {
               organizationId,
               kind: "oidc",
               name: `${name} OIDC`,
@@ -1053,6 +1075,75 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       );
       const world = yield* World;
       yield* world.outcomes.set(`oidc:${name}`, view.providerId);
+    },
+  );
+  Given("the organization {string} exists", function* (name: string) {
+    yield* organizationOf(name);
+  });
+  When(
+    "the organization {string} tries a {word} connection for the domain {string}",
+    function* (name: string, protocol: string, domain: string) {
+      const world = yield* World;
+      const organizationId = yield* organizationOf(name);
+      const tagOf = (exit: Exit.Exit<unknown, { readonly _tag: string }>) =>
+        Exit.isFailure(exit)
+          ? (Option.getOrUndefined(Exit.findErrorOption(exit))?._tag ?? "defect")
+          : "created";
+      const attempt =
+        protocol === "SAML"
+          ? tagOf(
+              yield* inAppExit(
+                Effect.flatMap(SamlConnections.SamlConnectionStore, (store) =>
+                  store.create({
+                    organizationId,
+                    name: `${name} SAML`,
+                    idp: {
+                      entityId: `https://idp.${name}.example`,
+                      ssoUrl: `https://idp.${name}.example/sso`,
+                      certificates: [idp.cert],
+                    },
+                    emailDomains: [domain],
+                  }),
+                ),
+              ),
+            )
+          : tagOf(
+              yield* inAppExit(
+                Effect.flatMap(OrganizationConnections.OrganizationConnectionStore, (store) =>
+                  store.create(OrganizationActor.application("bdd"), {
+                    organizationId,
+                    kind: "oidc",
+                    name: `${name} OIDC`,
+                    issuer: `https://oidc.${name}.example`,
+                    discoveryUrl: `https://oidc.${name}.example/.well-known/openid-configuration`,
+                    clientId: "client-1",
+                    clientSecret: Redacted.make("secret"),
+                    emailDomains: [domain],
+                  }),
+                ),
+              ),
+            );
+      yield* world.outcomes.set("domainAttempt", attempt);
+    },
+  );
+  Then("the attempt is refused as {string}", function* (tag: string) {
+    const world = yield* World;
+    assert.equal(yield* world.outcomes.getAs("domainAttempt", isString), tag);
+  });
+  Then(
+    "the dispatcher still answers the {word} login URL of {string} for {string}",
+    function* (protocol: string, name: string, email: string) {
+      const world = yield* World;
+      const route = yield* inApp(Effect.flatMap(Sso.Sso, (sso) => sso.discover({ email })));
+      assert.ok(Option.isSome(route), "a route");
+      if (protocol === "SAML") {
+        assert.equal(route.value.protocol, "saml");
+        assert.equal(route.value.connectionId, (yield* connectionState(name)).id);
+      } else {
+        assert.equal(route.value.protocol, "oidc");
+        const providerId = yield* world.outcomes.getAs(`oidc:${name}`, isString);
+        assert.equal(route.value.loginUrl, `/oauth/${encodeURIComponent(providerId)}/authorize`);
+      }
     },
   );
   Given("the Sso preference is {word}", function* (preferred: string) {
@@ -1181,7 +1272,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
   Then("the connection {string} is unchanged", function* (name: string) {
     const connection = yield* connectionState(name);
     const found = yield* inApp(
-      Effect.flatMap(SamlRecords.SamlRecords, (records) => records.findById(connection.id)),
+      Effect.flatMap(SamlRecords.SamlRecords, (records) => records.findById(grant, connection.id)),
     );
     assert.ok(Option.isSome(found));
     assert.equal(found.value.name, name);
@@ -1320,7 +1411,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     const world = yield* World;
     const dto = yield* world.outcomes.getAs("dto", isDto);
     const found = yield* inApp(
-      Effect.flatMap(SamlRecords.SamlRecords, (records) => records.findById(dto.id)),
+      Effect.flatMap(SamlRecords.SamlRecords, (records) => records.findById(grant, dto.id)),
     );
     assert.ok(Option.isSome(found));
     return found.value.idpCertificates.map((certificate) => certificate.fingerprint);

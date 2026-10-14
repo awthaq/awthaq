@@ -173,6 +173,26 @@ export const numericValueTypeSteps = defineSteps(({ When, Then }) => {
   );
 });
 
+/** BEH-EA-058 (08-verification-tokens.feature). */
+export const verificationRedeemTypeSteps = defineSteps(({ When, Then }) => {
+  When(
+    "a caller tries to defer a miss, record one, or settle a redeem some other way",
+    function* () {
+      yield* Effect.void;
+    },
+  );
+
+  Then(
+    "the interface rejects each by the type",
+    gate("verification-miss-protocol-is-internal", [
+      "@ts-expect-error",
+      "{ deferMiss: true }",
+      "verification.recordMiss",
+      'onFailure: () => "burn"',
+    ]),
+  );
+});
+
 /** BEH-EA-108 (14-rate-limiting.feature). */
 export const rateLimitKeyTypeSteps = defineSteps(({ Given, When, Then }) => {
   Given(
@@ -194,14 +214,32 @@ export const rateLimitKeyTypeSteps = defineSteps(({ Given, When, Then }) => {
         "@ts-expect-error",
         '"x-forwarded-for"',
       ]);
-      // The one strategy that reads request data is an explicit function.
-      assert.equal(typeof customKey, "function");
+      // The one strategy that reads request data is the explicit `Key.custom`.
+      assert.equal(customKey.strategy, "custom");
     },
   );
 
   Then(
     "only an explicit custom key function lets the author opt into deriving a key from request-supplied data",
-    gate("rate-limit-key-is-a-strategy-or-a-function", ["customKey", "=> `signin:"]),
+    gate("rate-limit-key-is-a-strategy-or-a-function", ["customKey", "RateLimits.Key.custom"]),
+  );
+});
+
+/** BEH-EA-111 (14-rate-limiting.feature): declared means enforceable, and only that. */
+export const rateLimitDeclaredTypeSteps = defineSteps(({ Given, When, Then }) => {
+  Given("a plugin whose rate-limit table declares {string} only", function* (rule: string) {
+    yield* Effect.void;
+    assert.equal(rule, "signIn");
+  });
+
+  When("that plugin spends the rule {string}", function* (rule: string) {
+    yield* Effect.void;
+    assert.equal(rule, "signUp");
+  });
+
+  Then(
+    "the plugin does not compile",
+    gate("spend-names-only-declared-rules", ["@ts-expect-error", 'limits.spend("signUp"']),
   );
 });
 

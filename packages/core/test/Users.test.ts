@@ -1,46 +1,37 @@
 // spec/behaviors/06-domain-users-accounts.md, BEH-EA-041, BEH-EA-042.
 //
-// The same contract suite runs against both `Layer`s — `layerMemory` (a
-// `Ref`) and `layerSql` (a real, in-memory SQLite database via
-// `@effect/sql-sqlite-node`) — since `UsersShape` is the one thing callers
-// depend on and both `Layer`s are meant to satisfy it identically.
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+// Plan 02 (ADR-EA-041): `Users` is one implementation over `UserStore`, so its domain suite runs
+// once, over the `Ref` adapter. What a store must do on every backend (the atomic insert-or-holder,
+// the identity compare-and-swap, the delete that takes the fields with it, the keyset page) is
+// `StoreContract.users`, run on the `Ref`, SQLite, WAL-file and (`pnpm test:pg`) Postgres adapters;
+// the SQL adapter's own failure mapping is `packages/sql/test/UserStoreSql.test.ts`.
+import { UserStore } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
-import * as Migrator from "effect/unstable/sql/Migrator";
+import { StoreUnavailable } from "../src/Errors.ts";
 import * as Hooks from "../src/Hooks.ts";
+import { ErasureClearance } from "../src/internal/erasureClearance.ts";
 import * as Phone from "../src/Phone.ts";
 import * as Tenant from "../src/Tenant.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
 import * as Users from "../src/Users.ts";
 
-const MemoryLayer = Users.layerMemory.pipe(
+const MemoryLayer = Users.layer.pipe(
+  Layer.provide(UserStore.layerMemory),
   Layer.provide(NodeCrypto.layer),
-  Layer.provide(Hooks.BeforeUserDelete.layer),
 );
 
-// PV-010: `:memory:` SQLite by default, a real Postgres schema under `pnpm run test:pg`.
-const SqlLive = TestSql.layer("core_Users");
+/** The clearance `AccountErasure` would mint once the veto passed; core tests may mint one directly. */
+const clearanceFor = (id: Users.UserId) => ErasureClearance.afterVeto(id, Effect.void);
 
-// FAMS-002: the real core migrations (not a hand-copied `CREATE TABLE`), so the
-// suite tracks every column and index `layerSql` depends on.
-const Migrated = Layer.effectDiscard(
-  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
-).pipe(Layer.provide(SqlLive));
-
-const SqlTestLayer = Users.layerSql.pipe(
-  Layer.provide(Repositories.UsersRepositoryLive),
-  Layer.provide(Hooks.BeforeUserDelete.layer),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
-
-const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): void => {
+const suite = (
+  name: string,
+  layer: Layer.Layer<Users.Users | Users.UserRemoval, unknown, never>,
+): void => {
   describe(name, () => {
     // EOTS-004: identifiers and emails are typed fields, never part of a message that reaches logs.
     it.effect("EOTS-004: error messages never contain the id or the email", () =>
@@ -126,7 +117,7 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
     );
 
     it.effect(
-      "findById/updateProfile/verifyEmail/delete all fail with UserNotFound for an unknown id",
+      "findById/updateProfile/verifyEmail all fail with UserNotFound for an unknown id",
       () =>
         Effect.gen(function* () {
           const users = yield* Users.Users;
@@ -139,8 +130,72 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
           assert.strictEqual(updateNotFound._tag, "UserNotFound");
           const verifyNotFound = yield* users.verifyEmail(missing).pipe(Effect.flip);
           assert.strictEqual(verifyNotFound._tag, "UserNotFound");
-          const deleteNotFound = yield* users.delete(missing).pipe(Effect.flip);
-          assert.strictEqual(deleteNotFound._tag, "UserNotFound");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "UserRemoval.remove with a clearance drops the row and its fields; an unknown id is UserNotFound",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const removal = yield* Users.UserRemoval;
+          const created = yield* users.create({
+            identity: { _tag: "Email", email: "removed@example.com" },
+            name: "Removed",
+          });
+          yield* removal.remove(yield* clearanceFor(created.id));
+          assert.strictEqual(
+            (yield* users.findById(created.id).pipe(Effect.flip))._tag,
+            "UserNotFound",
+          );
+          assert.isTrue(Option.isNone(yield* users.findByEmail("removed@example.com")));
+          // The address is free again.
+          yield* users.create({
+            identity: { _tag: "Email", email: "removed@example.com" },
+            name: "Again",
+          });
+          const missing = Users.UserId("00000000-0000-0000-0000-000000000000");
+          const failure = yield* removal.remove(yield* clearanceFor(missing)).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "UserNotFound");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "createWith abandons the user when completion fails, dies or is interrupted, and keeps it when it succeeds",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const input = (email: string) => ({
+            identity: { _tag: "Email" as const, email },
+            name: "Provisioned",
+          });
+          const abandoned = (email: string) =>
+            users.findByEmail(email).pipe(Effect.map(Option.isNone));
+
+          const failed = yield* users
+            .createWith(input("fail@example.com"), () => Effect.fail("boom" as const))
+            .pipe(Effect.flip);
+          assert.strictEqual(failed, "boom");
+          assert.isTrue(yield* abandoned("fail@example.com"));
+
+          const died = yield* users
+            .createWith(input("die@example.com"), () => Effect.die("boom"))
+            .pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(died));
+          assert.isTrue(yield* abandoned("die@example.com"));
+
+          const interrupted = yield* users
+            .createWith(input("interrupt@example.com"), () => Effect.interrupt)
+            .pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(interrupted));
+          assert.isTrue(yield* abandoned("interrupt@example.com"));
+
+          // The abandoned address is free again, and success keeps the user.
+          const kept = yield* users.createWith(input("fail@example.com"), (user) =>
+            Effect.succeed(user.name),
+          );
+          assert.strictEqual(kept.value, "Provisioned");
+          assert.strictEqual((yield* users.findById(kept.user.id)).id, kept.user.id);
         }).pipe(Effect.provide(layer)),
     );
 
@@ -576,28 +631,23 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
   });
 };
 
-suite("Users (layerMemory)", MemoryLayer);
-suite("Users (layerSql)", SqlTestLayer);
+suite("Users", MemoryLayer);
 
-// GC-004: `layerSql` read the row, then updated it in a second statement; a delete landing between
-// the two made `repo.update` die (`SqlModel.update` turns the missing row into a defect), where
-// `layerMemory` answers `UserNotFound`. The update is one statement now, and a row that is gone
-// by then comes back as `None`; a repository stub forces exactly that outcome for a row that
-// still exists when `create` returns.
-describe("Users (layerSql) profile update racing a delete (GC-004)", () => {
-  const VanishingRepository = Layer.effect(
-    Repositories.UsersRepository,
+// GC-004: the update is one statement, so a row deleted between the caller's read and the write is
+// `UserNotFound`, never a defect. A store double that answers "no such row" forces exactly that outcome for
+// a user that still exists when `create` returns.
+describe("Users profile update racing a delete (GC-004)", () => {
+  const VanishingStore = Layer.effect(
+    UserStore.UserStore,
     Effect.gen(function* () {
-      const real = yield* Repositories.UsersRepository;
+      const real = yield* UserStore.UserStore;
       return { ...real, updateProfile: () => Effect.succeedNone };
     }),
-  ).pipe(Layer.provide(Repositories.UsersRepositoryLive));
+  ).pipe(Layer.provide(UserStore.layerMemory));
 
-  const VanishingLayer = Users.layerSql.pipe(
-    Layer.provide(VanishingRepository),
-    Layer.provide(Hooks.BeforeUserDelete.layer),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
+  const VanishingLayer = Users.layer.pipe(
+    Layer.provide(VanishingStore),
+    Layer.provide(NodeCrypto.layer),
   );
 
   it.effect("updateProfile on a user deleted concurrently fails UserNotFound, never a defect", () =>
@@ -640,39 +690,171 @@ describe("Users (layerSql) profile update racing a delete (GC-004)", () => {
         });
         assert.deepStrictEqual(cleared.metadata, Option.none());
         assert.deepStrictEqual(cleared.image, Option.none());
-      }).pipe(Effect.provide(SqlTestLayer)),
+      }).pipe(Effect.provide(MemoryLayer)),
   );
 });
 
-// MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect.
-describe("Users infrastructure failures (MA-004)", () => {
-  const DownRepository = Layer.effect(
-    Repositories.UsersRepository,
-    Effect.gen(function* () {
-      const real = yield* Repositories.UsersRepository;
-      return {
-        ...real,
-        findByEmail: () =>
-          Effect.fail(
-            new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
-          ),
-      };
-    }),
-  ).pipe(Layer.provide(Repositories.UsersRepositoryLive));
+// AAPS-005: `updateProfile`/`verifyEmail`/`changeEmail` fire `Hooks.AfterUserAttributesChanged`, but only
+// when a policy-readable attribute really changed, so `@awthaq/qadi`'s `DecisionCacheInvalidationLive` can
+// flush an application-scoped decision cache exactly when `UserAttributes` could answer differently. The
+// unverified-to-verified transition is one compare-and-swap, so of two concurrent calls exactly one announces.
+describe("Users attribute-change hook (AAPS-005)", () => {
+  const seen: Array<{ readonly userId: string; readonly attributes: ReadonlyArray<string> }> = [];
 
-  const DownLayer = Users.layerSql.pipe(
-    Layer.provide(DownRepository),
-    Layer.provide(Hooks.BeforeUserDelete.layer),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
+  const HookedLayer = Users.layer.pipe(
+    Layer.provide(UserStore.layerMemory),
+    Layer.provide(
+      Hooks.AfterUserAttributesChanged.tap((input) =>
+        Effect.sync(() => {
+          seen.push(input);
+        }),
+      ).pipe(Layer.provideMerge(Hooks.HooksLive)),
+    ),
+    Layer.provide(NodeCrypto.layer),
   );
 
-  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable", () =>
+  it.effect("updateProfile announces name; verifyEmail announces emailVerified once", () =>
     Effect.gen(function* () {
       const users = yield* Users.Users;
-      const failure = yield* users.findByEmail("anyone@example.com").pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "StoreUnavailable");
-      assert.strictEqual(failure.operation, "Users.findByEmail");
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "hook@example.com" },
+        name: "Hook",
+      });
+      assert.deepStrictEqual(seen, []);
+
+      yield* users.updateProfile(user.id, { name: "Renamed" });
+      assert.deepStrictEqual(seen, [{ userId: user.id, attributes: ["name"] }]);
+
+      yield* users.verifyEmail(user.id);
+      assert.strictEqual(seen.length, 2);
+      assert.deepStrictEqual(seen[1], { userId: user.id, attributes: ["emailVerified"] });
+
+      // Already verified: nothing changed, nothing announced.
+      yield* users.verifyEmail(user.id);
+      assert.strictEqual(seen.length, 2);
+    }).pipe(Effect.provide(HookedLayer)),
+  );
+
+  it.effect("two concurrent verifyEmail calls announce emailVerified exactly once", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "race@example.com" },
+        name: "Race",
+      });
+      yield* Effect.all([users.verifyEmail(user.id), users.verifyEmail(user.id)], {
+        concurrency: 2,
+      });
+      assert.strictEqual(
+        seen.filter(
+          (entry) => entry.userId === user.id && entry.attributes.includes("emailVerified"),
+        ).length,
+        1,
+      );
+    }).pipe(Effect.provide(HookedLayer)),
+  );
+
+  // AAPS-005 / U-3: lowering `emailVerified` by an address change is announced from what the change
+  // really did, not from a stale pre-read.
+  it.effect("changeEmail announces emailVerified only when it lowered a verified address", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "moves@example.com" },
+        name: "Moves",
+      });
+      const before = seen.length;
+      yield* users.changeEmail(user.id, "moved@example.com");
+      assert.strictEqual(seen.length, before);
+      yield* users.verifyEmail(user.id);
+      yield* users.changeEmail(user.id, "moved-again@example.com");
+      assert.deepStrictEqual(seen.at(-1), { userId: user.id, attributes: ["emailVerified"] });
+    }).pipe(Effect.provide(HookedLayer)),
+  );
+});
+
+// U-4: every pure check runs before any I/O, so the answer to an unknown field does not depend on
+// whether the user exists (both memory and SQL used to answer in opposite orders).
+describe("Users declared-field error precedence (U-4)", () => {
+  it.effect("an unknown field is UnknownUserField even for a user that does not exist", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const absent = Users.UserId("55555555-5555-5555-5555-555555555555");
+      const read = yield* users.getFields(absent, ["nobody_declared"]).pipe(Effect.flip);
+      assert.strictEqual(read._tag, "UnknownUserField");
+      const write = yield* users.setFields(absent, { nobody_declared: "x" }).pipe(Effect.flip);
+      assert.strictEqual(write._tag, "UnknownUserField");
+      const missing = yield* users.getFields(absent).pipe(Effect.flip);
+      assert.strictEqual(missing._tag, "UserNotFound");
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+});
+
+// BEH-EA-036/U-10: a page is at least one row and at most MAX; a nonsense limit is clamped, never a defect.
+describe("Users.list limit", () => {
+  it.effect("a non-positive or oversize limit is clamped, not an error", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      for (let i = 0; i < 3; i++) {
+        yield* users.create({
+          identity: { _tag: "Email", email: `page-${i}@example.com` },
+          name: `P${i}`,
+        });
+      }
+      assert.strictEqual((yield* users.list({ limit: 0 })).items.length, 1);
+      assert.strictEqual((yield* users.list({ limit: -5 })).items.length, 1);
+      assert.strictEqual((yield* users.list({ limit: 1.9 })).items.length, 1);
+      assert.strictEqual((yield* users.list({ limit: 1_000_000 })).items.length, 3);
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+});
+
+// MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect. The store double names
+// its own primitive, as an adapter does; the service relabels it to the operation the caller ran.
+describe("Users infrastructure failures (MA-004)", () => {
+  const down = (primitive: string) => Effect.fail(new StoreUnavailable({ operation: primitive }));
+  const DownStore = Layer.mock(UserStore.UserStore, {
+    insertOrHolder: () => down("UserStore.insertOrHolder"),
+    get: () => down("UserStore.get"),
+    getByEmail: () => down("UserStore.getByEmail"),
+    getByPhone: () => down("UserStore.getByPhone"),
+    updateProfile: () => down("UserStore.updateProfile"),
+    casIdentity: () => down("UserStore.casIdentity"),
+    setStatus: () => down("UserStore.setStatus"),
+    delete: () => down("UserStore.delete"),
+    listPage: () => down("UserStore.listPage"),
+    readFields: () => down("UserStore.readFields"),
+    writeFields: () => down("UserStore.writeFields"),
+  });
+  const DownLayer = Users.layer.pipe(Layer.provide(DownStore), Layer.provide(NodeCrypto.layer));
+
+  it.effect("a store outage surfaces as StoreUnavailable named for the service operation", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const id = Users.UserId("66666666-6666-6666-6666-666666666666");
+      const operationOf = <A>(effect: Effect.Effect<A, { readonly _tag: string }>) =>
+        effect.pipe(
+          Effect.flip,
+          Effect.map((failure) =>
+            failure._tag === "StoreUnavailable" && "operation" in failure
+              ? failure.operation
+              : failure._tag,
+          ),
+        );
+      const email = { _tag: "Email", email: "x@example.com" } as const;
+      assert.strictEqual(
+        yield* operationOf(users.create({ identity: email, name: "X" })),
+        "Users.create",
+      );
+      assert.strictEqual(yield* operationOf(users.findByEmail("a@b.c")), "Users.findByEmail");
+      assert.strictEqual(yield* operationOf(users.findById(id)), "Users.findById");
+      assert.strictEqual(yield* operationOf(users.verifyEmail(id)), "Users.verifyEmail");
+      assert.strictEqual(
+        yield* operationOf(users.updateProfile(id, { name: "n" })),
+        "Users.updateProfile",
+      );
+      assert.strictEqual(yield* operationOf(users.setStatus(id, "active")), "Users.setStatus");
+      assert.strictEqual(yield* operationOf(users.list()), "Users.list");
     }).pipe(Effect.provide(DownLayer)),
   );
 });

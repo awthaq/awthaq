@@ -49,7 +49,9 @@
 // old key immediately, and `revoke(kid)` does the same for a key that was
 // already rotated out. See spec/decisions/017-jwt-signing-key-rotation.md.
 
+import type { Api } from "@awthaq/api";
 import { Defects, SqlTransaction } from "@awthaq/ports";
+import { SealedColumn, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -69,7 +71,7 @@ export interface SigningKey {
   readonly kid: string;
   readonly alg: Algorithm;
   readonly publicKeyJwk: SigningKeyRecords.Jwk;
-  readonly privateKeyJwk: Option.Option<Redacted.Redacted<SigningKeyRecords.Jwk>>;
+  readonly privateKeyJwk: Option.Option<SealedColumn.Sealed<SigningKeyRecords.Jwk>>;
   readonly createdAt: DateTime.Utc;
 }
 
@@ -122,7 +124,9 @@ const isStale = (
 const mint = Effect.fnUntraced(function* (algorithm: Algorithm, rsaModulusLength: number) {
   const records = yield* SigningKeyRecords.SigningKeyRecords;
   const crypto = yield* Crypto.Crypto;
-  const kid = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+  const kid = yield* crypto.randomUUIDv7.pipe(
+    Effect.catch(StoreFailure.storeUnavailable("KeyRing.mint")),
+  );
   const { publicKeyJwk: rawPublicJwk, privateKeyJwk: rawPrivateJwk } =
     yield* JwtCodec.generateKeyJwks(algorithm, { rsaModulusLength });
   return yield* records.create({
@@ -178,7 +182,7 @@ const settleCurrent = Effect.fnUntraced(function* (options: {
           )
           .pipe(
             Effect.catchTag("CurrentKeyConflict", () => Effect.succeed(Option.none())),
-            Effect.orDie,
+            Effect.catchTag("SqlError", StoreFailure.storeUnavailable("KeyRing.rotate")),
           ),
     });
     if (Option.isSome(minted)) return minted.value;
@@ -233,7 +237,11 @@ export const registerRemoteKey = (input: {
           return yield* records.create({ ...input, privateKeyJwk: Option.none() });
         }),
       )
-      .pipe(Effect.orDie);
+      .pipe(
+        // The current key was rotated out in this transaction, so no other current key can exist.
+        Effect.catchTag("CurrentKeyConflict", Effect.die),
+        Effect.catchTag("SqlError", StoreFailure.storeUnavailable("KeyRing.registerRemoteKey")),
+      );
   });
 
 /**
@@ -278,7 +286,8 @@ export const importKey = (input: {
           retiresAt: DateTime.addDuration(now, input.retiresAfter ?? config.keyGracePeriod),
         },
       })
-      .pipe(Effect.orDie);
+      // A key inserted already rotated never competes for the single current slot.
+      .pipe(Effect.catchTag("CurrentKeyConflict", Effect.die));
   });
 
 const layerFromStore = Layer.effect(
@@ -345,7 +354,9 @@ export const verifiable = Effect.gen(function* () {
  * limited) when a token names a `kid` the snapshot does not have, so keys minted
  * or imported by a peer verify at once instead of after `keyCacheMaxAge`.
  */
-export const refresh = Effect.gen(function* () {
+// The explicit type is the narrow exception the plugins document (TS2883): declaration emit cannot name
+// `StoreUnavailable` through the inferred error of the `LayerRef`, and naming it here lets it for the rest.
+export const refresh: Effect.Effect<void, Api.StoreUnavailable, KeyRing> = Effect.gen(function* () {
   const ref = yield* KeyRing;
   yield* ref.refresh;
 });

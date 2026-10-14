@@ -4,56 +4,20 @@
 //
 // Domain-level like `Admin.test.ts`: real in-memory `Users`/`Sessions`/`AuthEvents`.
 import { Api } from "@awthaq/api";
-import { AuditChain, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
 import * as Admin from "../src/Admin.ts";
-import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("admin-users-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 const buildLayer = (config: Partial<Admin.AdminConfigShape>) =>
-  Admin.Admin.layer.pipe(
-    Layer.provide(Admin.config(config)),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      ImpersonationRecords.layerMemory.pipe(
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
-      ),
-    ),
-  );
+  TestAuth.layer(Auth.make([Admin.Admin]), { services: Admin.config(config) });
 
 const manageAll = { canManageUsers: () => Effect.succeed(true) };
 

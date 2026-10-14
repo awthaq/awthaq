@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-01 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-005: `tables` is a record of tenancy declarations keyed by the plugin's own prefix; `Class.tables` lists its keys (plan 05) <br> 1.3 (2026-10-14): BEH-EA-334: a plugin declares its record stores as matched memory and SQL bundles (architecture plan 08) |
 
 ---
 
@@ -94,16 +94,19 @@ REQUIREMENT: A plugin's `contract` MUST fail to type-check, at the plugin's
 ## BEH-EA-005: A plugin's table names are constrained to its own prefix by a template-literal type
 
 ```ts
-readonly tables?: ReadonlyArray<`${Id}_${string}`>
+readonly tables?: { readonly [T in `${Id}_${string}`]: TenantScoped.TableDeclaration }
 ```
 
 ```text
-REQUIREMENT: Every entry in a plugin's `tables` array MUST be a string
-             literal beginning with `<id>_`; a bare table name MUST fail to
-             type-check as an argument to `AuthPlugin.Service`.
+REQUIREMENT: Every key of a plugin's `tables` record MUST be a string
+             literal beginning with `<id>_`, and its value MUST be the
+             table's tenancy declaration (`AuthPlugin.Table.partitioned`,
+             `keyed`, `derived` or `global`, BEH-EA-328); a bare table
+             name, another plugin's prefix, or a table without a declaration
+             MUST fail to type-check as an argument to `AuthPlugin.Service`.
 ```
 
-`research/09-plugin-architecture.md` Q25 contrasts better-auth's convention-only table naming (plugins may create arbitrary table names, with only a documentation warning against colliding with core) against Medusa 2.0's strict per-module isolation. awthaq's plan follows Medusa's discipline but enforces it the same way it enforces group namespacing (BEH-EA-004): as a template-literal constraint on the plugin's own static declaration, so a bare or core-colliding table name is rejected before the plugin can be published, not merely flagged by a linter a plugin author could ignore.
+`research/09-plugin-architecture.md` Q25 contrasts better-auth's convention-only table naming (plugins may create arbitrary table names, with only a documentation warning against colliding with core) against Medusa 2.0's strict per-module isolation. awthaq's plan follows Medusa's discipline but enforces it the same way it enforces group namespacing (BEH-EA-004): as a template-literal constraint on the keys of the plugin's own static declaration, so a bare or core-colliding table name is rejected before the plugin can be published, not merely flagged by a linter a plugin author could ignore.
 
 ## BEH-EA-006: `migrations` is a static, declarative member — never computed from runtime configuration
 
@@ -111,7 +114,7 @@ REQUIREMENT: Every entry in a plugin's `tables` array MUST be a string
 export class Password extends AuthPlugin.Service<Password, PasswordShape>()("password", {
   apiVersion: 1,
   contract: PasswordApi,
-  tables: ["password_account"],
+  tables: { password_account: AuthPlugin.Table.global("per-user account; the directory is global") },
   migrations
 }) { /* … */ }
 ```
@@ -163,4 +166,30 @@ JH-007 (as shipped): `dependsOn` is reserved for *other plugins*. Core domain se
 
 `archive/design/plugins-as-layers.md` §2.1 folds what earlier plugin systems kept as two separate declarations — a structural dependency list for ordering, and a service requirement for the type checker — into the single `dependsOn` array, because `AuthPlugin.layer`'s type signature (`DepsOf<typeof options>` joining `RIn`) makes the two facts equivalent by construction. `research/09-plugin-architecture.md` Q21 explicitly considers keeping `requiresPlugins` (structural) and `Context.Tag` requirements (service-level) as two mechanisms an author must maintain in parallel, and recommends against it for exactly this reason: Effect's own Layer graph already validates the tag-level requirement, so `dependsOn` only needs to add what the graph cannot express on its own — migration ordering.
 
-_Next: [BEH-EA-009](02-plugin-composition-validate.md#beh-ea-009-authmake-computes-three-outputs-from-one-plugin-tuple)_
+_Next: [BEH-EA-334](01-plugin-contract.md#beh-ea-334-a-plugin-declares-its-record-stores-as-matched-memory-and-sql-bundles)_
+
+## BEH-EA-334: A plugin declares its record stores as matched memory and SQL bundles
+
+```ts
+class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
+  // ...
+  records: { memory: layerMemory, sql: layerSql },
+}) {}
+```
+
+```text
+REQUIREMENT: A record store is a `Context.Service` whose key contains a
+             `/records/` segment. A plugin declares its stores as
+             `records: { memory, sql }` on `AuthPlugin.Service`, two layers
+             readable as static members of the class (`Layer.empty` when it
+             declares none). A plugin whose layer requires a `/records/` store
+             that neither its own bundle nor a `dependsOn` plugin's bundle
+             provides MUST fail to compile, naming the key. A `memory` and a
+             `sql` that provide different stores MUST fail to compile. A bundle
+             that provides anything other than record stores (a port, a
+             derived service) MUST fail to compile.
+```
+
+The key segment is the mechanism `PortKeysOf` already uses for `/ports/` (BEH-EA-202): one convention marks both, and the compiler can then ask "is every store provided?" without a brand. A plugin's static members are still frozen (BEH-EA-007): the bundle is a declaration, not a computed value. Selecting a bundle stays the host's choice; `Auth.make` does not provide records. A store only the plugin's own derived services read (`SamlConnectionStore`, `ScimConnectionStore`, `KeyRing`) is not a record store and is absorbed into the plugin layer instead. Test-only seams a record layer also provides (a `MemoryEnvelopes` tag) are projected out of the bundle.
+
+_Previous: [BEH-EA-008](01-plugin-contract.md#beh-ea-008-dependson-declares-both-ordering-and-a-typed-requirement-in-one-static-array) | Next: [BEH-EA-009](02-plugin-composition-validate.md#beh-ea-009-authmake-computes-three-outputs-from-one-plugin-tuple)_

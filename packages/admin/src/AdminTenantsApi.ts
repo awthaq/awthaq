@@ -13,6 +13,7 @@
 // plugin (`RolesAdmin` next to `Roles` is the same shape).
 
 import { Api } from "@awthaq/api";
+import { HookPoint } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -99,7 +100,7 @@ export const AdminTenantsGroup = HttpApiGroup.make("admin.tenants")
       params: OrganizationIdParams,
       payload: SuspendOrganizationPayload,
       success: TenantOrganizationDto,
-      error: [AdminActionDenied, AdminOrganizationNotFound],
+      error: [AdminActionDenied, AdminOrganizationNotFound, HookPoint.HookAborted],
     }),
   )
   .add(
@@ -109,7 +110,7 @@ export const AdminTenantsGroup = HttpApiGroup.make("admin.tenants")
       {
         params: OrganizationIdParams,
         success: TenantOrganizationDto,
-        error: [AdminActionDenied, AdminOrganizationNotFound],
+        error: [AdminActionDenied, AdminOrganizationNotFound, HookPoint.HookAborted],
       },
     ),
   )

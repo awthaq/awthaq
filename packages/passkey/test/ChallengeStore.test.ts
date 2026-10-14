@@ -21,7 +21,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const MemoryLayer = ChallengeStore.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
@@ -346,5 +346,21 @@ describe("ChallengeStore (layerCookie)", () => {
         assert.isTrue(first);
         assert.isTrue(secondStillWithinTtl);
       }).pipe(Effect.provide(CookieLayer)),
+  );
+});
+
+// Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
+describe("ChallengeStore.layerSql: a store outage", () => {
+  it.effect("issue fails with StoreUnavailable naming the operation", () =>
+    Effect.gen(function* () {
+      yield* TestSql.injectFailure({
+        name: "passkey_challenge_fail_insert",
+        table: "passkey_challenge",
+        event: "INSERT",
+      });
+      const store = yield* ChallengeStore.ChallengeStore;
+      const failure = yield* store.issue("outage-scope").pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(SqlLayer)),
   );
 });

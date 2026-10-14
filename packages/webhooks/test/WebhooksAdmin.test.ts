@@ -2,9 +2,9 @@
 // secret shown once and stored sealed, the SSRF floor and filter validation at registration, rotation,
 // the delivery log and manual redrive, and the per-administrator rate limit.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Auth, Erasure, DataExport, Users } from "@awthaq/core";
-import { Encryption, RateLimiter } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
+import { AuthEvents, Auth, AuthPlugin, Erasure, DataExport, RateLimits, Users } from "@awthaq/core";
+import { RateLimiter } from "@awthaq/ports";
+import { SealedColumn } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -18,37 +18,16 @@ import * as TestClock from "effect/testing/TestClock";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as Webhooks from "../src/Webhooks.ts";
-import { CoreLive, deliveryLayer, seedEndpoint } from "./support.ts";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { CoreLive, deliveryLayer, EncryptionLive, relay, seedEndpoint } from "./support.ts";
 
 const allow = () => Effect.succeed(true);
 const DateNowUtc = (millis: number) => DateTime.makeUnsafe(millis);
 const nowUtc = DateTime.now;
 
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  ),
-);
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("webhooks-admin-test-csrf-secret-padded-to-32-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 const buildLayer = (
   config: Partial<Webhooks.WebhooksConfigShape> = {},
   limiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
-) =>
-  Webhooks.Webhooks.layer.pipe(
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(deliveryLayer({ config, limiter })),
-  );
+) => deliveryLayer({ config, limiter });
 
 const admin = new Api.UserPrincipal({
   ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
@@ -142,29 +121,25 @@ describe("the gate is fail-closed", () => {
 });
 
 describe("registering an endpoint", () => {
-  it.effect(
-    "returns the secret once; the row holds only its sealed envelope; reads never carry it",
-    () =>
-      Effect.gen(function* () {
-        const webhooks = yield* Webhooks.Webhooks;
-        const encryption = yield* Encryption.Encryption;
-        const records = yield* WebhookRecords.WebhookRecords;
-        const created = yield* create({ description: "  primary  " });
-        assert.match(created.secret, /^whsec_/);
-        assert.strictEqual(created.endpoint.description, "primary");
-        assert.deepStrictEqual(created.endpoint.eventTags, ["auth.user.*"]);
-        assert.isTrue(created.endpoint.enabled);
-        const row = Option.getOrThrow(yield* records.findEndpoint(created.endpoint.id));
-        assert.notInclude(row.secret, created.secret);
-        const opened = yield* encryption.decrypt(row.secret, WebhookSecrets.aad(row.id, "secret"));
-        assert.strictEqual(Redacted.value(opened.plaintext), created.secret);
-        // No later read ever includes it.
-        const listed = JSON.stringify(yield* webhooks.listEndpoints(admin));
-        const got = JSON.stringify(yield* webhooks.getEndpoint(admin, created.endpoint.id));
-        assert.notInclude(listed, created.secret);
-        assert.notInclude(got, created.secret);
-        assert.notInclude(listed, "sealed");
-      }).pipe(Effect.provide(buildLayer({ canManageWebhooks: allow }))),
+  it.effect("returns the secret once, and it opens from the record; reads never carry it", () =>
+    Effect.gen(function* () {
+      const webhooks = yield* Webhooks.Webhooks;
+      const records = yield* WebhookRecords.WebhookRecords;
+      const created = yield* create({ description: "  primary  " });
+      assert.match(created.secret, /^whsec_/);
+      assert.strictEqual(created.endpoint.description, "primary");
+      assert.deepStrictEqual(created.endpoint.eventTags, ["auth.user.*"]);
+      assert.isTrue(created.endpoint.enabled);
+      const row = Option.getOrThrow(yield* records.findEndpoint(created.endpoint.id));
+      const opened = yield* SealedColumn.orDie(row.secret.open);
+      assert.strictEqual(Redacted.value(opened), created.secret);
+      // No later read ever includes it.
+      const listed = JSON.stringify(yield* webhooks.listEndpoints(admin));
+      const got = JSON.stringify(yield* webhooks.getEndpoint(admin, created.endpoint.id));
+      assert.notInclude(listed, created.secret);
+      assert.notInclude(got, created.secret);
+      assert.notInclude(listed, "sealed");
+    }).pipe(Effect.provide(buildLayer({ canManageWebhooks: allow }))),
   );
 
   it.effect(
@@ -252,7 +227,6 @@ describe("editing, rotating and removing", () => {
     () =>
       Effect.gen(function* () {
         const webhooks = yield* Webhooks.Webhooks;
-        const encryption = yield* Encryption.Encryption;
         const records = yield* WebhookRecords.WebhookRecords;
         const first = yield* create();
         const rotated = yield* webhooks.rotateSecret(admin, first.endpoint.id);
@@ -260,24 +234,16 @@ describe("editing, rotating and removing", () => {
         assert.isNotNull(rotated.endpoint.previousSecretExpiresAt);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         const row = Option.getOrThrow(yield* records.findEndpoint(first.endpoint.id));
-        const during = Option.getOrThrow(
-          yield* WebhookSecrets.open(encryption, row, DateNowUtc(now)),
-        );
+        const during = Option.getOrThrow(yield* WebhookSecrets.open(row, DateNowUtc(now)));
         assert.deepStrictEqual(during.map(Redacted.value), [rotated.secret, first.secret]);
         const after = Option.getOrThrow(
-          yield* WebhookSecrets.open(
-            encryption,
-            row,
-            DateNowUtc(now + Duration.toMillis(Duration.hours(25))),
-          ),
+          yield* WebhookSecrets.open(row, DateNowUtc(now + Duration.toMillis(Duration.hours(25)))),
         );
         assert.deepStrictEqual(after.map(Redacted.value), [rotated.secret]);
         // A second rotation forgets the first secret: only ever current + previous.
         const again = yield* webhooks.rotateSecret(admin, first.endpoint.id);
         const row2 = Option.getOrThrow(yield* records.findEndpoint(first.endpoint.id));
-        const two = Option.getOrThrow(
-          yield* WebhookSecrets.open(encryption, row2, DateNowUtc(now)),
-        );
+        const two = Option.getOrThrow(yield* WebhookSecrets.open(row2, DateNowUtc(now)));
         assert.deepStrictEqual(two.map(Redacted.value), [again.secret, rotated.secret]);
       }).pipe(Effect.provide(buildLayer({ canManageWebhooks: allow }))),
   );
@@ -321,7 +287,11 @@ describe("the delivery log", () => {
             nextAttemptAt: yield* nowUtc,
           },
         ]);
-        yield* records.markDead("d1", { at: yield* nowUtc, statusCode: 500, error: "status" });
+        yield* records.markDead(relay, "d1", {
+          at: yield* nowUtc,
+          statusCode: 500,
+          error: "status",
+        });
         const all = yield* webhooks.listDeliveries(admin, endpoint.id, {});
         assert.deepStrictEqual(
           all.map((row) => [row.id, row.status]),
@@ -387,6 +357,35 @@ describe("rate limits", () => {
   );
 });
 
+describe("the admin rate limit is declared and registered (plan 06)", () => {
+  it.effect("the registry carries the configured number; the manifest lists the rule", () =>
+    Effect.gen(function* () {
+      const registry = yield* RateLimits.RateLimitsRegistry;
+      const mine = (yield* registry.registered).filter((rule) => rule.plugin === "webhooks");
+      assert.deepStrictEqual(
+        mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.key, rule.limit]),
+        [["admin", "webhooks.admin", "*", "user", 2]],
+      );
+      assert.deepStrictEqual(
+        Auth.make([Webhooks.Webhooks]).manifest.rateLimits.map((rule) => [
+          rule.plugin,
+          rule.name,
+          rule.key,
+          rule.limit,
+        ]),
+        [["webhooks", "admin", "user", 60]],
+      );
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          canManageWebhooks: allow,
+          adminRate: { limit: 2, window: Duration.minutes(1) },
+        }),
+      ),
+    ),
+  );
+});
+
 describe("the plugin composes on the admin tier", () => {
   it("Auth.make([Webhooks]) puts the group in the admin API, out of the public one", () => {
     const auth = Auth.make([Webhooks.Webhooks]);
@@ -397,6 +396,10 @@ describe("the plugin composes on the admin tier", () => {
         id: "webhooks",
         apiVersion: 1,
         tables: ["webhooks_endpoint", "webhooks_delivery"],
+        tenancy: {
+          webhooks_endpoint: AuthPlugin.Table.partitioned("tenantId"),
+          webhooks_delivery: AuthPlugin.Table.derived("webhooks_endpoint", "endpointId"),
+        },
         dependsOn: [],
         groups: ["webhooks.admin"],
       },
@@ -405,7 +408,9 @@ describe("the plugin composes on the admin tier", () => {
 });
 
 describe("privacy: erasure and export", () => {
-  const PrivacyLayer = Layer.mergeAll(WebhookRecords.layerMemory).pipe(
+  const PrivacyLayer = Layer.mergeAll(
+    WebhookRecords.layerMemory.pipe(Layer.provide(EncryptionLive)),
+  ).pipe(
     Layer.provideMerge(Layer.mergeAll(Erasure.registryLayer, DataExport.registryLayer)),
     Layer.provideMerge(CoreLive),
   );
@@ -421,7 +426,7 @@ describe("privacy: erasure and export", () => {
         id: "ep",
         url: "https://hooks.example.com/x",
         eventTags: ["*"],
-        secret: "sealed",
+        secret: Redacted.make("whsec_x"),
         createdBy: "a",
       });
       const at = yield* nowUtc;
@@ -453,8 +458,8 @@ describe("privacy: erasure and export", () => {
       for (const contribution of yield* registry.contributions) {
         yield* contribution.erase({ userId: Users.UserId("me") });
       }
-      assert.deepStrictEqual(yield* records.listBySubject("me"), []);
-      assert.strictEqual((yield* records.listBySubject("them")).length, 1);
+      assert.deepStrictEqual(yield* records.listBySubject(relay, "me"), []);
+      assert.strictEqual((yield* records.listBySubject(relay, "them")).length, 1);
     }).pipe(Effect.scoped, Effect.provide(PrivacyLayer)),
   );
 });

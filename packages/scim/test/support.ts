@@ -1,75 +1,62 @@
-// Shared composition for the SCIM suites: the real in-memory core, the organization
-// plugin (`Scim` `dependsOn: [Organization]`), the SCIM records, connection store and
-// bearer authentication — the same layer graph an application builds.
+// Shared composition for the SCIM suites: `Auth.make([Organization, Scim])` through `TestAuth.layer` (plan 08), so the
+// real in-memory core, the organization plugin (`Scim` `dependsOn: [Organization]`), the SCIM records, connection
+// store and bearer authentication come from the plugins' own declarations: the same layer graph an application builds.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
-import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Erasure, Hooks, Users } from "@awthaq/core";
+import { Organization, OrganizationHooks } from "@awthaq/organization";
+import { TestAuth } from "@awthaq/test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Scim from "../src/Scim.ts";
 import * as ScimApi from "../src/ScimApi.ts";
 import * as ScimConnections from "../src/ScimConnections.ts";
-import * as ScimRecords from "../src/ScimRecords.ts";
 
-const CoreLive = (users: typeof Users.layerMemory, hooks: typeof Hooks.HooksLive) =>
-  Layer.mergeAll(Sessions.layerMemory, users).pipe(
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(hooks),
-    Layer.provideMerge(NodeCrypto.layer),
-  );
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("scim-test-csrf-secret-padded-to-thirty-two-bytes-long"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-/** The organization plugin and every records store it needs, in memory. */
-const OrganizationLive = (options: Partial<Organization.OrganizationConfigShape> = {}) =>
-  Organization.Organization.layer.pipe(
-    Layer.provide(Organization.config(options)),
-    Layer.provide(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-  );
+const built = Auth.make([Organization.Organization, Scim.Scim]);
 
 /**
- * `Scim` over in-memory storage. `ScimRecords.layerMemory` is shared by the plugin, the
- * connection store and the bearer authentication (one `Ref`), so a token created through
- * the store authenticates through the plugin.
+ * SCIM Groups are organization teams, so they need `teams.enabled` (plan 04, BEH-EA-251). The default
+ * keeps the groups tests meaningful: teams on, no quotas, and a directory may delete every group
+ * (`allowRemovingAllTeams`); a test that checks a refusal overrides it.
+ */
+export const groupsTeams = {
+  enabled: true,
+  maximumTeams: Number.POSITIVE_INFINITY,
+  maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+  allowRemovingAllTeams: true,
+};
+
+/**
+ * `Scim` over in-memory storage. `ScimRecords` is shared by the plugin, the connection store and the bearer
+ * authentication (one `Ref`), so a token created through the store authenticates through the plugin.
+ *
+ * `users` is a `Users` the suite substitutes for the plugins and the test alike (an outage, an erasure between
+ * reads: `TestAuth.layer`'s `decorate`). `taps` are application taps installed on the hook points the
+ * composition builds, core's (`Hooks.BeforeSignUp`) and the organization's: a tap's layer requires its point.
  */
 export const ScimLive = (
   scimConfig: Partial<Scim.ScimConfigShape> = {},
   organizationConfig: Partial<Organization.OrganizationConfigShape> = {},
-  users: typeof Users.layerMemory = Users.layerMemory,
-  // P20a: a composition with a tap installed on a hook point (e.g. a `beforeDelete` veto) passes
-  // `Tap.pipe(Layer.provideMerge(Hooks.HooksLive))` here.
-  hooks: typeof Hooks.HooksLive = Hooks.HooksLive,
+  users?: Layer.Layer<Users.Users, never, Users.Users>,
+  taps: Layer.Layer<
+    never,
+    never,
+    | Hooks.BeforeSignUp
+    | Hooks.BeforeUserDelete
+    | Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+  > = Layer.empty,
 ) =>
-  Scim.Scim.layer.pipe(
-    Layer.provide(Scim.config(scimConfig)),
-    Layer.provide(ScimConnections.ScimAuthenticationLive),
-    Layer.provideMerge(ScimConnections.layerStore),
-    Layer.provideMerge(OrganizationLive(organizationConfig)),
-    Layer.provideMerge(ScimRecords.layerMemory),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive(users, hooks)),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Scim.config(scimConfig),
+      Organization.config({ teams: groupsTeams, ...organizationConfig }),
+      // A substituted `Users` must reach the erasure cascade too (SCIM `erase` runs it): a fresh instance,
+      // built over the decorated `Users`, since the base's own was built over the real one.
+      ...(users === undefined ? [] : [Layer.fresh(Erasure.layer)]),
+    ),
+    ...(users === undefined ? {} : { decorate: users }),
+    taps,
+  });
 
 const ownerPrincipal = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({

@@ -1,6 +1,6 @@
 // @awthaq/core — Retention
 //
-// CSG-003/ALF-010 (wayfinder ticket 30, ADR-EA-033): the retention sweep. Expiry
+// CSG-003/ALF-010 (wayfinder ticket 30, ADR-EA-031 Decision 6): the retention sweep. Expiry
 // is a read-time rejection everywhere in this library — a session past its
 // absolute expiry, a verification token past its TTL, a reservation past its
 // window all stop *working* but their rows stay — so without a sweep the tables
@@ -17,12 +17,14 @@
 //   - verification tokens consumed or expired more than `verificationForensicWindow`
 //     ago (`layerSql` keeps a consumed row as replay evidence, BEH-EA-058), and
 //     expired reservations;
-//   - audit rows older than the per-event-class windows in `auditLog`.
+//   - audit rows older than the per-event-class windows in `auditLog`;
+//   - whatever each installed plugin contributes (`Retention.contribute`, the `RetentionRegistry`):
+//     its own table's expiry rule, run after the core purges, one failing contribution isolated.
 // The defaults (7 days, 90 days, audit forever) are a compliance policy an
 // operator confirms for their jurisdiction, not a universal truth.
 //
 // Not covered: `admin_impersonation` and its hash-chained ledger are retained by
-// decision (ADR-EA-033) — purging ended rows would break the chain that makes the
+// decision (ADR-EA-031 Decision 3) — purging ended rows would break the chain that makes the
 // ledger tamper-evident.
 
 import * as Context from "effect/Context";
@@ -34,8 +36,11 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import { AuditLog } from "./AuditLog.ts";
 import type { AuthEventTag } from "./AuthEventSchemas.ts";
+import { RetentionRegistry } from "./RetentionRegistry.ts";
 import { Sessions } from "./Sessions.ts";
 import { Verification } from "./Verification.ts";
+
+export * from "./RetentionRegistry.ts";
 
 /** Rows of these event tags are kept for `keepFor`, whatever `AuditRetention.default` says. */
 export interface AuditRetentionRule {
@@ -91,6 +96,12 @@ export interface SweepReport {
   /** Tokens and reservations together. */
   readonly verificationRowsDeleted: number;
   readonly auditRowsDeleted: number;
+  /** What each installed plugin's contribution deleted, in run order; `failed` when it could not run (logged, the sweep went on). */
+  readonly plugins: ReadonlyArray<{
+    readonly id: string;
+    readonly deleted: number;
+    readonly failed: boolean;
+  }>;
 }
 
 const cutoff = (now: DateTime.Utc, window: Duration.Duration): DateTime.Utc =>
@@ -106,6 +117,7 @@ export const sweep = Effect.gen(function* () {
   const sessions = yield* Sessions;
   const verification = yield* Verification;
   const auditLog = yield* AuditLog;
+  const registry = yield* RetentionRegistry;
   const now = yield* DateTime.now;
 
   const sessionsDeleted = yield* sessions.purgeExpired(cutoff(now, settings.sessionGrace));
@@ -133,7 +145,29 @@ export const sweep = Effect.gen(function* () {
     });
   }
 
-  return { sessionsDeleted, verificationRowsDeleted, auditRowsDeleted } satisfies SweepReport;
+  // Then every installed plugin's own rule. One plugin's outage must not stop the others, nor the
+  // core purges above: a failing contribution is logged and reported, never fatal.
+  const plugins: Array<SweepReport["plugins"][number]> = [];
+  for (const contribution of yield* registry.contributions) {
+    plugins.push(
+      yield* contribution.purge(now).pipe(
+        Effect.map((deleted) => ({ id: contribution.id, deleted, failed: false })),
+        Effect.catchCause((cause) =>
+          Effect.logError("awthaq.retention.contribution.failed", {
+            id: contribution.id,
+            cause,
+          }).pipe(Effect.as({ id: contribution.id, deleted: 0, failed: true })),
+        ),
+      ),
+    );
+  }
+
+  return {
+    sessionsDeleted,
+    verificationRowsDeleted,
+    auditRowsDeleted,
+    plugins,
+  } satisfies SweepReport;
 });
 
 /**

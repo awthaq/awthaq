@@ -5,8 +5,7 @@
 // the same way `Session.SessionHandlers` is.
 
 import { AuthCore, Api, AccountContract } from "@awthaq/api";
-import { AuthEvents, DataExport, Erasure, RateLimits, UserFields, Users } from "@awthaq/core";
-import { RateLimiter } from "@awthaq/ports";
+import { DataExport, Erasure, RateLimits, UserFields, Users } from "@awthaq/core";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
@@ -46,8 +45,25 @@ const toDto = (user: Users.UserRecord, fields: UserFields.Values): AccountContra
     fields,
   });
 
-/** Reading every plugin's store is the costliest thing an account can ask for; a person needs it rarely. */
-const EXPORT_RATE_LIMIT = { limit: 5, window: Duration.hours(1) } as const;
+/**
+ * BEH-EA-105/107/111: core's own owner for the `account` group's rate limits, so the export rule is declared
+ * and registered like a plugin's (it used to be enforced without either). Reading every plugin's store is the
+ * costliest thing an account can ask for; a person needs it rarely. It appears in the registry under the
+ * owner id `account`, not in the plugin manifest (`Auth.make` folds only plugins).
+ */
+export const accountRateLimits = RateLimits.owner({
+  id: "account",
+  contract: AuthCore.AuthCoreApi,
+  rateLimits: {
+    exportData: RateLimits.rule({
+      group: "account",
+      endpoint: "exportData",
+      key: RateLimits.Key.user,
+      limit: 5,
+      window: Duration.hours(1),
+    }),
+  },
+});
 
 export const AccountHandlers = HttpApiBuilder.group(
   AuthCore.AuthCoreApi,
@@ -56,8 +72,7 @@ export const AccountHandlers = HttpApiBuilder.group(
     const users = yield* Users.Users;
     const erasure = yield* Erasure.AccountErasure;
     const dataExport = yield* DataExport.AccountExport;
-    const limiter = yield* RateLimiter.RateLimiter;
-    const events = yield* AuthEvents.AuthEvents;
+    const limits = yield* RateLimits.budget(accountRateLimits);
     // SAM-004: a composition that declares no user field answers `fields: {}` without a query.
     const declared = yield* UserFields.UserFieldRegistry;
 
@@ -113,7 +128,7 @@ export const AccountHandlers = HttpApiBuilder.group(
       // same guaranteed-complete cascade; this handler is only the HTTP edge.
       deleteUser: Effect.fnUntraced(function* () {
         const { userId } = yield* currentUser;
-        yield* erasure.eraseAccount(userId, { deletedBy: "self" }).pipe(
+        yield* erasure.eraseAccount(userId, Erasure.ErasureInitiator.Self()).pipe(
           // `@awthaq/api` (the contract stratum) sits below core and cannot name core's
           // `HookAborted`, so the endpoint declares no error for a `BeforeUserDelete` veto
           // (a legal hold): as before this refactor, it surfaces as a server defect.
@@ -138,23 +153,7 @@ export const AccountHandlers = HttpApiBuilder.group(
       // store), and headers that keep the document out of caches and name the download.
       exportData: Effect.fnUntraced(function* () {
         const { userId } = yield* currentUser;
-        yield* RateLimits.enforce({
-          key: `account:export:${userId}`,
-          limit: EXPORT_RATE_LIMIT.limit,
-          window: EXPORT_RATE_LIMIT.window,
-          meta: {
-            group: "account",
-            endpoint: "exportData",
-            rule: "exportData",
-            dimension: "principal",
-          },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag("RateLimitExceeded", (error) =>
-            Effect.fail(new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis })),
-          ),
-        );
+        yield* limits.spend("exportData", { userId });
         const document = yield* dataExport.exportAccount(userId, { requestedBy: "self" }).pipe(
           Effect.catchTag("UserNotFound", () =>
             Effect.die(

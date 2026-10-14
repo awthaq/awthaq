@@ -5,8 +5,11 @@
 // Built directly against `effect/unstable/sql`'s `SqlSchema` (the table belongs to the plugin, not
 // the shared stratum), with row codecs from the ambient client's dialect (`SqlModels.dialectFields`).
 //
-// - `two_factor_secret`: one row per user. `secret` holds an `Encryption` envelope, never the
-//   base32 secret (ADR-EA-020); `confirmedAt` is NULL until the first valid code (an abandoned
+// - `two_factor_secret`: one row per user. `secret` is a `SealedColumn` (plan 05, ADR-EA-019 decision
+//   6, ADR-EA-020): an `Encryption` envelope under `two_factor_secret:<userId>:secret`, never the
+//   base32 secret, handed out as a `Sealed` value that opens where a code is checked (a secret
+//   sealed under the older `two_factor_secret:<userId>` AAD, or under a retired encryption key,
+//   re-seals on read by compare-and-swap); `confirmedAt` is NULL until the first valid code (an abandoned
 //   `enable` never becomes an active factor); `lastUsedStep` is the replay guard — the last TOTP
 //   step accepted, advanced by a compare-and-set (`advanceLastUsedStep`) so two concurrent
 //   verifications of one code cannot both succeed (RFC 6238 §5.2, THS-005).
@@ -19,8 +22,8 @@
 // contribution instead), so `deleteAllByUser` is what account erasure calls.
 
 import { Migrations, Users } from "@awthaq/core";
-import { Defects, PasswordHasher } from "@awthaq/ports";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Defects, type Encryption, PasswordHasher, SqlTransaction } from "@awthaq/ports";
+import { Models as SqlModels, SealedColumn, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -40,8 +43,8 @@ type UserId = Users.UserId;
 
 export interface SecretRecord {
   readonly userId: UserId;
-  /** An `Encryption` envelope (AES-256-GCM, AAD bound to the user) — never the plaintext secret. */
-  readonly envelope: string;
+  /** The sealed base32 secret (AES-256-GCM, AAD bound to the user and the column) — open it where a code is checked. */
+  readonly secret: SealedColumn.Sealed<string>;
   /** `None` until the first valid code: an unconfirmed secret is never an active factor. */
   readonly confirmedAt: Option.Option<DateTime.Utc>;
   /** The last TOTP step accepted; that step and every earlier one are refused (THS-005). */
@@ -49,33 +52,50 @@ export interface SecretRecord {
   readonly createdAt: DateTime.Utc;
 }
 
+/** The sealed `secret` column. The legacy AAD (`two_factor_secret:<userId>`) still opens, then re-seals canonically. */
+export const secretColumn = SealedColumn.column({
+  table: "two_factor_secret",
+  column: "secret",
+  key: "userId",
+  legacyAad: [(userId) => `two_factor_secret:${userId}`],
+});
+
 export interface TwoFactorSecretsShape {
-  readonly find: (userId: UserId) => Effect.Effect<Option.Option<SecretRecord>>;
+  readonly find: (
+    userId: UserId,
+  ) => Effect.Effect<Option.Option<SecretRecord>, StoreFailure.StoreUnavailable>;
   /**
    * Stores a *pending* secret, replacing an earlier unconfirmed one. `false` (nothing written)
    * when the user already has a confirmed secret — disable it first. One atomic statement.
    */
-  readonly upsertPending: (userId: UserId, envelope: string) => Effect.Effect<boolean>;
+  readonly upsertPending: (
+    userId: UserId,
+    secret: Redacted.Redacted<string>,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /**
    * Marks the pending secret confirmed and records the step of the code that proved it (so that
    * very code cannot be replayed at sign-in). `false` when there is no unconfirmed row — a
    * concurrent confirm won.
    */
-  readonly confirm: (userId: UserId, step: bigint) => Effect.Effect<boolean>;
+  readonly confirm: (
+    userId: UserId,
+    step: bigint,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /**
    * THS-005: compare-and-set of `lastUsedStep` — succeeds only if `step` is later than the stored
    * one (or none is stored). `false` means the step was already spent: a replay, or a concurrent
    * verification of the same code that lost the race.
    */
-  readonly advanceLastUsedStep: (userId: UserId, step: bigint) => Effect.Effect<boolean>;
-  /** Lazy re-encryption: swaps `previous` for `next` only if the row still holds `previous`. */
-  readonly reencrypt: (userId: UserId, previous: string, next: string) => Effect.Effect<boolean>;
+  readonly advanceLastUsedStep: (
+    userId: UserId,
+    step: bigint,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /** `true` when a row existed. */
-  readonly delete: (userId: UserId) => Effect.Effect<boolean>;
+  readonly delete: (userId: UserId) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
 }
 
 export class TwoFactorSecrets extends Context.Service<TwoFactorSecrets, TwoFactorSecretsShape>()(
-  "awthaq/two-factor/TwoFactorSecrets",
+  "awthaq/two-factor/records/TwoFactorSecrets",
 ) {}
 
 // ---- the recovery codes ----------------------------------------------------------------
@@ -90,41 +110,87 @@ export interface TwoFactorRecoveryCodesShape {
   readonly replaceAll: (
     userId: UserId,
     hashes: ReadonlyArray<PasswordHasher.PhcHash>,
-  ) => Effect.Effect<void>;
-  readonly listUnused: (userId: UserId) => Effect.Effect<ReadonlyArray<RecoveryCodeRecord>>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  readonly listUnused: (
+    userId: UserId,
+  ) => Effect.Effect<ReadonlyArray<RecoveryCodeRecord>, StoreFailure.StoreUnavailable>;
   /** Single-use: `true` only for the caller that spends an unused code (compare-and-set on `usedAt IS NULL`). */
-  readonly markUsed: (userId: UserId, id: string) => Effect.Effect<boolean>;
+  readonly markUsed: (
+    userId: UserId,
+    id: string,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /** BCR-002: what a client shows as "n recovery codes left". */
-  readonly countUnused: (userId: UserId) => Effect.Effect<number>;
-  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
+  readonly countUnused: (userId: UserId) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class TwoFactorRecoveryCodes extends Context.Service<
   TwoFactorRecoveryCodes,
   TwoFactorRecoveryCodesShape
->()("awthaq/two-factor/TwoFactorRecoveryCodes") {}
+>()("awthaq/two-factor/records/TwoFactorRecoveryCodes") {}
 
 // ---- layerMemory -----------------------------------------------------------------------
 
-export const layerSecretsMemory: Layer.Layer<TwoFactorSecrets> = Layer.effect(
-  TwoFactorSecrets,
+/** A secret as the memory adapter keeps it: the sealed column is the envelope string, like a SQL row. */
+interface StoredSecret extends Omit<SecretRecord, "secret"> {
+  readonly secret: string;
+}
+
+/**
+ * A test seam of `layerSecretsMemory`: the stored envelope of the sealed column, and a way to overwrite it
+ * (`TestAuth.runSealedColumnTests` needs to look at, and plant, what is at rest; over SQL that is a statement).
+ */
+export class MemoryEnvelopes extends Context.Service<
+  MemoryEnvelopes,
+  {
+    readonly stored: (userId: UserId) => Effect.Effect<string>;
+    readonly plant: (userId: UserId, stored: string) => Effect.Effect<void>;
+  }
+>()("awthaq/two-factor/TwoFactorStore/MemoryEnvelopes") {}
+
+// The explicit types on the secrets layers are the narrow exception the plugins document (TS2883):
+// declaration emit cannot name `Encryption` through the sealed-column codec's requirement.
+export const layerSecretsMemory: Layer.Layer<
+  TwoFactorSecrets | MemoryEnvelopes,
+  never,
+  Encryption.Encryption
+> = Layer.effectContext(
   Effect.gen(function* () {
-    const state = yield* Ref.make(HashMap.empty<UserId, SecretRecord>());
+    const state = yield* Ref.make(HashMap.empty<UserId, StoredSecret>());
+
+    /** Persists a re-seal only while the row still holds the envelope that was read. */
+    const swap: SealedColumn.Swap = (rowKey, stored, fresh) =>
+      Ref.modify(state, (rows) => {
+        const existing = HashMap.get(rows, Users.UserId(rowKey));
+        if (Option.isNone(existing) || existing.value.secret !== stored) {
+          return [false, rows] as const;
+        }
+        return [
+          true,
+          HashMap.set(rows, existing.value.userId, { ...existing.value, secret: fresh }),
+        ] as const;
+      });
+    const secretCodec = yield* SealedColumn.codec(secretColumn, swap);
+    const toRecord = (row: StoredSecret): SecretRecord => ({
+      ...row,
+      secret: secretCodec.sealed(row.userId, row.secret),
+    });
 
     const find: TwoFactorSecretsShape["find"] = (userId) =>
-      Ref.get(state).pipe(Effect.map((rows) => HashMap.get(rows, userId)));
+      Ref.get(state).pipe(Effect.map((rows) => Option.map(HashMap.get(rows, userId), toRecord)));
 
-    const upsertPending: TwoFactorSecretsShape["upsertPending"] = (userId, envelope) =>
+    const upsertPending: TwoFactorSecretsShape["upsertPending"] = (userId, secret) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
+        const envelope = yield* secretCodec.seal(userId, secret);
         return yield* Ref.modify(state, (rows) => {
           const existing = HashMap.get(rows, userId);
           if (Option.isSome(existing) && Option.isSome(existing.value.confirmedAt)) {
             return [false, rows] as const;
           }
-          const record: SecretRecord = {
+          const record: StoredSecret = {
             userId,
-            envelope,
+            secret: envelope,
             confirmedAt: Option.none(),
             lastUsedStep: Option.none(),
             createdAt: now,
@@ -166,15 +232,6 @@ export const layerSecretsMemory: Layer.Layer<TwoFactorSecrets> = Layer.effect(
         ] as const;
       });
 
-    const reencrypt: TwoFactorSecretsShape["reencrypt"] = (userId, previous, next) =>
-      Ref.modify(state, (rows) => {
-        const existing = HashMap.get(rows, userId);
-        if (Option.isNone(existing) || existing.value.envelope !== previous) {
-          return [false, rows] as const;
-        }
-        return [true, HashMap.set(rows, userId, { ...existing.value, envelope: next })] as const;
-      });
-
     const del: TwoFactorSecretsShape["delete"] = (userId) =>
       Ref.modify(state, (rows) =>
         HashMap.has(rows, userId)
@@ -182,7 +239,24 @@ export const layerSecretsMemory: Layer.Layer<TwoFactorSecrets> = Layer.effect(
           : ([false, rows] as const),
       );
 
-    return { find, upsertPending, confirm, advanceLastUsedStep, reencrypt, delete: del };
+    const secrets = { find, upsertPending, confirm, advanceLastUsedStep, delete: del };
+    const envelopes = MemoryEnvelopes.of({
+      stored: (userId) =>
+        Effect.map(Ref.get(state), (rows) =>
+          Option.match(HashMap.get(rows, userId), {
+            onNone: () => "",
+            onSome: (row) => row.secret,
+          }),
+        ),
+      plant: (userId, stored) =>
+        Ref.update(state, (rows) =>
+          Option.match(HashMap.get(rows, userId), {
+            onNone: () => rows,
+            onSome: (row) => HashMap.set(rows, userId, { ...row, secret: stored }),
+          }),
+        ),
+    });
+    return Context.make(TwoFactorSecrets, secrets).pipe(Context.add(MemoryEnvelopes, envelopes));
   }),
 );
 
@@ -205,7 +279,9 @@ export const layerRecoveryCodesMemory: Layer.Layer<TwoFactorRecoveryCodes, never
           const fresh: Array<MemoryCode> = [];
           for (const codeHash of hashes) {
             fresh.push({
-              id: yield* crypto.randomUUIDv7.pipe(Effect.orDie),
+              id: yield* crypto.randomUUIDv7.pipe(
+                Effect.catch(StoreFailure.storeUnavailable("TwoFactorRecoveryCodes.replaceAll")),
+              ),
               userId,
               codeHash,
               usedAt: Option.none(),
@@ -277,37 +353,46 @@ const makeCodeRow = (wire: SqlModels.DialectWire) =>
     createdAt: wire.dateTime,
   });
 
-export const layerSecretsSql: Layer.Layer<TwoFactorSecrets, never, SqlClient.SqlClient> =
-  Layer.effect(
-    TwoFactorSecrets,
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
-      const SecretRow = makeSecretRow(wire);
+export const layerSecretsSql: Layer.Layer<
+  TwoFactorSecrets,
+  never,
+  SqlClient.SqlClient | Encryption.Encryption
+> = Layer.effect(
+  TwoFactorSecrets,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const SecretRow = makeSecretRow(wire);
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`TwoFactorSecrets.${operation}`);
+    const secretCodec = yield* SealedColumn.codec(
+      secretColumn,
+      yield* SealedColumn.sqlSwap(secretColumn),
+    );
 
-      const toRecord = (row: typeof SecretRow.Type): SecretRecord => ({
-        userId: Users.UserId(row.userId),
-        envelope: row.secret,
-        confirmedAt: row.confirmedAt,
-        lastUsedStep: Option.map(row.lastUsedStep, (step) => BigInt(step)),
-        createdAt: row.createdAt,
-      });
+    const toRecord = (row: typeof SecretRow.Type): SecretRecord => ({
+      userId: Users.UserId(row.userId),
+      secret: secretCodec.sealed(row.userId, row.secret),
+      confirmedAt: row.confirmedAt,
+      lastUsedStep: Option.map(row.lastUsedStep, (step) => BigInt(step)),
+      createdAt: row.createdAt,
+    });
 
-      const findQuery = SqlSchema.findOneOption({
-        Request: Schema.String,
-        Result: SecretRow,
-        execute: (userId) => sql`SELECT * FROM two_factor_secret WHERE "userId" = ${userId}`,
-      });
+    const findQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: SecretRow,
+      execute: (userId) => sql`SELECT * FROM two_factor_secret WHERE "userId" = ${userId}`,
+    });
 
-      // One atomic statement: insert, or replace the row only while it is still unconfirmed.
-      const upsertPendingQuery = SqlSchema.findOneOption({
-        Request: Schema.Struct({
-          userId: Schema.String,
-          secret: Schema.String,
-          createdAt: wire.dateTime,
-        }),
-        Result: SecretRow,
-        execute: (r) => sql`
+    // One atomic statement: insert, or replace the row only while it is still unconfirmed.
+    const upsertPendingQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        userId: Schema.String,
+        secret: Schema.String,
+        createdAt: wire.dateTime,
+      }),
+      Result: SecretRow,
+      execute: (r) => sql`
           INSERT INTO two_factor_secret ("userId", secret, "confirmedAt", "lastUsedStep", "createdAt")
           VALUES (${r.userId}, ${r.secret}, NULL, NULL, ${r.createdAt})
           ON CONFLICT("userId") DO UPDATE SET
@@ -317,28 +402,28 @@ export const layerSecretsSql: Layer.Layer<TwoFactorSecrets, never, SqlClient.Sql
           WHERE two_factor_secret."confirmedAt" IS NULL
           RETURNING *
         `,
-      });
+    });
 
-      const confirmQuery = SqlSchema.findOneOption({
-        Request: Schema.Struct({
-          userId: Schema.String,
-          step: Schema.Int,
-          now: wire.dateTime,
-        }),
-        Result: SecretRow,
-        execute: (r) => sql`
+    const confirmQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        userId: Schema.String,
+        step: Schema.Int,
+        now: wire.dateTime,
+      }),
+      Result: SecretRow,
+      execute: (r) => sql`
           UPDATE two_factor_secret
           SET "confirmedAt" = ${r.now}, "lastUsedStep" = ${r.step}
           WHERE "userId" = ${r.userId} AND "confirmedAt" IS NULL
           RETURNING *
         `,
-      });
+    });
 
-      // THS-005: the compare-and-set — only a strictly later step advances it.
-      const advanceQuery = SqlSchema.findOneOption({
-        Request: Schema.Struct({ userId: Schema.String, step: Schema.Int }),
-        Result: SecretRow,
-        execute: (r) => sql`
+    // THS-005: the compare-and-set — only a strictly later step advances it.
+    const advanceQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ userId: Schema.String, step: Schema.Int }),
+      Result: SecretRow,
+      execute: (r) => sql`
           UPDATE two_factor_secret
           SET "lastUsedStep" = ${r.step}
           WHERE "userId" = ${r.userId}
@@ -346,64 +431,49 @@ export const layerSecretsSql: Layer.Layer<TwoFactorSecrets, never, SqlClient.Sql
             AND ("lastUsedStep" IS NULL OR "lastUsedStep" < ${r.step})
           RETURNING *
         `,
-      });
+    });
 
-      const reencryptQuery = SqlSchema.findOneOption({
-        Request: Schema.Struct({
-          userId: Schema.String,
-          previous: Schema.String,
-          next: Schema.String,
-        }),
-        Result: SecretRow,
-        execute: (r) => sql`
-          UPDATE two_factor_secret SET secret = ${r.next}
-          WHERE "userId" = ${r.userId} AND secret = ${r.previous}
-          RETURNING *
-        `,
-      });
+    const deleteQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: SecretRow,
+      execute: (userId) =>
+        sql`DELETE FROM two_factor_secret WHERE "userId" = ${userId} RETURNING *`,
+    });
 
-      const deleteQuery = SqlSchema.findOneOption({
-        Request: Schema.String,
-        Result: SecretRow,
-        execute: (userId) =>
-          sql`DELETE FROM two_factor_secret WHERE "userId" = ${userId} RETURNING *`,
-      });
+    const find: TwoFactorSecretsShape["find"] = (userId) =>
+      findQuery(userId).pipe(Effect.map(Option.map(toRecord)), unavailable("find"));
 
-      const find: TwoFactorSecretsShape["find"] = (userId) =>
-        findQuery(userId).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
-
-      const upsertPending: TwoFactorSecretsShape["upsertPending"] = (userId, envelope) =>
-        Effect.gen(function* () {
-          const now = yield* DateTime.now;
-          const written = yield* upsertPendingQuery({
-            userId,
-            secret: envelope,
-            createdAt: now,
-          }).pipe(Effect.orDie);
-          return Option.isSome(written);
+    const upsertPending: TwoFactorSecretsShape["upsertPending"] = (userId, secret) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const envelope = yield* secretCodec.seal(userId, secret);
+        const written = yield* upsertPendingQuery({
+          userId,
+          secret: envelope,
+          createdAt: now,
         });
+        return Option.isSome(written);
+      }).pipe(unavailable("upsertPending"));
 
-      const confirm: TwoFactorSecretsShape["confirm"] = (userId, step) =>
-        Effect.gen(function* () {
-          const now = yield* DateTime.now;
-          const updated = yield* confirmQuery({ userId, step: Number(step), now }).pipe(
-            Effect.orDie,
-          );
-          return Option.isSome(updated);
-        });
+    const confirm: TwoFactorSecretsShape["confirm"] = (userId, step) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const updated = yield* confirmQuery({ userId, step: Number(step), now });
+        return Option.isSome(updated);
+      }).pipe(unavailable("confirm"));
 
-      const advanceLastUsedStep: TwoFactorSecretsShape["advanceLastUsedStep"] = (userId, step) =>
-        advanceQuery({ userId, step: Number(step) }).pipe(Effect.map(Option.isSome), Effect.orDie);
+    const advanceLastUsedStep: TwoFactorSecretsShape["advanceLastUsedStep"] = (userId, step) =>
+      advanceQuery({ userId, step: Number(step) }).pipe(
+        Effect.map(Option.isSome),
+        unavailable("advanceLastUsedStep"),
+      );
 
-      const reencrypt: TwoFactorSecretsShape["reencrypt"] = (userId, previous, next) =>
-        reencryptQuery({ userId, previous, next }).pipe(Effect.map(Option.isSome), Effect.orDie);
+    const del: TwoFactorSecretsShape["delete"] = (userId) =>
+      deleteQuery(userId).pipe(Effect.map(Option.isSome), unavailable("delete"));
 
-      const del: TwoFactorSecretsShape["delete"] = (userId) =>
-        deleteQuery(userId).pipe(Effect.map(Option.isSome), Effect.orDie);
-
-      return { find, upsertPending, confirm, advanceLastUsedStep, reencrypt, delete: del };
-    }),
-  );
+    return { find, upsertPending, confirm, advanceLastUsedStep, delete: del };
+  }),
+);
 
 export const layerRecoveryCodesSql: Layer.Layer<
   TwoFactorRecoveryCodes,
@@ -416,6 +486,8 @@ export const layerRecoveryCodesSql: Layer.Layer<
     const crypto = yield* Crypto.Crypto;
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const CodeRow = makeCodeRow(wire);
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`TwoFactorRecoveryCodes.${operation}`);
 
     const insertQuery = SqlSchema.void({
       Request: Schema.Struct({
@@ -464,19 +536,22 @@ export const layerRecoveryCodesSql: Layer.Layer<
         const now = yield* DateTime.now;
         const rows: Array<{ id: string; codeHash: string }> = [];
         for (const codeHash of hashes) {
-          rows.push({ id: yield* crypto.randomUUIDv7.pipe(Effect.orDie), codeHash });
+          rows.push({
+            id: yield* crypto.randomUUIDv7.pipe(
+              Effect.catch(StoreFailure.storeUnavailable("TwoFactorRecoveryCodes.replaceAll")),
+            ),
+            codeHash,
+          });
         }
         // BCR-002: delete-then-insert as one transaction, so a failure part-way keeps the old set.
-        yield* sql
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* sql`DELETE FROM two_factor_recovery_code WHERE "userId" = ${userId}`;
-              for (const row of rows) {
-                yield* insertQuery({ id: row.id, userId, codeHash: row.codeHash, createdAt: now });
-              }
-            }),
-          )
-          .pipe(Effect.orDie);
+        yield* SqlTransaction.transactional(sql)(
+          Effect.gen(function* () {
+            yield* sql`DELETE FROM two_factor_recovery_code WHERE "userId" = ${userId}`;
+            for (const row of rows) {
+              yield* insertQuery({ id: row.id, userId, codeHash: row.codeHash, createdAt: now });
+            }
+          }),
+        ).pipe(unavailable("replaceAll"));
       });
 
     const listUnused: TwoFactorRecoveryCodesShape["listUnused"] = (userId) =>
@@ -488,7 +563,7 @@ export const layerRecoveryCodesSql: Layer.Layer<
             codeHash: Redacted.make(PasswordHasher.PhcHash(row.codeHash)),
           })),
         ),
-        Effect.orDie,
+        unavailable("listUnused"),
       );
 
     const markUsed: TwoFactorRecoveryCodesShape["markUsed"] = (userId, id) =>
@@ -496,25 +571,39 @@ export const layerRecoveryCodesSql: Layer.Layer<
         const now = yield* DateTime.now;
         return yield* markUsedQuery({ id, userId, now }).pipe(
           Effect.map(Option.isSome),
-          Effect.orDie,
+          unavailable("markUsed"),
         );
       });
 
     const countUnused: TwoFactorRecoveryCodesShape["countUnused"] = (userId) =>
       countQuery(userId).pipe(
         Effect.map((row) => row.remaining),
-        Effect.orDie,
+        unavailable("countUnused"),
       );
 
     const deleteAllByUser: TwoFactorRecoveryCodesShape["deleteAllByUser"] = (userId) =>
       sql`DELETE FROM two_factor_recovery_code WHERE "userId" = ${userId}`.pipe(
-        Effect.orDie,
+        unavailable("deleteAllByUser"),
         Effect.asVoid,
       );
 
     return { replaceAll, listUnused, markUsed, countUnused, deleteAllByUser };
   }),
 );
+
+/**
+ * Plan 08 (BEH-EA-T4): the plugin's record stores as two matched layers, `TwoFactor.records`. `layerSecretsMemory`
+ * also provides `MemoryEnvelopes`, a test seam that is not a store; a bundle provides record stores only, so it is
+ * projected away (a suite that plants envelopes uses `layerSecretsMemory` directly).
+ */
+const secretsMemory = Layer.effect(TwoFactorSecrets, Effect.service(TwoFactorSecrets)).pipe(
+  Layer.provide(layerSecretsMemory),
+);
+
+export const records = {
+  memory: Layer.mergeAll(secretsMemory, layerRecoveryCodesMemory),
+  sql: Layer.mergeAll(layerSecretsSql, layerRecoveryCodesSql),
+};
 
 // ---- migrations ------------------------------------------------------------------------
 

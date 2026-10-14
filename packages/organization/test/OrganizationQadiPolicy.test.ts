@@ -7,10 +7,8 @@
 // `@qadi/core`, mirroring `usage-qadi.md` §7's own worked example
 // (`hasRelationship("member", { depth: 2 })` inside a real policy).
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Users } from "@awthaq/core";
+import { addMember } from "./support.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   currentSubjectLayer,
@@ -22,45 +20,15 @@ import {
 } from "@qadi/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Organization from "../src/Organization.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationQadi from "../src/OrganizationQadi.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("organization-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+const built = Auth.make([Organization.Organization]);
 
 const buildOrganizationLayer = (
   configOverrides: Partial<Organization.OrganizationConfigShape> = {},
-) =>
-  Organization.Organization.layer.pipe(
-    Layer.provide(Organization.config(configOverrides)),
-    Layer.provide(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+) => TestAuth.layer(built, { services: Organization.config(configOverrides) });
 
 // `EvaluationServicesNone` bundles every optional evaluation port's
 // fail-closed default (per `@qadi/core`'s own doc comment); merging
@@ -110,7 +78,7 @@ describe("Organization.relationships composed into a real qadi policy", () => {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
         const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: record.id,
           userId: Users.UserId("member-1"),
           role: ["member"],
@@ -157,7 +125,7 @@ describe("Organization.relationships composed into a real qadi policy", () => {
           ["plain-1", "member"],
           ["target-1", "member"],
         ] as const) {
-          yield* organization.addMember({
+          yield* addMember({
             organizationId: record.id,
             userId: Users.UserId(user),
             role: [role],

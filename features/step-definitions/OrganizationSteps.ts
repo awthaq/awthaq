@@ -5,13 +5,13 @@
 // and the observation of rows an HTTP read cannot show (the erasure/delete cascades).
 import { Erasure, HookPoint } from "@awthaq/core";
 import type { Mailer } from "@awthaq/ports";
+import { OrganizationHooks } from "@awthaq/organization";
 import {
   InvitationRecords,
   MembershipRecords,
-  OrganizationHooks,
   OrgRoleRecords,
   TeamRecords,
-} from "@awthaq/organization";
+} from "@awthaq/organization/records";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -677,9 +677,9 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
     const actor = yield* world.users.get(name);
     yield* Effect.promise(() =>
       app.withContext(
-        Erasure.AccountErasure.use((erasure) => erasure.eraseAccount(actor.userId)).pipe(
-          Effect.orDie,
-        ),
+        Erasure.AccountErasure.use((erasure) =>
+          erasure.eraseAccount(actor.userId, Erasure.ErasureInitiator.Self()),
+        ).pipe(Effect.orDie),
       ),
     );
   });

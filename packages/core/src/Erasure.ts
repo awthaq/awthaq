@@ -17,13 +17,15 @@
 // inline, so any caller (an admin console, a CLI, a retention job) invokes the
 // same guaranteed-complete cascade:
 //
-//   1. the `BeforeUserDelete` veto runs FIRST (a legal hold, an ownership
-//      transfer requirement) — before anything is touched, so a composition
-//      with no real transaction (`SqlTransaction.layerNoop`, in memory) is never
-//      left half-erased by a veto. `Users.delete` consults the point again at the
-//      end; a veto tap must therefore be idempotent (a pure check is);
+//   1. the `BeforeUserDelete` veto runs FIRST, and exactly once (a legal hold, an
+//      ownership transfer requirement) — before anything is touched, so a
+//      composition with no real transaction (`SqlTransaction.layerNoop`, in
+//      memory) is never left half-erased by a veto. Its passing mints the
+//      `ErasureClearance` (internal/erasureClearance.ts), the only thing
+//      `UserRemoval.remove` accepts: no other path can delete a user row;
 //   2. inside one `SqlTransaction`: every registered contribution, then the
-//      core rows (accounts, sessions, verification tokens, the user row), then —
+//      core rows (accounts, sessions, verification tokens, the user row via
+//      `UserRemoval.remove(clearance)`), then —
 //      last, so nothing published above can re-introduce the id — the audit
 //      pseudonymization (`AuditLog.pseudonymizeActor`, ESA-005);
 //   3. only after commit: `auth.user.deleted` (SCP-006) — a rolled-back erasure
@@ -45,6 +47,7 @@
 
 import { SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -55,11 +58,15 @@ import type { StoreUnavailable } from "./Errors.ts";
 import * as HookPoint from "./HookPoint.ts";
 import { ErasureRegistry, type ErasureSubject } from "./ErasureRegistry.ts";
 import * as Hooks from "./Hooks.ts";
+import { ErasureClearance } from "./internal/erasureClearance.ts";
 import { Sessions } from "./Sessions.ts";
-import { emailOf, Users, type UserId, type UserNotFound } from "./Users.ts";
+import { emailOf, UserRemoval, Users, type UserId, type UserNotFound } from "./Users.ts";
 import { Verification } from "./Verification.ts";
 
 export * from "./ErasureRegistry.ts";
+
+// The type only: code outside core can name a clearance but never mint one.
+export type { ErasureClearance } from "./internal/erasureClearance.ts";
 
 export interface ErasureConfigShape {
   /**
@@ -79,17 +86,47 @@ export const ErasureConfig = Context.Reference<ErasureConfigShape>("awthaq/core/
 export const config = (partial: Partial<ErasureConfigShape>) =>
   Layer.succeed(ErasureConfig, { auditLog: "pseudonymize", ...partial });
 
+/**
+ * Who asked for the erasure. Required, so no caller is silently labelled "self".
+ * `Self` is the account holder (`DELETE /user`), `Admin` an administrator
+ * (`AdminAccounts.deleteUser`), `Directory` a directory connection
+ * (`@awthaq/scim` `DELETE /Users/:id` with `deleteBehavior: "erase"`).
+ */
+export type ErasureInitiator = Data.TaggedEnum<{
+  Self: {};
+  Admin: { readonly adminUserId: UserId };
+  Directory: { readonly connectionId: string; readonly organizationId: string };
+}>;
+export const ErasureInitiator = Data.taggedEnum<ErasureInitiator>();
+
 export interface AccountErasureShape {
   /**
    * Erases `userId` everywhere (see the module header for the order). Fails
    * `UserNotFound` for an unknown user and `HookAborted` when a
    * `BeforeUserDelete` tap vetoes; anything else dies and rolls back.
+   * `initiator` is recorded on `auth.user.deleted`.
    */
   readonly eraseAccount: (
     userId: UserId,
-    options?: { readonly deletedBy?: "self" | "admin" },
+    initiator: ErasureInitiator,
   ) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted | StoreUnavailable>;
 }
+
+/** The `deletedBy` half of `auth.user.deleted`, one case per initiator. */
+const deletedByOf = (initiator: ErasureInitiator) => {
+  switch (initiator._tag) {
+    case "Self":
+      return { deletedBy: "self" } as const;
+    case "Admin":
+      return { deletedBy: "admin", adminUserId: initiator.adminUserId } as const;
+    case "Directory":
+      return {
+        deletedBy: "directory",
+        connectionId: initiator.connectionId,
+        organizationId: initiator.organizationId,
+      } as const;
+  }
+};
 
 export class AccountErasure extends Context.Service<AccountErasure, AccountErasureShape>()(
   "awthaq/core/AccountErasure",
@@ -99,6 +136,7 @@ export const layer = Layer.effect(
   AccountErasure,
   Effect.gen(function* () {
     const users = yield* Users;
+    const removal = yield* UserRemoval;
     const accounts = yield* Accounts;
     const sessions = yield* Sessions;
     const verification = yield* Verification;
@@ -109,14 +147,18 @@ export const layer = Layer.effect(
     const beforeDelete = yield* Hooks.BeforeUserDelete;
     const { auditLog: auditPolicy } = yield* ErasureConfig;
 
-    const eraseAccount: AccountErasureShape["eraseAccount"] = (userId, options) =>
+    const eraseAccount: AccountErasureShape["eraseAccount"] = (userId, initiator) =>
       Effect.gen(function* () {
         const user = yield* users.findById(userId);
         const email = Option.getOrUndefined(emailOf(user));
         const subject: ErasureSubject = { userId, email };
-        // Veto first: nothing has been touched yet (see the module header).
-        yield* HookPoint.aborted(Hooks.BeforeUserDelete)(
-          beforeDelete.run({ id: userId, ...(email === undefined ? {} : { email }) }),
+        // The one consult of the veto, before anything is touched (see the module header). The
+        // clearance is its receipt.
+        const clearance = yield* ErasureClearance.afterVeto(
+          userId,
+          HookPoint.aborted(Hooks.BeforeUserDelete)(
+            beforeDelete.run({ id: userId, ...(email === undefined ? {} : { email }) }),
+          ),
         );
         const contributions = yield* registry.contributions;
         yield* sqlTransaction
@@ -128,7 +170,7 @@ export const layer = Layer.effect(
               yield* accounts.deleteAllByUser(userId);
               yield* sessions.revokeAll(userId, "userDeleted");
               yield* verification.deleteAllByUser(userId);
-              yield* users.delete(userId);
+              yield* removal.remove(clearance);
               // Last: everything published above (the session revocation) is included.
               if (auditPolicy === "pseudonymize") yield* auditLog.pseudonymizeActor(userId);
             }),
@@ -138,7 +180,7 @@ export const layer = Layer.effect(
         yield* events.publish({
           _tag: "auth.user.deleted",
           userId,
-          deletedBy: options?.deletedBy ?? "self",
+          ...deletedByOf(initiator),
         });
       });
 

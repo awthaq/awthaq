@@ -36,14 +36,33 @@ import {
   Hooks,
   Migrations,
   RateLimits,
+  Retention,
   SessionCookie,
   Sessions,
+  SignIn,
+  SignUp,
   Tenant,
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Defects, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
-import { OrganizationRecords, Organization } from "@awthaq/organization";
+import {
+  ClientAddress,
+  Defects,
+  type Encryption,
+  RateLimiter,
+  SqlTransaction,
+  XmlSignature,
+} from "@awthaq/ports";
+import {
+  DomainClaims,
+  Organization,
+  OrganizationActor,
+  OrganizationAuthority,
+  OrganizationDeletion,
+  OrganizationDirectory,
+  OrganizationMembers,
+} from "@awthaq/organization";
+import { TenantScoped } from "@awthaq/sql";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -70,12 +89,18 @@ import {
   type SignedAssertion,
 } from "./SamlAssertion.ts";
 import * as SamlConfig from "./SamlConfig.ts";
+import * as SamlConnections from "./SamlConnections.ts";
 import { trustSetOf } from "./SamlConnections.ts";
 import { authnRequestXml, redirectUrl, spMetadataXml } from "./SamlProtocol.ts";
 import * as SamlRecords from "./SamlRecords.ts";
 import * as SamlRoleMapping from "./SamlRoleMapping.ts";
 import * as SamlSlo from "./SamlSlo.ts";
 import * as SamlSpKeys from "./SamlSpKeys.ts";
+
+/** The session-row sweep covers every connection's sign-ins. */
+const sweepGrant = TenantScoped.crossTenant(
+  "saml: retention sweep of every connection's session rows",
+);
 
 export { SamlConfig, config } from "./SamlConfig.ts";
 export type { SamlConfigShape, SamlConfigInput } from "./SamlConfig.ts";
@@ -103,14 +128,14 @@ export interface SamlShape {
   /** BEH-EA-241: the SP metadata document for one connection. */
   readonly metadata: (
     connectionId: string,
-  ) => Effect.Effect<string, SamlApi.SamlConnectionNotFound>;
+  ) => Effect.Effect<string, SamlApi.SamlConnectionNotFound | ServerError>;
   /** SP-initiated login: reserves the AuthnRequest id and returns the IdP redirect and the state the browser cookie must carry. */
   readonly authnRequest: (
     connectionId: string,
     input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
   ) => Effect.Effect<
     { readonly location: string; readonly state: Redacted.Redacted<string> },
-    SamlApi.SamlConnectionNotFound | Api.RateLimited | ServerError
+    SamlApi.SamlConnectionNotFound | Api.RateLimited | ServerError | ServerError
   >;
   /** The Assertion Consumer Service. `cookieState` is the value of the request cookie, if the browser sent one. */
   readonly acs: (input: {
@@ -126,6 +151,7 @@ export interface SamlShape {
     | Hooks.TwoFactorRequired
     | Api.RateLimited
     | ServerError
+    | ServerError
   >;
   /**
    * BEH-EA-315: a Single Logout message delivered by the IdP's browser (a `LogoutRequest` to end sessions, or the
@@ -135,13 +161,13 @@ export interface SamlShape {
     input: SamlSlo.SloInput,
   ) => Effect.Effect<
     SamlSlo.SloOutcome,
-    SamlApi.SamlLogoutRejected | Api.RateLimited | ServerError
+    SamlApi.SamlLogoutRejected | Api.RateLimited | ServerError | ServerError
   >;
   /** BEH-EA-315: the signed-in user's own SP-initiated logout: ends their session and, when the connection has a logout endpoint, sends the IdP a `LogoutRequest`. */
   readonly logout: (
     caller: Api.UserPrincipal,
     input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
-  ) => Effect.Effect<SamlSlo.LogoutStart, ServerError>;
+  ) => Effect.Effect<SamlSlo.LogoutStart, ServerError | ServerError>;
   /** BEH-EA-318: the administrator's operations (the `saml.admin` group). */
   readonly admin: SamlAdmin.SamlAdminShape;
 }
@@ -287,6 +313,36 @@ const samlMigrations: Migrations.Migrations = [
       });
       yield* sql`CREATE INDEX saml_session_identity ON saml_session("connectionId", "nameId")`;
       yield* sql`CREATE INDEX saml_session_created_at ON saml_session("createdAt")`;
+    }),
+  },
+  {
+    // Plan 10 item 7 (BEH-EA-317): a domain belongs to one organization across protocols. The stored SAML domains are
+    // claimed in `@awthaq/organization`'s `organization_domain_claim` (created by its own, earlier migration). If an
+    // organization already claims a domain this table gives to another one (an OIDC connection of organization A and
+    // a SAML connection of organization B), the migration FAILS naming the domains: which side keeps the domain is
+    // the operator's call, so release one before upgrading.
+    name: "claim_saml_connection_domains",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const clashes = yield* sql<{ readonly domain: string }>`
+        SELECT DISTINCT d.domain AS domain
+        FROM saml_connection_domain d
+        JOIN saml_connection c ON c.id = d."connectionId"
+        JOIN organization_domain_claim x ON x.domain = d.domain AND x."organizationId" <> c."organizationId"
+        UNION
+        SELECT DISTINCT d.domain AS domain
+        FROM saml_connection_domain d
+        JOIN saml_connection c ON c.id = d."connectionId"
+        JOIN saml_connection_domain d2 ON d2.domain = d.domain
+        JOIN saml_connection c2 ON c2.id = d2."connectionId" AND c2."organizationId" <> c."organizationId"`;
+      if (clashes.length > 0) {
+        return yield* Defects.invariantViolation(
+          "saml.domainClaimClash",
+          `awthaq/saml: these email domains are claimed by two organizations (one over OIDC and one over SAML): ${clashes.map((row) => row.domain).join(", ")}. A domain belongs to one organization (BEH-EA-317); remove the claim from one side, then migrate again`,
+        );
+      }
+      yield* sql`INSERT INTO organization_domain_claim (domain, "connectionId", protocol, "organizationId") SELECT d.domain, d."connectionId", 'saml', c."organizationId" FROM saml_connection_domain d JOIN saml_connection c ON c.id = d."connectionId"`;
+      yield* sql`INSERT INTO organization_domain_owner (domain, "organizationId") SELECT DISTINCT x.domain, x."organizationId" FROM organization_domain_claim x WHERE NOT EXISTS (SELECT 1 FROM organization_domain_owner o WHERE o.domain = x.domain)`;
     }),
   },
 ];
@@ -646,13 +702,122 @@ const currentUserPrincipal = Effect.gen(function* () {
   return principal;
 });
 
+// ---- rate limits --------------------------------------------------------------------------------------
+
+/**
+ * BEH-EA-105/107/111: the rules `Saml` enforces, declared once (they used to be enforced without being
+ * declared or registered). The static `rateLimits` listing is derived from this table at the default numbers
+ * (`SamlConfig.rateLimits`/`adminRate` tune them at build). `login`, `acs` and `slo` are per source address
+ * on the unauthenticated endpoints (`slo` covers `slo` and `sloPost`); `admin` is per administrator, past the
+ * `canManageSaml` gate, and a group-wide rule: the breach event reports the admin action as its endpoint.
+ */
+const rules = {
+  login: RateLimits.rule({
+    group: "saml",
+    endpoint: "login",
+    key: RateLimits.Key.ip,
+    ...SamlConfig.defaultRateLimits.login,
+  }),
+  acs: RateLimits.rule({
+    group: "saml",
+    endpoint: "acs",
+    key: RateLimits.Key.ip,
+    ...SamlConfig.defaultRateLimits.acs,
+  }),
+  slo: RateLimits.rule({
+    group: "saml",
+    endpoint: "slo",
+    key: RateLimits.Key.ip,
+    ...SamlConfig.defaultRateLimits.slo,
+  }),
+  admin: RateLimits.rule({
+    group: "saml.admin",
+    endpoint: "*",
+    key: RateLimits.Key.user,
+    ...SamlConfig.defaultAdminRate,
+  }),
+};
+
+// ---- the sign-in continuation ----------------------------------------------------------------------
+
+/** What an ACS sign-in owes once its session exists (ADR-EA-038); JSON, because a second factor may hold it for minutes. */
+const SamlContinuationPayload = Schema.Struct({
+  connectionId: Schema.String,
+  nameId: Schema.String,
+  nameIdFormat: Schema.optionalKey(Schema.String),
+  sessionIndex: Schema.optionalKey(Schema.String),
+  /** The roles the connection's rules mapped from the assertion; absent when no rule matched (BEH-EA-316). */
+  roles: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 // ---- the plugin --------------------------------------------------------------------------------------
+
+/**
+ * Plan 04 (F7): an organization's deletion removes its SAML connections with their domains, SP keys and
+ * Single Logout session rows, in the deletion's own transaction. Without it those rows outlived the
+ * organization (and its email domains stayed routed to a dead connection).
+ */
+export const samlOrganizationDeletion = OrganizationDeletion.contribute({
+  id: "saml",
+  make: Effect.gen(function* () {
+    const records = yield* SamlRecords.SamlRecords;
+    const claims = yield* DomainClaims.DomainClaims;
+    return {
+      inTransaction: (organizationId: string) =>
+        Effect.flatMap(records.listByOrganization(organizationId), (connections) =>
+          Effect.forEach(
+            connections,
+            (connection) =>
+              records
+                .remove(organizationId, connection.id)
+                // Removed meanwhile: the goal state holds.
+                .pipe(
+                  Effect.catchTag("SamlRecordNotFound", () => Effect.void),
+                  // Its email domains are free for another organization again (BEH-EA-317).
+                  Effect.andThen(claims.release(organizationId, connection.id)),
+                ),
+            { discard: true },
+          ),
+        ),
+    };
+  }),
+});
+
+/**
+ * Plan 10 item 6: the session-record sweep is a retention contribution, not a side effect of a
+ * sign-in (ADR-EA-031 Decision 6). `Retention.sweep` (or `Retention.layerScheduled`) ages out the
+ * rows older than `sessionRecordRetention`; the ACS no longer prunes.
+ */
+export const samlSessionRetention = Retention.contribute({
+  id: "saml.sessions",
+  make: Effect.gen(function* () {
+    const records = yield* SamlRecords.SamlRecords;
+    const settings = yield* SamlConfig.SamlConfig;
+    return (now: DateTime.Utc) =>
+      records.pruneSessions(
+        sweepGrant,
+        DateTime.subtractDuration(now, settings.sessionRecordRetention),
+      );
+  }),
+});
+
+/** Named so the class's inferred `records` type can be emitted (TS2883 needs the `Encryption` namespace in scope). */
+export type RecordsEncryption = Encryption.Encryption;
 
 export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   apiVersion: 1,
   contract: SamlApi.SamlApi,
-  tables: ["saml_connection", "saml_connection_domain", "saml_sp_key", "saml_session"],
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
+  tables: {
+    saml_connection: AuthPlugin.Table.keyed("organizationId"),
+    saml_connection_domain: AuthPlugin.Table.derived("saml_connection", "connectionId"),
+    saml_sp_key: AuthPlugin.Table.derived("saml_connection", "connectionId"),
+    saml_session: AuthPlugin.Table.derived("saml_connection", "connectionId"),
+  },
   migrations: samlMigrations,
+  // Plan 08 (BEH-EA-T4): the connection/key/session store, memory and SQL, matched.
+  records: SamlRecords.records,
 }) {
   static readonly layer = AuthPlugin.layer(Saml, {
     ports: [
@@ -662,6 +827,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       XmlSignature.XmlSignature,
     ],
     dependsOn: [Organization.Organization],
+    contributes: Layer.mergeAll(samlOrganizationDeletion, samlSessionRetention),
     handlers: Layer.mergeAll(SamlHandlers, SamlAccountHandlers, SamlAdminHandlers),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
@@ -670,50 +836,43 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
       const records = yield* SamlRecords.SamlRecords;
-      const orgs = yield* OrganizationRecords.OrganizationRecords;
-      const organization = yield* Organization.Organization;
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
+      // ADR-EA-040: the role mapping goes through the exposed members module, bounded by the connection's ceiling.
+      const memberSystem = yield* OrganizationMembers.OrganizationMembers;
+      const authority = yield* OrganizationAuthority.OrganizationAuthority;
       const spKeys = yield* SamlSpKeys.SamlSpKeys;
       const xmlSignature = yield* XmlSignature.XmlSignature;
       const crypto = yield* Crypto.Crypto;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const settings = yield* SamlConfig.SamlConfig;
-      const beforeSignUp = yield* Hooks.BeforeSignUp;
-      const afterSignUp = yield* Hooks.AfterSignUp;
-      const beforeSignIn = yield* Hooks.BeforeSignIn;
-      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-      const afterSignIn = yield* Hooks.AfterSignIn;
+      const creation = yield* SignUp.make;
+      const completion = yield* SignIn.make;
 
       const acsUrl = SamlConfig.acsUrl(settings);
-      const admin = yield* SamlAdmin.makeAdmin;
-
-      const rateLimit = (endpoint: "login" | "acs", ip: string | undefined) =>
-        RateLimits.enforce({
-          key: `saml:${endpoint}:${ip ?? "unknown"}`,
-          limit: settings.rateLimits[endpoint].limit,
-          window: settings.rateLimits[endpoint].window,
-          meta: { group: "saml", endpoint, rule: endpoint, dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // The configured numbers tune the declared defaults (`sso` belongs to the `Sso` plugin's own budget).
+      const limits = yield* RateLimits.budget(Saml, {
+        tune: Effect.succeed({
+          login: settings.rateLimits.login,
+          acs: settings.rateLimits.acs,
+          slo: settings.rateLimits.slo,
+          admin: settings.adminRate,
+        }),
+      });
+      const admin = yield* SamlAdmin.makeAdmin((adminId, action) =>
+        limits.spend("admin", { userId: adminId }, { endpoint: action }),
+      );
 
       /** A connection that exists AND whose organization exists and is not suspended (BEH-EA-237); anything else is `None`. */
       const usableConnection = (connectionId: string) =>
-        records.findById(connectionId).pipe(
+        records.findById(SamlSlo.protocolGrant, connectionId).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.succeedNone,
               onSome: (connection) =>
-                orgs
-                  .findById(connection.organizationId)
+                directory
+                  .findActive(connection.organizationId)
                   .pipe(
                     Effect.map((organization) =>
-                      Option.isSome(organization) && Option.isNone(organization.value.suspendedAt)
+                      Option.isSome(organization)
                         ? Option.some(connection)
                         : Option.none<SamlRecords.ConnectionRecord>(),
                     ),
@@ -739,7 +898,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
 
       const authnRequest: SamlShape["authnRequest"] = Effect.fnUntraced(
         function* (connectionId, input) {
-          yield* rateLimit("login", input.ip);
+          yield* limits.spend("login", { ip: input.ip });
           const connection = yield* usableConnection(connectionId);
           if (Option.isNone(connection))
             return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
@@ -800,6 +959,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         if (!identifier.startsWith(REQUEST_PREFIX) || secret === "") {
           return yield* Effect.fail(new AssertionInvalid({ reason: "requestStateMalformed" }));
         }
+        // ADR-EA-039: burn-first on purpose (BEH-EA-244: the ACS consumes the request state exactly once;
+        // the assertion id is reserved separately, so giving the request back would not let a response be reused).
         const consumed = yield* verification
           .consume(identifier, Redacted.make(secret))
           .pipe(
@@ -907,35 +1068,69 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       });
 
       /**
-       * BEH-EA-316: the assertion's attributes, through the connection's rules, into the organization's roles, under the
-       * connection's ceiling (`canGrant`, RRM-001). A mapping that cannot be applied (a role that no longer exists, a member who
-       * out-privileges the connection, the last owner, a membership limit) is logged and skipped: the identity provider proved
-       * who the user is, and that is still true; what it may confer is bounded, never a reason to lock them out.
+       * BEH-EA-316: the roles the connection's rules mapped from the assertion's attributes, applied to the
+       * organization's membership under the connection's ceiling (`canGrant`, RRM-001). A mapping that cannot be
+       * applied (a role that no longer exists, a member who out-privileges the connection, the last owner, a
+       * membership limit) is logged and skipped: the identity provider proved who the user is, and that is still
+       * true; what it may confer is bounded, never a reason to lock them out.
        */
-      const applyRoleMapping = (
+      const applyRoles = (
         connection: SamlRecords.ConnectionRecord,
-        assertion: SignedAssertion,
+        roles: ReadonlyArray<string>,
         userId: Users.UserId,
-      ) => {
-        const roles = SamlRoleMapping.rolesFor(connection.roleMapping, assertion);
-        if (roles === undefined) return Effect.void;
-        return organization
-          .syncMemberRoles({
-            organizationId: connection.organizationId,
-            userId,
-            roles,
-            ceiling: connection.roleMapping.ceiling,
-          })
-          .pipe(
-            Effect.asVoid,
-            Effect.catch((error) =>
-              Effect.logWarning("awthaq/saml: role mapping not applied", {
-                connectionId: connection.id,
-                reason: error._tag,
-              }),
-            ),
-          );
-      };
+      ) =>
+        authority.ceilingOf(connection.organizationId, connection.roleMapping.ceiling).pipe(
+          Effect.flatMap((bound) =>
+            memberSystem.setRoles(OrganizationActor.identityProvider(connection.id), {
+              organizationId: connection.organizationId,
+              userId,
+              roles,
+              bound,
+              ifAbsent: "add",
+            }),
+          ),
+          Effect.asVoid,
+          Effect.catch((error) =>
+            Effect.logWarning("awthaq/saml: role mapping not applied", {
+              connectionId: connection.id,
+              reason: error._tag,
+            }),
+          ),
+        );
+
+      /**
+       * ADR-EA-038: what this connection's sign-in owes once its session exists, whichever request mints
+       * that session: role mapping (BEH-EA-316) and the Single Logout record (BEH-EA-315). It runs from
+       * `SignIn.issue` in the connection's tenant, so a sign-in finished by a second factor
+       * (`/two-factor/verify`) is recorded and role-mapped exactly like one the ACS finishes itself.
+       * Role mapping is applied only to a fully authenticated sign-in, still before the session
+       * reaches the client.
+       */
+      const continuation = SignIn.continuation({
+        id: "saml",
+        kind: "saml.acs",
+        payload: SamlContinuationPayload,
+        make: Effect.succeed(
+          (payload: typeof SamlContinuationPayload.Type, context: SignIn.ContinuationContext) =>
+            Effect.gen(function* () {
+              if (payload.roles !== undefined) {
+                const connection = yield* usableConnection(payload.connectionId);
+                if (Option.isSome(connection)) {
+                  yield* applyRoles(connection.value, payload.roles, context.userId);
+                }
+              }
+              // BEH-EA-315: remember which identity the IdP knows this session by, so a Single Logout can find it again.
+              yield* records.saveSession({
+                sessionId: context.sessionId,
+                connectionId: payload.connectionId,
+                nameId: payload.nameId,
+                nameIdFormat: payload.nameIdFormat,
+                sessionIndex: payload.sessionIndex,
+              });
+            }),
+        ),
+      });
+      yield* continuation.register;
 
       /** Step 7: the account, the sign-in gate, the hooks and the session. Runs as the connection's tenant. */
       const signIn = Effect.fnUntraced(function* (
@@ -975,97 +1170,63 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
                 return existing.value.id;
               }
               const name = attributeOf(assertion, NAME_ATTRIBUTES) ?? email ?? subject;
-              const vetoed = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
-                beforeSignUp.run({
-                  ...(email === undefined ? {} : { email }),
-                  name,
-                  strategy: providerId,
-                }),
-              );
-              const created = yield* sqlTransaction
-                .withTransaction(
-                  Effect.gen(function* () {
-                    const user = yield* users
-                      .create({
-                        identity:
-                          vetoed.email === undefined
-                            ? { _tag: "Anonymous" }
-                            : { _tag: "Email", email: vetoed.email },
-                        name: vetoed.name,
-                      })
-                      .pipe(
-                        Effect.catchTag("Users/EmailAlreadyExists", () =>
-                          Effect.fail(new AssertionInvalid({ reason: "emailInUse" })),
-                        ),
-                        Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
-                      );
-                    yield* accounts
-                      .link({
-                        userId: user.id,
-                        providerId,
-                        subject,
-                        issuer: connection.idpEntityId,
-                      })
-                      .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
-                    return user;
-                  }),
-                )
-                .pipe(Effect.catchTag("SqlError", Effect.die));
-              yield* events.publish({ _tag: "auth.user.created", userId: created.id });
-              yield* afterSignUp.run({
-                userId: created.id,
-                ...(vetoed.email === undefined ? {} : { email: vetoed.email }),
+              // ADR-EA-038: `SignUp` vets (`BeforeSignUp`, `strategy` is the provider id), then creates and
+              // links in one unit and announces after it commits.
+              const vetted = yield* creation.vet({
+                identity: email === undefined ? { _tag: "Anonymous" } : { _tag: "Email", email },
+                name,
                 strategy: providerId,
               });
+              const created = yield* creation
+                .create(vetted, {
+                  link: { providerId, subject, issuer: connection.idpEntityId },
+                })
+                .pipe(
+                  Effect.catchTag("SignUp/IdentityTaken", (taken) =>
+                    taken.kind === "Email"
+                      ? Effect.fail(new AssertionInvalid({ reason: "emailInUse" }))
+                      : // A fresh user has no phone, and a fresh user's subject is not yet linked.
+                        Defects.invariantViolation("SamlSignUpConflict", taken.message),
+                  ),
+                );
               return created.id;
             }),
         });
 
-        // SCP-001/BAM-005: THE shared sign-in gate — the IdP proved the identity; a suspended user still gets no session.
-        const user = yield* users
-          .findById(targetUserId)
-          .pipe(Effect.orDie, Effect.tap(Users.assertCanSignIn));
-        const userEmail = Users.emailOf(user);
-        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-          beforeSignIn.run({
-            userId: targetUserId,
-            ...(Option.isSome(userEmail) ? { email: userEmail.value } : {}),
-            strategy: providerId,
-          }),
-        );
-        const point = yield* beforeSessionIssue.run({ userId: targetUserId, strategy: providerId });
-        if (point._tag === "Diverted") return yield* Effect.fail(point.value);
-        yield* applyRoleMapping(connection, assertion, targetUserId);
-        const issued = yield* sessions.issue({
-          userId: targetUserId,
-          request: {
-            ...(input.ip !== undefined ? { ip: input.ip } : {}),
-            ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
-          },
-          amr: ["fed"],
-        });
-        // BEH-EA-315: remember which identity the IdP knows this session by, so a Single Logout can find it again.
-        yield* records.saveSession({
-          sessionId: issued.session.id,
-          connectionId: connection.id,
-          nameId: assertion.nameId.value,
-          nameIdFormat: assertion.nameId.format,
-          sessionIndex: assertion.sessionIndex,
-        });
-        yield* records.pruneSessions(
-          DateTime.subtractDuration(yield* DateTime.now, settings.sessionRecordRetention),
-        );
-        yield* events.publish({
-          _tag: "auth.user.signedIn",
-          userId: targetUserId,
-          strategy: providerId,
-        });
-        yield* afterSignIn.run({ userId: targetUserId, strategy: providerId });
-        return issued;
+        // ADR-EA-038: the IdP proved the identity, so core's sign-in takes over (gate, veto, MFA divert, session,
+        // announcement). The role mapping and the Single Logout record ride as a continuation, so they also
+        // apply when a second factor finishes the sign-in.
+        const roles = SamlRoleMapping.rolesFor(connection.roleMapping, assertion);
+        return yield* completion
+          .complete(
+            {
+              userId: targetUserId,
+              strategy: providerId,
+              amr: ["fed"],
+              continuation: yield* continuation.of({
+                connectionId: connection.id,
+                nameId: assertion.nameId.value,
+                ...(assertion.nameId.format === undefined
+                  ? {}
+                  : { nameIdFormat: assertion.nameId.format }),
+                ...(assertion.sessionIndex === undefined
+                  ? {}
+                  : { sessionIndex: assertion.sessionIndex }),
+                ...(roles === undefined ? {} : { roles }),
+              }),
+            },
+            input,
+          )
+          .pipe(
+            // An erasure can run between the IdP's proof and here: the uniform rejection, not a server error.
+            Effect.catchTag("SignIn/UserGone", () =>
+              Effect.fail(new AssertionInvalid({ reason: "accountMissing" })),
+            ),
+          );
       });
 
       const acs: SamlShape["acs"] = Effect.fnUntraced(function* (input) {
-        yield* rateLimit("acs", input.ip);
+        yield* limits.spend("acs", { ip: input.ip });
         // Which connection the attempt was for, once known, so the audit event can name it.
         let strategy = "saml";
         const reject = (reason: string) =>
@@ -1112,11 +1273,16 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         xmlSignature,
         spKeys,
         crypto,
-        limiter,
+        rateLimit: (ip) => limits.spend("slo", { ip }),
         resolveCallbackURL: (raw) => resolveCallbackURL(raw, settings),
       });
 
       return Saml.of({ metadata, authnRequest, acs, slo: slo.slo, logout: slo.logout, admin });
     }),
-  });
+  }).pipe(
+    // Plan 08 (Q1): the connection store and the SP key store are always required and storage-agnostic (built
+    // over `SamlRecords`), so they ship with the plugin instead of in every host's graph. The metadata fetcher
+    // stays the host's: it is a network adapter (`layerPinned` in production, a fake in tests).
+    Layer.provideMerge(SamlConnections.layerStore.pipe(Layer.provideMerge(SamlSpKeys.layer))),
+  );
 }

@@ -11,11 +11,9 @@
 // spec/behaviors/14-rate-limiting.md: "where this document says `consume` fails with
 // `RateLimited`, the port-level failure is `RateLimitExceeded` and the caller-visible one is
 // `RateLimited`"). `failureNamed` maps the Gherkin's word onto the level each step is at.
-import { Auth, AuthPlugin, RateLimits } from "@awthaq/core";
+import { AuditLog, Auth, AuthEvents, AuthPlugin, Persistence, RateLimits } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -30,7 +28,6 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { type Host, jsonPost, makeHost } from "./CrossCuttingApp.ts";
 import { AcmeAudit, AcmeGate, AcmeNormalize, PRE } from "./HooksWorld.ts";
 
@@ -47,37 +44,31 @@ const InviteApi = HttpApi.make("auth").add(
   ),
 );
 
-/**
- * The Invite plugin as the registry sees its owner (id and contract groups). Spelled from the
- * contract rather than `InvitePlugin` itself: the plugin's own layer initializer cannot name the
- * class it belongs to without the type checker looping.
- */
-const inviteOwner: AuthPlugin.Any = {
-  id: "invite",
-  apiVersion: 1,
-  contract: InviteApi,
-  tables: [],
-  migrations: [],
-  dependsOn: [],
-  layer: Layer.empty,
-};
-
 export class InvitePlugin extends AuthPlugin.Service<InvitePlugin, Record<string, never>>()(
   "invite",
   { apiVersion: 1, contract: InviteApi },
 ) {
   static readonly layer = AuthPlugin.layer(InvitePlugin, {
+    ports: [RateLimiter.RateLimiter],
     make: Effect.gen(function* () {
-      const registry = yield* RateLimits.RateLimitsRegistry;
       const group = yield* InviteRuleGroup;
-      // The rule the plugin contributes; the registry refuses one naming a group the plugin
-      // does not own (BEH-EA-107), which fails this plugin's layer — i.e. composition.
-      yield* registry.register(inviteOwner, {
-        group,
-        endpoint: "create",
-        key: "principal",
-        limit: 10,
-        window: Duration.minutes(10),
+      // The rule the plugin contributes, with a group a Given chose at run time. The class's own table is
+      // empty (its group is not known statically), so this is a hand-built owner: `RateLimits.budget`
+      // refuses one naming a group the plugin does not own (BEH-EA-107), which fails this plugin's layer,
+      // i.e. composition.
+      yield* RateLimits.budget({
+        id: "invite",
+        dependsOn: [],
+        contract: InviteApi,
+        rateLimitRules: {
+          create: RateLimits.rule({
+            group,
+            endpoint: "create",
+            key: RateLimits.Key.user,
+            limit: 10,
+            window: Duration.minutes(10),
+          }),
+        },
       });
       return {};
     }),
@@ -86,14 +77,6 @@ export class InvitePlugin extends AuthPlugin.Service<InvitePlugin, Record<string
     ),
   });
 }
-
-const FixtureAuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const FixtureCsrfLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
 
 /** What composing the Invite plugin came to: the rules it registered, or why it was refused. */
 export type Composition =
@@ -108,14 +91,9 @@ export const composeInvite = (group: string) =>
     const exit = yield* Effect.exit(
       Effect.gen(function* () {
         const context = yield* Layer.build(
-          TestAuth.layer(
-            Auth.make([InvitePlugin]),
-            Layer.mergeAll(
-              FixtureAuthenticationLive,
-              FixtureCsrfLive,
-              Layer.succeed(InviteRuleGroup, group),
-            ),
-          ),
+          TestAuth.layer(Auth.make([InvitePlugin]), {
+            services: Layer.succeed(InviteRuleGroup, group),
+          }),
         );
         const registry = yield* RateLimits.RateLimitsRegistry.pipe(Effect.provide(context));
         return yield* registry.registered;
@@ -124,7 +102,10 @@ export const composeInvite = (group: string) =>
     if (Exit.isSuccess(exit)) {
       const composed: Composition = {
         _tag: "Composed",
-        rules: exit.value.map((rule) => ({ plugin: rule.plugin, group: rule.group })),
+        // Plugin-owned rules only: core's own `account` owner registers the export rule beside them.
+        rules: exit.value
+          .filter((rule) => rule.plugin !== "account")
+          .map((rule) => ({ plugin: rule.plugin, group: rule.group })),
       };
       return composed;
     }
@@ -139,6 +120,52 @@ export const composeInvite = (group: string) =>
     }
     return yield* Effect.die(failure);
   });
+
+// ---- a plugin that declares rate-limit rules and never opens its budget (BEH-EA-111) ----
+
+const ForgetfulApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("forgetful").add(
+    HttpApiEndpoint.post("go", "/forgetful/go", { success: Schema.String }),
+  ),
+);
+
+export class ForgetfulPlugin extends AuthPlugin.Service<ForgetfulPlugin, Record<string, never>>()(
+  "forgetful",
+  {
+    apiVersion: 1,
+    contract: ForgetfulApi,
+    rateLimitRules: {
+      go: RateLimits.rule({
+        group: "forgetful",
+        endpoint: "go",
+        key: RateLimits.Key.ip,
+        limit: 5,
+        window: Duration.minutes(1),
+      }),
+    },
+  },
+) {
+  // Declares a rule, never calls `RateLimits.budget(ForgetfulPlugin)`: `AuthPlugin.layer` refuses it at build.
+  static readonly layer = AuthPlugin.layer(ForgetfulPlugin, {
+    make: Effect.succeed({}),
+    handlers: HttpApiBuilder.group(ForgetfulApi, "forgetful", (handlers) =>
+      handlers.handle("go", () => Effect.succeed("went")),
+    ),
+  });
+}
+
+/** What composing the forgetful plugin came to: `never-opened` with the plugin and its rules, or `composed`. */
+export const composeForgetful = Effect.gen(function* () {
+  const exit = yield* Effect.exit(
+    Layer.build(TestAuth.layer(Auth.make([ForgetfulPlugin]))).pipe(Effect.scoped),
+  );
+  if (Exit.isSuccess(exit)) return ["composed"];
+  const failure = Cause.squash(exit.cause);
+  if (failure instanceof RateLimits.RateLimitBudgetNotOpened) {
+    return ["never-opened", failure.plugin, failure.rules.join(",")];
+  }
+  return yield* Effect.die(failure);
+});
 
 // ---- fake owners for the registry-ordering scenarios ----
 
@@ -155,25 +182,37 @@ export const fakeOwner = (id: string): AuthPlugin.Any => ({
 
 export { AcmeAudit, AcmeGate, AcmeNormalize, PRE };
 
-/** Registers `rules` into a fresh registry (one per scenario) and reads the resolved list back. */
+/** What a budget needs beside the registry: a limiter, the event bus and its audit sink. */
+const BudgetServicesLive = RateLimiter.layerPermissive.pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  Layer.provideMerge(RateLimits.layer),
+);
+
+/** Opens a one-rule budget per owner into a fresh registry (one per scenario) and reads the resolved list back. */
 export const resolvedRules = (
   rules: ReadonlyArray<{ readonly owner: AuthPlugin.Any; readonly order?: number }>,
 ) =>
   Effect.gen(function* () {
-    const context = yield* Layer.build(RateLimits.layer);
+    const context = yield* Layer.build(BudgetServicesLive);
     return yield* Effect.gen(function* () {
       const registry = yield* RateLimits.RateLimitsRegistry;
       for (const { owner, order } of rules) {
-        yield* registry
-          .register(owner, {
-            group: Object.keys(owner.contract.groups)[0] ?? owner.id,
-            endpoint: "verify",
-            key: "ip",
-            limit: 3,
-            window: Duration.seconds(10),
-            ...(order === undefined ? {} : { order }),
-          })
-          .pipe(Effect.orDie);
+        yield* RateLimits.budget({
+          id: owner.id,
+          dependsOn: owner.dependsOn,
+          contract: owner.contract,
+          rateLimitRules: {
+            verify: RateLimits.rule({
+              group: Object.keys(owner.contract.groups)[0] ?? owner.id,
+              endpoint: "verify",
+              key: RateLimits.Key.ip,
+              limit: 3,
+              window: Duration.seconds(10),
+              ...(order === undefined ? {} : { order }),
+            }),
+          },
+        });
       }
       return (yield* registry.registered).map((rule) => rule.plugin);
     }).pipe(Effect.provide(context));
@@ -468,10 +507,11 @@ export const tagOf = (body: unknown): string | undefined => {
   return typeof value === "string" ? value : undefined;
 };
 
-/** The rules the Password plugin registered, for introspection (BEH-EA-110/111). */
+/** The rules the plugins registered, for introspection (BEH-EA-110/111); core's own `account` owner is left out. */
 export const registeredRules = Effect.gen(function* () {
   const { host } = yield* World;
-  return yield* host.run(
+  const rules = yield* host.run(
     Effect.flatMap(RateLimits.RateLimitsRegistry, (registry) => registry.registered),
   );
+  return rules.filter((rule) => rule.plugin !== "account");
 });

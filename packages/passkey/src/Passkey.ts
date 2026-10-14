@@ -36,7 +36,9 @@ import {
   Migrations,
   Observability,
   RateLimits,
+  Retention,
   Sessions,
+  SignIn,
   Tenant,
   Users,
 } from "@awthaq/core";
@@ -419,58 +421,39 @@ const DECOY_TRANSPORT_SETS: ReadonlyArray<ReadonlyArray<string>> = [
 ];
 
 /**
- * TSS-004/TC-001/WPS-005: the anonymous authenticate ceremony's rules. Three
- * rules, all per-source or per-target — a per-IP budget on each of
- * `authenticateOptions`/`authenticateVerify` (mints server state / does
- * signature work for anyone) and a per-email budget on the username-first
- * options call (the enumeration-probing surface). `RateLimits.enforce` is the
- * one place a breach becomes observable (EOTS-007).
+ * TSS-004/TC-001/WPS-005: the anonymous authenticate ceremony's rules. Three rules, all per-source or
+ * per-target: a per-IP budget on each of `authenticateOptions`/`authenticateVerify` (mints server
+ * state / does signature work for anyone) and a per-email budget on the username-first options call
+ * (the enumeration-probing surface). Declared once: the static `rateLimits` listing is derived from
+ * this table and the layer registers it with `RateLimits.budget`, where a breach is made observable
+ * (EOTS-007). The per-email key is the shared TMS-006 normaliser, so `victim+1@x.com` and
+ * `victim+2@x.com` share one bucket instead of each getting a fresh options budget.
  */
-const RATE_LIMITS = {
-  authenticateOptionsByIp: {
+const rules = {
+  authenticateOptionsByIp: RateLimits.rule({
+    group: "passkey.authenticate",
     endpoint: "authenticateOptions",
-    dimension: "ip",
+    key: RateLimits.Key.ip,
     limit: 60,
     window: Duration.minutes(15),
-  },
+  }),
   // Username-first is one call per attempt, so this is looser than a
   // password's per-account budget but still bounds probing one address.
-  authenticateOptionsByEmail: {
+  authenticateOptionsByEmail: RateLimits.rule({
+    group: "passkey.authenticate",
     endpoint: "authenticateOptions",
-    dimension: "identity",
+    key: RateLimits.Key.email,
     limit: 10,
     window: Duration.minutes(15),
-  },
-  authenticateVerifyByIp: {
+  }),
+  authenticateVerifyByIp: RateLimits.rule({
+    group: "passkey.authenticate",
     endpoint: "authenticateVerify",
-    dimension: "ip",
+    key: RateLimits.Key.ip,
     limit: 60,
     window: Duration.minutes(15),
-  },
-} as const satisfies Record<
-  string,
-  {
-    readonly endpoint: string;
-    readonly dimension: "ip" | "identity";
-    readonly limit: number;
-    readonly window: Duration.Duration;
-  }
->;
-
-type RateLimitRuleName = keyof typeof RATE_LIMITS;
-
-const ruleMeta = (name: RateLimitRuleName): RateLimits.EnforceMeta => ({
-  group: "passkey.authenticate",
-  endpoint: RATE_LIMITS[name].endpoint,
-  rule: name,
-  dimension: RATE_LIMITS[name].dimension,
-});
-
-/** `RateLimits.RateLimitKey`'s `input` is untyped, so pulling `email` back out needs a real narrowing check, not a cast. */
-const emailFromRateLimitInput = (input: unknown): string =>
-  typeof input === "object" && input !== null && "email" in input && typeof input.email === "string"
-    ? input.email
-    : "";
+  }),
+};
 
 /** TC-001: no user has this id, so listing its (empty) credentials costs what a real user's listing does. */
 const DECOY_USER_ID = Users.UserId("awthaq-decoy-user");
@@ -555,7 +538,7 @@ export interface PasskeyShape {
   readonly reauthenticateOptions: (
     userId: Users.UserId,
     sessionId: string,
-  ) => Effect.Effect<PasskeyApi.PublicKeyCredentialRequestOptions>;
+  ) => Effect.Effect<PasskeyApi.PublicKeyCredentialRequestOptions, Errors.StoreUnavailable>;
   readonly reauthenticateVerify: (
     userId: Users.UserId,
     sessionId: string,
@@ -569,6 +552,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCredentialNotFound
     | PasskeyApi.PasskeyCounterAnomaly
+    | Api.Unauthenticated
     | Errors.StoreUnavailable
   >;
   readonly authenticateOptions: (input: {
@@ -600,9 +584,14 @@ export interface PasskeyShape {
   >;
   readonly listCredentials: (
     userId: Users.UserId,
-  ) => Effect.Effect<ReadonlyArray<PasskeyCredentials.PasskeyCredentialRecord>>;
+  ) => Effect.Effect<
+    ReadonlyArray<PasskeyCredentials.PasskeyCredentialRecord>,
+    Errors.StoreUnavailable
+  >;
   /** BPAS-006/TC-004: the rpId, stable user handle and accepted credential ids a browser's Signals API call needs. */
-  readonly signals: (userId: Users.UserId) => Effect.Effect<PasskeySignals>;
+  readonly signals: (
+    userId: Users.UserId,
+  ) => Effect.Effect<PasskeySignals, Errors.StoreUnavailable>;
   /** TC-008: the origins `GET /.well-known/webauthn` serves — `PasskeyConfig.relatedOrigins` of the config in force for the request. */
   readonly relatedOrigins: Effect.Effect<ReadonlyArray<string>>;
   readonly renameCredential: (
@@ -611,7 +600,7 @@ export interface PasskeyShape {
     name: string,
   ) => Effect.Effect<
     PasskeyCredentials.PasskeyCredentialRecord,
-    PasskeyApi.PasskeyCredentialNotFound
+    PasskeyApi.PasskeyCredentialNotFound | Errors.StoreUnavailable
   >;
   readonly removeCredential: (
     userId: Users.UserId,
@@ -1004,6 +993,18 @@ export const passkeyExport = DataExport.contribute({
   }),
 });
 
+/**
+ * Plan 10 item 6: the scheduled half of `ChallengeStore.sweepExpired` (`issue` still prunes inline: it bounds a
+ * table fed by an anonymous endpoint). The store reads its own clock; `now` is the sweep's, the same instant.
+ */
+export const passkeyChallengeRetention = Retention.contribute({
+  id: "passkey.challenges",
+  make: Effect.gen(function* () {
+    const challenges = yield* ChallengeStore.ChallengeStore;
+    return () => challenges.sweepExpired;
+  }),
+});
+
 export const passkeyErasure = Erasure.contribute({
   id: "passkey",
   make: Effect.gen(function* () {
@@ -1019,17 +1020,29 @@ export const passkeyErasure = Erasure.contribute({
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
   apiVersion: 1,
   contract: PasskeyApi.PasskeyApi,
-  // PV-241: declared from `RATE_LIMITS`, the table both the registry and enforcement draw from.
-  rateLimits: AuthPlugin.declareRateLimits(
-    ["passkey.authenticate"],
-    Object.entries(RATE_LIMITS).map(([name, rule]) => ({
-      group: "passkey.authenticate",
-      name,
-      ...rule,
-    })),
-  ),
-  tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
+  tables: {
+    passkey_credential: AuthPlugin.Table.global(
+      "user-attached credential; the directory is global",
+    ),
+    passkey_challenge: AuthPlugin.Table.global("a ceremony starts before any tenant is known"),
+    passkey_user_handle: AuthPlugin.Table.global("user-attached; the directory is global"),
+  },
   migrations: passkeyMigrations,
+  // Plan 08 (BEH-EA-T4): the credential, user-handle and challenge stores, memory and SQL, matched.
+  records: {
+    memory: Layer.mergeAll(
+      PasskeyCredentials.layerMemory,
+      PasskeyUserHandles.layerMemory,
+      ChallengeStore.layerMemory,
+    ),
+    sql: Layer.mergeAll(
+      PasskeyCredentials.layerSql,
+      PasskeyUserHandles.layerSql,
+      ChallengeStore.layerSql,
+    ),
+  },
   // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
   config: [
     ConfigDescriptor.make(PasskeyConfig, {
@@ -1060,7 +1073,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   static readonly layer = AuthPlugin.layer(Passkey, {
     ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter, WebAuthn.WebAuthn],
     handlers: PasskeyHandlers,
-    contributes: Layer.mergeAll(passkeyErasure, passkeyExport),
+    contributes: Layer.mergeAll(passkeyErasure, passkeyExport, passkeyChallengeRetention),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
@@ -1078,13 +1091,8 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const builtConfig = yield* PasskeyConfig;
       const configNow = Tenant.configInForce(PasskeyConfig, builtConfig);
       const crypto = yield* Crypto.Crypto;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
-      // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
-      // future `TwoFactor` plugin taps.
-      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-      const afterSignIn = yield* Hooks.AfterSignIn;
-      const beforeSignIn = yield* Hooks.BeforeSignIn;
+      // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement.
+      const signIn = yield* SignIn.make;
 
       // ---- layer-build validation and operator warnings --------------------
 
@@ -1131,98 +1139,29 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const enumerationKey = new TextEncoder().encode(Redacted.value(enumerationSecret));
       const decoyCredential = { id: "awthaq-decoy-credential", publicKey: decoyPublicKey() };
 
-      /**
-       * Registers this plugin's own limits into the introspectable registry
-       * (BEH-EA-107/110/111) — declarative, matching the `limit`/`window` each
-       * `rateLimit(...)` call below actually enforces (`RATE_LIMITS` is the
-       * single source of truth both sides draw from). A
-       * `RateLimitScopeViolation` is only reachable if `group` below ever
-       * named something other than this plugin's own contract group — a
-       * coding defect here, hence `Effect.orDie`.
-       */
-      // The explicit return-type annotation on the `.map` callback is the
-      // narrow, necessary exception `@awthaq/password`'s and `@awthaq/oauth`'s
-      // own rule registration already document: passing this class into
-      // anything typed `AuthPlugin.Any` from inside its own `static readonly
-      // layer` initializer is a real TS circularity.
-      yield* Effect.all(
-        (
-          [
-            {
-              endpoint: RATE_LIMITS.authenticateOptionsByIp.endpoint,
-              key: "ip",
-              limit: RATE_LIMITS.authenticateOptionsByIp.limit,
-              window: RATE_LIMITS.authenticateOptionsByIp.window,
-            },
-            {
-              endpoint: RATE_LIMITS.authenticateOptionsByEmail.endpoint,
-              key: (input) =>
-                `passkey:authenticate-options:${emailFromRateLimitInput(input).toLowerCase()}`,
-              limit: RATE_LIMITS.authenticateOptionsByEmail.limit,
-              window: RATE_LIMITS.authenticateOptionsByEmail.window,
-            },
-            {
-              endpoint: RATE_LIMITS.authenticateVerifyByIp.endpoint,
-              key: "ip",
-              limit: RATE_LIMITS.authenticateVerifyByIp.limit,
-              window: RATE_LIMITS.authenticateVerifyByIp.window,
-            },
-          ] satisfies ReadonlyArray<{
-            readonly endpoint: string;
-            readonly key: RateLimits.RateLimitKey;
-            readonly limit: number;
-            readonly window: Duration.Duration;
-          }>
-        ).map((rule): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-          rateLimitsRegistry.register(Passkey, { group: "passkey.authenticate", ...rule }),
-        ),
-        { discard: true },
-      ).pipe(Effect.orDie);
-
-      const rateLimit = (
-        name: RateLimitRuleName,
-        key: string,
-      ): Effect.Effect<void, Api.RateLimited> =>
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        RateLimits.enforce({
-          key,
-          limit: RATE_LIMITS[name].limit,
-          window: RATE_LIMITS[name].window,
-          meta: ruleMeta(name),
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // BEH-EA-107/110/111: the table above is registered (introspectable) and spent through one
+      // budget; a breach is published, logged and counted, and answers `Api.RateLimited` (EOTS-007).
+      const limits = yield* RateLimits.budget(Passkey);
 
       /**
-       * Ticket 15 (BPAS-001): the shared freshness gate `registerOptions`/
-       * `registerOptionsConditional`/`registerVerify` all apply before
-       * doing anything else — `Sessions.findOwned` (TIR-003: a keyed
-       * lookup, never a `list` + `find` that a 200-row page cap could
-       * blind) mirrors `@awthaq/qadi`'s own `reauthHandler`. A session
-       * that is not live for its owner (already revoked/tombstoned/
-       * expired) fails closed the same as a stale one — there is no live
-       * session left to have proven anything recently.
+       * Ticket 15 (BPAS-001): the freshness gate `registerOptions`/
+       * `registerOptionsConditional`/`registerVerify` all apply before doing anything
+       * else. The rule is `Sessions.requireFresh` (BEH-EA-320): a session that is not
+       * live for its owner fails closed the same as a stale one. This maps it to the
+       * plugin's own wire error.
        */
-      const requireFreshSession = (
-        userId: Users.UserId,
-        sessionId: string,
-      ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable> =>
+      const requireFreshSession = (userId: Users.UserId, sessionId: string) =>
         Effect.gen(function* () {
           const config = yield* configNow;
-          const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAgeSeconds);
-          const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));
-          if (Option.isNone(current)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
-          }
-          const now = yield* DateTime.now;
-          if (Sessions.isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
-          }
+          yield* sessions
+            .requireFresh(userId, Sessions.SessionId(sessionId), config.reauthMaxAgeSeconds)
+            .pipe(
+              Effect.catchTag("Sessions/Stale", (stale) =>
+                Effect.fail(
+                  new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds: stale.maxAgeSeconds }),
+                ),
+              ),
+            );
         });
 
       /** TC-003: the knobs every options generator sets explicitly. */
@@ -1447,15 +1386,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const authenticateOptions: PasskeyShape["authenticateOptions"] = Effect.fnUntraced(
         function* ({ email, ip }) {
           const config = yield* configNow;
-          yield* rateLimit(
-            "authenticateOptionsByIp",
-            `passkey:authenticate-options:ip:${ip ?? "unknown"}`,
-          );
+          yield* limits.spend("authenticateOptionsByIp", { ip });
           if (email !== undefined) {
-            yield* rateLimit(
-              "authenticateOptionsByEmail",
-              `passkey:authenticate-options:${email.toLowerCase()}`,
-            );
+            yield* limits.spend("authenticateOptionsByEmail", { email });
           }
           const ceremonyId = toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie));
           const challenge = yield* challengeStore.issue(authenticateScope(ceremonyId));
@@ -1500,7 +1433,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const applyCounterPolicy = (
         stored: PasskeyCredentials.PasskeyCredentialRecord,
         verified: WebAuthn.VerifiedAuthentication,
-      ): Effect.Effect<void, PasskeyApi.PasskeyCounterAnomaly> =>
+      ): Effect.Effect<void, PasskeyApi.PasskeyCounterAnomaly | Errors.StoreUnavailable> =>
         Effect.gen(function* () {
           const config = yield* configNow;
           const regressed =
@@ -1512,7 +1445,10 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             userId: stored.userId,
             credentialId: stored.id,
           });
-          yield* credentials.flagCounterAnomaly(stored.id).pipe(Effect.orDie);
+          // The credential was read a moment ago in this ceremony: a vanished row is a bug, not a domain outcome.
+          yield* credentials
+            .flagCounterAnomaly(stored.id)
+            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
           if (config.counterAnomalyPolicy === "reject") {
             return yield* Effect.fail(new PasskeyApi.PasskeyCounterAnomaly());
           }
@@ -1523,10 +1459,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           const config = yield* configNow;
           // Per-source budget first: cheap to enforce, bounds signature work
           // and challenge probing from one address.
-          yield* rateLimit(
-            "authenticateVerifyByIp",
-            `passkey:authenticate-verify:ip:${input.ip ?? "unknown"}`,
-          );
+          yield* limits.spend("authenticateVerifyByIp", { ip: input.ip });
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
           if (Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
@@ -1611,65 +1544,23 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           yield* applyCounterPolicy(stored, verified);
           yield* credentials
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
-            .pipe(Effect.orDie);
+            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
 
-          // WPS-001: a deleted user's passkey credential row can outlive
-          // the account (no FK, no cascade) — cryptographic verification
-          // above only proves possession of *a* registered authenticator,
-          // never that the account it names still exists. Defense in
-          // depth, right where `Sessions.issue` would otherwise mint a
-          // session for a dead `userId` with no existence check of its
-          // own: same uniform `InvalidCredentials` collapse BEH-EA-136
-          // already applies to every other failure in this ceremony.
-          const user = yield* users
-            .findById(stored.userId)
-            .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
-
-          // SCP-001/BAM-005: THE shared sign-in gate, after the credential is
-          // proven and before any session exists.
-          yield* Users.assertCanSignIn(user);
-
-          // NAM-002: the sign-in veto, before the MFA divert point below.
-          const signedInEmail = Users.emailOf(user);
-          yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-            beforeSignIn.run({
-              userId: stored.userId,
-              ...(Option.isSome(signedInEmail) ? { email: signedInEmail.value } : {}),
-              strategy: "passkey",
-            }),
-          );
-
-          // BCR-004/THS-002: same canonical MFA attachment point
-          // `@awthaq/password`'s own `signIn` consults, right before this
-          // flow's own `sessions.issue`.
-          const amr = passkeyAmr(verified);
-          const point = yield* beforeSessionIssue.run({
-            userId: stored.userId,
-            strategy: "passkey",
-            amr,
-          });
-          if (point._tag === "Diverted") {
-            return yield* Effect.fail(point.value);
-          }
-          const issued = yield* sessions
-            .issue({
-              userId: stored.userId,
-              request: {
-                ...(input.ip !== undefined ? { ip: input.ip } : {}),
-                ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
-              },
-              // THS-003/HSK-005: the kind of key (hardware-bound or synced), plus user
-              // verification when the authenticator performed it.
-              amr,
-            })
-            .pipe(Effect.orDie);
-          yield* events.publish({
-            _tag: "auth.user.signedIn",
-            userId: stored.userId,
-            strategy: "passkey",
-          });
-          yield* afterSignIn.run({ userId: stored.userId, strategy: "passkey" });
-          return issued;
+          // ADR-EA-038: core's sign-in completes it (lookup, gate, veto, MFA divert, session,
+          // announcement). WPS-001: a deleted user's passkey credential row can outlive the
+          // account (no FK, no cascade), and cryptographic verification above only proves possession
+          // of *a* registered authenticator, never that the account it names still exists; a missing
+          // user collapses to the same uniform `InvalidCredentials` as every other failure in this
+          // ceremony (BEH-EA-136). THS-003/HSK-005: `amr` is the kind of key (hardware-bound or
+          // synced), plus user verification when the authenticator performed it.
+          return yield* signIn
+            .complete(
+              { userId: stored.userId, strategy: "passkey", amr: passkeyAmr(verified) },
+              { ip: input.ip, userAgent: context?.userAgent },
+            )
+            .pipe(
+              Effect.catchTag("SignIn/UserGone", () => Effect.fail(new Api.InvalidCredentials())),
+            );
         },
       );
 
@@ -1761,7 +1652,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               LastAccountRefusal: () => Effect.fail(new PasskeyApi.PasskeyLastCredential()),
             }),
           );
-          yield* credentials.delete(id, userId).pipe(Effect.orDie);
+          yield* credentials
+            .delete(id, userId)
+            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
         },
       );
 
@@ -1850,19 +1743,15 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           yield* applyCounterPolicy(stored, verified);
           yield* credentials
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
-            .pipe(Effect.orDie);
+            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
 
-          yield* sessions.reauthenticate(Sessions.SessionId(sessionId), passkeyAmr(verified)).pipe(
-            Effect.catchTag("Sessions/NotFound", () =>
-              // `passkey.reauthenticate`'s own `Authentication` middleware
-              // already proved this exact session live moments ago — see
-              // `Password.ts`'s own identical `reauthenticate` comment.
-              Defects.invariantViolation(
-                "RowVanished",
-                "awthaq: reauthenticate's own current session vanished",
-              ),
-            ),
-          );
+          // BEH-EA-319: ended since the middleware's verify (revoked, superseded,
+          // expired) is "no longer authenticated": 401, not a defect.
+          yield* sessions
+            .reauthenticate(userId, Sessions.SessionId(sessionId), passkeyAmr(verified))
+            .pipe(
+              Effect.catchTag("Sessions/NotFound", () => Effect.fail(new Api.Unauthenticated())),
+            );
         },
       );
 

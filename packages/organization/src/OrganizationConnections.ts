@@ -9,14 +9,15 @@
 //
 // - `OrganizationConnections`, a `LayerMap.Service` keyed by organization id
 //   (ADR-EA-005's reserved seam for keyed, per-tenant resources). Building an
-//   organization's entry reads its `organization_oauth_connection` rows, decrypts
-//   each client secret with the `Encryption` port, and yields a `ConnectionSet`
+//   organization's entry reads its `organization_oauth_connection` rows, opens
+//   each sealed client secret, and yields a `ConnectionSet`
 //   of ready `OAuthProviderConfig`s. Entries idle out and are invalidated on
 //   every write below.
 // - `OrganizationConnectionStore`, the write side: create / update / remove /
 //   list / discover, validating what an organization supplies. The client secret
-//   is sealed with AAD `organization-oauth-connection:<id>:clientSecret`, so a
-//   ciphertext cannot be moved to another connection or field.
+//   is a `SealedColumn` of `ConnectionRecords` (AAD `organization_oauth_connection:<id>:clientSecret`,
+//   so a ciphertext cannot be moved to another connection or field): this module hands the
+//   records plaintext and opens what they hand back, and never sees an envelope.
 // - `oauthConnections`, the layer that installs a resolver into
 //   `@awthaq/oauth` (`OAuthConnections`), which consults it after its static
 //   registry. A connection's provider id is `org:<organizationId>:<connectionId>`,
@@ -35,7 +36,9 @@
 
 import { OAuthConnections, OAuthProvider } from "@awthaq/oauth";
 import { Claims } from "@awthaq/oauth/presets";
-import { Encryption, OutboundUrl } from "@awthaq/ports";
+import { AuthEvents } from "@awthaq/core";
+import { OutboundUrl, SqlTransaction } from "@awthaq/ports";
+import { SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -47,7 +50,10 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Data from "effect/Data";
 import * as ConnectionRecords from "./ConnectionRecords.ts";
-import * as OrganizationHooks from "./OrganizationHooks.ts";
+import * as DomainClaims from "./DomainClaims.ts";
+import * as OrganizationActor from "./OrganizationActor.ts";
+import * as OrganizationDeletion from "./OrganizationDeletion.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 
 // ---- provider ids -------------------------------------------------------------
 
@@ -67,9 +73,6 @@ export const parseProviderId = (
     : Option.some({ organizationId, connectionId });
 };
 
-const secretAad = (connectionId: string): string =>
-  `organization-oauth-connection:${connectionId}:clientSecret`;
-
 // ---- record -> provider config ----------------------------------------------------
 
 /** OIDC standard claims -> `OAuthProfile`; a plain OAuth2 provider's userinfo usually carries `sub` or a numeric `id`. */
@@ -85,14 +88,14 @@ const standardProfile = (claims: Record<string, unknown>): OAuthProvider.OAuthPr
 /**
  * Changes whenever what a config is built from does. `updatedAt` alone is not
  * enough (two edits inside one millisecond share it); the sealed secret's
- * envelope is fresh on every write, so it is part of the fingerprint too (it is
- * ciphertext — this value is compared, never displayed).
+ * revision (its ciphertext, fresh on every write) is part of the fingerprint too
+ * — this value is compared, never displayed.
  */
 const revisionOf = (record: ConnectionRecords.ConnectionRecord): string =>
   [
     DateTime.formatIso(record.updatedAt),
     record.clientId,
-    Option.getOrElse(record.clientSecret, () => ""),
+    Option.getOrElse(record.secretRevision, () => ""),
     Option.getOrElse(record.issuer, () => ""),
     Option.getOrElse(record.discoveryUrl, () => ""),
     Option.getOrElse(record.authorizationEndpoint, () => ""),
@@ -149,27 +152,18 @@ export class ConnectionSet extends Context.Service<ConnectionSet, ConnectionSetS
 const buildSet = (organizationId: string) =>
   Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
-    const encryption = yield* Encryption.Encryption;
-    const rows = yield* records.listByOrganization(organizationId);
+    // The set is a resolver's lookup, and the resolver contract (`OAuthConnectionResolverShape.find`)
+    // is infallible: a store outage while building it is a defect of that lookup, not a typed error.
+    const rows = yield* records.listByOrganization(organizationId).pipe(Effect.orDie);
     const connections = new Map<string, OAuthConnections.OAuthConnection>();
     for (const record of rows) {
-      // A secret that no longer decrypts (a retired key, a tampered row) drops
-      // that one connection with a warning; it never takes the others down.
+      // A secret that no longer opens (a retired key, a tampered row) drops that one
+      // connection (the substrate logs which column of which row); it never takes the
+      // others down.
       const secret = Option.isNone(record.clientSecret)
         ? Option.some(Option.none<Redacted.Redacted<string>>())
-        : yield* encryption.decrypt(record.clientSecret.value, secretAad(record.id)).pipe(
-            Effect.map((decrypted) => Option.some(Option.some(decrypted.plaintext))),
-            Effect.catchTags({
-              DecryptionFailed: () => Effect.succeedNone,
-              UnknownKeyId: () => Effect.succeedNone,
-            }),
-          );
-      if (Option.isNone(secret)) {
-        yield* Effect.logWarning(
-          `awthaq/organization: connection "${record.id}" of organization "${organizationId}" has an undecryptable client secret and was not loaded`,
-        );
-        continue;
-      }
+        : Option.map(yield* SealedColumn.option(record.clientSecret.value.open), Option.some);
+      if (Option.isNone(secret)) continue;
       const providerId = providerIdOf(organizationId, record.id);
       connections.set(providerId, {
         config: toConfig(record, secret.value),
@@ -181,7 +175,7 @@ const buildSet = (organizationId: string) =>
 
 /**
  * BEH-EA-235: a `LayerMap.Service` keyed by organization id. Requires
- * `ConnectionRecords` and `Encryption`; provide `OrganizationConnections.layer`.
+ * `ConnectionRecords`; provide `OrganizationConnections.layer`.
  */
 export class OrganizationConnections extends LayerMap.Service<OrganizationConnections>()(
   "awthaq/organization/OrganizationConnections",
@@ -218,6 +212,11 @@ export const oauthConnections = Layer.effect(
 );
 
 // ---- the store ---------------------------------------------------------------------
+
+/** Home-realm discovery is deliberately cross-organization: a domain routes to exactly one connection. */
+const discoveryGrant = TenantScoped.crossTenant(
+  "organization: home-realm discovery routes an email domain to exactly one connection, across organizations",
+);
 
 /** The connection a caller sees: never the secret, only whether one is stored. */
 export interface ConnectionView {
@@ -276,10 +275,19 @@ export interface ConnectionUpdateInput {
 }
 
 export interface OrganizationConnectionStoreShape {
+  /**
+   * Refuses an organization that is unknown or suspended (`InvalidConnection`), then writes and publishes
+   * `auth.organization.connectionCreated` (identifiers only, naming the actor's user when it names one).
+   */
   readonly create: (
+    actor: OrganizationActor.Actor,
     input: ConnectionCreateInput,
-  ) => Effect.Effect<ConnectionView, InvalidConnection | ConnectionRecords.ConnectionDomainTaken>;
+  ) => Effect.Effect<
+    ConnectionView,
+    InvalidConnection | ConnectionRecords.ConnectionDomainTaken | StoreFailure.StoreUnavailable
+  >;
   readonly update: (
+    actor: OrganizationActor.Actor,
     organizationId: string,
     connectionId: string,
     patch: ConnectionUpdateInput,
@@ -288,12 +296,19 @@ export interface OrganizationConnectionStoreShape {
     | InvalidConnection
     | ConnectionRecords.ConnectionRecordNotFound
     | ConnectionRecords.ConnectionDomainTaken
+    | StoreFailure.StoreUnavailable
   >;
   readonly remove: (
+    actor: OrganizationActor.Actor,
     organizationId: string,
     connectionId: string,
-  ) => Effect.Effect<void, ConnectionRecords.ConnectionRecordNotFound>;
-  readonly list: (organizationId: string) => Effect.Effect<ReadonlyArray<ConnectionView>>;
+  ) => Effect.Effect<
+    void,
+    ConnectionRecords.ConnectionRecordNotFound | StoreFailure.StoreUnavailable
+  >;
+  readonly list: (
+    organizationId: string,
+  ) => Effect.Effect<ReadonlyArray<ConnectionView>, StoreFailure.StoreUnavailable>;
   /**
    * Home-realm discovery: the `providerId` an organization id, or an email's
    * domain, routes to (`None` when nothing does). The caller redirects to
@@ -303,7 +318,7 @@ export interface OrganizationConnectionStoreShape {
   readonly discover: (hint: {
     readonly organizationId?: string | undefined;
     readonly email?: string | undefined;
-  }) => Effect.Effect<Option.Option<string>>;
+  }) => Effect.Effect<Option.Option<string>, StoreFailure.StoreUnavailable>;
 }
 
 export class OrganizationConnectionStore extends Context.Service<
@@ -396,58 +411,107 @@ const toView = (record: ConnectionRecords.ConnectionRecord): ConnectionView => (
   updatedAt: record.updatedAt,
 });
 
-/** Requires `ConnectionRecords`, `Encryption`, `OrganizationConnections` (invalidated on every write) and `Crypto`. */
+/**
+ * Requires `ConnectionRecords`, `OrganizationConnections` (invalidated on every write), the exposed
+ * `OrganizationDirectory` (a connection belongs to an active organization), `AuthEvents` and `Crypto`.
+ */
 export const layerStore = Layer.effect(
   OrganizationConnectionStore,
   Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
-    const encryption = yield* Encryption.Encryption;
+    const claims = yield* DomainClaims.DomainClaims;
+    const transaction = yield* SqlTransaction.SqlTransaction;
     const map = yield* OrganizationConnections;
+    const directory = yield* OrganizationDirectory.OrganizationDirectory;
+    const events = yield* AuthEvents.AuthEvents;
     const crypto = yield* Crypto.Crypto;
 
-    const sealSecret = (connectionId: string, secret: Redacted.Redacted<string>) =>
-      encryption.encrypt(secret, secretAad(connectionId));
+    /** A domain another organization owns (over any protocol) is a taken domain, worded as this protocol's own refusal. */
+    const claimed = <A, E, R>(
+      input: DomainClaims.DomainClaim,
+      previous: ReadonlyArray<string> | undefined,
+      write: Effect.Effect<A, E, R>,
+    ) =>
+      DomainClaims.withClaim(
+        claims,
+        transaction,
+        input,
+        previous,
+        write,
+        (domain) => new ConnectionRecords.ConnectionDomainTaken({ domain }),
+      );
 
-    const create: OrganizationConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
-      const scopes = input.scopes ?? [];
-      yield* validate({
-        kind: input.kind,
-        name: input.name,
-        issuer: Option.fromNullishOr(input.issuer),
-        discoveryUrl: Option.fromNullishOr(input.discoveryUrl),
-        authorizationEndpoint: Option.fromNullishOr(input.authorizationEndpoint),
-        tokenEndpoint: Option.fromNullishOr(input.tokenEndpoint),
-        jwksUri: Option.fromNullishOr(input.jwksUri),
-        userinfoEndpoint: Option.fromNullishOr(input.userinfoEndpoint),
-        clientId: input.clientId,
-        scopes,
-      });
-      const emailDomains = yield* normalizeDomains(input.emailDomains ?? []);
-      const clientSecret =
-        input.clientSecret === undefined ? undefined : yield* sealSecret(id, input.clientSecret);
-      const record = yield* records.create({
-        id,
-        organizationId: input.organizationId,
-        kind: input.kind,
-        name: input.name.trim(),
-        issuer: input.issuer,
-        discoveryUrl: input.discoveryUrl,
-        authorizationEndpoint: input.authorizationEndpoint,
-        tokenEndpoint: input.tokenEndpoint,
-        jwksUri: input.jwksUri,
-        userinfoEndpoint: input.userinfoEndpoint,
-        clientId: input.clientId,
-        clientSecret,
-        scopes,
-        emailDomains,
-      });
-      yield* map.invalidate(input.organizationId);
-      return toView(record);
-    });
+    /** A connection belongs to an organization that exists and is not suspended (BEH-EA-237), worded as the SAML store words it. */
+    const requireActiveOrganization = (organizationId: string) =>
+      directory.findActive(organizationId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(new InvalidConnection({ reason: "the organization does not exist" })),
+            onSome: () => Effect.void,
+          }),
+        ),
+      );
+
+    const create: OrganizationConnectionStoreShape["create"] = Effect.fnUntraced(
+      function* (actor, input) {
+        yield* requireActiveOrganization(input.organizationId);
+        const id = yield* crypto.randomUUIDv7.pipe(
+          Effect.catch(StoreFailure.storeUnavailable("OrganizationConnectionStore.create")),
+        );
+        const scopes = input.scopes ?? [];
+        yield* validate({
+          kind: input.kind,
+          name: input.name,
+          issuer: Option.fromNullishOr(input.issuer),
+          discoveryUrl: Option.fromNullishOr(input.discoveryUrl),
+          authorizationEndpoint: Option.fromNullishOr(input.authorizationEndpoint),
+          tokenEndpoint: Option.fromNullishOr(input.tokenEndpoint),
+          jwksUri: Option.fromNullishOr(input.jwksUri),
+          userinfoEndpoint: Option.fromNullishOr(input.userinfoEndpoint),
+          clientId: input.clientId,
+          scopes,
+        });
+        const emailDomains = yield* normalizeDomains(input.emailDomains ?? []);
+        const record = yield* claimed(
+          {
+            organizationId: input.organizationId,
+            protocol: "oauth",
+            connectionId: id,
+            domains: emailDomains,
+          },
+          undefined,
+          records.create({
+            id,
+            organizationId: input.organizationId,
+            kind: input.kind,
+            name: input.name.trim(),
+            issuer: input.issuer,
+            discoveryUrl: input.discoveryUrl,
+            authorizationEndpoint: input.authorizationEndpoint,
+            tokenEndpoint: input.tokenEndpoint,
+            jwksUri: input.jwksUri,
+            userinfoEndpoint: input.userinfoEndpoint,
+            clientId: input.clientId,
+            clientSecret: input.clientSecret,
+            scopes,
+            emailDomains,
+          }),
+        );
+        yield* map.invalidate(input.organizationId);
+        yield* events.publish({
+          _tag: "auth.organization.connectionCreated",
+          organizationId: input.organizationId,
+          connectionId: record.id,
+          actorUserId: OrganizationActor.userIdOf(actor),
+        });
+        return toView(record);
+      },
+    );
 
     const update: OrganizationConnectionStoreShape["update"] = Effect.fnUntraced(
-      function* (organizationId, connectionId, patch) {
+      function* (actor, organizationId, connectionId, patch) {
+        yield* requireActiveOrganization(organizationId);
         const existing = yield* records.findById(organizationId, connectionId);
         if (Option.isNone(existing)) {
           return yield* new ConnectionRecords.ConnectionRecordNotFound({ id: connectionId });
@@ -476,13 +540,7 @@ export const layerStore = Layer.effect(
           patch.emailDomains === undefined
             ? undefined
             : yield* normalizeDomains(patch.emailDomains);
-        const clientSecret =
-          patch.clientSecret === undefined
-            ? undefined
-            : patch.clientSecret === null
-              ? null
-              : yield* sealSecret(connectionId, patch.clientSecret);
-        const record = yield* records.update(organizationId, connectionId, {
+        const update = records.update(organizationId, connectionId, {
           ...(patch.name === undefined ? {} : { name: patch.name.trim() }),
           issuer: patch.issuer,
           discoveryUrl: patch.discoveryUrl,
@@ -491,19 +549,47 @@ export const layerStore = Layer.effect(
           jwksUri: patch.jwksUri,
           userinfoEndpoint: patch.userinfoEndpoint,
           clientId: patch.clientId,
-          clientSecret,
+          clientSecret: patch.clientSecret,
           scopes: patch.scopes,
           emailDomains,
         });
+        const record = yield* emailDomains === undefined
+          ? update
+          : claimed(
+              { organizationId, protocol: "oauth", connectionId, domains: emailDomains },
+              current.emailDomains,
+              update,
+            );
         yield* map.invalidate(organizationId);
+        yield* events.publish({
+          _tag: "auth.organization.connectionUpdated",
+          organizationId,
+          connectionId,
+          fields: Object.entries(patch).flatMap(([field, value]) =>
+            value === undefined ? [] : [field],
+          ),
+          actorUserId: OrganizationActor.userIdOf(actor),
+        });
         return toView(record);
       },
     );
 
     const remove: OrganizationConnectionStoreShape["remove"] = Effect.fnUntraced(
-      function* (organizationId, connectionId) {
-        yield* records.remove(organizationId, connectionId);
+      function* (actor, organizationId, connectionId) {
+        yield* DomainClaims.withRelease(
+          claims,
+          transaction,
+          organizationId,
+          connectionId,
+          records.remove(organizationId, connectionId),
+        );
         yield* map.invalidate(organizationId);
+        yield* events.publish({
+          _tag: "auth.organization.connectionDeleted",
+          organizationId,
+          connectionId,
+          actorUserId: OrganizationActor.userIdOf(actor),
+        });
       },
     );
 
@@ -520,6 +606,7 @@ export const layerStore = Layer.effect(
         const at = email?.lastIndexOf("@") ?? -1;
         if (email === undefined || at < 0) return Option.none<string>();
         const found = yield* records.findByEmailDomain(
+          discoveryGrant,
           email
             .slice(at + 1)
             .trim()
@@ -533,19 +620,25 @@ export const layerStore = Layer.effect(
 );
 
 /**
- * Deleting an organization removes its connections and releases their email
- * domains. A separate opt-in layer, like `Organization.beforeUserDeleteErasure`
- * (hook-point taps are a module-level registry that freezes at first run, so a
- * tap cannot be merged into a layer rebuilt repeatedly): provide it once.
+ * Deleting an organization removes its connections and releases their email domains: this plugin's
+ * contribution to the organization's deletion (F7). The rows go in the deletion's own transaction, so a
+ * failure rolls the deletion back instead of being swallowed, and the cached provider set is dropped once
+ * it has committed. A separate opt-in layer, like the store itself: provide it where the store is.
  */
-export const cleanupOnOrganizationDelete = Layer.unwrap(
-  Effect.gen(function* () {
+export const connectionsOnOrganizationDelete = OrganizationDeletion.contribute({
+  id: "organization.oauthConnections",
+  make: Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
+    const claims = yield* DomainClaims.DomainClaims;
     const map = yield* OrganizationConnections;
-    return OrganizationHooks.AfterDeleteOrganization.tap(({ organizationId }) =>
-      records
-        .removeAllForOrganization(organizationId)
-        .pipe(Effect.andThen(map.invalidate(organizationId))),
-    );
+    return {
+      // The organization's domain claims go with it, whatever protocol made them.
+      inTransaction: (organizationId: string) =>
+        Effect.andThen(
+          records.removeAllForOrganization(organizationId),
+          claims.releaseAllForOrganization(organizationId),
+        ),
+      afterCommit: map.invalidate,
+    };
   }),
-);
+});

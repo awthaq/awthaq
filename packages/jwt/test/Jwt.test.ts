@@ -2,32 +2,18 @@
 // result succeeds with every claim correct; a tampered signature fails;
 // an expired token fails (`TestClock`-driven).
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
-import { SqlTransaction } from "@awthaq/ports";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Sessions, Users } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
-import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 
-/**
- * `Jwt.layer` now bundles the `jwt.token` mint endpoint's handlers
- * (ticket 10), which require `Api.Authentication` to discharge — even for
- * these service-level tests, which never go over HTTP and never actually
- * invoke that middleware. Mirrors `packages/organization/test/Organization.test.ts`'s
- * own identical fix for the identical reason.
- */
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
+const built = Auth.make([Jwt.Jwt]);
 
 const asCaller = (input: {
   readonly id: string;
@@ -44,30 +30,11 @@ const asCaller = (input: {
     ...(input.actingAs === undefined ? {} : { actingAs: new Api.PrincipalRef(input.actingAs) }),
   });
 
+/** `Jwt` through `TestAuth.layer(Auth.make([Jwt]))`: the real key ring over the plugin's own records, the derived middleware, the core services. */
 const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
-  Jwt.Jwt.layer.pipe(
-    Layer.provide(KeyRing.KeyRing.layer),
-    Layer.provide(SigningKeyRecords.layerMemory),
-    Layer.provide(SqlTransaction.layerNoop),
-    Layer.provide(AuthenticationLive),
-    // `provideMerge`, not `provide`: `verifyLive` (ticket 12) requires
-    // `Sessions` at its own call site, not captured in `make` — the test
-    // body needs the same `Sessions` instance exposed too, both to issue/
-    // revoke a real session and to satisfy `jwt.verifyLive`'s own `R`.
-    Layer.provideMerge(Sessions.layerMemory),
-    // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    // TIR-001: `RevocationStore` is captured once in `make` now (not a
-    // per-call `R` the way `Sessions` is), so this discharges it for the
-    // whole plugin rather than merely exposing it to the test body.
-    Layer.provideMerge(RevocationStore.layerMemory),
-    Layer.provide(NodeCrypto.layer),
-    // last: both `Jwt.layer` and `KeyRing.layer` independently need
-    // `JwtConfig` — `Layer.provide` folds each step's own open
-    // requirement forward, so one final provide here discharges both.
-    Layer.provide(JwtConfig.config({ issuer: "https://issuer.test", ...overrides })),
-  );
+  TestAuth.layer(built, {
+    services: JwtConfig.config({ issuer: "https://issuer.test", ...overrides }),
+  });
 
 describe("Jwt sign/verify", () => {
   it.effect("signs a caller and verifies every claim", () =>

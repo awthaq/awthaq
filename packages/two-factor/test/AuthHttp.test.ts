@@ -7,77 +7,24 @@ import { Api } from "@awthaq/api";
 import { Auth } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
-import {
-  EncryptionLive,
-  Gates,
-  NoBreachHttpClient,
-  Stores,
-  codeFor,
-  letForkedFibersRun,
-  tokenOf,
-} from "./support/harness.ts";
+import { Gates, codeFor, letForkedFibersRun, tokenOf } from "./support/harness.ts";
 
 const built = Auth.make([Password.Password, TwoFactor.TwoFactor]);
 
-const CSRF_SECRET = "two-factor-authhttp-test-csrf-secret-padded-32";
-const CSRF_TOKEN = (() => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
-})();
+const AppLayer = TestAuth.layer(built, {
+  services: Layer.merge(Gates, TestAuth.httpClient.noBreach),
+});
 
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+// One running app, shared by the handler and by the test's own reads of its `Mailer`.
+const testApp = TestAuth.app(AppLayer);
 
-const AppLayer = TestAuth.layer(
-  built,
-  Layer.mergeAll(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-    CsrfProtectionLive,
-    Gates.pipe(
-      Layer.provideMerge(SecondFactor.layer),
-      Layer.provideMerge(Stores),
-      Layer.provideMerge(EncryptionLive),
-    ),
-    NoBreachHttpClient,
-  ),
-);
-
-// One running app, shared by the handler and by the test's own reads of its `Mailer` (via the memo map).
-const memoMap = Layer.makeMemoMapUnsafe();
-const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
-
-const sentMail = () =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const scope = yield* Effect.scope;
-        const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-        return yield* Effect.gen(function* () {
-          const mailer = yield* Mailer.Mailer;
-          return yield* mailer.sent;
-        }).pipe(Effect.provide(context));
-      }),
-    ),
-  );
+const sentMail = () => testApp.run(Effect.flatMap(Mailer.Mailer, (mailer) => mailer.sent));
 
 const call = (
   method: "GET" | "POST",
@@ -85,19 +32,10 @@ const call = (
   options?: { readonly body?: unknown; readonly cookie?: string },
 ) =>
   Effect.promise(() =>
-    handler(
-      new Request(`http://localhost${path}`, {
-        method,
-        headers: {
-          "content-type": "application/json",
-          cookie: [options?.cookie, `${Api.CSRF_COOKIE_NAME}=${CSRF_TOKEN}`]
-            .filter((part) => part !== undefined)
-            .join("; "),
-          [Api.CSRF_HEADER_NAME]: CSRF_TOKEN,
-        },
-        ...(options?.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-      }),
-    ),
+    testApp.request(method, path, {
+      ...(options?.cookie === undefined ? {} : { cookie: options.cookie }),
+      ...(options?.body === undefined ? {} : { json: options.body }),
+    }),
   );
 
 const json = (response: Response) => Effect.promise(() => response.json());

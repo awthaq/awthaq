@@ -10,7 +10,7 @@
 // rotation are `ApiKey.ts`'s job.
 
 import { Users } from "@awthaq/core";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -40,19 +40,36 @@ export interface ApiKeyRecord {
 }
 
 export interface ApiKeyRecordsShape {
-  readonly insert: (record: ApiKeyRecord) => Effect.Effect<void>;
-  readonly findById: (id: string) => Effect.Effect<Option.Option<ApiKeyRecord>>;
+  readonly insert: (record: ApiKeyRecord) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  readonly findById: (
+    id: string,
+  ) => Effect.Effect<Option.Option<ApiKeyRecord>, StoreFailure.StoreUnavailable>;
   /** Newest first. */
-  readonly listByOwner: (ownerId: Users.UserId) => Effect.Effect<ReadonlyArray<ApiKeyRecord>>;
+  readonly listByOwner: (
+    ownerId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<ApiKeyRecord>, StoreFailure.StoreUnavailable>;
   /** Sets `revokedAt` once; a key already revoked keeps its first revocation time. */
-  readonly revoke: (id: string, at: DateTime.Utc) => Effect.Effect<void>;
+  readonly revoke: (
+    id: string,
+    at: DateTime.Utc,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** OCM-005: shortens (never extends) the key's expiry, for a rotation's grace window. */
-  readonly limitExpiry: (id: string, expiresAt: DateTime.Utc) => Effect.Effect<void>;
-  readonly touch: (id: string, at: DateTime.Utc) => Effect.Effect<void>;
+  readonly limitExpiry: (
+    id: string,
+    expiresAt: DateTime.Utc,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  readonly touch: (
+    id: string,
+    at: DateTime.Utc,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  /** Erasure: every key the user owns, revoked or not. Idempotent. */
+  readonly deleteByOwner: (
+    ownerId: Users.UserId,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class ApiKeyRecords extends Context.Service<ApiKeyRecords, ApiKeyRecordsShape>()(
-  "awthaq/api-key/ApiKeyRecords",
+  "awthaq/api-key/records/ApiKeyRecords",
 ) {}
 
 // ---- layerMemory ------------------------------------------------------------
@@ -95,6 +112,10 @@ export const layerMemory = Layer.effect(
             : { ...record, expiresAt: Option.some(expiresAt) },
         ),
       touch: (id, at) => update(id, (record) => ({ ...record, lastUsedAt: Option.some(at) })),
+      deleteByOwner: (ownerId) =>
+        Ref.update(state, (records) =>
+          HashMap.filter(records, (record) => record.ownerId !== ownerId),
+        ),
     });
   }),
 );
@@ -120,6 +141,8 @@ export const layerSql = Layer.effect(
   ApiKeyRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`ApiKeyRecords.${operation}`);
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
@@ -181,6 +204,11 @@ export const layerSql = Layer.effect(
       execute: (r) => sql`UPDATE apikey_key SET "lastUsedAt" = ${r.at} WHERE id = ${r.id}`,
     });
 
+    const deleteByOwnerQuery = SqlSchema.void({
+      Request: Schema.String,
+      execute: (ownerId) => sql`DELETE FROM apikey_key WHERE "ownerId" = ${ownerId}`,
+    });
+
     return ApiKeyRecords.of({
       insert: (record) =>
         insertQuery({
@@ -195,16 +223,19 @@ export const layerSql = Layer.effect(
           revokedAt: Option.getOrNull(record.revokedAt),
           lastUsedAt: Option.getOrNull(record.lastUsedAt),
           rotatedFrom: Option.getOrNull(record.rotatedFrom),
-        }).pipe(Effect.orDie),
-      findById: (id) => findByIdQuery(id).pipe(Effect.map(Option.map(toRecord)), Effect.orDie),
+        }).pipe(unavailable("insert")),
+      findById: (id) =>
+        findByIdQuery(id).pipe(Effect.map(Option.map(toRecord)), unavailable("findById")),
       listByOwner: (ownerId) =>
         listByOwnerQuery(ownerId).pipe(
           Effect.map((rows) => rows.map(toRecord)),
-          Effect.orDie,
+          unavailable("listByOwner"),
         ),
-      revoke: (id, at) => revokeQuery({ id, at }).pipe(Effect.orDie),
-      limitExpiry: (id, expiresAt) => limitExpiryQuery({ id, expiresAt }).pipe(Effect.orDie),
-      touch: (id, at) => touchQuery({ id, at }).pipe(Effect.orDie),
+      revoke: (id, at) => revokeQuery({ id, at }).pipe(unavailable("revoke")),
+      limitExpiry: (id, expiresAt) =>
+        limitExpiryQuery({ id, expiresAt }).pipe(unavailable("limitExpiry")),
+      touch: (id, at) => touchQuery({ id, at }).pipe(unavailable("touch")),
+      deleteByOwner: (ownerId) => deleteByOwnerQuery(ownerId).pipe(unavailable("deleteByOwner")),
     });
   }),
 );

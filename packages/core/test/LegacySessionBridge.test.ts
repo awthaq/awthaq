@@ -3,8 +3,9 @@
 // branch (a still-live legacy token, which never contains a `.`) and the
 // unrecognized-id branch — mints a fresh awthaq session through the same
 // `issue` every other session goes through, and makes the legacy token
-// single-use via `consume`. Runs against both `layerMemory` and
-// `layerSql`, mirroring `Sessions.test.ts`'s own dual-layer pattern.
+// single-use via `consume`. Runs against both `Persistence.memory` and
+// `Persistence.sql()`, mirroring `Sessions.test.ts`'s own dual-layer pattern.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { LegacySessionBridge } from "@awthaq/ports";
 import { Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -15,10 +16,14 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as Users from "../src/Users.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 const LEGACY_TOKEN = "legacy-opaque-better-auth-token";
 const LEGACY_USER_ID = Users.UserId("legacy-user-1");
@@ -44,12 +49,14 @@ const FakeBridgeLayer = Layer.effect(
   }),
 );
 
-const MemoryLayer = Sessions.layerMemory.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(AuthEvents.layer),
-  Layer.provide(AuditLog.layerMemory),
-  Layer.provide(FakeBridgeLayer),
-);
+const MemoryLayer = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provide(FakeBridgeLayer),
+  );
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
@@ -83,15 +90,17 @@ const Migrated = Layer.effectDiscard(
   }),
 ).pipe(Layer.provide(SqlLive));
 
-const SqlLayer = Sessions.layerSql.pipe(
-  Layer.provide(Repositories.SessionsRepositoryLive),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(AuthEvents.layer),
-  Layer.provide(AuditLog.layerMemory),
-  Layer.provide(FakeBridgeLayer),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
+const SqlLayer = Sessions.layer
+  .pipe(Layer.provide(SqlStores))
+  .pipe(
+    Layer.provide(Repositories.SessionsRepositoryLive),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provide(FakeBridgeLayer),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
 
 const suite = (name: string, layer: Layer.Layer<Sessions.Sessions, unknown, never>): void => {
   describe(name, () => {
@@ -123,5 +132,5 @@ const suite = (name: string, layer: Layer.Layer<Sessions.Sessions, unknown, neve
   });
 };
 
-suite("Sessions.layerMemory", MemoryLayer);
-suite("Sessions.layerSql", SqlLayer);
+suite("Sessions over Persistence.memory", MemoryLayer);
+suite("Sessions over Persistence.sql()", SqlLayer);

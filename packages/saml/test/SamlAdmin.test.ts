@@ -27,6 +27,10 @@ import {
   startLogin,
 } from "./support.ts";
 import { Organization } from "@awthaq/organization";
+import { TenantScoped } from "@awthaq/sql";
+
+/** The witness this test presents where a protocol message would. */
+const grant = TenantScoped.crossTenant("saml admin test: a connection named by its own id");
 
 const admin = new Api.UserPrincipal({
   ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
@@ -109,7 +113,7 @@ describe("the gate is fail-closed", () => {
         const store = yield* SamlRecords.SamlRecords;
         assert.strictEqual((yield* store.listByOrganization(organizationId)).length, 1);
         assert.strictEqual(
-          (yield* store.findById(connection.id).pipe(Effect.map(Option.getOrThrow))).name,
+          (yield* store.findById(grant, connection.id).pipe(Effect.map(Option.getOrThrow))).name,
           "Acme Okta",
         );
         assert.deepStrictEqual(yield* auditTags("auth.saml."), []);

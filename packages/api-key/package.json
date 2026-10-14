@@ -34,7 +34,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/platform-node": "catalog:",
+    "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

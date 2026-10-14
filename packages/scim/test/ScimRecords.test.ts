@@ -3,13 +3,25 @@
 // runs on Postgres), so the two unique rules — a user's `userName` and a resource's
 // `externalId`, each per connection and kind — are real database constraints.
 import { Migrations } from "@awthaq/core";
+import { Tenant } from "@awthaq/ports";
+import { TenantScoped } from "@awthaq/sql";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Scim from "../src/Scim.ts";
 import * as ScimRecords from "../src/ScimRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
+
+/** The witness these tests present where a bearer token, erasure or export would. */
+const grant = TenantScoped.crossTenant("scim records test: a cross-organization caller");
+
+const vitestFramework: TestAuth.TestFramework = {
+  describe: (name, body) => describe(name, body),
+  it: (name, body) => it(name, body),
+  fail: (message) => assert.fail(message),
+};
 
 const SqlLive = TestSql.layer("scim_ScimRecords");
 
@@ -36,9 +48,9 @@ const suite = (name: string, layer: Layer.Layer<ScimRecords.ScimRecords, unknown
             tokenHash: "hash-1",
           });
           assert.isTrue(Option.isNone(created.revokedAt));
-          const found = yield* records.findConnectionByTokenHash("hash-1");
+          const found = yield* records.findConnectionByTokenHash(grant, "hash-1");
           assert.isTrue(Option.isSome(found) && found.value.id === "c1");
-          assert.isTrue(Option.isNone(yield* records.findConnectionByTokenHash("hash-2")));
+          assert.isTrue(Option.isNone(yield* records.findConnectionByTokenHash(grant, "hash-2")));
           yield* records.createConnection({
             id: "c2",
             organizationId: "org-2",
@@ -99,7 +111,7 @@ const suite = (name: string, layer: Layer.Layer<ScimRecords.ScimRecords, unknown
           .link({ connectionId: "c1", kind: "User", resourceId: "u2", name: "ada@acme.example" })
           .pipe(Effect.flip);
         assert.strictEqual(sameName._tag, "ScimLinkConflict");
-        assert.strictEqual(sameName.field, "name");
+        assert.strictEqual(sameName._tag === "ScimLinkConflict" ? sameName.field : "", "name");
         const sameExternal = yield* records
           .link({
             connectionId: "c1",
@@ -110,7 +122,10 @@ const suite = (name: string, layer: Layer.Layer<ScimRecords.ScimRecords, unknown
           })
           .pipe(Effect.flip);
         assert.strictEqual(sameExternal._tag, "ScimLinkConflict");
-        assert.strictEqual(sameExternal.field, "externalId");
+        assert.strictEqual(
+          sameExternal._tag === "ScimLinkConflict" ? sameExternal.field : "",
+          "externalId",
+        );
         // Another connection, and another kind, may reuse both.
         yield* records.link({
           connectionId: "c2",
@@ -164,6 +179,28 @@ const suite = (name: string, layer: Layer.Layer<ScimRecords.ScimRecords, unknown
       }).pipe(Effect.provide(layer)),
     );
 
+    it.effect(
+      "unlinkResource drops a user's links across connections and leaves groups and other users",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* ScimRecords.ScimRecords;
+          yield* records.link({ connectionId: "c1", kind: "User", resourceId: "u1", name: "a" });
+          yield* records.link({ connectionId: "c2", kind: "User", resourceId: "u1", name: "a" });
+          yield* records.link({ connectionId: "c1", kind: "User", resourceId: "u2", name: "b" });
+          yield* records.link({ connectionId: "c1", kind: "Group", resourceId: "u1" });
+          assert.deepStrictEqual(
+            (yield* records.linksOfResource(grant, "User", "u1")).map((row) => row.connectionId),
+            ["c1", "c2"],
+          );
+          yield* records.unlinkResource(grant, "User", "u1");
+          assert.deepStrictEqual(yield* records.linksOfResource(grant, "User", "u1"), []);
+          assert.isTrue(Option.isSome(yield* records.find("c1", "User", "u2")));
+          assert.isTrue(Option.isSome(yield* records.find("c1", "Group", "u1")));
+          // Idempotent.
+          yield* records.unlinkResource(grant, "User", "u1");
+        }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("list pages oldest-first and reports the total", () =>
       Effect.gen(function* () {
         const records = yield* ScimRecords.ScimRecords;
@@ -193,3 +230,170 @@ const suite = (name: string, layer: Layer.Layer<ScimRecords.ScimRecords, unknown
 
 suite("ScimRecords (layerMemory)", ScimRecords.layerMemory);
 suite("ScimRecords (layerSql)", SqlLayer);
+
+// Plan 05: the tenant-isolation conformance suite. `scim_connection` is Keyed by `organizationId`;
+// `scim_resource` is Derived through its connection. A bearer token is the capability that finds a
+// connection before any tenant is known, and erasure and export read a person's links in every
+// connection: those take a witness. Everything else on a resource is keyed by a connection id the
+// caller already resolved through its token.
+let isolationCounter = 0;
+interface Row {
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly tokenHash: string;
+  readonly resourceId: string;
+}
+const orgOf = (row: Row, as: "owner" | "other") =>
+  as === "owner" ? row.organizationId : "another-organization";
+const using = <A, E, R>(use: (records: ScimRecords.ScimRecordsShape) => Effect.Effect<A, E, R>) =>
+  Effect.flatMap(ScimRecords.ScimRecords, use);
+
+const insertRow = Effect.gen(function* () {
+  const records = yield* ScimRecords.ScimRecords;
+  isolationCounter += 1;
+  const organizationId = yield* Effect.map(
+    Tenant.TenantContext,
+    Option.getOrElse(() => "platform-organization"),
+  );
+  const connectionId = `isolation-${isolationCounter}`;
+  const tokenHash = `isolation-hash-${isolationCounter}`;
+  yield* records.createConnection({
+    id: connectionId,
+    organizationId,
+    name: `Directory ${isolationCounter}`,
+    tokenHash,
+  });
+  const resourceId = `isolation-user-${isolationCounter}`;
+  yield* records.link({
+    connectionId,
+    kind: "User",
+    resourceId,
+    name: `user-${isolationCounter}`,
+  });
+  return { connectionId, organizationId, tokenHash, resourceId };
+});
+
+type Methods = {
+  readonly [K in keyof ScimRecords.ScimRecordsShape]: TestAuth.MethodClass<
+    Row,
+    ScimRecords.ScimRecords
+  >;
+};
+const derivedElsewhere = (table: string) => ({
+  derived: `operates on ${table}; classified in that table's case`,
+});
+const viaConnection = {
+  derived: "keyed by a connection id the caller resolved through its bearer token (a Keyed read)",
+};
+
+const connectionMethods: Methods = {
+  createConnection: { insert: true },
+  findConnectionByTokenHash: {
+    crossTenant: {
+      run: (row) =>
+        using((records) =>
+          Effect.map(
+            records.findConnectionByTokenHash(grant, row.tokenHash),
+            (found) => Option.isSome(found) && found.value.id === row.connectionId,
+          ),
+        ),
+    },
+  },
+  listConnections: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.map(records.listConnections(orgOf(row, as)), (rows) =>
+            rows.some((found) => found.id === row.connectionId),
+          ),
+        ),
+    },
+  },
+  revokeConnection: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          records.revokeConnection(orgOf(row, as), row.connectionId).pipe(
+            Effect.as(true),
+            Effect.catchTag("ScimRecordNotFound", () => Effect.succeed(false)),
+          ),
+        ),
+    },
+  },
+  removeAllForOrganization: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          Effect.gen(function* () {
+            yield* records.removeAllForOrganization(orgOf(row, as));
+            // Keyed by the organization: only that organization's own connection is gone.
+            const remaining = yield* records.listConnections(row.organizationId);
+            return !remaining.some((found) => found.id === row.connectionId);
+          }),
+        ),
+    },
+  },
+  link: derivedElsewhere("scim_resource"),
+  find: derivedElsewhere("scim_resource"),
+  findByName: derivedElsewhere("scim_resource"),
+  findByExternalId: derivedElsewhere("scim_resource"),
+  list: derivedElsewhere("scim_resource"),
+  setExternalId: derivedElsewhere("scim_resource"),
+  unlink: derivedElsewhere("scim_resource"),
+  linksOfResource: derivedElsewhere("scim_resource"),
+  unlinkResource: derivedElsewhere("scim_resource"),
+};
+
+const resourceMethods: Methods = {
+  createConnection: { insert: true },
+  findConnectionByTokenHash: derivedElsewhere("scim_connection"),
+  listConnections: derivedElsewhere("scim_connection"),
+  revokeConnection: derivedElsewhere("scim_connection"),
+  removeAllForOrganization: derivedElsewhere("scim_connection"),
+  link: { insert: true },
+  find: viaConnection,
+  findByName: viaConnection,
+  findByExternalId: viaConnection,
+  list: viaConnection,
+  setExternalId: viaConnection,
+  unlink: viaConnection,
+  linksOfResource: {
+    crossTenant: {
+      run: (row) =>
+        using((records) =>
+          Effect.map(records.linksOfResource(grant, "User", row.resourceId), (links) =>
+            links.some((link) => link.connectionId === row.connectionId),
+          ),
+        ),
+    },
+  },
+  unlinkResource: {
+    crossTenant: {
+      run: (row) =>
+        using((records) =>
+          Effect.gen(function* () {
+            const before = yield* records.find(row.connectionId, "User", row.resourceId);
+            yield* records.unlinkResource(grant, "User", row.resourceId);
+            return (
+              Option.isSome(before) &&
+              Option.isNone(yield* records.find(row.connectionId, "User", row.resourceId))
+            );
+          }),
+        ),
+    },
+  },
+};
+
+TestAuth.runTenantIsolationTests(vitestFramework, {
+  plugin: Scim.Scim,
+  covers: ["scim_connection", "scim_resource"],
+  adapters: [
+    { name: "layerMemory", layer: ScimRecords.layerMemory },
+    { name: "layerSql", layer: SqlLayer },
+  ],
+  cases: [
+    { table: "scim_connection", insert: insertRow, methods: connectionMethods },
+    { table: "scim_resource", insert: insertRow, methods: resourceMethods },
+  ],
+  rls: { layer: SqlLayer },
+});

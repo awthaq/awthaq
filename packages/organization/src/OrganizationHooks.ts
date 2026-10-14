@@ -24,12 +24,14 @@
 import { HookPoint } from "@awthaq/core";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as OrganizationActor from "./OrganizationActor.ts";
 
 const RoleArray = Schema.Array(Schema.String);
 
 // ---- organization ---------------------------------------------------------
 
 const CreateOrganizationInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   callerId: Schema.String,
   name: Schema.String,
   slug: Schema.String,
@@ -48,6 +50,7 @@ export class AfterCreateOrganization extends HookPoint.observe<AfterCreateOrgani
 ) {}
 
 const UpdateOrganizationInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   name: Schema.optional(Schema.String),
   slug: Schema.optional(Schema.String),
@@ -61,7 +64,10 @@ export class AfterUpdateOrganization extends HookPoint.observe<AfterUpdateOrgani
   UpdateOrganizationInput,
 ) {}
 
-const DeleteOrganizationInput = Schema.Struct({ organizationId: Schema.String });
+const DeleteOrganizationInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+});
 export class BeforeDeleteOrganization extends HookPoint.veto<BeforeDeleteOrganization>()(
   "organization.delete.before",
   DeleteOrganizationInput,
@@ -71,9 +77,42 @@ export class AfterDeleteOrganization extends HookPoint.observe<AfterDeleteOrgani
   DeleteOrganizationInput,
 ) {}
 
+/**
+ * EP-003/BEH-EA-237 (plan 04): a platform administrator suspends or reinstates an organization. A veto
+ * aborts it with the typed `HookAborted`; the observe point is what `DecisionCacheInvalidationLive` taps,
+ * so a long-lived decision cache never keeps answering for a suspended organization.
+ */
+const SuspendOrganizationInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+  reason: Schema.optional(Schema.String),
+});
+export class BeforeSuspendOrganization extends HookPoint.veto<BeforeSuspendOrganization>()(
+  "organization.suspend.before",
+  SuspendOrganizationInput,
+) {}
+export class AfterSuspendOrganization extends HookPoint.observe<AfterSuspendOrganization>()(
+  "organization.suspend.after",
+  SuspendOrganizationInput,
+) {}
+
+const ReinstateOrganizationInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+});
+export class BeforeReinstateOrganization extends HookPoint.veto<BeforeReinstateOrganization>()(
+  "organization.reinstate.before",
+  ReinstateOrganizationInput,
+) {}
+export class AfterReinstateOrganization extends HookPoint.observe<AfterReinstateOrganization>()(
+  "organization.reinstate.after",
+  ReinstateOrganizationInput,
+) {}
+
 // ---- membership -------------------------------------------------------------
 
 const AddMemberInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   userId: Schema.String,
   role: RoleArray,
@@ -87,7 +126,11 @@ export class AfterAddMember extends HookPoint.observe<AfterAddMember>()(
   AddMemberInput,
 ) {}
 
-const RemoveMemberInput = Schema.Struct({ organizationId: Schema.String, userId: Schema.String });
+const RemoveMemberInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+  userId: Schema.String,
+});
 export class BeforeRemoveMember extends HookPoint.veto<BeforeRemoveMember>()(
   "organization.member.remove.before",
   RemoveMemberInput,
@@ -98,6 +141,7 @@ export class AfterRemoveMember extends HookPoint.observe<AfterRemoveMember>()(
 ) {}
 
 const UpdateMemberRoleInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   userId: Schema.String,
   role: RoleArray,
@@ -114,6 +158,7 @@ export class AfterUpdateMemberRole extends HookPoint.observe<AfterUpdateMemberRo
 // ---- invitations --------------------------------------------------------------
 
 const CreateInvitationInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   email: Schema.String,
   role: RoleArray,
@@ -131,8 +176,12 @@ export class AfterCreateInvitation extends HookPoint.observe<AfterCreateInvitati
   CreateInvitationResult,
 ) {}
 
-const InvitationIdInput = Schema.Struct({ invitationId: Schema.String });
+const InvitationIdInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  invitationId: Schema.String,
+});
 const AcceptInvitationResult = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   invitationId: Schema.String,
   organizationId: Schema.String,
   userId: Schema.String,
@@ -167,6 +216,7 @@ export class AfterCancelInvitation extends HookPoint.observe<AfterCancelInvitati
 // ---- dynamic roles --------------------------------------------------------------
 
 const CreateRoleInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   role: Schema.String,
 });
@@ -180,7 +230,11 @@ export class AfterCreateRole extends HookPoint.observe<AfterCreateRole>()(
   CreateRoleResult,
 ) {}
 
-const UpdateRoleInput = Schema.Struct({ organizationId: Schema.String, roleId: Schema.String });
+const UpdateRoleInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+  roleId: Schema.String,
+});
 export class BeforeUpdateRole extends HookPoint.veto<BeforeUpdateRole>()(
   "organization.role.update.before",
   UpdateRoleInput,
@@ -190,7 +244,11 @@ export class AfterUpdateRole extends HookPoint.observe<AfterUpdateRole>()(
   UpdateRoleInput,
 ) {}
 
-const DeleteRoleInput = Schema.Struct({ organizationId: Schema.String, roleId: Schema.String });
+const DeleteRoleInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+  roleId: Schema.String,
+});
 export class BeforeDeleteRole extends HookPoint.veto<BeforeDeleteRole>()(
   "organization.role.delete.before",
   DeleteRoleInput,
@@ -203,6 +261,7 @@ export class AfterDeleteRole extends HookPoint.observe<AfterDeleteRole>()(
 // ---- teams --------------------------------------------------------------------
 
 const CreateTeamInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   name: Schema.String,
   /** OHS-001: the parent team, when created nested. */
@@ -219,6 +278,7 @@ export class AfterCreateTeam extends HookPoint.observe<AfterCreateTeam>()(
 ) {}
 
 const UpdateTeamInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   teamId: Schema.String,
   name: Schema.String,
@@ -234,6 +294,7 @@ export class AfterUpdateTeam extends HookPoint.observe<AfterUpdateTeam>()(
 
 /** OHS-001: `parentId` is `null` when the team is moved to the root. */
 const MoveTeamInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   teamId: Schema.String,
   parentId: Schema.NullOr(Schema.String),
@@ -247,7 +308,11 @@ export class AfterMoveTeam extends HookPoint.observe<AfterMoveTeam>()(
   MoveTeamInput,
 ) {}
 
-const DeleteTeamInput = Schema.Struct({ organizationId: Schema.String, teamId: Schema.String });
+const DeleteTeamInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
+  organizationId: Schema.String,
+  teamId: Schema.String,
+});
 export class BeforeDeleteTeam extends HookPoint.veto<BeforeDeleteTeam>()(
   "organization.team.delete.before",
   DeleteTeamInput,
@@ -258,6 +323,7 @@ export class AfterDeleteTeam extends HookPoint.observe<AfterDeleteTeam>()(
 ) {}
 
 const TeamMemberInput = Schema.Struct({
+  actor: OrganizationActor.ActorSchema,
   organizationId: Schema.String,
   teamId: Schema.String,
   userId: Schema.String,
@@ -308,6 +374,10 @@ export const OrganizationHooksLive = Layer.mergeAll(
   AfterUpdateOrganization.layer,
   BeforeDeleteOrganization.layer,
   AfterDeleteOrganization.layer,
+  BeforeSuspendOrganization.layer,
+  AfterSuspendOrganization.layer,
+  BeforeReinstateOrganization.layer,
+  AfterReinstateOrganization.layer,
   BeforeAddMember.layer,
   AfterAddMember.layer,
   BeforeRemoveMember.layer,

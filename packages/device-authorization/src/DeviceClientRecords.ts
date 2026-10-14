@@ -6,7 +6,7 @@
 // credential — so this row holds only what the approval page shows the user (`name`) and the scopes the
 // client may ask for; an unregistered or revoked `client_id` is refused at `POST /device/code`.
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -30,18 +30,25 @@ export interface DeviceClientRecord {
 
 export interface DeviceClientRecordsShape {
   /** `false` when the `clientId` is already registered. */
-  readonly insert: (record: DeviceClientRecord) => Effect.Effect<boolean>;
-  readonly findById: (clientId: string) => Effect.Effect<Option.Option<DeviceClientRecord>>;
+  readonly insert: (
+    record: DeviceClientRecord,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
+  readonly findById: (
+    clientId: string,
+  ) => Effect.Effect<Option.Option<DeviceClientRecord>, StoreFailure.StoreUnavailable>;
   /** Oldest first. */
-  readonly list: Effect.Effect<ReadonlyArray<DeviceClientRecord>>;
+  readonly list: Effect.Effect<ReadonlyArray<DeviceClientRecord>, StoreFailure.StoreUnavailable>;
   /** Sets `revokedAt` once; resolves to whether a live client was revoked. */
-  readonly revoke: (clientId: string, at: DateTime.Utc) => Effect.Effect<boolean>;
+  readonly revoke: (
+    clientId: string,
+    at: DateTime.Utc,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
 }
 
 export class DeviceClientRecords extends Context.Service<
   DeviceClientRecords,
   DeviceClientRecordsShape
->()("awthaq/device-authorization/DeviceClientRecords") {}
+>()("awthaq/device-authorization/records/DeviceClientRecords") {}
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -93,6 +100,8 @@ export const layerSql = Layer.effect(
   DeviceClientRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`DeviceClientRecords.${operation}`);
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
     const ClientId = Schema.Struct({ clientId: Schema.String });
@@ -148,15 +157,15 @@ export const layerSql = Layer.effect(
           scopes: record.scopes,
           createdAt: record.createdAt,
           revokedAt: Option.getOrNull(record.revokedAt),
-        }).pipe(Effect.map(Option.isSome), Effect.orDie),
+        }).pipe(Effect.map(Option.isSome), unavailable("insert")),
       findById: (clientId) =>
-        findByIdQuery(clientId).pipe(Effect.map(Option.map(toRecord)), Effect.orDie),
+        findByIdQuery(clientId).pipe(Effect.map(Option.map(toRecord)), unavailable("findById")),
       list: listQuery(undefined).pipe(
         Effect.map((rows) => rows.map(toRecord)),
-        Effect.orDie,
+        unavailable("list"),
       ),
       revoke: (clientId, at) =>
-        revokeQuery({ clientId, at }).pipe(Effect.map(Option.isSome), Effect.orDie),
+        revokeQuery({ clientId, at }).pipe(Effect.map(Option.isSome), unavailable("revoke")),
     });
   }),
 );

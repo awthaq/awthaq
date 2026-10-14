@@ -24,7 +24,6 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import {
-  AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
   DataExport,
@@ -34,9 +33,10 @@ import {
   Hooks,
   RateLimits,
   Sessions,
+  SignIn,
   Users,
 } from "@awthaq/core";
-import { ClientAddress, Defects, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, Defects, type Encryption, RateLimiter } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -49,11 +49,15 @@ import * as Headers from "effect/unstable/http/Headers";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { type TwoFactorMethodUsed, type VerifiedChallenge, verified } from "./Challenge.ts";
-import { SecondFactor, type Purpose } from "./SecondFactor.ts";
+import { SecondFactor, failureRule, type Purpose } from "./SecondFactor.ts";
 import { TwoFactorConfig } from "./TwoFactorConfig.ts";
 import * as TwoFactorApi from "./TwoFactorApi.ts";
-import * as TwoFactorRateLimits from "./TwoFactorRateLimits.ts";
-import { TwoFactorRecoveryCodes, TwoFactorSecrets, migrations } from "./TwoFactorStore.ts";
+import {
+  TwoFactorRecoveryCodes,
+  TwoFactorSecrets,
+  migrations,
+  records as twoFactorRecords,
+} from "./TwoFactorStore.ts";
 
 // ---- the markers: what makes forgetting a gate a compile error --------------------------------
 
@@ -74,6 +78,9 @@ export class TwoFactorResetGuard extends Context.Service<
  * plugin, or a host that disables reset). Provides the marker without tapping anything.
  */
 export const noCredentialReset = Layer.succeed(TwoFactorResetGuard, { guard: "notApplicable" });
+
+/** Named so the class's inferred `records` type can be emitted (TS2883 needs the `Encryption` namespace in scope). */
+export type RecordsEncryption = Encryption.Encryption;
 
 // ---- the service shape ---------------------------------------------------------------------------
 
@@ -110,6 +117,7 @@ export interface TwoFactorShape {
     | TwoFactorApi.TwoFactorAlreadyEnabled
     | TwoFactorApi.SecondFactorLocked
     | Api.RateLimited
+    | Errors.StoreUnavailable
   >;
   /** BEH-EA-262: completes a diverted sign-in with a TOTP code and mints the session. */
   readonly verify: (
@@ -119,7 +127,7 @@ export interface TwoFactorShape {
       readonly ip?: string;
     },
     context?: { readonly userAgent?: string },
-  ) => Effect.Effect<IssuedSession, VerifyError>;
+  ) => Effect.Effect<IssuedSession, VerifyError | Errors.StoreUnavailable>;
   /** BEH-EA-264: completes a diverted sign-in with a recovery code (spent). */
   readonly verifyRecovery: (
     input: {
@@ -128,23 +136,26 @@ export interface TwoFactorShape {
       readonly ip?: string;
     },
     context?: { readonly userAgent?: string },
-  ) => Effect.Effect<IssuedSession, VerifyError>;
+  ) => Effect.Effect<IssuedSession, VerifyError | Errors.StoreUnavailable>;
   /** BEH-EA-263: needs a fresh session and a valid TOTP or recovery code; removes the factor. */
   readonly disable: (
     userId: Users.UserId,
     sessionId: string,
     code: Redacted.Redacted<string>,
-  ) => Effect.Effect<void, ManageError>;
+  ) => Effect.Effect<void, ManageError | Errors.StoreUnavailable>;
   /** BEH-EA-264/BCR-002: replaces the recovery-code set atomically; needs a fresh session and a valid code. */
   readonly regenerateRecoveryCodes: (
     userId: Users.UserId,
     sessionId: string,
     code: Redacted.Redacted<string>,
-  ) => Effect.Effect<ReadonlyArray<string>, ManageError>;
-  readonly status: (userId: Users.UserId) => Effect.Effect<{
-    readonly enabled: boolean;
-    readonly remainingRecoveryCodes: number;
-  }>;
+  ) => Effect.Effect<ReadonlyArray<string>, ManageError | Errors.StoreUnavailable>;
+  readonly status: (userId: Users.UserId) => Effect.Effect<
+    {
+      readonly enabled: boolean;
+      readonly remainingRecoveryCodes: number;
+    },
+    Errors.StoreUnavailable
+  >;
 }
 
 type VerifyError =
@@ -182,14 +193,16 @@ export const sessionGate = Layer.unwrap(
           // BEH-EA-304: an `amr` that already says `mfa` was recorded by this very gate's own completion
           // (`finalizeSignIn`), so a flow that inherits it (a device grant approved from such a session)
           // has nothing left to prove. No first-factor flow ever presents `mfa` here.
-          if ((input.amr ?? []).includes("mfa")) return Option.none();
+          if (input.amr.includes("mfa")) return Option.none();
           const userId = Users.UserId(input.userId);
           if (!(yield* factor.isEnrolled(userId))) return Option.none();
           const challengeId = yield* factor.issueChallenge({
             userId,
             strategy: input.strategy,
-            amr: (input.amr ?? []).filter(Sessions.isAuthMethod),
+            amr: input.amr.filter(Sessions.isAuthMethod),
             attempt: 0,
+            // ADR-EA-038: the first factor's tenant and continuation ride the challenge to `resume`.
+            handoff: input.handoff,
           });
           return Option.some(new Hooks.TwoFactorRequired({ userId: input.userId, challengeId }));
         }).pipe(Effect.orDie),
@@ -213,7 +226,10 @@ export const credentialResetGate = Layer.unwrap(
       (input) =>
         Effect.gen(function* () {
           const userId = Users.UserId(input.userId);
-          if (!(yield* factor.isEnrolled(userId))) return input;
+          const enrolled = yield* factor
+            .isEnrolled(userId)
+            .pipe(Effect.catchTag("StoreUnavailable", Effect.die));
+          if (!enrolled) return input;
           if (input.secondFactorCode === undefined) {
             return yield* Effect.fail(new HookPoint.HookAbort({ code: "TWO_FACTOR_REQUIRED" }));
           }
@@ -224,6 +240,9 @@ export const credentialResetGate = Layer.unwrap(
             Effect.catchTag("SecondFactorLocked", () =>
               Effect.fail(new HookPoint.HookAbort({ code: "SECOND_FACTOR_LOCKED" })),
             ),
+            // A hook point can only abort (`HookAbort`); an outage inside the reset's transaction is a defect
+            // of this tap, which rolls the reset back, exactly as before.
+            Effect.catchTag("StoreUnavailable", Effect.die),
           );
           return input;
         }),
@@ -412,18 +431,52 @@ export const TwoFactorHandlers = Layer.mergeAll(
   ),
 );
 
+// ---- rate limits ------------------------------------------------------------------------------------
+
+// BEH-EA-105/107/111, RBS-006: declared once. The static `rateLimits` listing is derived from this table
+// and the layer registers it with `RateLimits.budget`. A rule's key reads only the small, secret-free
+// input its endpoint names (`{ ip }`, `{ userId }`), never a payload: a challenge id or a code never
+// becomes a bucket key.
+//
+// - `verifyByIp` bounds one source spraying `/two-factor/verify*` across many challenges.
+// - `manageByUser` bounds enrol/confirm/disable/regenerate per account (a group-wide rule: the event
+//   reports the real endpoint).
+// - `failureBudget` is BCR-006's shared per-account budget. It is *enforced* inside `SecondFactor` (which
+//   needs the read half, `RateLimiter.check`, and charges failures only); it is listed here so the
+//   registry, `awthaq routes` and the docs show it beside the other two.
+const rules = {
+  verifyByIp: RateLimits.rule({
+    group: "two_factor",
+    endpoint: "verify",
+    key: RateLimits.Key.ip,
+    limit: 30,
+    window: Duration.minutes(15),
+  }),
+  manageByUser: RateLimits.rule({
+    group: "two_factor.account",
+    endpoint: "*",
+    key: RateLimits.Key.user,
+    limit: 20,
+    window: Duration.minutes(15),
+  }),
+  failureBudget: failureRule,
+};
+
 // ---- the plugin ----------------------------------------------------------------------------------------------
 
 export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("two_factor", {
   apiVersion: 1,
   contract: TwoFactorApi.TwoFactorApi,
-  // PV-241: the rules at the default configuration (`failureBudget` follows `failureLimit`/`failureWindow`).
-  rateLimits: AuthPlugin.declareRateLimits(
-    ["two_factor", "two_factor.account"],
-    Object.values(TwoFactorRateLimits.makeRules(TwoFactorConfig.defaultValue())),
-  ),
-  tables: ["two_factor_secret", "two_factor_recovery_code"],
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it at the default
+  // configuration (`failureBudget` follows `failureLimit`/`failureWindow` through `tune` at build).
+  rateLimitRules: rules,
+  tables: {
+    two_factor_secret: AuthPlugin.Table.global("per-user factor; the directory is global"),
+    two_factor_recovery_code: AuthPlugin.Table.global("per-user codes; the directory is global"),
+  },
   migrations,
+  // Plan 08 (BEH-EA-T4): the secret and recovery-code stores, memory and SQL, matched.
+  records: twoFactorRecords,
   // ECS-008/BEH-EA-229: the default issuer is the classic thing left in production — the label users see in their authenticator app.
   config: [
     ConfigDescriptor.make(TwoFactorConfig, {
@@ -453,104 +506,67 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       const factor = yield* SecondFactor;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const events = yield* AuthEvents.AuthEvents;
       const config = yield* TwoFactorConfig;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
-      const afterSignIn = yield* Hooks.AfterSignIn;
+      const completion = yield* SignIn.make;
 
-      // RBS-006: one typed definition per rule feeds both the registry and the enforcement calls. A
-      // `RateLimitScopeViolation` is only reachable if a rule named a group outside this plugin's own
-      // contract — a coding defect here, hence `Effect.orDie`.
-      const rules = TwoFactorRateLimits.makeRules(config);
-      yield* Effect.all(
-        // The callback's return type is annotated to break the inference cycle through `TwoFactor.layer`
-        // (its own initializer names `TwoFactor`) — the narrow exception `Password`/`Passkey` document too.
-        TwoFactorRateLimits.registryEntries(rules).map(
-          (entry): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-            rateLimitsRegistry.register(TwoFactor, entry),
-        ),
-      ).pipe(Effect.orDie);
-
-      const rateLimit = <I>(
-        rule: TwoFactorRateLimits.TwoFactorRule<I>,
-        input: I,
-      ): Effect.Effect<void, Api.RateLimited> =>
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        RateLimits.enforce({
-          key: rule.keyOf(input),
-          limit: rule.limit,
-          window: rule.window,
-          meta: TwoFactorRateLimits.metaOf(rule),
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // RBS-006: the table above feeds both the registry and the enforcement calls. EOTS-007: a breach is
+      // published, logged and counted, and answers `Api.RateLimited`. The failure budget follows the
+      // configured numbers, exactly as `SecondFactor` reads them.
+      const limits = yield* RateLimits.budget(TwoFactor, {
+        tune: Effect.succeed({
+          failureBudget: { limit: config.failureLimit, window: config.failureWindow },
+        }),
+      });
 
       /**
        * BEH-EA-263: enrolling, disabling and regenerating need a session that proved a credential
-       * recently, so a hijacked cookie cannot quietly swap the victim's second factor. A session that
-       * is not live for its owner fails closed the same as a stale one.
+       * recently, so a hijacked cookie cannot quietly swap the victim's second factor. The rule is
+       * `Sessions.requireFresh` (BEH-EA-320); this maps it to the plugin's own wire error.
        */
-      const requireFreshSession = (
-        userId: Users.UserId,
-        sessionId: string,
-      ): Effect.Effect<void, TwoFactorApi.TwoFactorReauthRequired | Errors.StoreUnavailable> =>
-        Effect.gen(function* () {
-          const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAge);
-          const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));
-          if (Option.isNone(current)) {
-            return yield* Effect.fail(new TwoFactorApi.TwoFactorReauthRequired({ maxAgeSeconds }));
-          }
-          const now = yield* DateTime.now;
-          if (Sessions.isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
-            return yield* Effect.fail(new TwoFactorApi.TwoFactorReauthRequired({ maxAgeSeconds }));
-          }
-        });
+      const requireFreshSession = (userId: Users.UserId, sessionId: string) =>
+        sessions
+          .requireFresh(userId, Sessions.SessionId(sessionId), config.reauthMaxAge)
+          .pipe(
+            Effect.catchTag("Sessions/Stale", (stale) =>
+              Effect.fail(
+                new TwoFactorApi.TwoFactorReauthRequired({ maxAgeSeconds: stale.maxAgeSeconds }),
+              ),
+            ),
+          );
 
       /**
        * THS-001 step 5/11: the ONE place this plugin mints a session, and it accepts only a
        * `VerifiedChallenge` — a spent challenge joined to a proof that the same user's second factor
-       * passed — so a session without a verified second factor does not type-check. Records
-       * `[...first-factor amr, "otp", "mfa"]` (AOMS-003), and re-runs the sign-in gate: the user may
-       * have been suspended in the minutes since the first factor passed.
+       * passed — so a session without a verified second factor does not type-check (ADR-EA-020).
+       * The mint itself is core's `SignIn` (ADR-EA-038): `resume` re-runs the sign-in gate (the
+       * user may have been suspended in the minutes since the first factor passed) and restores the
+       * first factor's tenant and continuation from the challenge's handoff; `issue` records
+       * `[...first-factor amr, "otp", "mfa"]` (AOMS-003), runs the continuation (a SAML session's
+       * Single Logout record) and announces the sign-in.
        */
       const finalizeSignIn = Effect.fnUntraced(function* (
         challenge: VerifiedChallenge,
         request: { readonly ip?: string | undefined; readonly userAgent?: string | undefined },
       ) {
-        const user = yield* users
-          .findById(challenge.userId)
+        const cleared = yield* completion
+          .resume({
+            userId: challenge.userId,
+            strategy: challenge.strategy,
+            amr: Sessions.unionAmr(challenge.amr, ["otp", "mfa"]),
+            handoff: challenge.handoff,
+          })
           .pipe(
-            Effect.catchTag("UserNotFound", () =>
+            // An erasure can run between the first factor and here: the one opaque answer.
+            Effect.catchTag("SignIn/UserGone", () =>
               Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({})),
             ),
           );
-        yield* Users.assertCanSignIn(user);
-        const issued = yield* sessions.issue({
-          userId: challenge.userId,
-          request: {
-            ...(request.ip === undefined ? {} : { ip: request.ip }),
-            ...(request.userAgent === undefined ? {} : { userAgent: request.userAgent }),
-          },
-          amr: Sessions.unionAmr(challenge.amr, ["otp", "mfa"]),
-        });
-        yield* events.publish({
-          _tag: "auth.user.signedIn",
-          userId: challenge.userId,
-          strategy: challenge.strategy,
-        });
-        yield* afterSignIn.run({ userId: challenge.userId, strategy: challenge.strategy });
-        return issued;
+        return yield* completion.issue(cleared, request);
       });
 
       /**
        * BEH-EA-262 (ticket 05 §1, plus the retry UX the plan adds): consume the challenge BEFORE
-       * checking the code, so `auth.token.replay` fires on every bad, expired or reused challenge. A
+       * checking the code (`redeemChallenge`, ADR-EA-039: one transaction with the check and the session), so `auth.token.replay` fires on every bad, expired or reused challenge. A
        * wrong code re-issues a fresh challenge carrying `attempt + 1` — a consumed challenge is never
        * re-used — until `maxAttemptsPerChallenge` are spent, after which the client restarts the sign-in.
        */
@@ -563,36 +579,43 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         },
         context: { readonly userAgent?: string | undefined } | undefined,
       ) {
-        yield* rateLimit(rules.verifyByIp, { ip: input.ip });
-        const consumed = yield* factor.consumeChallenge(input.challengeId);
-        const check = method === "totp" ? factor.verifyTotp : factor.verifyRecoveryCode;
-        const proof = yield* check(consumed.userId, input.code, "signIn").pipe(
-          Effect.catchTag("InvalidTwoFactorCode", () =>
-            consumed.attempt + 1 < config.maxAttemptsPerChallenge
-              ? factor
-                  .issueChallenge({
-                    userId: consumed.userId,
-                    strategy: consumed.strategy,
-                    amr: consumed.amr,
-                    attempt: consumed.attempt + 1,
-                  })
-                  .pipe(
-                    Effect.flatMap((next) =>
-                      Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({ challengeId: next })),
-                    ),
-                  )
-              : Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({})),
-          ),
+        yield* limits.spend("verifyByIp", { ip: input.ip });
+        // ADR-EA-039: the challenge, the code check and the session share one transaction. Every
+        // refusal (a wrong code and its re-issued challenge, a lockout, a suspension) commits; an
+        // outage while finishing the sign-in gives the challenge back.
+        return yield* factor.redeemChallenge(input.challengeId, (consumed) =>
+          Effect.gen(function* () {
+            const check = method === "totp" ? factor.verifyTotp : factor.verifyRecoveryCode;
+            const proof = yield* check(consumed.userId, input.code, "signIn").pipe(
+              Effect.catchTag("InvalidTwoFactorCode", () =>
+                consumed.attempt + 1 < config.maxAttemptsPerChallenge
+                  ? factor
+                      .issueChallenge({
+                        userId: consumed.userId,
+                        strategy: consumed.strategy,
+                        amr: consumed.amr,
+                        attempt: consumed.attempt + 1,
+                        handoff: consumed.handoff,
+                      })
+                      .pipe(
+                        Effect.flatMap((next) =>
+                          Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({ challengeId: next })),
+                        ),
+                      )
+                  : Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({})),
+              ),
+            );
+            const verifiedChallenge = yield* verified(consumed, proof);
+            return yield* finalizeSignIn(verifiedChallenge, {
+              ip: input.ip,
+              userAgent: context?.userAgent,
+            });
+          }),
         );
-        const verifiedChallenge = yield* verified(consumed, proof);
-        return yield* finalizeSignIn(verifiedChallenge, {
-          ip: input.ip,
-          userAgent: context?.userAgent,
-        });
       });
 
       const enable: TwoFactorShape["enable"] = Effect.fnUntraced(function* (userId, sessionId) {
-        yield* rateLimit(rules.manageByUser, { userId });
+        yield* limits.spend("manageByUser", { userId }, { endpoint: "enable" });
         yield* requireFreshSession(userId, sessionId);
         const user = yield* users
           .findById(userId)
@@ -612,7 +635,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       });
 
       const confirm: TwoFactorShape["confirm"] = Effect.fnUntraced(function* (userId, code) {
-        yield* rateLimit(rules.manageByUser, { userId });
+        yield* limits.spend("manageByUser", { userId }, { endpoint: "confirm" });
         return yield* factor.confirmEnrolment(userId, code);
       });
 
@@ -637,7 +660,11 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         code: Redacted.Redacted<string>,
         purpose: Purpose,
       ) {
-        yield* rateLimit(rules.manageByUser, { userId });
+        yield* limits.spend(
+          "manageByUser",
+          { userId },
+          { endpoint: purpose === "disable" ? "disable" : "regenerateRecoveryCodes" },
+        );
         yield* requireFreshSession(userId, sessionId);
         if (!(yield* factor.isEnrolled(userId))) {
           return yield* Effect.fail(new TwoFactorApi.TwoFactorNotEnabled());

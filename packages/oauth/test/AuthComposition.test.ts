@@ -15,6 +15,7 @@ describe("Auth.make([OAuth])", () => {
         id: "oauth",
         apiVersion: 1,
         tables: [],
+        tenancy: {},
         dependsOn: [],
         groups: ["oauth", "oauth.exchange"],
       },

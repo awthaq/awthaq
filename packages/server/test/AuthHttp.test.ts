@@ -1,3 +1,4 @@
+// Hand-wired on purpose: `@awthaq/server` is below `@awthaq/test` in the package graph, and this suite is about the server's own routing and middleware (plan 08 exemption).
 // spec/behaviors/04-contract-stratum.md, BEH-EA-031.
 // spec/behaviors/11-http-error-mapping.md, BEH-EA-083 through BEH-EA-088.
 //
@@ -10,10 +11,12 @@ import { AccountContract, Api, AuthCore, SessionContract } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  AuthEvents,
   DataExport,
   Erasure,
   Hooks,
-  AuthEvents,
+  Persistence,
+  RateLimits,
   Sessions,
   UserFields,
   Users,
@@ -49,6 +52,8 @@ import * as Csrf from "../src/Csrf.ts";
 import { currentUser } from "../src/internal/CurrentUser.ts";
 import { HandlerInvariantViolation } from "../src/internal/Defects.ts";
 import * as Session from "../src/Session.ts";
+
+const SessionsInMemory = Sessions.layer.pipe(Layer.provide(Persistence.memory));
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -92,7 +97,7 @@ const csrfHeaders = (cookie?: string): Record<string, string> => ({
 });
 
 const makeAppLayer = (
-  sessionsLayer: typeof Sessions.layerMemory,
+  sessionsLayer: typeof SessionsInMemory,
   limiterLayer: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
 ) =>
   Layer.mergeAll(
@@ -109,26 +114,27 @@ const makeAppLayer = (
     Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
     // CSG-005: the export endpoint rate-limits per account.
     Layer.provide(limiterLayer),
+    Layer.provideMerge(RateLimits.layer),
     // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
     // `SqlTransaction` — a no-op wrapper for this in-memory composition.
     Layer.provide(SqlTransaction.layerNoop),
     Layer.provideMerge(sessionsLayer),
-    Layer.provideMerge(Users.layerMemory),
-    Layer.provideMerge(Accounts.layerMemory),
-    Layer.provideMerge(Verification.layerMemory),
+    Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Verification.layer.pipe(Layer.provide(Persistence.memory))),
     // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );
 
-const AppLayer = makeAppLayer(Sessions.layerMemory);
+const AppLayer = makeAppLayer(Sessions.layer.pipe(Layer.provide(Persistence.memory)));
 
 // SAM-004: the same app over a composition that declares two `billing` fields, one of them server-only.
-const FieldsAppLayer = makeAppLayer(Sessions.layerMemory).pipe(
+const FieldsAppLayer = makeAppLayer(Sessions.layer.pipe(Layer.provide(Persistence.memory))).pipe(
   Layer.provideMerge(
     UserFields.layer({
       billing_plan: UserFields.serverOnly(Schema.Literals(["free", "pro"])),
@@ -141,13 +147,13 @@ const FieldsAppLayer = makeAppLayer(Sessions.layerMemory).pipe(
 // TIR-003/ESS-005/GC-005: a `Sessions` whose `list` never contains the
 // caller's own session — what the SQL layer's 200-row page cap used to do to
 // a user with many historical sessions. Point queries must not depend on it.
-const ListlessSessions: typeof Sessions.layerMemory = Layer.effect(
+const ListlessSessions: typeof SessionsInMemory = Layer.effect(
   Sessions.Sessions,
   Effect.gen(function* () {
     const real = yield* Sessions.Sessions;
     return { ...real, list: () => Effect.succeed([]) };
   }),
-).pipe(Layer.provide(Sessions.layerMemory));
+).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
 
 const ListlessAppLayer = makeAppLayer(ListlessSessions);
 
@@ -502,6 +508,18 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
 
 // CSG-005: GDPR Art. 15/20 self-service export.
 describe("GET /user/export (CSG-005)", () => {
+  // Plan 06: the export rule is declared and registered like a plugin's, under core's own owner.
+  it.effect("the account export rule is registered under the core `account` owner", () =>
+    Effect.gen(function* () {
+      const registry = yield* RateLimits.RateLimitsRegistry;
+      const rules = yield* registry.registered;
+      assert.deepStrictEqual(
+        rules.map((rule) => [rule.plugin, rule.group, rule.endpoint, rule.name, rule.key]),
+        [["account", "account", "exportData", "exportData", "user"]],
+      );
+    }).pipe(Effect.provide(AppLayer)),
+  );
+
   it.effect(
     "returns the caller's user, accounts (no secrets), sessions and activity as an attachment, and audits it",
     () =>
@@ -593,19 +611,26 @@ describe("GET /user/export (CSG-005)", () => {
         const limited = yield* sendHandled("/user/export", { method: "GET", token });
         assert.strictEqual(limited.status, 429);
       }),
-    ).pipe(Effect.provide(makeAppLayer(Sessions.layerMemory, RateLimiter.layerMemory))),
+    ).pipe(
+      Effect.provide(
+        makeAppLayer(
+          Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+          RateLimiter.layerMemory,
+        ),
+      ),
+    ),
   );
 });
 
 // EHA-009: the session was revoked between the middleware's verify and the
 // handler's keyed read — a typed 401 with an expired cookie, not a 500.
-const VanishingSessions: typeof Sessions.layerMemory = Layer.effect(
+const VanishingSessions: typeof SessionsInMemory = Layer.effect(
   Sessions.Sessions,
   Effect.gen(function* () {
     const real = yield* Sessions.Sessions;
     return { ...real, findOwned: () => Effect.succeed(Option.none()) };
   }),
-).pipe(Layer.provide(Sessions.layerMemory));
+).pipe(Layer.provide(Sessions.layer.pipe(Layer.provide(Persistence.memory))));
 
 describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)", () => {
   it.effect("GET /session answers 401 Unauthenticated and expires the cookie", () =>
@@ -1104,11 +1129,13 @@ describe("AuthHttp (BEH-EA-087's ManagedRuntime escape hatch)", () => {
   it.effect("serves an imperative, non-Effect-native call against the same Layer", () =>
     Effect.gen(function* () {
       const runtime = ManagedRuntime.make(
-        Sessions.layerMemory.pipe(
-          Layer.provide(NodeCrypto.layer),
-          Layer.provide(AuthEvents.layer),
-          Layer.provide(AuditLog.layerMemory),
-        ),
+        Sessions.layer
+          .pipe(Layer.provide(Persistence.memory))
+          .pipe(
+            Layer.provide(NodeCrypto.layer),
+            Layer.provide(AuthEvents.layer),
+            Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+          ),
       );
       const { session } = yield* Effect.promise(() =>
         runtime.runPromise(

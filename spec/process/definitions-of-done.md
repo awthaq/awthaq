@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-PROC-02 |
-> | Revision | 1.3 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Process Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Noted that spec/scripts/verify-traceability.sh now exists and is runnable by hand; gate 9 itself remains not-yet-active pending CI (CCR-EA-002) <br> 1.2 (2026-09-12): Noted that a Gherkin acceptance suite now exists at features/features/*.feature (REQ-EA-001 through REQ-EA-602 allocated); distinguished this from the still-unbuilt testing harness that would execute it (CCR-EA-003) <br> 1.3 (2026-09-29): Replaced the forward-looking "nothing exists" framing with the real state: added a "Wired as" column mapping each gate to its `pnpm check` step (or "Not wired"), flipped Active? to the truth, removed the claims that no `package.json`, CI or runner exists, and added the per-change rules for inventories and the acceptance manifest; `spec/scripts/check-drift.mjs` fails a gate marked Active whose command is not in `pnpm check` (MM-005, DTWS-005, DTWS-006, AVS-008, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Noted that spec/scripts/verify-traceability.sh now exists and is runnable by hand; gate 9 itself remains not-yet-active pending CI (CCR-EA-002) <br> 1.2 (2026-09-12): Noted that a Gherkin acceptance suite now exists at features/features/*.feature (REQ-EA-001 through REQ-EA-602 allocated); distinguished this from the still-unbuilt testing harness that would execute it (CCR-EA-003) <br> 1.3 (2026-09-29): Replaced the forward-looking "nothing exists" framing with the real state: added a "Wired as" column mapping each gate to its `pnpm check` step (or "Not wired"), flipped Active? to the truth, removed the claims that no `package.json`, CI or runner exists, and added the per-change rules for inventories and the acceptance manifest; `spec/scripts/check-drift.mjs` fails a gate marked Active whose command is not in `pnpm check` (MM-005, DTWS-005, DTWS-006, AVS-008, CCR-EA-006) <br> 1.4 (2026-10-14): gate 3 also names `pnpm check:contract-tests` (every plugin class runs the contract suite; architecture plan 08) |
 ---
 
 _Previous: [Requirement ID Scheme](./requirement-id-scheme.md)_
@@ -33,7 +33,7 @@ wired" is a plan, not a check, and no cell claims otherwise.
 |---|---|---|---|---|
 | 1 | Typecheck (`tsc`) | Sources and tests compile | Active | `pnpm typecheck` (`tsc -b tsconfig.json && tsc -p tsconfig.test.json`) |
 | 2 | Lint (`oxlint`) | Style and correctness lint is clean, including the project's own Effect rules in `tools/oxc` (no type assertions in `packages/*/src`) | Active | `pnpm lint` |
-| 3 | House-style check | Project-specific conventions a linter cannot express | Active-partial | `pnpm check:error-tags` (`scripts/check-error-tags.mjs`: internal and wire error tags never collide, no untagged defect) and `pnpm check:readmes` (`scripts/check-readme-status.mjs`); naming conventions are not mechanized |
+| 3 | House-style check | Project-specific conventions a linter cannot express | Active-partial | `pnpm check:error-tags` (`scripts/check-error-tags.mjs`: internal and wire error tags never collide, no untagged defect) `pnpm check:readmes` (`scripts/check-readme-status.mjs`) and `pnpm check:contract-tests` (`scripts/check-contract-tests.mjs`: every `AuthPlugin.Service` class runs `runPluginContractTests` from its package's `test/Contract.test.ts`, and `@awthaq/test` stays dev-only); naming conventions are not mechanized |
 | 4 | Circular-import check (`madge`) | No circular imports across packages | Active | `pnpm circular` (`scripts/circular.mjs`; `import type` edges count too) |
 | 5 | Type-level compile-error tests | `Auth.make`'s `Validate<P>` produces the documented compiler errors for the missing-dependency, slot-conflict, and duplicate-id cases | Active-partial | `pnpm typecheck` compiles the `@ts-expect-error` cases in `packages/core/test/AuthPlugin.test.ts` and `HookPoint.types.test.ts`; there is no dedicated type-testing tool (`tstyche`), so a wrong-error-message regression is not caught |
 | 6 | Unit and integration tests | Tests pass, with a coverage threshold enforced rather than merely reported | Active | `pnpm coverage` runs the whole vitest suite under v8 coverage and fails below the thresholds in `vitest.config.ts` (workspace-wide floors plus stricter floors for `core`, `password`, `jwt` and `server`) |

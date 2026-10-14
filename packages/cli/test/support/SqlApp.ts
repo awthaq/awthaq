@@ -3,14 +3,15 @@
 // client (SQLite), exactly what an application's `awthaq.config.ts` exports as `app`. It is a
 // Layer over a `SqlClient` the *test* owns, so state survives across the separate builds each CLI
 // invocation performs (a fresh runtime per command), the way a database does.
+import { TestEncryption } from "@awthaq/test";
 import {
   Accounts,
   AuditLog,
   AuthEvents,
   DataExport,
   Erasure,
-  Hooks,
   Migrations,
+  Persistence,
   Slots,
   Users,
 } from "@awthaq/core";
@@ -27,6 +28,9 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { role } from "@qadi/core";
 import { passwordAndRoles } from "./TestApp.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 const adminRole = role({ name: "admin", permissions: [] });
 const editorRole = role({ name: "editor", permissions: [] });
@@ -49,13 +53,15 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerSql.pipe(
-    Layer.provide(Repositories.UsersRepositoryLive),
-    Layer.provide(Hooks.BeforeUserDelete.layer),
-  ),
-  Accounts.layerSql.pipe(
-    Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-  ),
+  Users.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(Layer.provide(Repositories.UsersRepositoryLive), Layer.provide(NodeCrypto.layer)),
+  Accounts.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(
+      Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
+      Layer.provide(NodeCrypto.layer),
+    ),
   // `UserImport.importUser` runs each user in a `SqlTransaction` (nested inside the CLI's batch one).
   SqlTransaction.layerSql,
   // The imported better-auth / Firebase hashes verify through their legacy verifiers.
@@ -72,10 +78,12 @@ const CoreLive = Layer.mergeAll(
   Layer.provideMerge(
     AuthEvents.layer.pipe(
       Layer.provideMerge(
-        AuditLog.layerSql.pipe(
-          Layer.provide(Repositories.AuditLogRepositoryLive),
-          Layer.provide(NodeCrypto.layer),
-        ),
+        AuditLog.layer
+          .pipe(Layer.provide(SqlStores))
+          .pipe(
+            Layer.provide(Repositories.AuditLogRepositoryLive),
+            Layer.provide(NodeCrypto.layer),
+          ),
       ),
     ),
   ),
@@ -83,7 +91,8 @@ const CoreLive = Layer.mergeAll(
 
 /** Core services plus the Roles plugin (catalog: `admin`, `editor`) over the given SQL client. */
 export const sqlApp = (sql: SqlClient.SqlClient) =>
-  Roles.Roles.layerSql.pipe(
+  Roles.Roles.layer.pipe(
+    Layer.provide(Roles.Roles.records.sql),
     Layer.provide(Roles.config([adminRole, editorRole])),
     Layer.provideMerge(CoreLive),
     // Exposed as well as provided: `import` keeps its checkpoint ledger on the application's own client.

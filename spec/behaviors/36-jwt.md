@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-36 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-008](../models/08-jwt-bearer.md) as `@awthaq/jwt`; BDD-005) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-008](../models/08-jwt-bearer.md) as `@awthaq/jwt`; BDD-005) <br> 1.1 (2026-10-13): BEH-EA-296: the private key is a sealed column (re-sealed on read, an unopenable key is a `sealedColumn.readable` defect) and the stores fail with StoreUnavailable (plan 05 phase 8) |
 ---
 
 > `@awthaq/jwt` composes as `Auth.make([Jwt])` and serves two groups: `jwt` (`GET /jwt/jwks`, public) and `jwt.token` (`POST /jwt/token`, `POST /jwt/introspect`, behind `Api.Authentication`). It issues short-lived, self-contained tokens for an already-authenticated caller so other services can verify them without a session store ([MOD-EA-008](../models/08-jwt-bearer.md), [ADR-EA-017](../decisions/017-jwt-signing-key-rotation.md)). It is never a login: the session remains the source of truth, and the token is a delegation credential whose lifetime bounds how stale it can be.
@@ -119,6 +119,8 @@ REQUIREMENT: Keys MUST rotate every `keyRotationInterval` (default 90 days)
 ```
 
 The grace period is what makes routine rotation invisible to callers; the emergency path is what makes a leaked key recoverable. They are the same mechanism with a different grace period, which is why one is a default and the other an explicit argument ([ADR-EA-017](../decisions/017-jwt-signing-key-rotation.md) is the operator runbook).
+
+The private JWK is a sealed column ([ADR-EA-019](../decisions/019-encryption-key-rotation.md) decision 6): `jwt_signing_key.privateKeyJwk` is sealed under `jwt_signing_key:<kid>:privateKeyJwk` by both the SQL and the in-memory records (so `SigningKeyRecords.layerMemory` requires `Encryption`), the records hand out a `Sealed` value and `Jwt` opens the current key where it signs. A key sealed under a retired encryption key re-seals to the current one the next time it is read, so a rotated `AWTHAQ_ENCRYPTION_KEY_ID` no longer leaves signing keys on the retired kid forever. A key that does not open is a deployment fault and a defect (`sealedColumn.readable`, `SealedColumn.orDie`), never an unsigned token. Every store failure of the ring is `StoreUnavailable` ([BEH-EA-325](05-persistence-stratum.md#beh-ea-325-a-plugin-records-module-fails-with-storeunavailable-never-a-defect-when-its-store-is-down)): `GET /jwt/jwks` declares it, and a bearer token's resolver lets it through instead of answering `401`. Both key tables are Global ([BEH-EA-328](28-tenancy.md#beh-ea-328-every-plugin-table-declares-its-tenancy-and-authmake-validates-the-declarations)): the ring is deployment-wide.
 
 _Previous: [BEH-EA-295](36-jwt.md#beh-ea-295-introspection-answers-in-the-rfc-7662-shape-for-callers-who-are-themselves-authenticated) | Next: [BEH-EA-297](36-jwt.md#beh-ea-297-a-minted-token-is-not-an-origin-credential-unless-the-deployment-opts-in-and-a-downstream-only-token-never-is)_
 

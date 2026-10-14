@@ -7,11 +7,23 @@
 // this suite proves the plugin's own ceremony/persistence/enumeration-safety
 // logic, not `@simplewebauthn/server`'s cryptography (that's
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
-import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  Erasure,
+  Persistence,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
+import { SqlTransaction } from "@awthaq/ports";
+import { SignInProbe } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -27,6 +39,16 @@ import {
 } from "./passkeyTestFixtures.ts";
 
 const TestLayer = buildLayer(mockWebAuthn());
+
+/** An erasure that runs the core cascade but none of the plugins' contributions: a deliberate orphan. */
+const OrphaningErasure = Erasure.layer.pipe(
+  // `Layer.fresh`: the composition's own registry (holding this plugin's contribution) is memoized by
+  // reference and `Effect.provide` forks the current memo map, so without `fresh` it would be reused.
+  Layer.provide(Layer.fresh(Erasure.registryLayer)),
+  Layer.provide(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
+  Layer.provide(Verification.layer.pipe(Layer.provide(Persistence.memory))),
+  Layer.provide(SqlTransaction.layerNoop),
+);
 
 // HSK-005: a synced (multiDevice) passkey is a software key, a device-bound one a hardware key.
 const SyncedLayer = buildLayer(
@@ -119,6 +141,59 @@ describe("Passkey", () => {
 
       assert.strictEqual(issued.session.userId, user.id);
     }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // ADR-EA-038: policy (gate, veto, divert, announcement) is tested once at `SignIn`; this proves the wiring.
+  it.effect("ADR-EA-038 wiring: SignIn is handed strategy passkey and the assertion's amr", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const probe = yield* SignInProbe.SignInProbe;
+      const { userId } = yield* registerNewUser("wiring@example.com");
+      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
+      yield* passkey.authenticateVerify({
+        ceremonyId,
+        credential: assertionCredential({ options }),
+      });
+      const recorded = yield* probe.recorded;
+      assert.deepStrictEqual(
+        recorded.beforeSignIn.map((input) => [input.userId, input.email, input.strategy]),
+        [[userId, "wiring@example.com", "passkey"]],
+      );
+      assert.deepStrictEqual(
+        recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
+        [["passkey", ["hwk", "user"]]],
+      );
+    }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(TestLayer)))),
+  );
+
+  // CSD-004: a refused assertion is the passkey strategy's failure signal.
+  it.effect(
+    "a refused assertion publishes auth.user.signInFailed (strategy passkey, reason assertionInvalid)",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const auditLog = yield* AuditLog.AuditLog;
+        const refused = yield* passkey
+          .authenticateVerify({
+            ceremonyId: "no-such-ceremony",
+            ip: "203.0.113.4",
+            credential: {
+              id: "cred-x",
+              rawId: "cred-x",
+              type: "public-key",
+              response: { clientDataJSON: "not-client-data", authenticatorData: "", signature: "" },
+            },
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "PasskeyChallengeInvalid");
+        const [failure] = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        assert.deepStrictEqual(failure?.payload, {
+          _tag: "auth.user.signInFailed",
+          strategy: "passkey",
+          reason: "assertionInvalid",
+          clientIp: "203.0.113.4",
+        });
+      }).pipe(Effect.provide(TestLayer)),
   );
 
   // HSK-005 (BEH-EA-258): the session records *what kind* of key proved it, so a policy can tell them apart.
@@ -268,12 +343,13 @@ describe("Passkey", () => {
           },
         });
 
-        // The user row is gone, but — today's still-incomplete erasure
-        // cascade (CSG-001/DRS-002, tracked separately) — the credential
-        // row is deliberately left untouched here, to exercise exactly
-        // the orphan this defense-in-depth check exists for regardless
-        // of whether a future cascade also cleans it up.
-        yield* users.delete(user.id);
+        // The user row is gone, but the credential row is deliberately left untouched: the
+        // cascade exists now (`Passkey`'s own erasure contribution), so the orphan this
+        // defense-in-depth check exists for is produced on purpose, through an erasure that
+        // runs the core rows and none of the plugins' contributions.
+        yield* Erasure.AccountErasure.use((erasure) =>
+          erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self()),
+        ).pipe(Effect.provide(OrphaningErasure), Effect.orDie);
 
         const { ceremonyId, options } = yield* passkey.authenticateOptions({});
         const clientDataJSON = buildClientDataJSON({
@@ -721,6 +797,38 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
 
         // The gate is now clear — same session, no new sign-in.
         yield* passkey.registerOptions(userId, sessionId);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "BEH-EA-319: reauthenticateVerify on a session that ended mid-request is Unauthenticated",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const sessions = yield* Sessions.Sessions;
+        const { userId, sessionId } = yield* registerNewUser("ended@example.com");
+        const options = yield* passkey.reauthenticateOptions(userId, sessionId);
+        yield* sessions.revoke(Sessions.SessionId(sessionId), "signOut");
+
+        const failure = yield* passkey
+          .reauthenticateVerify(userId, sessionId, {
+            credential: {
+              id: "cred-mock-1",
+              rawId: "cred-mock-1",
+              type: "public-key",
+              response: {
+                clientDataJSON: buildClientDataJSON({
+                  type: "webauthn.get",
+                  challenge: extractChallenge(options),
+                  origin: ORIGIN,
+                }),
+                authenticatorData: "",
+                signature: "",
+              },
+            },
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Unauthenticated");
       }).pipe(Effect.provide(TestLayer)),
   );
 

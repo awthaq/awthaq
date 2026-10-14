@@ -1,23 +1,29 @@
 // THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-259 to BEH-EA-266): the plugin
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
-import { AuditLog, Hooks, Users, VerificationLink } from "@awthaq/core";
-import { Encryption, Mailer } from "@awthaq/ports";
+import { AuditLog, AuthEvents, Hooks, SignIn, Users, VerificationLink } from "@awthaq/core";
+import { SealedColumn } from "@awthaq/sql";
 import { Password } from "@awthaq/password";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
 import * as TwoFactorStore from "../src/TwoFactorStore.ts";
 import { CHALLENGE_PURPOSE } from "../src/Challenge.ts";
 import {
+  buildDurableAuditLayer,
+  awaitMail,
   buildLayer,
   codeFor,
-  letForkedFibersRun,
   realLimiter,
   tokenOf,
 } from "./support/harness.ts";
@@ -29,10 +35,8 @@ const secret = (text: string) => Redacted.make(text);
 const registerUser = (email: string) =>
   Effect.gen(function* () {
     const password = yield* Password.Password;
-    const mailer = yield* Mailer.Mailer;
     const issued = yield* password.signUp({ email, password: pw });
-    yield* letForkedFibersRun;
-    const verifyMail = (yield* mailer.sent).findLast((mail) => mail.template === "verify-email");
+    const verifyMail = yield* awaitMail("verify-email");
     yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
     return { email, userId: issued.session.userId, sessionId: issued.session.id };
   });
@@ -66,6 +70,8 @@ const freshChallenge = (userId: Users.UserId) =>
     const factor = yield* SecondFactor.SecondFactor;
     return yield* factor.issueChallenge({ userId, strategy: "password", amr: ["pwd"], attempt: 0 });
   });
+
+const sessionOutage = Ref.makeUnsafe(false);
 
 /** The next TOTP step (a code is single-use, and the enrolment code spent the current step). */
 const nextStep = TestClock.adjust(Duration.seconds(30));
@@ -174,29 +180,17 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
 });
 
 describe("TwoFactor: secret at rest (THS-004, ADR-EA-020)", () => {
-  it.effect(
-    "the stored secret is an Encryption envelope bound to its user, never the base32 secret",
-    () =>
-      Effect.gen(function* () {
-        const encryption = yield* Encryption.Encryption;
-        const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        const user = yield* enrolledUser("cipher@example.com");
-        const other = yield* enrolledUser("cipher2@example.com");
-        const row = yield* secrets.find(user.userId);
-        if (Option.isNone(row)) return assert.fail("no secret row");
-        assert.notInclude(row.value.envelope, user.secret);
-        // The plaintext is recoverable only with the row's own AAD...
-        const ok = yield* encryption.decrypt(
-          row.value.envelope,
-          `two_factor_secret:${user.userId}`,
-        );
-        assert.strictEqual(Redacted.value(ok.plaintext), user.secret);
-        // ...an envelope moved to another user's row does not authenticate.
-        const moved = yield* encryption
-          .decrypt(row.value.envelope, `two_factor_secret:${other.userId}`)
-          .pipe(Effect.flip);
-        assert.strictEqual(moved._tag, "DecryptionFailed");
-      }).pipe(Effect.provide(buildLayer())),
+  // That the stored secret is an envelope bound to its row (never the base32 secret), moves nowhere, re-seals
+  // after a key rotation and still opens under the legacy AAD is `runSealedColumnTests`' (TwoFactorStore.test.ts).
+  it.effect("the stored secret opens to the base32 secret the user was shown", () =>
+    Effect.gen(function* () {
+      const secrets = yield* TwoFactorStore.TwoFactorSecrets;
+      const user = yield* enrolledUser("cipher@example.com");
+      const row = yield* secrets.find(user.userId);
+      if (Option.isNone(row)) return assert.fail("no secret row");
+      const opened = yield* SealedColumn.orDie(row.value.secret.open);
+      assert.strictEqual(Redacted.value(opened), user.secret);
+    }).pipe(Effect.provide(buildLayer())),
   );
 });
 
@@ -219,6 +213,34 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(replay._tag, "InvalidTwoFactorCode");
     }).pipe(Effect.provide(buildLayer())),
+  );
+
+  // ADR-EA-039: the challenge, the code check and the session share one transaction.
+  it.effect(
+    "an outage while issuing the session leaves the challenge usable: the same challenge signs in on retry",
+    () =>
+      Effect.gen(function* () {
+        const twoFactor = yield* TwoFactor.TwoFactor;
+        const user = yield* enrolledUser("outage@example.com");
+        const divert = yield* divertedSignIn(user.email);
+        yield* nextStep;
+        yield* Ref.set(sessionOutage, true);
+        const down = yield* twoFactor
+          .verify({
+            challengeId: Redacted.make(divert.challengeId),
+            code: secret(yield* codeFor(user.secret)),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(down._tag, "StoreUnavailable");
+        yield* Ref.set(sessionOutage, false);
+        // The TOTP store is not part of the transaction, so the spent step needs the next code.
+        yield* nextStep;
+        const issued = yield* twoFactor.verify({
+          challengeId: Redacted.make(divert.challengeId),
+          code: secret(yield* codeFor(user.secret)),
+        });
+        assert.strictEqual(issued.session.userId, user.userId);
+      }).pipe(Effect.provide(buildLayer({ failSessionIssue: sessionOutage }))),
   );
 
   it.effect(
@@ -288,10 +310,12 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
       // Rewrite the claimed user to B, keeping A's secret value.
       const value = challengeA.slice(challengeA.lastIndexOf(".") + 1);
       const forged = `${VerificationLink.identifierOf(CHALLENGE_PURPOSE, b.userId)}.${value}`;
-      const failure = yield* factor.consumeChallenge(Redacted.make(forged)).pipe(Effect.flip);
+      const failure = yield* factor
+        .redeemChallenge(Redacted.make(forged), Effect.succeed)
+        .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvalidTwoFactorCode");
       // A's own challenge is still intact (the forgery consumed nothing of A's).
-      const consumed = yield* factor.consumeChallenge(Redacted.make(challengeA));
+      const consumed = yield* factor.redeemChallenge(Redacted.make(challengeA), Effect.succeed);
       assert.strictEqual(consumed.userId, a.userId);
     }).pipe(Effect.provide(buildLayer())),
   );
@@ -308,10 +332,12 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
       };
       const first = yield* factor.issueChallenge(input);
       const second = yield* factor.issueChallenge(input);
-      const stale = yield* factor.consumeChallenge(Redacted.make(first)).pipe(Effect.flip);
+      const stale = yield* factor
+        .redeemChallenge(Redacted.make(first), Effect.succeed)
+        .pipe(Effect.flip);
       assert.strictEqual(stale._tag, "InvalidTwoFactorCode");
       assert.strictEqual(
-        (yield* factor.consumeChallenge(Redacted.make(second))).userId,
+        (yield* factor.redeemChallenge(Redacted.make(second), Effect.succeed)).userId,
         user.userId,
       );
     }).pipe(Effect.provide(buildLayer())),
@@ -347,25 +373,87 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
+  // ADR-EA-038: the divert's handoff rides the challenge, and `finalizeSignIn` is `SignIn.resume` + `issue`.
   it.effect(
-    "a session is refused for a user suspended between the first factor and the second",
-    () =>
-      Effect.gen(function* () {
+    "a first factor's tenant and continuation survive the second factor: the session keeps them and records [...amr, otp, mfa]",
+    () => {
+      const continued: Array<{ readonly n: number; readonly sessionId: string }> = [];
+      const continuation = SignIn.continuation({
+        id: "test",
+        kind: "test.continuation",
+        payload: Schema.Struct({ n: Schema.Number }),
+        make: Effect.succeed(
+          (payload: { readonly n: number }, context: SignIn.ContinuationContext) =>
+            Effect.sync(() => {
+              continued.push({ n: payload.n, sessionId: context.sessionId });
+            }),
+        ),
+      });
+      return Effect.gen(function* () {
         const twoFactor = yield* TwoFactor.TwoFactor;
-        const users = yield* Users.Users;
-        const user = yield* enrolledUser("suspended@example.com");
-        const divert = yield* divertedSignIn(user.email);
-        yield* users.setStatus(user.userId, "suspended");
+        const gate = yield* Hooks.BeforeSessionIssue;
+        const user = yield* enrolledUser("handoff@example.com");
+        const diverted = yield* gate.run({
+          userId: user.userId,
+          strategy: "saml:org:conn",
+          amr: ["fed"],
+          handoff: {
+            tenantId: "tenant-1",
+            continuation: yield* continuation.of({ n: 7 }),
+          },
+        });
+        if (diverted._tag !== "Diverted") return assert.fail("expected a divert");
         yield* nextStep;
-        const failure = yield* twoFactor
-          .verify({
-            challengeId: Redacted.make(divert.challengeId),
-            code: secret(yield* codeFor(user.secret)),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "UserSuspended");
-      }).pipe(Effect.provide(buildLayer())),
+        const issued = yield* twoFactor.verify({
+          challengeId: Redacted.make(diverted.value.challengeId),
+          code: secret(yield* codeFor(user.secret)),
+        });
+        assert.deepStrictEqual(issued.session.amr, ["fed", "otp", "mfa"]);
+        assert.deepStrictEqual(Option.getOrUndefined(issued.session.tenantId), "tenant-1");
+        assert.deepStrictEqual(continued, [{ n: 7, sessionId: issued.session.id }]);
+      }).pipe(Effect.provide(continuation.layer.pipe(Layer.provideMerge(buildLayer()))));
+    },
   );
+
+  it.effect("a wrong code re-issues the challenge carrying the same handoff", () => {
+    const continued: Array<number> = [];
+    const continuation = SignIn.continuation({
+      id: "test",
+      kind: "test.continuation",
+      payload: Schema.Struct({ n: Schema.Number }),
+      make: Effect.succeed((payload: { readonly n: number }) =>
+        Effect.sync(() => {
+          continued.push(payload.n);
+        }),
+      ),
+    });
+    return Effect.gen(function* () {
+      const twoFactor = yield* TwoFactor.TwoFactor;
+      const gate = yield* Hooks.BeforeSessionIssue;
+      const user = yield* enrolledUser("retry@example.com");
+      const diverted = yield* gate.run({
+        userId: user.userId,
+        strategy: "saml:org:conn",
+        amr: ["fed"],
+        handoff: { continuation: yield* continuation.of({ n: 3 }) },
+      });
+      if (diverted._tag !== "Diverted") return assert.fail("expected a divert");
+      const wrong = yield* twoFactor
+        .verify({
+          challengeId: Redacted.make(diverted.value.challengeId),
+          code: secret("000000"),
+        })
+        .pipe(Effect.flip);
+      if (wrong._tag !== "InvalidTwoFactorCode" || wrong.challengeId === undefined)
+        return assert.fail("expected a retry challenge");
+      yield* nextStep;
+      yield* twoFactor.verify({
+        challengeId: Redacted.make(wrong.challengeId),
+        code: secret(yield* codeFor(user.secret)),
+      });
+      assert.deepStrictEqual(continued, [3]);
+    }).pipe(Effect.provide(continuation.layer.pipe(Layer.provideMerge(buildLayer()))));
+  });
 });
 
 describe("TwoFactor: recovery codes (BEH-EA-264, BCR-002)", () => {
@@ -548,14 +636,45 @@ describe("TwoFactor: the shared failure budget (BCR-006, ADR-EA-020)", () => {
   );
 });
 
+describe("TwoFactor: management is rate limited per account (plan 06)", () => {
+  it.effect("a breach of manageByUser reports the real endpoint, not a catch-all, and no key", () =>
+    Effect.gen(function* () {
+      const twoFactor = yield* TwoFactor.TwoFactor;
+      const events = yield* AuthEvents.AuthEvents;
+      const user = yield* enrolledUser("manage@example.com");
+      const collected = yield* Effect.forkChild(
+        events.stream.pipe(
+          Stream.filter((event) => event._tag === "auth.rateLimit.exceeded"),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+        { startImmediately: true },
+      );
+      // `manageByUser` is 20 per 15 minutes; the spend happens before anything else is checked.
+      for (let i = 0; i < 20; i += 1) {
+        yield* Effect.exit(twoFactor.confirm(user.userId, secret("000000")));
+      }
+      const refused = yield* twoFactor.confirm(user.userId, secret("000000")).pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "RateLimited");
+      const [event] = yield* Fiber.join(collected);
+      assert.deepInclude(event, {
+        _tag: "auth.rateLimit.exceeded",
+        group: "two_factor.account",
+        endpoint: "confirm",
+        rule: "manageByUser",
+        dimension: "principal",
+      });
+      assert.notInclude(JSON.stringify(event), user.userId);
+    }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+  );
+});
+
 describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
   const requestResetToken = (email: string) =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
       yield* password.requestReset({ email });
-      yield* letForkedFibersRun;
-      const mail = (yield* mailer.sent).findLast((m) => m.template === "reset-password");
+      const mail = yield* awaitMail("reset-password");
       return Redacted.make(tokenOf(mail));
     });
   const newPassword = Redacted.make("a brand new strong password");
@@ -589,11 +708,11 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
           .pipe(Effect.flip);
         if (wrong._tag !== "HookAborted") return assert.fail(wrong._tag);
         assert.strictEqual(wrong.code, "SECOND_FACTOR_INVALID");
-        // The wrong code spent the (in-memory, non-transactional) reset token, so request another.
-        const second = yield* requestResetToken(user.email);
+        // ADR-EA-039: the refusal gave the reset token back (memory and SQL alike), so the SAME
+        // token carries the reset once the right code is presented (BEH-EA-259).
         yield* nextStep;
         yield* password.confirmReset({
-          token: second,
+          token,
           password: newPassword,
           secondFactorCode: secret(yield* codeFor(user.secret)),
         });
@@ -603,6 +722,36 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
         // The new password works — it reaches the second-factor divert.
         assert.strictEqual(signedIn._tag, "TwoFactorRequired");
       }).pipe(Effect.provide(buildLayer())),
+  );
+
+  // ADR-EA-037 / BEH-EA-266: the wrong code fails the reset, which rolls its transaction back. The
+  // challengeFailed attempt used to be written inside it and so erased with it: a brute force of the
+  // second factor through the reset form left no audit row. Over a real database it now survives.
+  it.effect(
+    "a wrong second-factor code during a reset is audited and delivered although the reset rolls back",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const password = yield* Password.Password;
+          const events = yield* AuthEvents.AuthEvents;
+          const audit = yield* AuditLog.AuditLog;
+          const user = yield* enrolledUser("reset-audit@example.com");
+          const token = yield* requestResetToken(user.email);
+          const stream = yield* events.subscribe;
+          const wrong = yield* password
+            .confirmReset({ token, password: newPassword, secondFactorCode: secret("000000") })
+            .pipe(Effect.flip);
+          assert.strictEqual(wrong._tag, "HookAborted");
+          const rows = yield* audit.list({ eventTag: "auth.twoFactor.challengeFailed" });
+          assert.strictEqual(rows.length, 1);
+          const seen = yield* stream.pipe(
+            Stream.filter((event) => event._tag === "auth.twoFactor.challengeFailed"),
+            Stream.take(1),
+            Stream.runCollect,
+          );
+          assert.strictEqual(seen.length, 1);
+        }),
+      ).pipe(Effect.provide(buildDurableAuditLayer())),
   );
 
   it.effect("a recovery code carries a reset exactly once", () =>

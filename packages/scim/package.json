@@ -25,6 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
     "@awthaq/organization": "workspace:*",
     "@awthaq/ports": "workspace:*",
@@ -32,9 +33,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@awthaq/api": "workspace:*",
-    "@awthaq/server": "workspace:*",
-    "@effect/platform-node": "catalog:",
+    "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

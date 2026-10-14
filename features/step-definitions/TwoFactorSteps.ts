@@ -269,6 +269,25 @@ export const twoFactorSteps = defineSteps<World>(({ Given, When, Then }) => {
     successValue(yield* beginEnrolment(name));
   });
 
+  Given("the session store is down", function* () {
+    const { sessionOutage } = yield* World;
+    yield* Ref.set(sessionOutage, true);
+  });
+
+  When("the session store is back", function* () {
+    const { sessionOutage } = yield* World;
+    yield* Ref.set(sessionOutage, false);
+  });
+
+  When("she presents the next authenticator code with the same challenge", function* () {
+    const { people, strings } = yield* World;
+    const name = yield* people.current;
+    yield* nextStep;
+    yield* setAnswer(
+      yield* verifyWith(yield* strings.get(`challenge:${name}`), yield* currentCode(name)),
+    );
+  });
+
   Given("a new time step begins", function* () {
     yield* nextStep;
   });
@@ -423,7 +442,7 @@ export const twoFactorSteps = defineSteps<World>(({ Given, When, Then }) => {
     directExit(
       Effect.gen(function* () {
         const factor = yield* SecondFactor.SecondFactor;
-        return yield* factor.consumeChallenge(Redacted.make(challengeId));
+        return yield* factor.redeemChallenge(Redacted.make(challengeId), Effect.succeed);
       }),
     );
 

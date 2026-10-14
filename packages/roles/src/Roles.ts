@@ -28,7 +28,7 @@
 // `RevocationStore.layerSql` (`INSERT ... ON CONFLICT ... DO NOTHING`,
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
-import { Defects, Users } from "@awthaq/core";
+import { Defects, Errors, Users } from "@awthaq/core";
 import {
   AuthEvents,
   AuthPlugin,
@@ -39,17 +39,13 @@ import {
   Slots,
 } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
+import * as RoleAssignments from "./RoleAssignments.ts";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { Role } from "@qadi/core";
 import { fromRoles, withAttributes } from "@qadi/core";
 
@@ -75,27 +71,32 @@ export interface RolesShape {
     userId: Users.UserId,
     roleName: string,
     options?: RoleChangeOptions,
-  ) => Effect.Effect<void, UnknownRole>;
+  ) => Effect.Effect<void, UnknownRole | Errors.StoreUnavailable>;
   /** RRM-005: a real revoke publishes `auth.roles.revoked`; revoking a role the user never held publishes nothing. */
   readonly revoke: (
     userId: Users.UserId,
     roleName: string,
     options?: RoleChangeOptions,
-  ) => Effect.Effect<void>;
-  readonly listRoleNames: (userId: Users.UserId) => Effect.Effect<ReadonlyArray<string>>;
+  ) => Effect.Effect<void, Errors.StoreUnavailable>;
+  readonly listRoleNames: (
+    userId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<string>, Errors.StoreUnavailable>;
   /**
    * ECS-006: the users currently holding `roleName`. `awthaq seed admin` must find an
    * existing administrator before it grants another, and nothing else can answer "who has
    * this role" (`listRoleNames` goes the other way).
    */
-  readonly holders: (roleName: string) => Effect.Effect<ReadonlyArray<Users.UserId>>;
+  readonly holders: (
+    roleName: string,
+  ) => Effect.Effect<ReadonlyArray<Users.UserId>, Errors.StoreUnavailable>;
   /**
    * RRM-003: stored assignments whose role name is no longer in the catalog
    * (drift after a rename/removal) — for a startup/doctor check. Empty when
    * catalog and assignments agree.
    */
   readonly listUnknownAssignments: Effect.Effect<
-    ReadonlyArray<{ readonly userId: Users.UserId; readonly roleName: string }>
+    ReadonlyArray<{ readonly userId: Users.UserId; readonly roleName: string }>,
+    Errors.StoreUnavailable
   >;
 }
 
@@ -141,29 +142,23 @@ const validatedCatalog = Effect.gen(function* () {
 export const config = (catalog: ReadonlyArray<Role>): Layer.Layer<never> =>
   Layer.succeed(RolesConfig, { catalog });
 
-const emptyNames: ReadonlyArray<string> = [];
-
-const rolesMake: Effect.Effect<RolesShape, never, AuthEvents.AuthEvents> = Effect.gen(function* () {
+/**
+ * The one domain implementation of `Roles` (plan 08): catalog validation, `UnknownRole` and the audit events,
+ * written once over whichever `RoleAssignments` store the composition provides (`Roles.records.memory` or
+ * `Roles.records.sql`).
+ */
+const rolesMake = Effect.gen(function* () {
   const events = yield* AuthEvents.AuthEvents;
   const catalog = yield* validatedCatalog;
-  const state = yield* Ref.make(HashMap.empty<Users.UserId, ReadonlyArray<string>>());
-
-  const namesOf = (
-    map: HashMap.HashMap<Users.UserId, ReadonlyArray<string>>,
-    userId: Users.UserId,
-  ): ReadonlyArray<string> => HashMap.get(map, userId).pipe(Option.getOrElse(() => emptyNames));
+  const store = yield* RoleAssignments.RoleAssignments;
+  const catalogNames = Array.from(catalog.keys());
 
   return {
     assign: (userId, roleName, options) =>
       Effect.gen(function* () {
         if (!catalog.has(roleName)) return yield* Effect.fail(new UnknownRole({ roleName }));
-        const changed = yield* Ref.modify(state, (map) => {
-          const existing = namesOf(map, userId);
-          return existing.includes(roleName)
-            ? ([false, map] as const)
-            : ([true, HashMap.set(map, userId, [...existing, roleName])] as const);
-        });
-        if (changed) {
+        // RRM-005: only a real change is audited.
+        if (yield* store.add(userId, roleName)) {
           yield* events.publish({
             _tag: "auth.roles.assigned",
             userId,
@@ -174,20 +169,7 @@ const rolesMake: Effect.Effect<RolesShape, never, AuthEvents.AuthEvents> = Effec
       }),
     revoke: (userId, roleName, options) =>
       Effect.gen(function* () {
-        const changed = yield* Ref.modify(state, (map) => {
-          const existing = namesOf(map, userId);
-          return existing.includes(roleName)
-            ? ([
-                true,
-                HashMap.set(
-                  map,
-                  userId,
-                  existing.filter((name) => name !== roleName),
-                ),
-              ] as const)
-            : ([false, map] as const);
-        });
-        if (changed) {
+        if (yield* store.remove(userId, roleName)) {
           yield* events.publish({
             _tag: "auth.roles.revoked",
             userId,
@@ -196,125 +178,11 @@ const rolesMake: Effect.Effect<RolesShape, never, AuthEvents.AuthEvents> = Effec
           });
         }
       }),
-    listRoleNames: (userId) => Ref.get(state).pipe(Effect.map((map) => namesOf(map, userId))),
-    holders: (roleName) =>
-      Ref.get(state).pipe(
-        Effect.map((map) =>
-          Array.from(HashMap.entries(map))
-            .filter(([, names]) => names.includes(roleName))
-            .map(([userId]) => userId),
-        ),
-      ),
-    listUnknownAssignments: Ref.get(state).pipe(
-      Effect.map((map) =>
-        Array.from(HashMap.entries(map)).flatMap(([userId, names]) =>
-          names.filter((name) => !catalog.has(name)).map((roleName) => ({ userId, roleName })),
-        ),
-      ),
-    ),
-  };
+    listRoleNames: store.roleNames,
+    holders: store.holders,
+    listUnknownAssignments: store.outside(catalogNames),
+  } satisfies RolesShape;
 });
-
-// ---- layerSql -----------------------------------------------------------------
-
-const RoleAssignmentRow = Schema.Struct({
-  userId: Schema.String,
-  role: Schema.String,
-});
-
-const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthEvents.AuthEvents> =
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const events = yield* AuthEvents.AuthEvents;
-    const catalog = yield* validatedCatalog;
-    const catalogNames = Array.from(catalog.keys());
-
-    // RETURNING tells a real change from a no-op (`DO NOTHING` returns no row),
-    // so only real changes are audited (RRM-005).
-    const assignQuery = SqlSchema.findOneOption({
-      Request: RoleAssignmentRow,
-      Result: RoleAssignmentRow,
-      execute: (r) =>
-        sql`
-          INSERT INTO roles_assignments ("userId", role)
-          VALUES (${r.userId}, ${r.role})
-          ON CONFLICT ("userId", role) DO NOTHING
-          RETURNING "userId", role
-        `,
-    });
-
-    const revokeQuery = SqlSchema.findOneOption({
-      Request: RoleAssignmentRow,
-      Result: RoleAssignmentRow,
-      execute: (r) =>
-        sql`DELETE FROM roles_assignments WHERE "userId" = ${r.userId} AND role = ${r.role} RETURNING "userId", role`,
-    });
-
-    const listUnknownQuery = SqlSchema.findAll({
-      Request: Schema.Array(Schema.String),
-      Result: RoleAssignmentRow,
-      execute: (names) =>
-        names.length === 0
-          ? sql`SELECT "userId", role FROM roles_assignments`
-          : sql`SELECT "userId", role FROM roles_assignments WHERE role NOT IN ${sql.in(names)}`,
-    });
-
-    const holdersQuery = SqlSchema.findAll({
-      Request: Schema.String,
-      Result: Schema.Struct({ userId: Schema.String }),
-      execute: (roleName) => sql`SELECT "userId" FROM roles_assignments WHERE role = ${roleName}`,
-    });
-
-    const listQuery = SqlSchema.findAll({
-      Request: Schema.String,
-      Result: Schema.Struct({ role: Schema.String }),
-      execute: (userId) => sql`SELECT role FROM roles_assignments WHERE "userId" = ${userId}`,
-    });
-
-    return {
-      assign: (userId, roleName, options) =>
-        Effect.gen(function* () {
-          if (!catalog.has(roleName)) return yield* Effect.fail(new UnknownRole({ roleName }));
-          const inserted = yield* assignQuery({ userId, role: roleName }).pipe(Effect.orDie);
-          if (Option.isSome(inserted)) {
-            yield* events.publish({
-              _tag: "auth.roles.assigned",
-              userId,
-              roleName,
-              actorUserId: options?.actorId,
-            });
-          }
-        }),
-      revoke: (userId, roleName, options) =>
-        Effect.gen(function* () {
-          const removed = yield* revokeQuery({ userId, role: roleName }).pipe(Effect.orDie);
-          if (Option.isSome(removed)) {
-            yield* events.publish({
-              _tag: "auth.roles.revoked",
-              userId,
-              roleName,
-              actorUserId: options?.actorId,
-            });
-          }
-        }),
-      listRoleNames: (userId) =>
-        listQuery(userId).pipe(
-          Effect.map((rows) => rows.map((row) => row.role)),
-          Effect.orDie,
-        ),
-      holders: (roleName) =>
-        holdersQuery(roleName).pipe(
-          Effect.map((rows) => rows.map((row) => Users.UserId(row.userId))),
-          Effect.orDie,
-        ),
-      listUnknownAssignments: listUnknownQuery(catalogNames).pipe(
-        Effect.map((rows) =>
-          rows.map((row) => ({ userId: Users.UserId(row.userId), roleName: row.role })),
-        ),
-        Effect.orDie,
-      ),
-    };
-  });
 
 /**
  * BAM-006 (.issues/high): the migration this plugin's own header used to
@@ -450,8 +318,12 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   // trivially, the same bottom-type reasoning `Auth.ts`'s own comments use
   // for `Layer`'s contravariant `ROut`).
   contract: HttpApi.make("auth"),
-  tables: ["roles_assignments"],
+  tables: {
+    roles_assignments: AuthPlugin.Table.global("global roles, ADR-EA-025"),
+  },
   migrations: rolesMigrations,
+  // Plan 08 (BEH-EA-T4): the assignment store, memory and SQL, matched. The catalog (`Roles.config`) stays config.
+  records: RoleAssignments.records,
   // The catalog is listed by role name (each `Role` carries its whole permission tree).
   config: [
     ConfigDescriptor.make(RolesConfig, {
@@ -499,20 +371,6 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
     Layer.provideMerge(
       AuthPlugin.layer(Roles, {
         make: rolesMake,
-        contributes: Layer.mergeAll(rolesErasure, rolesExport),
-      }),
-    ),
-  );
-
-  /** BAM-006: the same composition as `layer`, over `rolesMakeSql` instead of the in-memory `rolesMake`. */
-  static readonly layerSql = Slots.override(
-    Roles,
-    QadiSubjectResolver.SubjectResolver,
-    subjectResolverMake,
-  ).pipe(
-    Layer.provideMerge(
-      AuthPlugin.layer(Roles, {
-        make: rolesMakeSql,
         contributes: Layer.mergeAll(rolesErasure, rolesExport),
       }),
     ),

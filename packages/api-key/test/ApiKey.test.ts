@@ -1,6 +1,6 @@
 // spec/models/07-api-keys.md, BEH-EA-140, ADR-EA-022 (OCM-002, OCM-005). The same domain
 // suite runs against the in-memory records and against real migrated SQL records.
-import { AuditLog, SecretHash, Users } from "@awthaq/core";
+import { AuditLog, Erasure, SecretHash, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -11,14 +11,27 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as ApiKey from "../src/ApiKey.ts";
 import * as ApiKeyRecords from "../src/ApiKeyRecords.ts";
-import { buildLayer, type HarnessOptions } from "./harness.ts";
+import {
+  buildLayer,
+  orphanOwner,
+  seedUser,
+  type HarnessOptions,
+  type HarnessServices,
+} from "./harness.ts";
 
-const owner = Users.UserId("owner-1");
-const someoneElse = Users.UserId("owner-2");
+// Re-seeded as real users by every test's `provide`, so these are `let`, not constants.
+let owner = Users.UserId("owner-1");
+let someoneElse = Users.UserId("owner-2");
 
 const suite = (store: HarnessOptions["store"]) => {
-  const provide = (config: Partial<ApiKey.ApiKeyConfigShape> = {}) =>
-    Effect.provide(buildLayer({ store, suite: "api_key_domain", config }));
+  const provide =
+    (config: Partial<ApiKey.ApiKeyConfigShape> = {}) =>
+    <A, E>(effect: Effect.Effect<A, E, HarnessServices>) =>
+      Effect.gen(function* () {
+        owner = yield* seedUser("owner-1@example.com");
+        someoneElse = yield* seedUser("owner-2@example.com");
+        return yield* effect;
+      }).pipe(Effect.provide(buildLayer({ store, suite: "api_key_domain", config })));
 
   describe(`ApiKey domain (${store} records)`, () => {
     it.effect(
@@ -304,6 +317,91 @@ const suite = (store: HarnessOptions["store"]) => {
             DateTime.toEpochMillis(Option.getOrThrow(yield* usedAt)),
             DateTime.toEpochMillis(first),
           );
+        }).pipe(provide()),
+      );
+    });
+
+    describe("the owner's standing (plan 10 item 0)", () => {
+      it.effect("a suspended owner's key stops resolving, and resolves again once reinstated", () =>
+        Effect.gen(function* () {
+          const apiKey = yield* ApiKey.ApiKey;
+          const users = yield* Users.Users;
+          const created = yield* apiKey.create(owner, { name: "k", scopes: ["reports:read"] });
+          assert.isTrue(Option.isSome(yield* apiKey.resolve(created.key)));
+
+          yield* users.setStatus(owner, "suspended", { reason: "abuse" });
+          assert.isTrue(Option.isNone(yield* apiKey.resolve(created.key)));
+
+          yield* users.setStatus(owner, "active");
+          assert.isTrue(Option.isSome(yield* apiKey.resolve(created.key)));
+        }).pipe(provide()),
+      );
+
+      it.effect("a timed suspension that has lapsed no longer blocks the key", () =>
+        Effect.gen(function* () {
+          const apiKey = yield* ApiKey.ApiKey;
+          const users = yield* Users.Users;
+          const created = yield* apiKey.create(owner, { name: "k", scopes: [] });
+          const until = DateTime.addDuration(yield* DateTime.now, Duration.hours(1));
+          yield* users.setStatus(owner, "suspended", { until });
+          assert.isTrue(Option.isNone(yield* apiKey.resolve(created.key)));
+          yield* TestClock.adjust(Duration.hours(2));
+          assert.isTrue(Option.isSome(yield* apiKey.resolve(created.key)));
+        }).pipe(provide()),
+      );
+
+      it.effect("a key whose owner row is gone (an orphan) resolves None", () =>
+        Effect.gen(function* () {
+          const apiKey = yield* ApiKey.ApiKey;
+          const created = yield* apiKey.create(owner, { name: "k", scopes: [] });
+          yield* orphanOwner(owner);
+          assert.isTrue(Option.isNone(yield* apiKey.resolve(created.key)));
+        }).pipe(provide()),
+      );
+
+      it.effect("an unknown key id costs no user lookup", () =>
+        Effect.gen(function* () {
+          const apiKey = yield* ApiKey.ApiKey;
+          const users = yield* Users.Users;
+          let lookups = 0;
+          const spied = Users.Users.of({
+            ...users,
+            findById: (id) => {
+              lookups += 1;
+              return users.findById(id);
+            },
+          });
+          const unknown = Redacted.make(
+            `ak_${"0".repeat(8)}-0000-7000-8000-000000000000.${"a".repeat(64)}`,
+          );
+          const none = yield* apiKey
+            .resolve(unknown)
+            .pipe(Effect.provideService(Users.Users, spied));
+          assert.isTrue(Option.isNone(none));
+          assert.strictEqual(lookups, 0);
+        }).pipe(provide()),
+      );
+
+      it.effect("erasing the owner deletes their keys and clients and leaves others' alone", () =>
+        Effect.gen(function* () {
+          const apiKey = yield* ApiKey.ApiKey;
+          const registry = yield* Erasure.ErasureRegistry;
+          const mine = yield* apiKey.create(owner, { name: "mine", scopes: [] });
+          yield* apiKey.registerClient(owner, { name: "svc", scopes: ["a:b"] });
+          const theirs = yield* apiKey.create(someoneElse, { name: "theirs", scopes: [] });
+
+          const contributions = yield* registry.contributions;
+          assert.include(
+            contributions.map((c) => c.id),
+            "apikey",
+          );
+          for (const c of contributions) yield* c.erase({ userId: owner });
+
+          assert.deepStrictEqual(yield* apiKey.list(owner), []);
+          assert.deepStrictEqual(yield* apiKey.listClients(owner), []);
+          assert.isTrue(Option.isNone(yield* apiKey.resolve(mine.key)));
+          assert.isTrue(Option.isSome(yield* apiKey.resolve(theirs.key)));
+          assert.strictEqual((yield* apiKey.list(someoneElse)).length, 1);
         }).pipe(provide()),
       );
     });

@@ -9,19 +9,9 @@
 // transport (the same category of swap `TestClock` is for time — not a
 // business-logic mock).
 import { createHash } from "node:crypto";
-import {
-  AuditLog,
-  Hooks,
-  AuthEvents,
-  MailDispatch,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-  Accounts,
-} from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Accounts, AuditLog, Auth, AuthEvents, MailDispatch, Sessions, Users } from "@awthaq/core";
+import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { SignInProbe, TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -36,37 +26,18 @@ import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
-import { tokenOf } from "./harness.ts";
+import {
+  httpClientReturning,
+  makeTestLayer,
+  NoBreachHttpClient,
+  tokenOf,
+  UnavailableHttpClient,
+} from "./harness.ts";
 
 const sha1Hex = (plain: string): string =>
   createHash("sha1").update(plain).digest("hex").toUpperCase();
-
-const httpClientReturning = (body: (url: string) => string): Layer.Layer<HttpClient.HttpClient> =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) =>
-      Effect.succeed(
-        HttpClientResponse.fromWeb(request, new Response(body(request.url), { status: 200 })),
-      ),
-    ),
-  );
-
-/** BEH-EA-119: nothing in the corpus ever matches — the default, "not breached" transport. */
-const NoBreachHttpClient = httpClientReturning(() => `${"F".repeat(35)}:1`);
-
-const UnavailableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.fail(
-      new HttpClientError.HttpClientError({
-        reason: new HttpClientError.TransportError({ request }),
-      }),
-    ),
-  ),
-);
 
 // CSD-001: a resolved-but-non-2xx response (HIBP's own aggressive
 // throttling makes 429 the most common failure mode at scale) — distinct
@@ -80,103 +51,37 @@ const httpClientReturningStatus = (status: number): Layer.Layer<HttpClient.HttpC
     ),
   );
 
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+/** The composition every test shares: `Auth.make([Password])` through `TestAuth.layer` (`harness.ts`). */
+const TestLayer = makeTestLayer();
 
-/**
- * `changePassword` (ticket 11) needs `RateLimiter.layerPermissive` too
- * (ticket 12's own `rateLimit(...)` call sites use it), same reasoning:
- * a real, working default so an ordinary test loop never trips a limit
- * tuned for production, mirroring `TestAuth`'s own default.
- */
-const PortsLive = Layer.mergeAll(
-  PasswordHasher.layerArgon2id,
-  Mailer.layerMemory,
-  RateLimiter.layerPermissive,
-).pipe(Layer.provideMerge(NodeCrypto.layer));
-
-/**
- * `changePassword` (shipping-gap map, ticket 11) is the one endpoint in
- * this plugin's contract carrying `Authentication` middleware — building
- * `Password.layer` at all now needs it satisfied, even for these
- * domain-level tests that never go through HTTP.
- */
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-/**
- * CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `PasswordGroup` now
- * carries `.middleware(Api.CsrfProtection)` at the group level — building
- * `Password.Password.layer` at all now needs it satisfied, the same as
- * `AuthenticationLive` above, even though no HTTP request is ever issued
- * from this domain-level suite.
- */
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("password-domain-test-csrf-secret"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const TestLayer = Password.Password.layer.pipe(
-  Layer.provideMerge(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(PortsLive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provide(NoBreachHttpClient),
-  // ARF-001: `confirmReset` now runs inside a `SqlTransaction` — a no-op
-  // wrapper for this in-memory composition.
-  Layer.provide(SqlTransaction.layerNoop),
-  Layer.provide(ClientAddress.layerDirect),
-);
-
-/** TSS-001/TSS-002: a `Mailer` whose `send` never resolves — see the tests below that provide this in place of `PortsLive`'s own `Mailer.layerMemory`. */
+/** TSS-001/TSS-002: a `Mailer` whose `send` never resolves: see the tests below that provide this in place of the default recording `Mailer.layerMemory`. */
 const HangingMailerLayer: Layer.Layer<Mailer.Mailer> = Layer.succeed(
   Mailer.Mailer,
   Mailer.Mailer.of({ send: () => Effect.never, sent: Effect.succeed([]) }),
 );
 
-const TestLayerHangingMailer = Password.Password.layer.pipe(
-  Layer.provideMerge(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(
-    Layer.mergeAll(
-      PasswordHasher.layerArgon2id,
-      HangingMailerLayer,
-      RateLimiter.layerPermissive,
-    ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+// ERS-002: scope close waits `drainTimeout` for in-flight mail; this mailer never finishes and `TestClock` never
+// advances, so don't wait.
+const TestLayerHangingMailer = TestAuth.layer(Auth.make([Password.Password]), {
+  services: Layer.mergeAll(
+    NoBreachHttpClient,
+    Password.config({}),
+    HangingMailerLayer,
+    MailDispatch.config({ drainTimeout: Duration.zero }),
   ),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provide(NoBreachHttpClient),
-  Layer.provide(SqlTransaction.layerNoop),
-  Layer.provide(ClientAddress.layerDirect),
-  // ERS-002: scope close waits `drainTimeout` for in-flight mail; this
-  // mailer never finishes and `TestClock` never advances, so don't wait.
-  Layer.provideMerge(MailDispatch.config({ drainTimeout: Duration.zero })),
-);
+});
 
 /**
- * PHS-005: a real argon2id hasher at explicitly chosen cost parameters (env-style keys), for
- * planting hashes "stored under other parameters". `Layer.fresh` matters: the composition under
- * test already built `layerArgon2id` on the shared memo map, so without it this would resolve to
- * that same default-cost instance and silently ignore `env`. A ConfigError here is a defect in
- * the fixed table.
+ * PHS-005: the production-cost argon2id hasher (`TestAuth`'s own is deliberately cheap): the rehash tests below
+ * plant hashes "stored under other parameters" and assert what `signIn` upgrades them to.
  */
+const TestLayerProductionHasher = TestAuth.layer(Auth.make([Password.Password]), {
+  services: Layer.mergeAll(NoBreachHttpClient, Password.config({})),
+  // `decorate` shadows the base hasher for the plugin and for the test body alike. `Layer.fresh`: the base already
+  // built `layerArgon2id` (at the cheap test cost) on the shared memo map, so without it this resolves to that instance.
+  decorate: Layer.orDie(Layer.fresh(PasswordHasher.layerArgon2id)),
+});
+
 const hasherAt = (env: Record<string, string>) =>
   Layer.fresh(PasswordHasher.layerArgon2id).pipe(
     Layer.provide(NodeCrypto.layer),
@@ -354,7 +259,7 @@ describe("Password", () => {
         assert.match(stored, /^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
         assert.isFalse(current.needsRehash(stored));
         assert.isTrue(yield* current.verify(strongPassword, stored));
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(TestLayerProductionHasher)),
   );
 
   it.effect(
@@ -386,7 +291,7 @@ describe("Password", () => {
           Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
         );
         assert.strictEqual(stored, stronger, "signIn must never downgrade a stronger stored hash");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(TestLayerProductionHasher)),
   );
 
   // THS-003: how the session was authenticated.
@@ -674,7 +579,7 @@ describe("Password", () => {
         assert.isFalse(values.some((value) => value.includes(email)));
         assert.isFalse(values.some((value) => value.includes("correct horse battery staple")));
         assert.isFalse(values.some((value) => value.includes("totally wrong password")));
-      }).pipe(Effect.provide(TestLayer.pipe(Layer.provideMerge(TracerLive))));
+      }).pipe(Effect.provide(TracerLive.pipe(Layer.provideMerge(TestLayer))));
     },
   );
 
@@ -1028,17 +933,7 @@ describe("Password", () => {
         assert.strictEqual(failure._tag, "WeakPassword");
       }).pipe(
         Effect.provide(
-          Password.Password.layer.pipe(
-            Layer.provideMerge(AuthenticationLive),
-            Layer.provide(CsrfProtectionLive),
-            Layer.provideMerge(CoreLive),
-            Layer.provideMerge(PortsLive),
-            Layer.provideMerge(RateLimits.layer),
-            Layer.provide(BreachedHttpClient),
-            Layer.provide(SqlTransaction.layerNoop),
-            Layer.provide(ClientAddress.layerDirect),
-            Layer.provideMerge(Password.config({ breachCheck: true })),
-          ),
+          makeTestLayer({ httpClient: BreachedHttpClient, config: { breachCheck: true } }),
         ),
       );
     },
@@ -1051,17 +946,7 @@ describe("Password", () => {
       assert.isDefined(issued.token);
     }).pipe(
       Effect.provide(
-        Password.Password.layer.pipe(
-          Layer.provideMerge(AuthenticationLive),
-          Layer.provide(CsrfProtectionLive),
-          Layer.provideMerge(CoreLive),
-          Layer.provideMerge(PortsLive),
-          Layer.provideMerge(RateLimits.layer),
-          Layer.provide(UnavailableHttpClient),
-          Layer.provide(SqlTransaction.layerNoop),
-          Layer.provide(ClientAddress.layerDirect),
-          Layer.provideMerge(Password.config({ breachCheck: true })),
-        ),
+        makeTestLayer({ httpClient: UnavailableHttpClient, config: { breachCheck: true } }),
       ),
     ),
   );
@@ -1073,17 +958,10 @@ describe("Password", () => {
       assert.strictEqual(failure._tag, "WeakPassword");
     }).pipe(
       Effect.provide(
-        Password.Password.layer.pipe(
-          Layer.provideMerge(AuthenticationLive),
-          Layer.provide(CsrfProtectionLive),
-          Layer.provideMerge(CoreLive),
-          Layer.provideMerge(PortsLive),
-          Layer.provideMerge(RateLimits.layer),
-          Layer.provide(UnavailableHttpClient),
-          Layer.provide(SqlTransaction.layerNoop),
-          Layer.provide(ClientAddress.layerDirect),
-          Layer.provideMerge(Password.config({ breachCheck: { onUnavailable: "reject" } })),
-        ),
+        makeTestLayer({
+          httpClient: UnavailableHttpClient,
+          config: { breachCheck: { onUnavailable: "reject" } },
+        }),
       ),
     ),
   );
@@ -1102,17 +980,10 @@ describe("Password", () => {
       assert.isDefined(issued.token);
     }).pipe(
       Effect.provide(
-        Password.Password.layer.pipe(
-          Layer.provideMerge(AuthenticationLive),
-          Layer.provide(CsrfProtectionLive),
-          Layer.provideMerge(CoreLive),
-          Layer.provideMerge(PortsLive),
-          Layer.provideMerge(RateLimits.layer),
-          Layer.provide(httpClientReturningStatus(429)),
-          Layer.provide(SqlTransaction.layerNoop),
-          Layer.provide(ClientAddress.layerDirect),
-          Layer.provideMerge(Password.config({ breachCheck: true })),
-        ),
+        makeTestLayer({
+          httpClient: httpClientReturningStatus(429),
+          config: { breachCheck: true },
+        }),
       ),
     ),
   );
@@ -1124,17 +995,10 @@ describe("Password", () => {
       assert.strictEqual(failure._tag, "WeakPassword");
     }).pipe(
       Effect.provide(
-        Password.Password.layer.pipe(
-          Layer.provideMerge(AuthenticationLive),
-          Layer.provide(CsrfProtectionLive),
-          Layer.provideMerge(CoreLive),
-          Layer.provideMerge(PortsLive),
-          Layer.provideMerge(RateLimits.layer),
-          Layer.provide(httpClientReturningStatus(503)),
-          Layer.provide(SqlTransaction.layerNoop),
-          Layer.provide(ClientAddress.layerDirect),
-          Layer.provideMerge(Password.config({ breachCheck: { onUnavailable: "reject" } })),
-        ),
+        makeTestLayer({
+          httpClient: httpClientReturningStatus(503),
+          config: { breachCheck: { onUnavailable: "reject" } },
+        }),
       ),
     ),
   );
@@ -1336,6 +1200,27 @@ describe("Password", () => {
   );
 
   it.effect(
+    "BEH-EA-319: reauthenticate on a session that ended mid-request is Unauthenticated, not a defect",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const sessions = yield* Sessions.Sessions;
+        const issued = yield* password.signUp({ email, password: strongPassword });
+        // The middleware verified the session; then it was revoked before the write.
+        yield* sessions.revoke(issued.session.id, "signOut");
+
+        const failure = yield* password
+          .reauthenticate({
+            userId: issued.session.userId,
+            currentSessionId: issued.session.id,
+            currentPassword: strongPassword,
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Unauthenticated");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
     "shipping-gaps/12: signIn is actually throttled once its own rule's limit is exceeded",
     () =>
       Effect.gen(function* () {
@@ -1372,21 +1257,9 @@ describe("Password", () => {
         // own `PortsLive`, deliberately, so this is the one place that
         // opts back into real enforcement.
         Effect.provide(
-          Password.Password.layer.pipe(
-            Layer.provideMerge(AuthenticationLive),
-            Layer.provide(CsrfProtectionLive),
-            Layer.provideMerge(CoreLive),
-            Layer.provideMerge(
-              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
-                Layer.provideMerge(NodeCrypto.layer),
-              ),
-            ),
-            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
-            Layer.provideMerge(RateLimits.layer),
-            Layer.provide(NoBreachHttpClient),
-            Layer.provide(SqlTransaction.layerNoop),
-            Layer.provide(ClientAddress.layerDirect),
-          ),
+          makeTestLayer({
+            limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+          }),
         ),
       ),
   );
@@ -1437,21 +1310,9 @@ describe("Password", () => {
         assert.strictEqual(otherIp._tag, "InvalidCredentials");
       }).pipe(
         Effect.provide(
-          Password.Password.layer.pipe(
-            Layer.provideMerge(AuthenticationLive),
-            Layer.provide(CsrfProtectionLive),
-            Layer.provideMerge(CoreLive),
-            Layer.provideMerge(
-              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
-                Layer.provideMerge(NodeCrypto.layer),
-              ),
-            ),
-            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
-            Layer.provideMerge(RateLimits.layer),
-            Layer.provide(NoBreachHttpClient),
-            Layer.provide(SqlTransaction.layerNoop),
-            Layer.provide(ClientAddress.layerDirect),
-          ),
+          makeTestLayer({
+            limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+          }),
         ),
       ),
   );
@@ -1483,21 +1344,9 @@ describe("Password", () => {
         yield* password.requestReset({ email: "reset-spray-31@example.com", ip: "198.51.100.4" });
       }).pipe(
         Effect.provide(
-          Password.Password.layer.pipe(
-            Layer.provideMerge(AuthenticationLive),
-            Layer.provide(CsrfProtectionLive),
-            Layer.provideMerge(CoreLive),
-            Layer.provideMerge(
-              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
-                Layer.provideMerge(NodeCrypto.layer),
-              ),
-            ),
-            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
-            Layer.provideMerge(RateLimits.layer),
-            Layer.provide(NoBreachHttpClient),
-            Layer.provide(SqlTransaction.layerNoop),
-            Layer.provide(ClientAddress.layerDirect),
-          ),
+          makeTestLayer({
+            limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+          }),
         ),
       ),
   );
@@ -1534,21 +1383,9 @@ describe("Password", () => {
       assert.strictEqual(throttled._tag, "RateLimited");
     }).pipe(
       Effect.provide(
-        Password.Password.layer.pipe(
-          Layer.provideMerge(AuthenticationLive),
-          Layer.provide(CsrfProtectionLive),
-          Layer.provideMerge(CoreLive),
-          Layer.provideMerge(
-            Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
-              Layer.provideMerge(NodeCrypto.layer),
-            ),
-          ),
-          Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
-          Layer.provideMerge(RateLimits.layer),
-          Layer.provide(NoBreachHttpClient),
-          Layer.provide(SqlTransaction.layerNoop),
-          Layer.provide(ClientAddress.layerDirect),
-        ),
+        makeTestLayer({
+          limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+        }),
       ),
     ),
   );
@@ -1616,21 +1453,9 @@ describe("Password", () => {
         assert.strictEqual(untouched._tag, "TokenConsumed");
       }).pipe(
         Effect.provide(
-          Password.Password.layer.pipe(
-            Layer.provideMerge(AuthenticationLive),
-            Layer.provide(CsrfProtectionLive),
-            Layer.provideMerge(CoreLive),
-            Layer.provideMerge(
-              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
-                Layer.provideMerge(NodeCrypto.layer),
-              ),
-            ),
-            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
-            Layer.provideMerge(RateLimits.layer),
-            Layer.provide(NoBreachHttpClient),
-            Layer.provide(SqlTransaction.layerNoop),
-            Layer.provide(ClientAddress.layerDirect),
-          ),
+          makeTestLayer({
+            limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+          }),
         ),
       ),
   );
@@ -1667,21 +1492,9 @@ describe("Password", () => {
         assert.strictEqual(throttled._tag, "RateLimited");
       }).pipe(
         Effect.provide(
-          Password.Password.layer.pipe(
-            Layer.provideMerge(AuthenticationLive),
-            Layer.provide(CsrfProtectionLive),
-            Layer.provideMerge(CoreLive),
-            Layer.provideMerge(
-              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
-                Layer.provideMerge(NodeCrypto.layer),
-              ),
-            ),
-            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
-            Layer.provideMerge(RateLimits.layer),
-            Layer.provide(NoBreachHttpClient),
-            Layer.provide(SqlTransaction.layerNoop),
-            Layer.provide(ClientAddress.layerDirect),
-          ),
+          makeTestLayer({
+            limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+          }),
         ),
       ),
   );
@@ -1700,21 +1513,7 @@ describe("Password signIn timing floor (TSS-006)", () => {
   );
 
   const layerWith = (timingFloor: Partial<Password.PasswordConfigShape>) =>
-    Password.Password.layer.pipe(
-      Layer.provideMerge(AuthenticationLive),
-      Layer.provide(CsrfProtectionLive),
-      Layer.provideMerge(CoreLive),
-      Layer.provideMerge(
-        Layer.mergeAll(InstantHasher, Mailer.layerMemory, RateLimiter.layerPermissive).pipe(
-          Layer.provideMerge(NodeCrypto.layer),
-        ),
-      ),
-      Layer.provideMerge(RateLimits.layer),
-      Layer.provide(NoBreachHttpClient),
-      Layer.provide(SqlTransaction.layerNoop),
-      Layer.provide(ClientAddress.layerDirect),
-      Layer.provide(Password.config(timingFloor)),
-    );
+    makeTestLayer({ config: timingFloor, hasher: InstantHasher });
 
   it.effect("a sign-in completes no sooner than the floor, even when verify is instant", () =>
     Effect.gen(function* () {
@@ -1741,5 +1540,111 @@ describe("Password signIn timing floor (TSS-006)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvalidCredentials");
     }).pipe(Effect.provide(layerWith({ signInTimingFloor: "off" }))),
+  );
+});
+
+// ADR-EA-038: sign-in policy (gate, veto, divert, announcement) is tested once at `SignIn`; these prove
+// only what the password plugin hands the module and how it answers a refusal.
+describe("Password sign-in wiring (ADR-EA-038)", () => {
+  it.effect("hands SignIn strategy password and amr [pwd]", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const users = yield* Users.Users;
+      const probe = yield* SignInProbe.SignInProbe;
+      const signedUp = yield* password.signUp({
+        email: "wiring@example.com",
+        password: strongPassword,
+      });
+      yield* users.verifyEmail(signedUp.session.userId);
+      yield* password.signIn({ email: "wiring@example.com", password: strongPassword });
+      const recorded = yield* probe.recorded;
+      assert.deepStrictEqual(
+        recorded.beforeSessionIssue.map((input) => [input.userId, input.strategy, input.amr]),
+        // The sign-up's first session is a cleared sign-in too (createSignedIn), then the sign-in.
+        [
+          [signedUp.session.userId, "password", ["pwd"]],
+          [signedUp.session.userId, "password", ["pwd"]],
+        ],
+      );
+      assert.deepStrictEqual(
+        recorded.beforeSignIn.map((input) => [input.email, input.strategy]),
+        [
+          ["wiring@example.com", "password"],
+          ["wiring@example.com", "password"],
+        ],
+      );
+    }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(TestLayer)))),
+  );
+
+  it.effect(
+    "EmailNotVerified precedes the suspension gate: a suspended unverified user learns neither",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const users = yield* Users.Users;
+        const auditLog = yield* AuditLog.AuditLog;
+        const signedUp = yield* password.signUp({
+          email: "unverified@example.com",
+          password: strongPassword,
+        });
+        yield* users.setStatus(signedUp.session.userId, "suspended");
+        const refused = yield* password
+          .signIn({ email: "unverified@example.com", password: strongPassword })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "EmailNotVerified");
+        const failures = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        assert.deepStrictEqual(
+          failures.map((row) =>
+            row.payload._tag === "auth.user.signInFailed" ? row.payload.reason : "?",
+          ),
+          ["emailNotVerified"],
+        );
+      }).pipe(Effect.provide(makeTestLayer({ config: { requireVerifiedEmail: true } }))),
+  );
+
+  it.effect(
+    "a user erased between the proof and the session is the uniform InvalidCredentials, announced as invalidCredentials",
+    () => {
+      const gone = { value: false };
+      return Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const users = yield* Users.Users;
+        const auditLog = yield* AuditLog.AuditLog;
+        const signedUp = yield* password.signUp({
+          email: "erased@example.com",
+          password: strongPassword,
+        });
+        yield* users.verifyEmail(signedUp.session.userId);
+        gone.value = true;
+        const refused = yield* password
+          .signIn({ email: "erased@example.com", password: strongPassword, ip: "203.0.113.7" })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "InvalidCredentials");
+        const failures = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        assert.deepStrictEqual(
+          failures.map((row) =>
+            row.payload._tag === "auth.user.signInFailed" ? row.payload.reason : "?",
+          ),
+          ["invalidCredentials"],
+        );
+      }).pipe(
+        Effect.provide(
+          makeTestLayer({
+            coreOverride: Layer.effect(
+              Users.Users,
+              Effect.map(Users.Users, (real) =>
+                Users.Users.of({
+                  ...real,
+                  findById: (id) =>
+                    gone.value
+                      ? Effect.fail(new Users.UserNotFound({ id, message: "erased" }))
+                      : real.findById(id),
+                }),
+              ),
+            ),
+          }),
+        ),
+      );
+    },
   );
 });

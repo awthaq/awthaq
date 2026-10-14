@@ -4,20 +4,12 @@
 // group is 401 unauthenticated, 403 while the gate is unconfigured, and typed errors past it.
 import { Api } from "@awthaq/api";
 import { Sessions, Users } from "@awthaq/core";
-import { AuthHttp } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { inflateRawSync } from "node:zlib";
+import { TestAuth } from "@awthaq/test";
 import * as Saml from "../src/Saml.ts";
-import * as SamlApi from "../src/SamlApi.ts";
 import * as SamlConnections from "../src/SamlConnections.ts";
 import * as SamlKeys from "../src/SamlKeys.ts";
 import * as SamlProtocol from "../src/SamlProtocol.ts";
@@ -26,17 +18,9 @@ import { redirectParts } from "./samlMetadata.ts";
 import { BASE_URL, IDP_ENTITY_ID, SamlLive, seedConnection } from "./support.ts";
 import { Organization } from "@awthaq/organization";
 
-const CSRF_SECRET = "saml-test-csrf-secret-padded-to-thirty-two-bytes-long";
-const CSRF_VALUE: string = (() => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
-})();
+const CSRF_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
 
 const IDP_SLO = "https://idp.example.com/slo";
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
 
 const around = () => ({
   notBefore: new Date(Date.now() - 60_000).toISOString().replace(/\.\d+Z$/, "Z"),
@@ -44,14 +28,8 @@ const around = () => ({
 });
 
 const buildApp = (config: Parameters<typeof SamlLive>[0] = {}) => {
-  const Live = SamlLive(config);
-  const AppLayer = AuthHttp.routes(SamlApi.SamlApi).pipe(
-    Layer.provide(Live),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+  const app = TestAuth.app(SamlLive(config));
+  /** Runs `effect` against the very same service instances the web handler uses. */
   const inside = <A, E>(
     effect: Effect.Effect<
       A,
@@ -62,17 +40,8 @@ const buildApp = (config: Parameters<typeof SamlLive>[0] = {}) => {
       | Sessions.Sessions
       | Users.Users
     >,
-  ) =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(Live, memoMap, scope);
-          return yield* effect.pipe(Effect.provide(context));
-        }),
-      ),
-    );
-  return { handler, inside };
+  ) => app.run(effect);
+  return { handler: app.handler, inside };
 };
 
 const cookieHeaderOf = (response: Response, name: string): string | undefined =>

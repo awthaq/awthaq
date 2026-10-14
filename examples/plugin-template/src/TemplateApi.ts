@@ -34,8 +34,8 @@ export const NotesGroup = HttpApiGroup.make("notes")
     HttpApiEndpoint.post("create", "/notes", {
       payload: CreateNotePayload,
       success: NoteDto,
-      // A veto hook can abort the operation, so the endpoint must declare it.
-      error: [NoteTooLong, HookPoint.HookAborted],
+      // A veto hook can abort the operation and a rate limit can refuse it, so the endpoint must declare both.
+      error: [NoteTooLong, HookPoint.HookAborted, Api.RateLimited],
     }),
   )
   .add(HttpApiEndpoint.get("list", "/notes", { success: Schema.Array(NoteDto) }))

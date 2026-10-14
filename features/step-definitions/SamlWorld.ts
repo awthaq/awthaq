@@ -9,33 +9,11 @@
 // IdP (a signed response for a given AuthnRequest). Everything goes through `Saml.acs`, the service behind
 // `POST /auth/saml/acs`, so the chain a scenario exercises is the production one, cookie to session.
 import { Api } from "@awthaq/api";
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import {
-  ConnectionRecords,
-  MembershipRecords,
-  Organization,
-  OrganizationConnections,
-  OrganizationHooks,
-  OrganizationMemory,
-} from "@awthaq/organization";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  RateLimiter,
-  SqlTransaction,
-  XmlSignature,
-} from "@awthaq/ports";
+import { Accounts, AuditLog, Auth, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
+import { Organization, OrganizationConnections } from "@awthaq/organization";
+import { MembershipRecords } from "@awthaq/organization/records";
+import type { Encryption } from "@awthaq/ports";
+import { XmlSignature } from "@awthaq/ports";
 import {
   Saml,
   SamlConnections,
@@ -45,12 +23,10 @@ import {
   Sso,
   XmlSignatureNode,
 } from "@awthaq/saml";
+import { TestAuth } from "@awthaq/test";
 
 type SamlConfigInput = Saml.SamlConfigInput;
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { inflateRawSync } from "node:zlib";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -59,7 +35,6 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import {
   ALGORITHM,
@@ -93,6 +68,7 @@ export type AppServices =
   | SamlConnections.SamlConnectionStore
   | SamlSpKeys.SamlSpKeys
   | SamlRecords.SamlRecords
+  | SamlRecords.MemoryEnvelopes
   | Sso.Sso
   | OrganizationConnections.OrganizationConnectionStore
   | MembershipRecords.MembershipRecords
@@ -151,53 +127,6 @@ const spyLayer = (observations: Observations) =>
     }),
   ).pipe(Layer.provide(XmlSignatureNode.layer));
 
-const CoreLive = Layer.mergeAll(
-  Sessions.layerMemory,
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("saml-bdd-csrf-secret-padded-to-thirty-two-bytes-long"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-/** A real `Encryption` over a fixed test key: the SP signing keys are sealed with it, as in production. */
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-
 /**
  * The metadata fetcher of these scenarios serves what a scenario put in its table (there is no network in this World): the URL
  * import's guards (SSRF, pinning, caps) are tested with the real pinned fetcher, in the package's own suites.
@@ -220,17 +149,15 @@ const metadataFetcher = (served: ReadonlyMap<string, string>) =>
     }),
   );
 
-/** The organization's OIDC connections, for the `Sso` dispatcher's other side. */
+/**
+ * The organization's OIDC connections, for the `Sso` dispatcher's other side. Built ABOVE the composition: the store
+ * reads the exposed `OrganizationDirectory`, which only the organization plugin's own layer provides.
+ */
 const OidcStoreLive = OrganizationConnections.layerStore.pipe(
   Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
-  Layer.provideMerge(ConnectionRecords.layerMemory),
 );
 
-const OrganizationLive = Organization.Organization.layer.pipe(
-  Layer.provide(Organization.config({})),
-  Layer.provide(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-);
+const built = Auth.make([Organization.Organization, Saml.Saml]);
 
 const buildLive = (
   observations: Observations,
@@ -250,31 +177,23 @@ const buildLive = (
   const ClockLive = Layer.effectDiscard(TestClock.setTime(NOW_MILLIS)).pipe(
     Layer.provideMerge(TestClock.layer()),
   );
+  // `Auth.make([Organization, Saml])` through `TestAuth.layer`: the real in-memory core, the organization plugin,
+  // the SAML records and connection store, with the spy around the Node `XmlSignature` adapter and the World's own
+  // metadata fetcher as the test's `services`.
+  const Composition = TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Saml.config({ baseUrl: BASE_URL, ...config }),
+      Organization.config({}),
+      spyLayer(observations),
+      metadataFetcher(served),
+      // The same layer the bundle projects `SamlRecords` from (one instance), plus its `MemoryEnvelopes` seam.
+      SamlRecords.layerMemory,
+    ),
+  });
   return Sso.Sso.layer.pipe(
     Layer.provide(preferred === undefined ? Layer.empty : Sso.config({ preferred })),
     Layer.provideMerge(OidcStoreLive),
-    Layer.provideMerge(
-      Saml.Saml.layer.pipe(
-        Layer.provide(AdminAuthenticationLive),
-        Layer.provide(AuthenticationLive),
-        Layer.provide(CsrfProtectionLive),
-      ),
-    ),
-    Layer.provideMerge(SamlConnections.layerStore),
-    Layer.provideMerge(SamlSpKeys.layer),
-    Layer.provideMerge(metadataFetcher(served)),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provideMerge(OrganizationLive),
-    Layer.provideMerge(SamlRecords.layerMemory),
-    Layer.provideMerge(spyLayer(observations)),
-    Layer.provideMerge(RateLimiter.layerPermissive),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-    Layer.provideMerge(Saml.config({ baseUrl: BASE_URL, ...config })),
+    Layer.provideMerge(Composition),
     Layer.provideMerge(Capture),
     Layer.provideMerge(ClockLive),
   );
@@ -292,15 +211,10 @@ const buildApp = (
   served: ReadonlyMap<string, string>,
   preferred: Sso.SsoProtocol | undefined,
 ): AppHandle => {
-  const Live = buildLive(observations, config, served, preferred);
-  const scope = Effect.runSync(Scope.make());
-  let built: Promise<Context.Context<AppServices>> | undefined;
-  const context = () =>
-    (built ??= Effect.runPromise(Layer.buildWithMemoMap(Live, Layer.makeMemoMapUnsafe(), scope)));
+  const app = TestAuth.app(buildLive(observations, config, served, preferred));
   return {
-    run: (effect) =>
-      context().then((services) => Effect.runPromiseExit(effect.pipe(Effect.provide(services)))),
-    close: Scope.close(scope, Exit.void),
+    run: (effect) => app.run(Effect.exit(effect)),
+    close: Effect.promise(() => app.dispose()),
   };
 };
 

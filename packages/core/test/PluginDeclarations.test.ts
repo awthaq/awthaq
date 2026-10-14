@@ -3,6 +3,7 @@
 // — can print them without building a layer. The type-level halves (a rule's group confined to the
 // plugin's own groups; a required port left undeclared refused) are `@ts-expect-error` directives,
 // checked by `tsc -p tsconfig.test.json`.
+import { RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -45,24 +46,22 @@ const SignalApi = HttpApi.make("auth")
 class Signal extends AuthPlugin.Service<Signal, {}>()("signal", {
   apiVersion: 1,
   contract: SignalApi,
-  rateLimits: [
-    {
+  rateLimitRules: {
+    sendByIp: RateLimits.rule({
       group: "signal",
       endpoint: "send",
-      name: "sendByIp",
-      dimension: "ip",
+      key: RateLimits.Key.ip,
       limit: 5,
       window: Duration.minutes(15),
-    },
-    {
+    }),
+    verifyByCode: RateLimits.rule({
       group: "signal.verify",
       endpoint: "verify",
-      name: "verifyByCode",
-      dimension: "identity",
+      key: RateLimits.Key.identifier,
       limit: 3,
       window: Duration.minutes(1),
-    },
-  ],
+    }),
+  },
 }) {
   static readonly layer = AuthPlugin.layer(Signal, {
     ports: [Beacon, Lantern],
@@ -109,62 +108,69 @@ describe("rateLimits declaration (PV-241)", () => {
           HttpApiEndpoint.get("send", "/stray", { success: Schema.String }),
         ),
       ),
-      rateLimits: [
-        {
-          // @ts-expect-error — "elsewhere" is not a group of this contract
+      rateLimitRules: {
+        // @ts-expect-error — "elsewhere" is not a group of this contract
+        sendByIp: RateLimits.rule({
           group: "elsewhere",
           endpoint: "send",
-          name: "sendByIp",
-          dimension: "ip",
+          key: RateLimits.Key.ip,
           limit: 1,
           window: Duration.seconds(1),
-        },
-      ],
+        }),
+      },
     }) {}
     assert.strictEqual(Stray.rateLimits.length, 1);
   });
 
-  it("registerDeclared registers every declared rule, and declarationDrift agrees with the registry", () =>
-    Effect.gen(function* () {
-      const registry = yield* RateLimits.RateLimitsRegistry;
-      yield* RateLimits.registerDeclared(Signal, {
-        key: (rule) => (rule.dimension === "identity" ? (input) => String(input) : undefined),
+  it("rateLimitRules derive the static declaration, with the key strategy and the mode", () => {
+    class Table extends AuthPlugin.Service<Table, {}>()("table", {
+      apiVersion: 1,
+      contract: HttpApi.make("auth").add(
+        HttpApiGroup.make("table").add(
+          HttpApiEndpoint.get("send", "/table", { success: Schema.String }),
+        ),
+      ),
+      rateLimitRules: {
+        sendByIp: RateLimits.rule({
+          group: "table",
+          endpoint: "send",
+          key: RateLimits.Key.ip,
+          limit: 5,
+          window: Duration.minutes(15),
+        }),
+        lockout: RateLimits.failureRule({
+          group: "table",
+          endpoint: "send",
+          key: RateLimits.Key.user,
+          limit: 3,
+          window: Duration.minutes(1),
+          bucket: "table.lockout",
+        }),
+      },
+    }) {
+      static readonly layer = AuthPlugin.layer(Table, {
+        ports: [RateLimiter.RateLimiter],
+        make: Effect.gen(function* () {
+          yield* RateLimits.budget(Table);
+          return {};
+        }),
       });
-      const registered = yield* registry.registered;
-      assert.deepStrictEqual(
-        registered.map((rule) => `${rule.group}.${rule.endpoint}`),
-        ["signal.send", "signal.verify.verify"],
-      );
-      assert.deepStrictEqual(RateLimits.declarationDrift(Signal, registered), {
-        undeclared: [],
-        unregistered: [],
-        mismatched: [],
-      });
-    }).pipe(Effect.provide(RateLimits.layer), Effect.runPromise));
-
-  it("declarationDrift names an undeclared rule, an unregistered one and a changed limit", () =>
-    Effect.gen(function* () {
-      const registry = yield* RateLimits.RateLimitsRegistry;
-      yield* registry.register(Signal, {
-        group: "signal",
-        endpoint: "send",
-        key: "ip",
-        limit: 99,
-        window: Duration.minutes(15),
-      });
-      yield* registry.register(Signal, {
-        group: "signal",
-        endpoint: "extra",
-        key: "ip",
-        limit: 1,
-        window: Duration.minutes(1),
-      });
-      assert.deepStrictEqual(RateLimits.declarationDrift(Signal, yield* registry.registered), {
-        undeclared: ["signal.extra"],
-        unregistered: ["signal.verify.verify"],
-        mismatched: ["signal.send"],
-      });
-    }).pipe(Effect.provide(RateLimits.layer), Effect.runPromise));
+    }
+    assert.deepStrictEqual(
+      Auth.make([Table]).manifest.rateLimits.map((rule) => [
+        rule.plugin,
+        rule.name,
+        rule.dimension,
+        rule.key,
+        rule.mode,
+        rule.limit,
+      ]),
+      [
+        ["table", "sendByIp", "ip", "ip", "attempts", 5],
+        ["table", "lockout", "principal", "user", "failures", 3],
+      ],
+    );
+  });
 });
 
 describe("ports declaration (PV-241/BEH-EA-202)", () => {

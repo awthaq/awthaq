@@ -7,94 +7,31 @@
 // codes, a real session cookie — mirroring `@awthaq/passkey`'s own
 // `AuthHttp.test.ts`.
 import { Api } from "@awthaq/api";
-import { AuditChain, Sessions, Users } from "@awthaq/core";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { TestAuth } from "@awthaq/test";
 import * as Admin from "../src/Admin.ts";
 import * as AdminApi from "../src/AdminApi.ts";
-import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 
-// CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `admin` now also carries
-// `.middleware(Api.CsrfProtection)`, so this file's real HTTP requests need
-// to play the double-submit role a real browser client would — mirrors
-// `packages/server/test/Csrf.test.ts`'s own `validCookieValue()`: an HMAC
-// computed independently of `Csrf.ts`'s own implementation (Node's
-// `node:crypto`), so a passing run exercises RFC 2104 compatibility, not
-// just self-consistency with the code under test.
-const CSRF_TEST_SECRET = "admin-authhttp-test-csrf-secret-padded-to-thirty-two-bytes";
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_TEST_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The handler under test runs on the real clock here (a web handler).
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
-  return `${signed}.${signature}`;
-})();
+// CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `admin` carries `.middleware(Api.CsrfProtection)`, so this file's
+// real HTTP requests play the double-submit role a browser client would: a pair minted against the harness's own
+// `CsrfConfig` (`TestAuth.csrfToken`; the handler under test runs on the real clock, so it is stamped now).
+const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
 
 const withCsrfCookie = (cookie?: string): string =>
   cookie
     ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
     : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-// AR-003: the admin group sits behind `Api.AdminAuthentication`; the default just delegates.
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-
 const buildAppLayer = (config: Partial<Admin.AdminConfigShape>) =>
-  Layer.mergeAll(
-    AuthHttp.routes(AdminApi.AdminApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Admin.Admin.layer),
-      Layer.provide(Admin.config(config)),
-      Layer.provide(AdminAuthenticationLive),
-    ),
-    AuthHttp.docs(AdminApi.AdminApi),
-  ).pipe(
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      ImpersonationRecords.layerMemory.pipe(
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
-      ),
-    ),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
+  TestAuth.layer(Auth.make([Admin.Admin]), {
+    services: Admin.config(config),
+    openapiPath: "/openapi.json",
+    docsPath: "/docs",
+  });
 
 const ORIGIN = "http://localhost:3000";
 
@@ -104,31 +41,25 @@ const deny = () => Effect.succeed(false);
 const buildHandler = (
   configOrGate: Partial<Admin.AdminConfigShape> | Admin.AdminConfigShape["canImpersonate"],
 ) => {
-  const AppLayer = buildAppLayer(
-    typeof configOrGate === "function" ? { canImpersonate: configOrGate } : configOrGate,
+  const app = TestAuth.app(
+    buildAppLayer(
+      typeof configOrGate === "function" ? { canImpersonate: configOrGate } : configOrGate,
+    ),
+    { baseUrl: ORIGIN },
   );
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+  const { handler } = app;
 
   /**
-   * Issues a real session directly against the same running `Sessions`
-   * instance the handler itself uses (shared via `memoMap`), formatted as
-   * the `__Host-session` cookie header a browser would carry — the same
-   * pattern `@awthaq/passkey`'s own `AuthHttp.test.ts` documents using.
+   * Issues a real session directly against the same running `Sessions` instance the handler itself uses,
+   * formatted as the `__Host-session` cookie header a browser would carry.
    */
   const issueSessionCookieHeader = (userId: string): Promise<string> =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const sessions = yield* Sessions.Sessions;
-            const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-            return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-          }).pipe(Effect.provide(context));
-        }),
-      ),
+    app.run(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
+        return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+      }),
     );
 
   /**
@@ -136,21 +67,15 @@ const buildHandler = (
    * a real `Users` row; resolves to its generated id.
    */
   const seedUser = (name: string): Promise<string> =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const users = yield* Users.Users;
-            const created = yield* users.create({
-              identity: { _tag: "Email", email: `${name}@example.com` },
-              name,
-            });
-            return created.id;
-          }).pipe(Effect.provide(context));
-        }),
-      ),
+    app.run(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const created = yield* users.create({
+          identity: { _tag: "Email", email: `${name}@example.com` },
+          name,
+        });
+        return created.id;
+      }),
     );
 
   return { handler, issueSessionCookieHeader, seedUser };
@@ -751,21 +676,3 @@ describe("AuthHttp + Admin (real HTTP)", () => {
       }),
   );
 });
-
-/**
- * BEH-EA-198/199: `runPluginContractTests` against the real `Admin` plugin —
- * manifest legality, group ids, the `admin_impersonation` table prefix, and
- * migration determinism. Mirrors `packages/test/test/runPluginContractTests.test.ts`'s
- * own use of `@awthaq/password`, adapted onto real `describe`/`it`/`assert`
- * instead of a recording framework, since this suite only needs the checks to
- * pass, not to inspect their pass/fail messages.
- */
-const vitestFramework: TestAuth.TestFramework = {
-  describe: (name, body) => describe(name, body),
-  it: (name, body) => it(name, body),
-  fail: (message) => {
-    throw new Error(message);
-  },
-};
-
-TestAuth.runPluginContractTests(vitestFramework, () => Admin.Admin, { options: [{}] });

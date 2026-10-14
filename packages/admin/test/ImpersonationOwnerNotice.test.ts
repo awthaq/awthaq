@@ -1,7 +1,7 @@
 // ARF-005 (wayfinder ticket 05 §2), BEH-EA-209: the one mitigation shipped for a zero-factor recovery —
 // support-assisted impersonation stops being silent to the account owner. Opt-in; the notice carries
 // the reason and the time, never a session id or token.
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -11,13 +11,15 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as ImpersonationOwnerNotice from "../src/ImpersonationOwnerNotice.ts";
 
-const CoreLive = Users.layerMemory.pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.BeforeUserDelete.layer),
-  Layer.provideMerge(Mailer.layerMemory),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+const CoreLive = Users.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(Hooks.BeforeUserDelete.layer),
+    Layer.provideMerge(Mailer.layerMemory),
+    Layer.provideMerge(NodeCrypto.layer),
+  );
 
 /** The notice subscribed to the bus, over the same events/users/mailer the test publishes to. */
 const TestLayer = ImpersonationOwnerNotice.layer.pipe(Layer.provideMerge(CoreLive));

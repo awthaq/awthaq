@@ -1,27 +1,18 @@
 // @awthaq/core — Verification
 //
 // spec/behaviors/08-verification-tokens.md, BEH-EA-057 through BEH-EA-064.
-// Two `Layer`s over the same `VerificationShape`: `layerMemory` (a `Ref`)
-// and `layerSql` (`@awthaq/sql`'s `VerificationRepository`/
-// `VerificationReservationsRepository`), per
-// `spec/decisions/016-verification-sql-claiming.md` (ADR-EA-016, revised
-// 1.1 after a code-review finding on the original delete-then-insert
-// design) — a dedicated `verification_reservations` table for `reserve`,
-// claimed by a conditional upsert (`VerificationReservationsRepository.claim`);
-// `issue` built on one atomic `INSERT ... ON CONFLICT ... DO UPDATE`
-// against a partial unique index on `(identifier) WHERE consumedAt IS NULL`
-// (`VerificationRepository.upsertLive`), so two concurrent `issue`s for the
-// same `identifier` can never both leave a live row behind — the DB
-// engine's own conflict resolution replaces the current live row
-// atomically instead of racing a separate delete against a separate
-// insert; `consume` built on one atomic `UPDATE ... RETURNING`
-// (`VerificationRepository.tryConsume`) so unknown/expired/wrong-secret/
-// already-consumed all collapse into the same "no row back" result. Both
-// give `layerSql` the same win-or-lose-inside-one-atomic-step guarantee
-// `layerMemory`'s `Ref.modify`/`HashMap.set` give. BEH-EA-058's transaction
-// requirement needs no change to `VerificationShape` at all —
-// `SqlClient.withTransaction` already threads transparently, so the
-// calling plugin wraps `consume` together with its own state change.
+// Plan 02 (ADR-EA-041): written once, over `@awthaq/ports`' `VerificationStore` (a `Ref` adapter
+// there, a SQL adapter in `@awthaq/sql`). Per `spec/decisions/016-verification-sql-claiming.md`
+// (ADR-EA-016) the store's primitives are the atomic steps: `upsertLive` replaces the identifier's
+// one unconsumed row in a single step (the SQL adapter's is one `INSERT ... ON CONFLICT ... DO
+// UPDATE` against a partial unique index), `present` claims a token in a single step (unknown,
+// expired, wrong-secret and already-consumed all collapse into the same miss), and `reserve` is a
+// conditional upsert into a dedicated reservations table. BEH-EA-058's transaction requirement is
+// met by `redeem` (ADR-EA-039, which supersedes ADR-EA-016's "no change to `VerificationShape`"
+// paragraph): it claims the token and runs the caller's state change in one transaction, records a
+// miss itself, and gives the token back when the state change fails (the SQL adapter by rollback,
+// the `Ref` adapter by `settle`'s compensation). `consume` stays as the burn-first operation for
+// tokens whose spending is the point (OAuth/SAML request state, the native exchange code).
 //
 // BEH-EA-059: `consume`'s every failure path — expired, unknown, or
 // already-consumed — publishes `auth.token.replay` to `AuthEvents.ts`
@@ -30,8 +21,7 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
-import { Defects, Hmac } from "@awthaq/ports";
-import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
+import { Defects, Hmac, type Ids, VerificationStore } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -39,21 +29,17 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as HashMap from "effect/HashMap";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
-import * as Result from "effect/Result";
 import * as AuthEvents from "./AuthEvents.ts";
-import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
-import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
-import { drainBatches } from "./internal/purgeBatches.ts";
+import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import { UserId } from "./Users.ts";
 
-// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
-export type VerificationTokenId = SqlModels.VerificationTokenId;
+// MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
+export type VerificationTokenId = Ids.VerificationTokenId;
 export const VerificationTokenId = Brand.nominal<VerificationTokenId>();
 
 const { toHex } = Hmac;
@@ -126,14 +112,26 @@ export type IssueInput = {
     }
 );
 
-/** PV-220: see `VerificationShape.recordMiss`. */
-export interface ConsumeOptions {
-  /**
-   * The caller consumes inside its own transaction and will call `recordMiss` after it: a miss
-   * then records nothing here, because a failing transaction would roll the record back too.
-   */
-  readonly deferMiss?: boolean | undefined;
+/**
+ * ADR-EA-039 (BEH-EA-058): how a typed failure of `redeem`'s `use` settles the transaction the token
+ * was claimed in. `"rollback"` (the default): nothing `use` wrote stands, and the token is live again.
+ * `"commit"`: the token is spent, what `use` wrote stands, and the failure still reaches the caller.
+ * This is for a refusal that is itself the outcome the token paid for: a second-factor divert, or a
+ * veto after a valid presentation. A defect or an interruption always rolls back.
+ */
+export type Settlement = "rollback" | "commit";
+
+export interface RedeemInput<A, E, R> {
+  readonly identifier: string;
+  readonly value: Redacted.Redacted<string>;
+  /** The state change the token authorises. Runs inside the transaction that claimed the token. */
+  readonly use: (token: VerificationTokenView) => Effect.Effect<A, E, R>;
+  readonly onFailure?: ((error: E) => Settlement) | undefined;
 }
+
+/** The settlement most callers share: an outage gives the token back, and any refusal spends it. */
+export const commitUnlessUnavailable = <E extends { readonly _tag: string }>(error: E) =>
+  error._tag === "StoreUnavailable" ? ("rollback" as const) : ("commit" as const);
 
 export interface VerificationShape {
   /** BEH-EA-057/060/061: mints a token scoped to `identifier`, hashed at rest. */
@@ -144,26 +142,29 @@ export interface VerificationShape {
     StoreUnavailable
   >;
   /**
-   * BEH-EA-058/062: consumption and the caller's own state change are meant
-   * to commit in one transaction — this in-memory Layer's `Ref.modify` is
-   * that transaction boundary's stand-in until the SQL Layer (holding the
-   * real transaction) replaces it; both are race-safe the same way, at most
-   * one concurrent caller ever receives a non-`TokenConsumed` result for the
-   * same identifier.
+   * Burn-first: spends the token now, and nothing after it is atomic with the spend. Use it only
+   * where spending is the point (an OAuth/SAML request state, a native exchange code). Never call it
+   * for a token that authorises a state change: use `redeem`, which owns the transaction. A miss
+   * publishes `auth.token.replay` (BEH-EA-059), an attempt event, so it survives the caller's rollback.
+   * At most one concurrent caller receives a non-`TokenConsumed` result (BEH-EA-062).
    */
   readonly consume: (
     identifier: string,
     value: Redacted.Redacted<string>,
-    options?: ConsumeOptions,
   ) => Effect.Effect<VerificationTokenView, TokenConsumed | StoreUnavailable>;
   /**
-   * PV-220: what a failed `consume(..., { deferMiss: true })` left unrecorded: the spent attempt
-   * (`layerSql`) and the `auth.token.replay` event, and with it the durable audit row. Run it once
-   * the caller's own transaction has ended (rolled back), so the record is not undone with it. Only
-   * for a `consume` that itself failed, never after a hit: it would spend an attempt against a live
-   * token and report a replay that did not happen.
+   * BEH-EA-058/059/062, ADR-EA-039: claims the token and runs `use` with it in one transaction.
+   * - `use` succeeds: both commit, and the token is spent.
+   * - Miss (unknown, expired, already spent, wrong value): `use` never runs. The miss is recorded
+   *   (the attempt a budgeted token is owed, `auth.token.replay`, its audit row) and `redeem` fails
+   *   with `TokenConsumed`.
+   * - `use` fails: `onFailure` settles it (default `"rollback"`: the token is live again, in both
+   *   adapters). A defect or an interruption always rolls back.
+   * `SqlError` from the transaction itself is `StoreUnavailable("Verification.redeem")`.
    */
-  readonly recordMiss: (identifier: string) => Effect.Effect<void, StoreUnavailable>;
+  readonly redeem: <A, E, R>(
+    input: RedeemInput<A, E, R>,
+  ) => Effect.Effect<A, TokenConsumed | E | StoreUnavailable, R>;
   /**
    * BEH-EA-063: `true` only for the first reservation of `identifier` while
    * unexpired, `false` for every later one — independent of `consume`, used
@@ -194,21 +195,42 @@ export class Verification extends Context.Service<Verification, VerificationShap
   "awthaq/core/Verification",
 ) {}
 
-interface TokenRow {
-  readonly id: VerificationTokenId;
-  readonly identifier: string;
-  readonly userId: Option.Option<UserId>;
-  readonly valueHash: string;
-  readonly createdAt: DateTime.Utc;
-  readonly expiresAt: DateTime.Utc;
-  readonly payload: unknown;
-  /** SOS-004: `None` = no budget (the default 256-bit token). */
-  readonly maxAttempts: Option.Option<number>;
-  readonly attempts: number;
-}
+/** The payload as a caller sees it: parsed from the stored JSON text, `undefined` when there is none (ESS-010). */
+const decodePayload = (json: Option.Option<string>): unknown =>
+  Option.match(json, {
+    onNone: () => undefined,
+    onSome: (text): unknown => JSON.parse(text),
+  });
 
-const isExpired = (row: TokenRow, now: DateTime.Utc): boolean =>
-  DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.expiresAt);
+const viewOf = (row: VerificationStore.TokenRow): VerificationTokenView => ({
+  id: row.id,
+  identifier: row.identifier,
+  createdAt: row.createdAt,
+  expiresAt: row.expiresAt,
+  payload: decodePayload(row.payloadJson),
+  userId: row.userId,
+});
+
+/**
+ * BEH-EA-122: the payload is stored as JSON text, encoded here once for every adapter. `undefined`
+ * and an explicit `null` both mean "no payload" (ESS-010); anything JSON cannot carry (a `bigint`, a
+ * cycle, a function) is a caller bug, so a defect on every backend instead of a silent change.
+ */
+const encodePayload = (payload: unknown): Effect.Effect<Option.Option<string>> =>
+  payload === undefined || payload === null
+    ? Effect.succeed(Option.none())
+    : Effect.try({
+        try: () => {
+          const text: unknown = JSON.stringify(payload);
+          if (typeof text !== "string") throw new TypeError("not representable as JSON");
+          return Option.some(text);
+        },
+        catch: (cause) =>
+          new Defects.InvalidConfiguration({
+            setting: "Verification.issue.payload",
+            message: `awthaq: a token payload must be JSON-encodable: ${String(cause)}`,
+          }),
+      }).pipe(Effect.orDie);
 
 /** BCR-005: bytes at or above this are rejected, so `byte % 10` is uniform (250 = 25 * 10). */
 const DIGIT_REJECTION_BOUND = 250;
@@ -252,220 +274,132 @@ const mintValue = (
     return digits;
   });
 
+/** A `use` failure the transaction must roll back for. Wrapped so it can never be mistaken for an error of the transaction itself. */
+interface Rollback<E> {
+  readonly _tag: "Verification/Rollback";
+  readonly error: E;
+}
+
+type Outcome<A, E> =
+  | { readonly _tag: "Missed" }
+  | { readonly _tag: "Done"; readonly value: A }
+  | { readonly _tag: "Refused"; readonly error: E };
+
 /**
- * TRBS-005: single-process, test-grade storage. State is one per-process
- * `Ref`: it is not shared across instances (a revocation on one instance does
- * not propagate to another), it is lost on restart, and it grows without bound
- * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
- * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
- * `PubSub` has the same process boundary.
+ * What `consume` and `redeem` need of a store, in the domain's own terms: `VerificationStore`'s
+ * primitives with the views and the operation labels applied (see the layer below).
  */
-export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthEvents.AuthEvents> =
-  Layer.effect(
-    Verification,
-    Effect.gen(function* () {
-      const state = yield* Ref.make(HashMap.empty<string, TokenRow>());
-      const reservations = yield* Ref.make(HashMap.empty<string, DateTime.Utc>());
-      const crypto = yield* Crypto.Crypto;
-      const events = yield* AuthEvents.AuthEvents;
+interface ClaimStore {
+  /**
+   * One atomic step (`VerificationStore.present`). Takes the live row for `identifier` whose hash is
+   * `valueHash`, and holds it aside when `hold`. On a miss it spends the attempt a budgeted live row
+   * is owed (SOS-004), in a way that survives a rolled-back caller (ADR-EA-037). `None` is a miss.
+   */
+  readonly claim: (input: {
+    readonly identifier: string;
+    readonly valueHash: string;
+    readonly now: DateTime.Utc;
+    readonly hold: boolean;
+    readonly operation: string;
+  }) => Effect.Effect<Option.Option<VerificationTokenView>, StoreUnavailable>;
+  /** The unit `redeem` runs in (`VerificationStore.transaction`). */
+  readonly transaction: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | StoreUnavailable, R>;
+  /**
+   * After a held claim's `use` ended (`VerificationStore.settle`). `"kept"` drops the hold.
+   * `"returned"` gives the row back, unless a newer `issue` replaced it or `deleteAllByUser` swept it
+   * meanwhile. Over SQL this is a no-op, because the rollback already did it.
+   */
+  readonly release: (id: VerificationTokenId, how: "kept" | "returned") => Effect.Effect<void>;
+}
 
-      const hash = (value: string) =>
-        crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.map(toHex));
+const makeTokenFlows = (
+  store: ClaimStore,
+  crypto: Crypto.Crypto,
+  events: AuthEvents.AuthEventsShape,
+) => {
+  const hashOf = (value: Redacted.Redacted<string>, operation: string) =>
+    crypto
+      .digest("SHA-256", new TextEncoder().encode(Redacted.value(value)))
+      .pipe(Effect.map(toHex), Effect.catchTag("PlatformError", storeUnavailable(operation)));
 
-      const issue: VerificationShape["issue"] = Effect.fnUntraced(
-        function* (input) {
-          const id = VerificationTokenId(yield* crypto.randomUUIDv7);
-          const maxAttempts = yield* validBudget(input.maxAttempts);
-          const value = yield* mintValue(crypto, input.format);
-          const valueHash = yield* hash(value);
-          const now = yield* DateTime.now;
-          const row: TokenRow = {
-            id,
-            identifier: input.identifier,
-            userId: Option.fromNullishOr(input.userId),
-            valueHash,
-            maxAttempts,
-            attempts: 0,
-            createdAt: now,
-            expiresAt: DateTime.addDuration(now, input.ttl),
-            // ESS-010: an explicit `null` is treated as absent, exactly as
-            // `layerSql` stores it (a JSON `null` column decodes to `undefined`),
-            // so both layers hand back the same `payload`.
-            payload: input.payload === null ? undefined : input.payload,
-          };
-          // TMS-004: an unconsumed token was never removed; prune expired rows once the map is large.
-          yield* Ref.update(state, (s) =>
-            HashMap.set(
-              pruneExpiredAbove(s, now, (r) => r.expiresAt),
-              input.identifier,
-              row,
-            ),
-          );
-          return {
-            token: {
-              id,
-              identifier: row.identifier,
-              createdAt: row.createdAt,
-              expiresAt: row.expiresAt,
-              payload: row.payload,
-              userId: row.userId,
-            },
-            value: Redacted.make(value),
-          };
-        },
-        Effect.catchTag("PlatformError", storeUnavailable("Verification.issue")),
-      );
+  const missed = (identifier: string) =>
+    new TokenConsumed({ message: "awthaq: token replay or unknown token", identifier });
 
-      const consume: VerificationShape["consume"] = Effect.fnUntraced(
-        function* (identifier, value, options) {
-          const now = yield* DateTime.now;
-          const presentedHash = yield* hash(Redacted.value(value));
-          // BEH-EA-062: the row is removed by the same atomic step that reads
-          // it, so a second concurrent caller sees nothing to consume — win or
-          // lose is decided inside `Ref.modify`'s pure function, not by a
-          // separate read followed by a separate delete.
-          const outcome = yield* Ref.modify(
-            state,
-            (
-              s,
-            ): readonly [
-              Result.Result<VerificationTokenView, TokenConsumed>,
-              HashMap.HashMap<string, TokenRow>,
-            ] => {
-              const row = HashMap.get(s, identifier);
-              if (Option.isNone(row) || isExpired(row.value, now)) {
-                return [
-                  Result.fail(
-                    new TokenConsumed({
-                      message: "awthaq: token replay or unknown token",
-                      identifier,
-                    }),
-                  ),
-                  s,
-                ] as const;
-              }
-              // ACS-002: the digest is compared in constant time, like
-              // `Sessions`' secret hash; `layerSql` does it in the DB predicate.
-              if (!Hmac.constantTimeEqualString(row.value.valueHash, presentedHash)) {
-                // SOS-004: a wrong presentation against a live budgeted row spends one
-                // attempt, and the row is burned when the budget is gone — in the same
-                // atomic step, so concurrent guesses cannot exceed it.
-                const spent = row.value.attempts + 1;
-                const burned =
-                  Option.isSome(row.value.maxAttempts) && spent >= row.value.maxAttempts.value;
-                const next = Option.isNone(row.value.maxAttempts)
-                  ? s
-                  : burned
-                    ? HashMap.remove(s, identifier)
-                    : HashMap.set(s, identifier, { ...row.value, attempts: spent });
-                return [
-                  Result.fail(
-                    new TokenConsumed({
-                      message: "awthaq: token replay or unknown token",
-                      identifier,
-                    }),
-                  ),
-                  next,
-                ] as const;
-              }
-              return [
-                Result.succeed({
-                  id: row.value.id,
-                  identifier: row.value.identifier,
-                  createdAt: row.value.createdAt,
-                  expiresAt: row.value.expiresAt,
-                  payload: row.value.payload,
-                  userId: row.value.userId,
-                }),
-                HashMap.remove(s, identifier),
-              ] as const;
-            },
-          );
-          // BEH-EA-059: every failed consumption — expired, unknown, or
-          // already-consumed — publishes the same `auth.token.replay` event,
-          // uniformly, before the caller ever sees `TokenConsumed`.
-          // PV-220: a caller consuming inside its own transaction publishes it after (`recordMiss`).
-          return yield* Effect.fromResult(outcome).pipe(
-            Effect.tapError(() =>
-              options?.deferMiss === true
-                ? Effect.void
-                : events.publish({ _tag: "auth.token.replay", identifier }),
-            ),
-          );
-        },
-        Effect.catchTag("PlatformError", storeUnavailable("Verification.consume")),
-      );
+  /** BEH-EA-059: a miss is published once, here, whichever operation saw it (an attempt event, ADR-EA-037). */
+  const claimOrMiss = Effect.fnUntraced(function* (
+    identifier: string,
+    value: Redacted.Redacted<string>,
+    hold: boolean,
+    operation: string,
+  ) {
+    const valueHash = yield* hashOf(value, operation);
+    const now = yield* DateTime.now;
+    const token = yield* store.claim({ identifier, valueHash, now, hold, operation });
+    if (Option.isNone(token)) yield* events.publish({ _tag: "auth.token.replay", identifier });
+    return token;
+  });
 
-      // The memory attempt budget is spent inside `consume`'s own atomic `Ref.modify` (there is no
-      // transaction here to roll it back), so only the event is left to record.
-      const recordMiss: VerificationShape["recordMiss"] = (identifier) =>
-        events.publish({ _tag: "auth.token.replay", identifier });
+  const consume: VerificationShape["consume"] = (identifier, value) =>
+    claimOrMiss(identifier, value, false, "Verification.consume").pipe(
+      Effect.flatMap(
+        Option.match({ onNone: () => Effect.fail(missed(identifier)), onSome: Effect.succeed }),
+      ),
+    );
 
-      const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
-        const now = yield* DateTime.now;
-        return yield* Ref.modify(reservations, (s) => {
-          const existing = HashMap.get(s, input.identifier);
-          if (
-            Option.isSome(existing) &&
-            DateTime.toEpochMillis(now) < DateTime.toEpochMillis(existing.value)
-          ) {
-            return [false, s] as const;
-          }
-          // TMS-004: expired reservations are otherwise never removed.
-          return [
-            true,
-            HashMap.set(
-              pruneExpiredAbove(s, now, (expiresAt) => expiresAt),
-              input.identifier,
-              DateTime.addDuration(now, input.ttl),
-            ),
-          ] as const;
-        });
-      });
-
-      const deleteAllByUser: VerificationShape["deleteAllByUser"] = (userId) =>
-        Ref.update(state, (s) =>
-          HashMap.filter(s, (row) => !(Option.isSome(row.userId) && row.userId.value === userId)),
-        );
-
-      const purgeExpired: VerificationShape["purgeExpired"] = (before) =>
+  const redeem = <A, E, R>(input: RedeemInput<A, E, R>) =>
+    store
+      .transaction(
         Effect.gen(function* () {
-          const cutoff = DateTime.toEpochMillis(before);
-          const tokens = yield* Ref.modify(state, (s) => {
-            const kept = HashMap.filter(
-              s,
-              (row) => DateTime.toEpochMillis(row.expiresAt) >= cutoff,
-            );
-            return [HashMap.size(s) - HashMap.size(kept), kept] as const;
-          });
-          const reserved = yield* Ref.modify(reservations, (s) => {
-            const kept = HashMap.filter(
-              s,
-              (expiresAt) => DateTime.toEpochMillis(expiresAt) >= cutoff,
-            );
-            return [HashMap.size(s) - HashMap.size(kept), kept] as const;
-          });
-          return tokens + reserved;
-        });
+          const token = yield* claimOrMiss(
+            input.identifier,
+            input.value,
+            true,
+            "Verification.redeem",
+          );
+          // A miss is an outcome, not a failure: this transaction commits (it wrote nothing), and the
+          // spent attempt and the replay event already went through the unit's `afterUnit` lane.
+          if (Option.isNone(token)) return yield* Effect.succeed<Outcome<A, E>>({ _tag: "Missed" });
+          return yield* input.use(token.value).pipe(
+            Effect.map((value): Outcome<A, E> => ({ _tag: "Done", value })),
+            Effect.catch(
+              Effect.fnUntraced(function* (error: E) {
+                if (input.onFailure?.(error) === "commit")
+                  return { _tag: "Refused", error } as const;
+                return yield* Effect.fail<Rollback<E>>({ _tag: "Verification/Rollback", error });
+              }),
+            ),
+            // Success here means the transaction commits (a result, or a refusal settled as commit).
+            // Any failure (a rollback-settled error, a defect, an interruption) means it rolls back.
+            Effect.onExit((exit) =>
+              store.release(token.value.id, Exit.isSuccess(exit) ? "kept" : "returned"),
+            ),
+          );
+        }),
+      )
+      .pipe(
+        Effect.catchTag("Verification/Rollback", (rollback) => Effect.fail(rollback.error)),
+        Effect.flatMap(
+          Effect.fnUntraced(function* (outcome: Outcome<A, E>) {
+            if (outcome._tag === "Done") return outcome.value;
+            if (outcome._tag === "Refused") return yield* Effect.fail(outcome.error);
+            return yield* Effect.fail(missed(input.identifier));
+          }),
+        ),
+      );
 
-      return { issue, consume, recordMiss, reserve, deleteAllByUser, purgeExpired };
-    }),
-  );
+  return { consume, redeem };
+};
 
-const toTokenView = (row: SqlModels.VerificationToken): VerificationTokenView => ({
-  id: VerificationTokenId(row.id),
-  identifier: row.identifier,
-  createdAt: row.createdAt,
-  expiresAt: row.expiresAt,
-  payload: row.payload === null ? undefined : row.payload,
-  userId: Option.fromNullishOr(row.userId).pipe(Option.map((id) => UserId(id))),
-});
-
-export const layerSql = Layer.effect(
+/**
+ * Written once over `VerificationStore` (ADR-EA-041). Needs the store, `Crypto` (the value and its
+ * hash) and `AuthEvents` (the replay event).
+ */
+export const layer = Layer.effect(
   Verification,
   Effect.gen(function* () {
-    const repo = yield* SqlRepositories.VerificationRepository;
-    const reservationsRepo = yield* SqlRepositories.VerificationReservationsRepository;
+    const store = yield* VerificationStore.VerificationStore;
     const crypto = yield* Crypto.Crypto;
     const events = yield* AuthEvents.AuthEvents;
 
@@ -474,130 +408,66 @@ export const layerSql = Layer.effect(
 
     const issue: VerificationShape["issue"] = Effect.fnUntraced(
       function* (input) {
+        const id = VerificationTokenId(yield* crypto.randomUUIDv7);
         const maxAttempts = yield* validBudget(input.maxAttempts);
         const value = yield* mintValue(crypto, input.format);
         const valueHash = yield* hash(value);
         const now = yield* DateTime.now;
-        const insert = yield* repo.models.VerificationToken.insert
-          .makeEffect({
-            identifier: input.identifier,
-            userId: input.userId ?? null,
-            valueHash,
-            maxAttempts: Option.getOrNull(maxAttempts),
-            expiresAt: DateTime.addDuration(now, input.ttl),
-            consumedAt: null,
-            payload: input.payload ?? null,
-          })
-          .pipe(Effect.orDie);
-        // BEH-EA-057/ADR-EA-016: one atomic upsert — matches `layerMemory`'s
-        // one-live-token overwrite behavior even under two concurrent
-        // `issue`s for the same `identifier`, since the DB engine's own
-        // conflict resolution (not a separate delete-then-insert racing
-        // itself) decides "fresh row" vs. "replace the current live row" in
-        // a single statement. Already-consumed history is never touched by `issue`
+        const payloadJson = yield* encodePayload(input.payload);
+        // BEH-EA-057/ADR-EA-016: one atomic upsert replaces the identifier's one live token, so two
+        // concurrent `issue`s never leave two. Already-consumed history is never touched by `issue`
         // (only `purgeExpired`, past the forensic window, removes it).
-        const row = yield* repo.upsertLive(insert);
-        return { token: toTokenView(row), value: Redacted.make(value) };
-      },
-      Effect.catchTags({
-        PlatformError: storeUnavailable("Verification.issue"),
-        SqlError: storeUnavailable("Verification.issue"),
-        SchemaError: Effect.die,
-        NoSuchElementError: Effect.die,
-      }),
-    );
-
-    const consume: VerificationShape["consume"] = Effect.fnUntraced(
-      function* (identifier, value, options) {
-        const now = yield* DateTime.now;
-        const presentedHash = yield* hash(Redacted.value(value));
-        // BEH-EA-058/062: one atomic `UPDATE ... RETURNING` decides win or
-        // lose — no separate read racing this call's own write, the same
-        // guarantee `layerMemory`'s `Ref.modify` gives.
-        const claimed = yield* repo.tryConsume({ identifier, valueHash: presentedHash, now });
-        const outcome: Result.Result<VerificationTokenView, TokenConsumed> = Option.match(claimed, {
-          onNone: () =>
-            Result.fail(
-              new TokenConsumed({
-                message: "awthaq: token replay or unknown token",
-                identifier,
-              }),
-            ),
-          onSome: (row) => Result.succeed(toTokenView(row)),
-        });
-        // SOS-004: a miss against a live budgeted row spends one attempt (one atomic
-        // statement; a row with no budget, an unknown or an expired one is untouched).
-        // PV-220: a caller consuming inside its own transaction (`deferMiss`) records the spent
-        // attempt and the event itself once that transaction has ended (`recordMiss`): written
-        // here they would roll back with the failure that follows.
-        const deferred = options?.deferMiss === true;
-        if (Option.isNone(claimed) && !deferred) {
-          yield* repo.recordFailedAttempt({ identifier, now });
-        }
-        // BEH-EA-059: every failed consumption publishes the same
-        // `auth.token.replay` event, uniformly, before the caller ever sees
-        // `TokenConsumed`.
-        return yield* Effect.fromResult(outcome).pipe(
-          Effect.tapError(() =>
-            deferred ? Effect.void : events.publish({ _tag: "auth.token.replay", identifier }),
-          ),
-        );
-      },
-      Effect.catchTags({
-        PlatformError: storeUnavailable("Verification.consume"),
-        SqlError: storeUnavailable("Verification.consume"),
-        SchemaError: Effect.die,
-      }),
-    );
-
-    const recordMiss: VerificationShape["recordMiss"] = Effect.fnUntraced(
-      function* (identifier) {
-        const now = yield* DateTime.now;
-        yield* repo.recordFailedAttempt({ identifier, now });
-        yield* events.publish({ _tag: "auth.token.replay", identifier });
-      },
-      Effect.catchTags({
-        SqlError: storeUnavailable("Verification.recordMiss"),
-        SchemaError: Effect.die,
-      }),
-    );
-
-    const reserve: VerificationShape["reserve"] = Effect.fnUntraced(
-      function* (input) {
-        const now = yield* DateTime.now;
-        return yield* reservationsRepo.claim({
+        const row = yield* store.upsertLive({
+          id,
           identifier: input.identifier,
+          userId: Option.fromNullishOr(input.userId),
+          valueHash,
+          createdAt: now,
           expiresAt: DateTime.addDuration(now, input.ttl),
-          now,
+          payloadJson,
+          maxAttempts,
         });
+        return { token: viewOf(row), value: Redacted.make(value) };
       },
-      Effect.catchTags({
-        SqlError: storeUnavailable("Verification.reserve"),
-        SchemaError: Effect.die,
-      }),
+      Effect.catchTag("PlatformError", storeUnavailable("Verification.issue")),
+      relabel("Verification.issue"),
     );
+
+    const claimStore: ClaimStore = {
+      claim: ({ identifier, valueHash, now, hold, operation }) =>
+        store.present({ identifier, valueHash, now, hold }).pipe(
+          Effect.map((outcome) =>
+            outcome._tag === "Hit" ? Option.some(viewOf(outcome.row)) : Option.none(),
+          ),
+          relabel(operation),
+        ),
+      transaction: (effect) => store.transaction(effect).pipe(relabel("Verification.redeem")),
+      release: (id, how) =>
+        store.settle(id, how).pipe(
+          // A give-back that cannot be recorded must not mask the outcome of the caller's own work.
+          Effect.catchTag("StoreUnavailable", (error) =>
+            Effect.logWarning("awthaq: a held verification token could not be settled", error),
+          ),
+        ),
+    };
+
+    const { consume, redeem } = makeTokenFlows(claimStore, crypto, events);
+
+    const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
+      const now = yield* DateTime.now;
+      return yield* store.reserve({
+        identifier: input.identifier,
+        expiresAt: DateTime.addDuration(now, input.ttl),
+        now,
+      });
+    }, relabel("Verification.reserve"));
 
     const deleteAllByUser: VerificationShape["deleteAllByUser"] = (userId) =>
-      repo
-        .deleteAllByUser(userId)
-        .pipe(Effect.catchTag("SqlError", storeUnavailable("Verification.deleteAllByUser")));
+      store.deleteByUser(userId).pipe(Effect.asVoid, relabel("Verification.deleteAllByUser"));
 
-    // CSG-003: consumed rows are kept as replay evidence (BEH-EA-058) until the retention
-    // sweep's forensic window passes; a bounded loop of short deletes, tokens then reservations.
     const purgeExpired: VerificationShape["purgeExpired"] = (before) =>
-      Effect.all([
-        drainBatches((limit) =>
-          repo
-            .deleteExpiredBefore(before, limit)
-            .pipe(orStoreUnavailable("Verification.purgeExpired")),
-        ),
-        drainBatches((limit) =>
-          reservationsRepo
-            .deleteExpiredBefore(before, limit)
-            .pipe(orStoreUnavailable("Verification.purgeExpired")),
-        ),
-      ]).pipe(Effect.map(([tokens, reserved]) => tokens + reserved));
+      store.purgeExpired(before).pipe(relabel("Verification.purgeExpired"));
 
-    return { issue, consume, recordMiss, reserve, deleteAllByUser, purgeExpired };
+    return { issue, consume, redeem, reserve, deleteAllByUser, purgeExpired };
   }),
 );

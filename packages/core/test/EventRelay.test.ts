@@ -1,6 +1,7 @@
 // CWM-004/MAPS-010 (ADR-EA-032): `EventRelay`, the outbox relay that tails the durable audit log into an
 // application-provided `EventTransport`. One suite over memory and over SQLite (audit log and cursor both in
 // `CoreMigrations`' tables); time is `TestClock`'s, so the settle delay and the poll interval cost nothing.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -13,11 +14,15 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as EventRelay from "../src/EventRelay.ts";
 import type { Published } from "../src/AuthEventSchemas.ts";
 import * as Users from "../src/Users.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 class BrokerUnavailable extends Data.TaggedError("BrokerUnavailable") {}
 
@@ -49,7 +54,7 @@ const publishN = (events: AuthEvents.AuthEventsShape, count: number, prefix = "i
 
 const MemoryBase = Layer.mergeAll(EventRelay.layerCursorMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
 );
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
@@ -60,7 +65,7 @@ const Migrated = Layer.effectDiscard(
 const SqlBase = EventRelay.layerCursorSql.pipe(
   Layer.provide(Repositories.RelayCursorRepositoryLive),
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

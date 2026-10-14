@@ -8,16 +8,20 @@
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
-import type * as Duration from "effect/Duration";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as Record from "effect/Record";
 import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import { TenantScoped } from "@awthaq/sql";
 import type * as HookPoint from "./HookPoint.ts";
+import type * as Hooks from "./Hooks.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
+import * as RateLimitModel from "./RateLimitModel.ts";
+import type { RateLimitDeclaration } from "./RateLimitModel.ts";
 import * as UserFields from "./UserFields.ts";
 
 /**
@@ -79,21 +83,33 @@ export interface Class<
   Shape,
   Groups extends HttpApiGroup.Constraint,
   Fields extends UserFields.Declarations = {},
+  Limits extends RateLimitModel.Table = {},
+  Records extends AnyRecords = NoRecords,
+  Points extends Layer.Layer<never, unknown, unknown> = Layer.Layer<never>,
 > extends Context.ServiceClass<Self, Key<Id>, Shape> {
   readonly id: Id;
   readonly apiVersion: 1;
   readonly contract: HttpApi.HttpApi<"auth", Groups>;
   readonly tables: ReadonlyArray<`${Id}_${string}`>;
+  /** Plan 05 (ADR-EA-018 decision 10): how each table in `tables` relates to the tenant, keyed by table name. */
+  readonly tenancy: Readonly<Record<string, TenantScoped.TableDeclaration>>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
   /** PERS-003: the taps this plugin declared statically (`AuthPlugin.layer`'s `taps` option), readable without building any layer. */
   readonly taps: ReadonlyArray<DeclaredTap>;
   /** JH-007: tables owned by *other* plugins this one reads; `Auth.make` requires the owner in `dependsOn`. */
   readonly readsTables: ReadonlyArray<string>;
-  /** PV-241/BEH-EA-111: the rate-limit rules this plugin declares statically (defaults; config may tune them), readable without building any layer. */
+  /** PV-241/BEH-EA-111: the rate-limit rules this plugin declares statically (defaults; config may tune them), readable without building any layer. DERIVED from `rateLimitRules`. */
   readonly rateLimits: ReadonlyArray<RateLimitDeclaration>;
+  /**
+   * BEH-EA-105/107: the typed rule table this plugin declared (`Service`'s `rateLimitRules`), the one
+   * source of the static `rateLimits` declaration AND of what `RateLimits.budget(Self)` registers.
+   */
+  readonly rateLimitRules: RateLimitModel.Table;
   /** PV-241/BEH-EA-202: the keys of the ports this plugin's layer requires (`AuthPlugin.layer`'s `ports` option), readable without building any layer. */
   readonly ports: ReadonlyArray<string>;
+  /** ADR-EA-040: the keys of the namespaced domain services this plugin's layer exposes beside its own service (`AuthPlugin.layer`'s `exposes` option), readable without building any layer. */
+  readonly exposes: ReadonlyArray<string>;
   /** ECS-008/BEH-EA-229: the configuration inputs this plugin reads, declared statically (none when it has no policy knobs). */
   readonly config: ReadonlyArray<ConfigDescriptor>;
   /**
@@ -107,59 +123,159 @@ export interface Class<
    * without an assertion), so it reads `undefined`.
    */
   readonly "~userFields"?: Fields;
-}
-
-/** PV-241: what a rate-limit rule is keyed on, as a label a listing can print (the same set as `RateLimits.EnforceMeta["dimension"]`). */
-export type RateLimitDimension = "identity" | "ip" | "principal" | "custom";
-
-/**
- * PV-241/BEH-EA-111: one rate-limit rule declared statically on a plugin (`Service`'s `rateLimits`
- * option), so `awthaq plugin list --rules` can print it without building a layer. The numbers are the
- * plugin's defaults; a configurable plugin may register tuned values at build. `group` is confined at the
- * type level to the plugin's own contract groups (BEH-EA-107 as a compile error, not only a build-time
- * `RateLimitScopeViolation`). The registry stays the source of truth for what is enforced; a plugin's test
- * checks it against this declaration (`RateLimits.declarationDrift`).
- */
-export interface RateLimitDeclaration<Group extends string = string> {
-  readonly group: Group;
-  readonly endpoint: string;
-  /** The rule's own name, unique within its group and endpoint (`requestByIp`), as `EnforceMeta.rule` reports it. */
-  readonly name: string;
-  readonly dimension: RateLimitDimension;
-  readonly limit: number;
-  readonly window: Duration.Input;
+  /**
+   * Type-only: the declared rule table's own type, which `RateLimits.budget(Self)` reads to type
+   * `spend`'s names and inputs. Never assigned, for the reason `"~userFields"` is not.
+   */
+  readonly "~rateLimits"?: Limits;
+  /**
+   * Plan 08 (BEH-EA-T4): the plugin's record stores, one memory and one SQL implementation, matched. A
+   * plugin that owns no tables declares nothing and reads `Layer.empty` for both.
+   */
+  readonly records: Records;
+  /**
+   * Plan 08 (BEH-EA-T5): the default (no-tap) layers of the hook points this plugin owns, provided once
+   * per composition by the host. `Layer.empty` when it owns none.
+   */
+  readonly hookPoints: Points;
 }
 
 /**
- * PV-241: builds a `rateLimits` declaration from a rule table a plugin already keeps for its own
- * enforcement (`PasswordRateLimits.makeRules`, `MagicLink`'s `rules`), so the numbers have one source.
- * `groups` names the plugin's own contract groups; a rule outside them is a definition-time defect
- * (the same refusal `RateLimits.rule` gives at build, raised earlier), and narrowing each rule's `group`
- * to that union needs no type assertion.
+ * Plan 08: a record store is a `Context.Service` whose key names a `/records/` service
+ * (`awthaq/scim/records/ScimRecords`), the same mechanism `PortKeysOf` uses for `/ports/`. The
+ * convention is what lets the compiler ask "does a bundle provide every record store the layer needs?".
  */
-export const declareRateLimits = <const Group extends string>(
-  groups: ReadonlyArray<Group>,
-  rules: Iterable<RateLimitDeclaration>,
-): ReadonlyArray<RateLimitDeclaration<Group>> => {
-  const declared: Array<RateLimitDeclaration<Group>> = [];
-  for (const rule of rules) {
-    const group = groups.find((candidate) => candidate === rule.group);
-    if (group === undefined) {
-      throw new Error(
-        `awthaq: rate-limit rule "${rule.name}" names group "${rule.group}", which is not one of [${groups.join(", ")}]`,
-      );
+export type RecordKeysOf<R> = R extends { readonly key: infer K extends string }
+  ? K extends `${string}/records/${string}`
+    ? K
+    : never
+  : never;
+
+/** Plan 08: the services among `S` that are record stores (the rest are what a bundle must not carry). */
+type RecordServices<S> = S extends { readonly key: `${string}/records/${string}` } ? S : never;
+
+/** Plan 08: a hook point's key (`HookPoint.veto/observe/divert` mint `awthaq/hook/<id>`). */
+export type HookKeysOf<R> = R extends { readonly key: infer K extends string }
+  ? K extends `awthaq/hook/${string}`
+    ? K
+    : never
+  : never;
+
+/**
+ * Plan 08: the widest records declaration. `never` is the contravariant `ROut` slot's top (what it
+ * accepts from any bundle); `unknown` is the covariant `RIn`/`E` slots' top.
+ */
+export interface AnyRecords {
+  readonly memory: Layer.Layer<never, unknown, unknown>;
+  readonly sql: Layer.Layer<never, unknown, unknown>;
+}
+
+/** Plan 08: a plugin that owns no record stores declares nothing; `Service` fills this in. */
+export interface NoRecords {
+  readonly memory: Layer.Layer<never>;
+  readonly sql: Layer.Layer<never>;
+}
+
+/**
+ * Plan 08 (BEH-EA-T4): `memory` and `sql` provide exactly the same stores, and nothing but stores.
+ * `unknown` (no constraint) when legal; otherwise a property whose type names the offending keys.
+ */
+export type RecordsLegal<R extends AnyRecords> = [Layer.Success<R["memory"]>] extends [
+  Layer.Success<R["sql"]>,
+]
+  ? [Layer.Success<R["sql"]>] extends [Layer.Success<R["memory"]>]
+    ? [Exclude<Layer.Success<R["memory"]>, RecordServices<Layer.Success<R["memory"]>>>] extends [
+        never,
+      ]
+      ? unknown
+      : {
+          readonly "~records": {
+            readonly "a records bundle provides only /records/ stores, not": Exclude<
+              Layer.Success<R["memory"]>,
+              RecordServices<Layer.Success<R["memory"]>>
+            >;
+          };
+        }
+    : {
+        readonly "~records": {
+          readonly "sql provides stores memory does not": Exclude<
+            RecordKeysOf<Layer.Success<R["sql"]>>,
+            RecordKeysOf<Layer.Success<R["memory"]>>
+          >;
+        };
+      }
+  : {
+      readonly "~records": {
+        readonly "memory provides stores sql does not": Exclude<
+          RecordKeysOf<Layer.Success<R["memory"]>>,
+          RecordKeysOf<Layer.Success<R["sql"]>>
+        >;
+      };
+    };
+
+/** Plan 08: the record stores a plugin (or a union of plugin classes) provides. Distributes over a union. */
+export type RecordsOut<P> = P extends {
+  readonly records: { readonly memory: infer M extends Layer.Any };
+}
+  ? Layer.Success<M>
+  : never;
+
+/** Plan 08: what a record bundle of the given mode still requires (`SqlClient`, `Encryption`, ...). */
+export type RecordsIn<P, Mode extends "memory" | "sql"> = P extends {
+  readonly records: infer B;
+}
+  ? B extends {
+      readonly memory: infer M extends Layer.Any;
+      readonly sql: infer S extends Layer.Any;
     }
-    declared.push({
-      group,
-      endpoint: rule.endpoint,
-      name: rule.name,
-      dimension: rule.dimension,
-      limit: rule.limit,
-      window: rule.window,
-    });
-  }
-  return declared;
-};
+    ? Layer.Services<Mode extends "memory" ? M : S>
+    : never
+  : never;
+
+/** Plan 08: the hook points a plugin (or a union of plugin classes) declares. */
+export type HookPointsOut<P> = P extends { readonly hookPoints: infer H extends Layer.Any }
+  ? Layer.Success<H>
+  : never;
+
+/** Plan 08: the record stores `R` requires that `Provided` does not. */
+export type MissingRecords<R, Provided> = Exclude<RecordKeysOf<R>, RecordKeysOf<Provided>>;
+
+/**
+ * Plan 08 (BEH-EA-T4): completeness of the `records` declaration, checked where `AuthPlugin.layer` is
+ * called, like `PortsComplete`. Records owned by a `dependsOn` plugin count as provided.
+ */
+export type RecordsComplete<R, Provided> = [MissingRecords<R, Provided>] extends [never]
+  ? unknown
+  : {
+      readonly "~missingRecords": {
+        readonly "declare these record stores in AuthPlugin.Service's records": MissingRecords<
+          R,
+          Provided
+        >;
+      };
+    };
+
+type CorePoints = Layer.Success<typeof Hooks.HooksLive>;
+
+/** Plan 08: the plugin-owned hook points `R` requires that nothing declares (core's own points are always present). */
+export type MissingHookPoints<R, Provided> = Exclude<
+  HookKeysOf<R>,
+  HookKeysOf<Provided | CorePoints>
+>;
+
+/** Plan 08 (BEH-EA-T5): completeness of the `hookPoints` declaration, checked where `AuthPlugin.layer` is called. */
+export type HookPointsComplete<R, Provided> = [MissingHookPoints<R, Provided>] extends [never]
+  ? unknown
+  : {
+      readonly "~missingHookPoints": {
+        readonly "declare these hook points in AuthPlugin.Service's hookPoints": MissingHookPoints<
+          R,
+          Provided
+        >;
+      };
+    };
+
+export type { RateLimitDeclaration, RateLimitDimension } from "./RateLimitModel.ts";
 
 /** PV-241: the group ids of a plugin's contract, the only groups a declared rule may name. */
 export type GroupIdOf<Groups> =
@@ -192,11 +308,35 @@ export interface ContractData {
   readonly groups: Record.ReadonlyRecord<string, HttpApiGroup.Constraint>;
 }
 
+/**
+ * Plan 05: the tenancy of one declared table, as `tables` takes it. Re-exported so a package that
+ * does not depend on `@awthaq/sql` (roles, qadi) declares its tables through core alone.
+ * `partitioned` (nullable tenant column stamped from the ambient tenant), `keyed` (the organization
+ * id is the row's own key), `derived` (scoped through a parent table) or `global` (deliberately
+ * tenant-blind; the reason is printed by `awthaq plugin list`).
+ */
+export const Table = {
+  partitioned: (column = "tenantId"): TenantScoped.TableDeclaration => ({
+    tenancy: TenantScoped.partitioned(column),
+  }),
+  keyed: (column: string): TenantScoped.TableDeclaration => ({
+    tenancy: TenantScoped.keyed(column),
+  }),
+  derived: (parent: string, via: string, parentKey = "id"): TenantScoped.TableDeclaration => ({
+    tenancy: TenantScoped.derived(parent, via, parentKey),
+  }),
+  global: (reason: string): TenantScoped.TableDeclaration => ({
+    tenancy: TenantScoped.global(reason),
+  }),
+};
+
 export interface Any {
   readonly id: string;
   readonly apiVersion: 1;
   readonly contract: ContractData;
   readonly tables: ReadonlyArray<string>;
+  /** Plan 05: optional so a hand-built plugin value (a test fixture) need not declare any; an absent entry reads as Global. */
+  readonly tenancy?: Readonly<Record<string, TenantScoped.TableDeclaration>>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
   /** PERS-003: optional so a hand-built plugin value (a test fixture) need not declare any. */
@@ -205,12 +345,20 @@ export interface Any {
   readonly readsTables?: ReadonlyArray<string>;
   /** PV-241: optional so a hand-built plugin value need not declare any. */
   readonly rateLimits?: ReadonlyArray<RateLimitDeclaration>;
+  /** BEH-EA-105: optional so a hand-built plugin value need not declare any. */
+  readonly rateLimitRules?: RateLimitModel.Table;
   /** PV-241: optional so a hand-built plugin value need not declare any. */
   readonly ports?: ReadonlyArray<string>;
+  /** ADR-EA-040: optional so a hand-built plugin value need not declare any. */
+  readonly exposes?: ReadonlyArray<string>;
   /** Optional here (a hand-built `Any` may have none); every plugin made with `Service` carries the list. */
   readonly config?: ReadonlyArray<ConfigDescriptor>;
   /** SAM-004: optional so a hand-built plugin value need not declare any; every plugin made with `Service` carries the record. */
   readonly userFields?: UserFields.Declarations;
+  /** Plan 08: optional so a hand-built plugin value (a test fixture) need not declare any; every plugin made with `Service` carries the pair. */
+  readonly records?: AnyRecords;
+  /** Plan 08: optional so a hand-built plugin value need not declare any; every plugin made with `Service` carries the layer. */
+  readonly hookPoints?: Layer.Layer<never, unknown, unknown>;
   readonly layer: Layer.Layer<never, unknown, unknown>;
 }
 
@@ -247,6 +395,11 @@ const portsByPlugin = new WeakMap<object, ReadonlyArray<string>>();
 
 const noPorts: ReadonlyArray<string> = [];
 
+/** ADR-EA-040: the exposed service keys, kept the same way (known only once `AuthPlugin.layer` runs). */
+const exposesByPlugin = new WeakMap<object, ReadonlyArray<string>>();
+
+const noExposes: ReadonlyArray<string> = [];
+
 /**
  * ELC-006: `AuthPlugin.layer` was called a second time for one plugin class with a
  * different `dependsOn` set. The side table above is keyed by class identity, so the
@@ -270,26 +423,38 @@ const sameIds = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boo
  * freezes its static, declarative members. `options.tables`/`migrations` are
  * read off the class alone — no `Layer` is evaluated to produce them (BEH-EA-006).
  */
-export const Service =
-  <Self, Shape>() =>
-  <
+export const Service = <Self, Shape>() => {
+  // The public signature: `records`/`hookPoints` are inferred from the options (and default to "none declared"
+  // when absent). The implementation below is typed against the widest shapes, the way `Auth.make`'s is.
+  function build<
     const Id extends string,
     Groups extends GroupsFor<Id>,
     const Fields extends UserFields.Declarations = {},
+    const Limits extends RateLimitModel.Table<GroupIdOf<Groups>> = {},
+    const Records extends AnyRecords = NoRecords,
+    Points extends Layer.Layer<never, unknown, unknown> = Layer.Layer<never>,
   >(
     id: Id,
     options: {
       readonly apiVersion: 1;
       readonly contract: HttpApi.HttpApi<"auth", Groups>;
-      readonly tables?: ReadonlyArray<`${NoInfer<Id>}_${string}`>;
+      /**
+       * BEH-EA-005/BEH-EA-328: the tables this plugin owns, keyed by name (each `<id>_...`), each with its
+       * tenancy: `{ webhooks_endpoint: AuthPlugin.Table.partitioned() }`. A table without a declaration, or
+       * with another plugin's prefix, does not compile.
+       */
+      readonly tables?: {
+        readonly [T in `${NoInfer<Id>}_${string}`]: TenantScoped.TableDeclaration;
+      };
       readonly migrations?: Migrations;
       readonly readsTables?: ReadonlyArray<string>;
       /**
-       * PV-241/BEH-EA-111: the rate-limit rules this plugin enforces, declared statically so `plugin list
-       * --rules` prints them without building a layer. Each rule's `group` must be one of this plugin's own
-       * contract groups (a compile error otherwise); the numbers are the defaults a config may tune.
+       * BEH-EA-105/107/111: the typed rate-limit rule table (`{ signIn: RateLimits.rule({ group, endpoint,
+       * key: RateLimits.Key.email, limit, window }) }`). Declared once: the static `rateLimits` listing is
+       * derived from it, `RateLimits.budget(Self)` registers it and `spend`s only its names, and a rule
+       * whose `group` is not one of this plugin's contract groups is a compile error.
        */
-      readonly rateLimits?: ReadonlyArray<RateLimitDeclaration<NoInfer<GroupIdOf<Groups>>>>;
+      readonly rateLimitRules?: Limits;
       /** ECS-008/BEH-EA-229: descriptors of the `Context.Reference`s this plugin reads (`ConfigDescriptor.make`). */
       readonly config?: ReadonlyArray<ConfigDescriptor>;
       /**
@@ -299,10 +464,41 @@ export const Service =
        * Validated here, at definition time: a schema that is not one scalar throws `InvalidDeclaration`.
        */
       readonly userFields?: Fields;
+      /**
+       * Plan 08 (BEH-EA-T4): the plugin's record stores as two matched layers, `{ memory, sql }`. Every
+       * `/records/` store the plugin's layer requires must be provided by this bundle or by a `dependsOn`
+       * plugin's (checked at `AuthPlugin.layer`); `memory` and `sql` must provide the same stores, and only
+       * stores. `TestAuth.layer` selects one per composition; a host picks one the same way.
+       */
+      readonly records?: Records;
+      /**
+       * Plan 08 (BEH-EA-T5): the default (no-tap) layers of the hook points this plugin owns, merged into one
+       * layer. A plugin layer that requires a non-core hook point it does not declare here does not compile.
+       */
+      readonly hookPoints?: Points;
+    } & RecordsLegal<Records>,
+  ): Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points>;
+  function build(
+    id: string,
+    options: {
+      readonly apiVersion: 1;
+      readonly contract: ContractData;
+      readonly tables?: Readonly<Record<string, TenantScoped.TableDeclaration>>;
+      readonly migrations?: Migrations;
+      readonly readsTables?: ReadonlyArray<string>;
+      readonly rateLimitRules?: RateLimitModel.Table;
+      readonly config?: ReadonlyArray<ConfigDescriptor>;
+      readonly userFields?: UserFields.Declarations;
+      readonly records?: AnyRecords;
+      readonly hookPoints?: Layer.Layer<never, unknown, unknown>;
     },
-  ): Class<Self, Id, Shape, Groups, Fields> => {
-    const key: Key<Id> = `awthaq/plugin/${id}`;
+  ): object {
+    const key: Key<string> = `awthaq/plugin/${id}`;
     const userFields: UserFields.Declarations = options.userFields ?? {};
+    const tenancy: Readonly<Record<string, TenantScoped.TableDeclaration>> = options.tables ?? {};
+    const tables = Object.keys(tenancy).filter((name): name is `${string}_${string}` =>
+      name.startsWith(`${id}_`),
+    );
     UserFields.describePlugin(id, userFields);
     const serviceKey = Context.Service<Self, Shape>()(key);
     // `Object.assign`'s source is a plain-valued `dependsOn` (not a getter): a
@@ -317,15 +513,20 @@ export const Service =
       id,
       apiVersion: options.apiVersion,
       contract: options.contract,
-      tables: options.tables ?? [],
+      tables,
+      tenancy,
       migrations: options.migrations ?? [],
       readsTables: options.readsTables ?? [],
-      rateLimits: options.rateLimits ?? [],
+      rateLimits: RateLimitModel.declare(options.rateLimitRules ?? {}),
+      rateLimitRules: options.rateLimitRules ?? {},
       config: options.config ?? [],
       userFields,
       dependsOn: noDependencies,
       taps: noTaps,
       ports: noPorts,
+      exposes: noExposes,
+      records: options.records ?? noRecords,
+      hookPoints: options.hookPoints ?? Layer.empty,
     });
     // A regular (not arrow) function, so `this` is whatever the getter is
     // actually read off — `Pong`, say, when a subclass reads `Pong.dependsOn` —
@@ -347,14 +548,26 @@ export const Service =
         return tapsByPlugin.get(this) ?? noTaps;
       },
     });
-    return Object.defineProperty(withLiveTaps, "ports", {
+    const withLivePorts = Object.defineProperty(withLiveTaps, "ports", {
       enumerable: true,
       configurable: true,
       get(this: object): ReadonlyArray<string> {
         return portsByPlugin.get(this) ?? noPorts;
       },
     });
-  };
+    return Object.defineProperty(withLivePorts, "exposes", {
+      enumerable: true,
+      configurable: true,
+      get(this: object): ReadonlyArray<string> {
+        return exposesByPlugin.get(this) ?? noExposes;
+      },
+    });
+  }
+  return build;
+};
+
+/** Plan 08: what a plugin that declares no `records` reads (empty layers, in both modes). */
+const noRecords: NoRecords = { memory: Layer.empty, sql: Layer.empty };
 
 /** PERS-003: the hook points a `taps` option's declarations tap — they join the plugin layer's `RIn`, exactly like a port. */
 export type TapPoints<Taps extends ReadonlyArray<HookPoint.TapDeclaration<unknown>>> =
@@ -397,6 +610,57 @@ export type PortsComplete<R, Ports extends ReadonlyArray<PortClass>> = [
   ? unknown
   : { readonly ports: { readonly "declare these required ports": MissingPorts<R, Ports> } };
 
+/** ADR-EA-040: the service keys of a requirement/provision union. */
+export type ServiceKeysOf<S> = S extends { readonly key: infer K extends string } ? K : never;
+
+/**
+ * ADR-EA-040: completeness and namespacing of an `exposes` declaration, checked where
+ * `AuthPlugin.layer` is called. Nothing when every service the exposing layer provides is keyed
+ * `awthaq/plugin/<id>/<name>` and is listed in `services` (and nothing listed is missing from the
+ * layer); otherwise `exposes` becomes a required property whose type names the offending keys. The
+ * namespace rule means two plugins can never expose the same tag, so no implicit slot appears.
+ */
+export type ExposesComplete<Id extends string, XOut, Exposed extends ReadonlyArray<PortClass>> = [
+  Exclude<ServiceKeysOf<XOut> | Exposed[number]["key"], `awthaq/plugin/${Id}/${string}`>,
+] extends [never]
+  ? [Exclude<ServiceKeysOf<XOut>, Exposed[number]["key"]>] extends [never]
+    ? [Exclude<Exposed[number]["key"], ServiceKeysOf<XOut>>] extends [never]
+      ? unknown
+      : {
+          readonly exposes: {
+            readonly "listed in services but not provided by layer": Exclude<
+              Exposed[number]["key"],
+              ServiceKeysOf<XOut>
+            >;
+          };
+        }
+    : {
+        readonly exposes: {
+          readonly "list these exposed services in services": Exclude<
+            ServiceKeysOf<XOut>,
+            Exposed[number]["key"]
+          >;
+        };
+      }
+  : {
+      readonly exposes: {
+        readonly "an exposed service must be keyed awthaq/plugin/<id>/<name>": Exclude<
+          ServiceKeysOf<XOut> | Exposed[number]["key"],
+          `awthaq/plugin/${Id}/${string}`
+        >;
+      };
+    };
+
+/**
+ * ADR-EA-040: the namespaced domain services a plugin exposes beside its own service. `services`
+ * lists the tags (static: the manifest prints them without building a layer); `layer` builds them,
+ * once, beneath `make`, so `make` may require them.
+ */
+export interface Exposes<Exposed, XOut, XE, XR> {
+  readonly services: Exposed;
+  readonly layer: Layer.Layer<XOut, XE, XR>;
+}
+
 /**
  * BEH-EA-008: `dependsOn` declares both migration ordering and a typed
  * requirement in one array — every class it lists joins the returned layer's
@@ -437,6 +701,10 @@ export function layer<
   Id extends string,
   Shape,
   Groups extends HttpApiGroup.Constraint,
+  Fields extends UserFields.Declarations,
+  Limits extends RateLimitModel.Table,
+  Records extends AnyRecords,
+  Points extends Layer.Layer<never, unknown, unknown>,
   E,
   R,
   HE,
@@ -446,31 +714,47 @@ export function layer<
   Ports extends ReadonlyArray<PortClass> = readonly [],
   CE = never,
   CR = never,
+  Exposed extends ReadonlyArray<PortClass> = readonly [],
+  XOut = never,
+  XE = never,
+  XR = never,
 >(
-  plugin: Class<Self, Id, Shape, Groups>,
+  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;
     readonly ports?: Ports;
     readonly contributes?: Layer.Layer<never, CE, CR>;
+    readonly exposes?: Exposes<Exposed, XOut, XE, XR>;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
-  } & PortsComplete<R | HR | CR, Ports>,
+  } & PortsComplete<R | HR | CR | XR, Ports> &
+    ExposesComplete<Id, XOut, Exposed> &
+    RecordsComplete<R | HR | CR | XR, Layer.Success<Records["memory"]> | RecordsOut<Deps[number]>> &
+    HookPointsComplete<
+      R | HR | CR | XR | TapPoints<Taps>,
+      Layer.Success<Points> | HookPointsOut<Deps[number]>
+    >,
 ): Layer.Layer<
-  Self | HttpApiGroup.ToService<"auth", Groups>,
-  E | HE | CE,
-  | Exclude<R, Scope.Scope>
-  | Exclude<HR, Self>
+  Self | HttpApiGroup.ToService<"auth", Groups> | XOut,
+  E | HE | CE | XE,
+  | Exclude<R, Scope.Scope | XOut>
+  | Exclude<HR, Self | XOut>
   | InstanceOf<Deps[number]>
   | InstanceOf<Ports[number]>
   | TapPoints<Taps>
-  | Exclude<CR, Self | HttpApiGroup.ToService<"auth", Groups>>
+  | Exclude<CR, Self | XOut | HttpApiGroup.ToService<"auth", Groups>>
+  | XR
 >;
 export function layer<
   Self,
   Id extends string,
   Shape,
   Groups extends HttpApiGroup.Constraint,
+  Fields extends UserFields.Declarations,
+  Limits extends RateLimitModel.Table,
+  Records extends AnyRecords,
+  Points extends Layer.Layer<never, unknown, unknown>,
   E,
   R,
   Deps extends ReadonlyArray<Any> = readonly [],
@@ -478,29 +762,45 @@ export function layer<
   Ports extends ReadonlyArray<PortClass> = readonly [],
   CE = never,
   CR = never,
+  Exposed extends ReadonlyArray<PortClass> = readonly [],
+  XOut = never,
+  XE = never,
+  XR = never,
 >(
-  plugin: Class<Self, Id, Shape, Groups>,
+  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;
     readonly ports?: Ports;
     readonly contributes?: Layer.Layer<never, CE, CR>;
+    readonly exposes?: Exposes<Exposed, XOut, XE, XR>;
     readonly make: Effect.Effect<Shape, E, R>;
-  } & PortsComplete<R | CR, Ports>,
+  } & PortsComplete<R | CR | XR, Ports> &
+    ExposesComplete<Id, XOut, Exposed> &
+    RecordsComplete<R | CR | XR, Layer.Success<Records["memory"]> | RecordsOut<Deps[number]>> &
+    HookPointsComplete<
+      R | CR | XR | TapPoints<Taps>,
+      Layer.Success<Points> | HookPointsOut<Deps[number]>
+    >,
 ): Layer.Layer<
-  Self,
-  E | CE,
-  | Exclude<R, Scope.Scope>
+  Self | XOut,
+  E | CE | XE,
+  | Exclude<R, Scope.Scope | XOut>
   | InstanceOf<Deps[number]>
   | InstanceOf<Ports[number]>
   | TapPoints<Taps>
-  | Exclude<CR, Self>
+  | Exclude<CR, Self | XOut>
+  | XR
 >;
 export function layer<
   Self,
   Id extends string,
   Shape,
   Groups extends HttpApiGroup.Constraint,
+  Fields extends UserFields.Declarations,
+  Limits extends RateLimitModel.Table,
+  Records extends AnyRecords,
+  Points extends Layer.Layer<never, unknown, unknown>,
   E,
   R,
   HE = never,
@@ -510,13 +810,18 @@ export function layer<
   Ports extends ReadonlyArray<PortClass> = readonly [],
   CE = never,
   CR = never,
+  Exposed extends ReadonlyArray<PortClass> = readonly [],
+  XOut = never,
+  XE = never,
+  XR = never,
 >(
-  plugin: Class<Self, Id, Shape, Groups>,
+  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;
     readonly ports?: Ports;
     readonly contributes?: Layer.Layer<never, CE, CR>;
+    readonly exposes?: Exposes<Exposed, XOut, XE, XR>;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers?: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
   },
@@ -549,7 +854,16 @@ export function layer<
       options.ports.map((port) => port.key),
     );
   }
-  const own = Layer.effect<Self, Shape, E, R>(plugin, options.make);
+  if (options.exposes !== undefined) {
+    exposesByPlugin.set(
+      plugin,
+      options.exposes.services.map((service) => service.key),
+    );
+  }
+  const ownOnly = Layer.effect<Self, Shape, E, R>(plugin, options.make);
+  // ADR-EA-040: the exposed services are built once, beneath `make`, so `make` may require them and
+  // a dependent plugin's requirement on them is discharged by `Auth.make`'s fold.
+  const own = Layer.provideMerge(ownOnly, options.exposes?.layer ?? Layer.empty);
   const withHandlers = options.handlers ? Layer.provideMerge(options.handlers, own) : own;
   // A plugin's other registry contributions (its erasure/export sections, rate-limit
   // rules, ...): built over the plugin's own service, and what else they require joins
@@ -558,12 +872,33 @@ export function layer<
     options.contributes === undefined
       ? withHandlers
       : Layer.provideMerge(options.contributes, withHandlers);
-  if (taps.length === 0) return withContributions;
+  // BEH-EA-111: declared means opened. A plugin whose table is non-empty must have opened its budget
+  // by the time its layer is built, so the declaration `plugin list --rules` prints is never a rule
+  // nothing registered. Applies only when a registry is in scope (a budget requires one, so a plugin
+  // that opens its budget always has it).
+  const guarded = Layer.tap(withContributions, () =>
+    Effect.flatMap(Effect.serviceOption(RateLimitModel.RateLimitsRegistry), (registry) =>
+      Option.isNone(registry) || Object.keys(plugin.rateLimitRules).length === 0
+        ? Effect.void
+        : Effect.flatMap(registry.value.handleOf(plugin.id), (handle) =>
+            Option.isSome(handle)
+              ? Effect.void
+              : Effect.die(
+                  new RateLimitModel.RateLimitBudgetNotOpened({
+                    plugin: plugin.id,
+                    rules: Object.keys(plugin.rateLimitRules),
+                    message: `awthaq: plugin "${plugin.id}" declares rate-limit rules but its layer never opened RateLimits.budget(${plugin.id})`,
+                  }),
+                ),
+          ),
+    ),
+  );
+  if (taps.length === 0) return guarded;
   // PERS-003: the plugin installs its own taps as its own owner, so the
   // runtime chain orders them by this plugin's place in the composition.
   const installed = taps.reduce<Layer.Layer<never, never, unknown>>(
     (acc, declaration) => Layer.merge(acc, declaration.install(plugin)),
     Layer.empty,
   );
-  return Layer.merge(withContributions, installed);
+  return Layer.merge(guarded, installed);
 }

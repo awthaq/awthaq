@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-29 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.8 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-314), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) |
+> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-314), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) <br> 1.3 (2026-10-13): the `BeforeSessionIssue` divert context carries `amr: ["fed"]`, the same methods the session records (plan 10 item 1); a session-store outage during the ACS completion is the typed `StoreUnavailable`, not a defect (ADR-EA-028) <br> 1.4 (2026-10-13): SAML and SSO rate-limit rules are declared, registered and tunable with `RateLimits.overrides` (plan 06) <br> 1.5 (2026-10-13): BEH-EA-240/315/316: the Single Logout record and role mapping are a sign-in continuation that survives a second factor (ADR-EA-038, architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-314: the SP private key is a sealed column re-sealed on read and an unopenable key is a `sealedColumn.readable` defect; the records are Keyed/Derived and fail with StoreUnavailable (plan 05 phase 7) <br> 1.7 (2026-10-13): BEH-EA-316: the mapping is `OrganizationMembers.setRoles` with an `IdentityProvider` actor, and a veto tap that rewrites the roles is re-bounded (ADR-EA-040, architecture plan 04 phase 3) <br> 1.8 (2026-10-14): BEH-EA-317: an email domain belongs to one organization across protocols (`DomainClaims`, plan 10 item 7) |
 ---
 
 > `@awthaq/saml` implements this ([MOD-EA-010](../models/10-saml.md)). It was written first on purpose — SAML's failure modes are silent signature bypasses, so the checks and their order were fixed before an implementation could drift — and every rule below has a negative test, including the XML signature-wrapping (XSW) corpus from the SAML security literature (`packages/saml/test/XmlSignatureNode.test.ts`). The signature step is the `XmlSignature` port (`@awthaq/ports`), implemented over the maintained `xml-crypto` library (Node adapter in `@awthaq/saml`); the plugin reads the assertion ONLY from the signed bytes that port returns.
@@ -160,6 +160,8 @@ REQUIREMENT: After every check above passes, the account MUST be resolved by
 
 The IdP asserts an identity *within its own directory*; treating its email attribute as proof of ownership of a local account would let any organization's IdP take over accounts by email, the same account-linking rule ([BEH-EA-123](16-oauth.md)) OAuth applies.
 
+*Implementation* (plan 10 item 1): the completion consults `Hooks.BeforeSessionIssue` with `{ userId, strategy: <providerId>, amr: ["fed"] }`, the same `amr` it then issues the session with, so a second-factor divert (BEH-EA-261) records `fed` alongside `otp` and `mfa` instead of losing the first factor. An outage reading the user or minting the session fails the ACS with `StoreUnavailable` (503, [ADR-EA-028](../decisions/028-infrastructure-error-policy.md)). The completion is core's `SignIn.complete` (BEH-EA-322, ADR-EA-038): a user erased between the IdP's proof and the session is the uniform `SamlAssertionRejected` (`accountMissing`), and a suspended account is announced as `signInFailed{suspended}`. The Single Logout record and the role mapping (BEH-EA-315, 316) are a *sign-in continuation* (`saml.acs`), so they apply whether the ACS mints the session or a second factor does later (BEH-EA-261), and a tenant-scoped connection's session keeps the connection's tenant across the divert.
+
 _Previous: [BEH-EA-244](29-saml-sp.md#beh-ea-244-inresponseto-matches-a-stored-single-consume-request-id) | Next: [BEH-EA-246](30-scim.md#beh-ea-246-a-scim-connection-authenticates-by-a-hashed-revocable-bearer-token-and-scopes-everything-it-reads)_
 
 ## BEH-EA-314: A connection can sign its AuthnRequests with an SP key that is stored sealed, and never falls back to unsigned
@@ -176,8 +178,9 @@ REQUIREMENT: A connection with `authnRequestsSigned` MUST send every AuthnReques
              X.509 certificate valid `signingKeyValidityDays`, default five
              years); an operator MAY instead import a pair, which MUST be RSA of
              at least 2048 bits with a certificate for THAT key. The private key
-             MUST be stored only as an `Encryption` envelope whose additional
-             authenticated data names the key, and MUST never appear in an API
+             MUST be stored only as an `Encryption` envelope (a sealed column of
+             `SamlRecords`) whose additional authenticated data names the table,
+             the key and the column, and MUST never appear in an API
              response, an event or a log. The newest unexpired key signs; the
              older certificates stay published until they expire (a rotation
              overlap). A connection that signs and has no usable key (all
@@ -186,7 +189,7 @@ REQUIREMENT: A connection with `authnRequestsSigned` MUST send every AuthnReques
              `WantAuthnRequestsSigned="true"` makes the flag default on.
 ```
 
-The redirect binding forbids an enveloped XML signature, so the signature covers the query octets; the same key signs Single Logout messages (BEH-EA-315) when the connection has one. The negative tests are the verifier's side of it: a signature that fails after any change to the message, under another key, or under a downgraded `SigAlg`.
+The key is a `SealedColumn` ([ADR-EA-019](../decisions/019-encryption-key-rotation.md) decision 6): `saml_sp_key.privateKey` is sealed under `saml_sp_key:<id>:privateKey`, a key sealed under the older `saml-sp-key:<id>:privateKey` spelling still opens and is re-sealed canonically (and when the encryption key rotates) on read, and a key that does not open is the `sealedColumn.readable` defect (`SealedColumn.orDie`), never an unsigned request. The connection tables are tenant-scoped like the organization's ([BEH-EA-328](28-tenancy.md#beh-ea-328-every-plugin-table-declares-its-tenancy-and-authmake-validates-the-declarations)): `saml_connection` is Keyed by `organizationId` and the domain, key and session tables are Derived through it; a protocol message that names its connection before any tenant is known (the ACS, Single Logout, SP metadata, home-realm discovery) and the session sweep present a `CrossTenant` witness, and a store outage is `StoreUnavailable` ([BEH-EA-325](05-persistence-stratum.md#beh-ea-325-a-plugin-records-module-fails-with-storeunavailable-never-a-defect-when-its-store-is-down)). The redirect binding forbids an enveloped XML signature, so the signature covers the query octets; the same key signs Single Logout messages (BEH-EA-315) when the connection has one. The negative tests are the verifier's side of it: a signature that fails after any change to the message, under another key, or under a downgraded `SigAlg`.
 
 _Previous: [BEH-EA-245](29-saml-sp.md#beh-ea-245-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | Next: [BEH-EA-315](29-saml-sp.md#beh-ea-315-single-logout-ends-sessions-in-both-directions-over-the-redirect-and-post-bindings-verified-like-an-assertion)_
 
@@ -240,7 +243,7 @@ REQUIREMENT: A connection MAY carry a role mapping: rules (`{ attribute, value?,
              `defaultRoles`. After a sign-in has passed every check and
              `Users.assertCanSignIn`, the roles of the matching rules (else the
              defaults; else nothing) MUST become the user's roles in the
-             connection's organization (`Organization.syncMemberRoles`): the
+             connection's organization (`OrganizationMembers.setRoles` with an `IdentityProvider` actor and the connection's ceiling as its `Bound`): the
              membership is added, or re-roled. The conferred roles MUST be within
              the ceiling by RRM-001's `canGrant` rule (the statements they hold
              MUST be held by the ceiling), so a connection whose ceiling does not
@@ -274,8 +277,16 @@ REQUIREMENT: `POST /auth/sso/start { email | organizationId, callbackURL? }` MUS
              (default `saml`) MUST win and `Sso.discoverAll` MUST list every match.
              Nothing routing MUST be one uniform `SsoNotFound` whatever the reason
              (unknown domain, unknown organization, malformed or missing hint),
-             and the endpoint MUST be rate limited per source address.
+             and the endpoint MUST be rate limited per source address (`sso.start`, declared and registered like the SAML `login`, `acs` and `slo` rules and tunable with `RateLimits.overrides`; `SamlConfig.rateLimits` accepts a partial object).
+             An email domain MUST belong to one organization whatever protocol routes
+             it: registering a connection (OIDC/OAuth2 or SAML) for a domain another
+             organization already claims, over either protocol, MUST be refused as that
+             protocol's own domain-taken answer and change nothing; the organization
+             that owns a domain MAY route it over both protocols (`preferred` then
+             picks). A claim MUST live and die with its connection and its organization.
 ```
+
+**One organization per domain (plan 10 item 7).** Domains are asserted, not verified, and used to be unique only within one protocol's table: organization B could register `acme.com` over SAML while the real Acme routed it over OIDC, and with the default `preferred: "saml"` every `@acme.com` sign-in went to B's IdP (phishing and denial of service, not takeover: B's IdP still has to authenticate). Both connection stores now claim through `@awthaq/organization`'s `DomainClaims` (`organization_domain_owner`, whose primary key makes a first claim atomic, and `organization_domain_claim`, which connection claims what), in the same transaction as the connection row; the per-protocol uniqueness stays as defence in depth. The migrations backfill the stored domains (organization's the OIDC ones, Saml's the SAML ones) and Saml's REFUSES to run, naming the domains, when one organization holds a domain over OIDC that another holds over SAML: which side keeps it is the operator's call. Known limit: the memory twin is atomic per `Ref` and releases a claim again when the connection write fails; Postgres relies on the owner row's primary key, not on a lock. Tests: `packages/organization/test/DomainClaims.test.ts`, `packages/saml/test/SamlDomainClaims.test.ts`, `SamlDomainClaimMigration.test.ts`.
 
 The dispatcher is a router, not a third protocol: the state cookie, the redirect and every check stay the owning plugin's ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md) Decision 4).
 
@@ -291,7 +302,7 @@ REQUIREMENT: The `saml.admin` group MUST be admin-tier (BEH-EA-071), behind
              organizationId? })`, which denies by default: a denial MUST answer
              403, publish `auth.admin.actionDenied` (`saml.<action>`) and reveal
              nothing about which ids exist; past the gate each administrator is
-             limited to `adminRate` (429). Inside a tenant only that tenant's
+             limited to `adminRate` (429; the rule is declared and registered like any plugin's and tunable with `RateLimits.overrides`, the knob names unchanged). Inside a tenant only that tenant's
              organization is in reach: another organization's connection MUST be
              answered exactly like an id that does not exist, and registering one
              for another organization like an organization that does not exist.

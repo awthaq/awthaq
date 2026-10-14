@@ -6,6 +6,7 @@
 // maps it (`Runtime.getErrorExitCode`, BEH-EA-225). Database-backed commands run over a real
 // in-memory SQLite client the *World* owns, so state survives across the separate runtimes each
 // invocation builds, the way a database does (the same seam `packages/cli/test/support/*` uses).
+import { TestEncryption } from "@awthaq/test";
 import {
   Browser,
   Cli,
@@ -16,8 +17,8 @@ import {
 } from "@awthaq/cli";
 import {
   Accounts,
-  Auth,
   AuditLog,
+  Auth,
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
@@ -25,6 +26,7 @@ import {
   Erasure,
   Hooks,
   Migrations,
+  Persistence,
   Slots,
   Users,
 } from "@awthaq/core";
@@ -61,6 +63,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { cheapArgon2id } from "./shared/Harness.ts";
 import { makeOutcomes, type Outcomes } from "./shared/Outcomes.ts";
 import { startSessionServer, type SessionServer } from "./SessionServer.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 // ---- the compositions ---------------------------------------------------------------------
 
@@ -149,23 +154,22 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 const CoreLive = Layer.mergeAll(
-  Users.layerSql.pipe(
-    Layer.provide(Repositories.UsersRepositoryLive),
-    Layer.provide(Hooks.BeforeUserDelete.layer),
-  ),
-  Accounts.layerSql.pipe(
-    Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-  ),
+  Users.layer.pipe(Layer.provide(SqlStores)),
+  Accounts.layer
+    .pipe(Layer.provide(SqlStores))
+    .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
   SqlTransaction.layerSql,
   cheapArgon2id.pipe(Layer.provide(NodeCrypto.layer)),
 ).pipe(
   Layer.provideMerge(
     AuthEvents.layer.pipe(
       Layer.provideMerge(
-        AuditLog.layerSql.pipe(
-          Layer.provide(Repositories.AuditLogRepositoryLive),
-          Layer.provide(NodeCrypto.layer),
-        ),
+        AuditLog.layer
+          .pipe(Layer.provide(SqlStores))
+          .pipe(
+            Layer.provide(Repositories.AuditLogRepositoryLive),
+            Layer.provide(NodeCrypto.layer),
+          ),
       ),
     ),
   ),
@@ -175,7 +179,8 @@ const CoreLive = Layer.mergeAll(
 
 /** Core services plus the Roles plugin (catalog: `admin`, `editor`) over the given SQL client. */
 export const sqlApp = (sql: SqlClient.SqlClient) =>
-  Roles.Roles.layerSql.pipe(
+  Roles.Roles.layer.pipe(
+    Layer.provide(Roles.Roles.records.sql),
     Layer.provide(Roles.config([adminRole, editorRole])),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)),

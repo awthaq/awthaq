@@ -4,7 +4,8 @@
 // out-privileges the connection is never reshaped by it, the last owner is never demoted, and a mapping that cannot be applied
 // never locks the user out.
 import { AuditLog, Users } from "@awthaq/core";
-import { MembershipRecords, Organization } from "@awthaq/organization";
+import { Organization, OrganizationHooks } from "@awthaq/organization";
+import { MembershipRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -326,7 +327,7 @@ describe("a sign-in through a connection with a role mapping", () => {
         const records = yield* SamlRecords.SamlRecords;
         const { connection, organizationId } = yield* seedConnection({ roleMapping: groupsRule });
         // Rewritten straight in the records, the way a stale row or a hand-edited database could look.
-        yield* records.update(connection.id, {
+        yield* records.update(connection.organizationId, connection.id, {
           roleMapping: mapping(
             [{ attribute: "groups", value: "admins", roles: ["owner"] }],
             ["member"],
@@ -345,7 +346,7 @@ describe("a sign-in through a connection with a role mapping", () => {
           Option.none(),
         );
         // Even an admin ceiling cannot mint an owner: it is the statements held, not the name.
-        yield* records.update(connection.id, {
+        yield* records.update(connection.organizationId, connection.id, {
           roleMapping: mapping(
             [{ attribute: "groups", value: "admins", roles: ["owner"] }],
             ["admin"],
@@ -387,7 +388,7 @@ describe("a sign-in through a connection with a role mapping", () => {
         yield* users.verifyEmail(founder.id);
         yield* members.create({ userId: founder.id, organizationId, role: ["owner"] });
         yield* members.remove(Users.UserId(ownerPrincipal.ref.id), organizationId);
-        yield* records.update(connection.id, { trustsEmail: true });
+        yield* records.update(connection.organizationId, connection.id, { trustsEmail: true });
         assert.strictEqual(yield* members.countOwners(organizationId), 1);
         // Under an admin ceiling the IdP cannot touch an owner at all (they out-privilege the connection).
         const outranked = yield* signInWith(
@@ -399,7 +400,7 @@ describe("a sign-in through a connection with a role mapping", () => {
         assert.strictEqual(outranked.session.session.userId, founder.id);
         assert.deepStrictEqual(yield* rolesOf(founder.id, organizationId), Option.some(["owner"]));
         // Even under an owner ceiling, an IdP mapping to `member` does not demote the only owner.
-        yield* records.update(connection.id, {
+        yield* records.update(connection.organizationId, connection.id, {
           roleMapping: mapping(
             [{ attribute: "groups", value: "staff", roles: ["member"] }],
             ["owner"],
@@ -417,12 +418,48 @@ describe("a sign-in through a connection with a role mapping", () => {
       }).pipe(Effect.provide(SamlLive({ allowOwnerRoleMapping: true }))),
   );
 
+  it.effect("an applied mapping fires AfterAddMember with an IdentityProvider actor", () => {
+    const seen: Array<string> = [];
+    return Effect.gen(function* () {
+      yield* atNow;
+      const { connection, organizationId } = yield* seedConnection({ roleMapping: groupsRule });
+      const outcome = yield* signInWith(
+        connection.id,
+        { email: ["ada@acme.example"], groups: ["admins"] },
+        "ada@acme.example",
+        "_idp1",
+      );
+      assert.deepStrictEqual(
+        yield* rolesOf(outcome.session.session.userId, organizationId),
+        Option.some(["admin"]),
+      );
+      // The creator's own membership fired first (D7); the mapping's add is the identity provider's.
+      assert.deepStrictEqual(seen.slice(1), [`IdentityProvider:${connection.id}`]);
+      assert.strictEqual(seen[0]?.startsWith("User:"), true);
+    }).pipe(
+      Effect.provide(
+        SamlLive(
+          {},
+          undefined,
+          undefined,
+          undefined,
+          OrganizationHooks.AfterAddMember.tap((input) => {
+            seen.push(
+              `${input.actor._tag}:${"connectionId" in input.actor ? input.actor.connectionId : ""}`,
+            );
+            return Effect.void;
+          }),
+        ),
+      ),
+    );
+  });
+
   it.effect("a role that no longer exists is logged and skipped: the sign-in still succeeds", () =>
     Effect.gen(function* () {
       yield* atNow;
       const records = yield* SamlRecords.SamlRecords;
       const { connection, organizationId } = yield* seedConnection({ roleMapping: groupsRule });
-      yield* records.update(connection.id, {
+      yield* records.update(connection.organizationId, connection.id, {
         roleMapping: mapping(
           [{ attribute: "groups", value: "admins", roles: ["retired-role"] }],
           ["admin"],

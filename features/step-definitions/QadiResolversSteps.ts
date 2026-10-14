@@ -76,7 +76,7 @@ const DyingUsers = Layer.succeed(Users.Users, {
   promoteIdentity: () => Effect.die("promoteIdentity is not used"),
   changeEmail: () => Effect.die("changeEmail is not used"),
   setStatus: () => Effect.die("setStatus is not used"),
-  delete: () => Effect.die("delete is not used"),
+  createWith: () => Effect.die("createWith is not used"),
   list: () => Effect.die("list is not used"),
   getFields: () => Effect.die("getFields is not used"),
   setFields: () => Effect.die("setFields is not used"),
@@ -110,7 +110,7 @@ const BillingApi = HttpApi.make("auth").add(
 class Billing extends AuthPlugin.Service<Billing, Record<string, never>>()("billing", {
   apiVersion: 1,
   contract: BillingApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(Billing, {
     make: Effect.succeed({}),

@@ -1,7 +1,8 @@
+// Hand-wired on purpose: the credential-resolver registry is the unit under test (plan 08 exemption).
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-066 (bearer), BEH-EA-072
 // (declaration-order chain). MAPS-001/MAPS-004/OCM-002: plugin-contributed
 // credential resolvers on the `bearer` and `apiKey` carriers (ADR-EA-012 registry).
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -114,9 +115,9 @@ const layerWith = (...contributions: ReadonlyArray<ReturnType<typeof contributio
     Layer.provideMerge(Authentication.MachineAuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
     Layer.provideMerge(registry),
-    Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(TestServices),
   );

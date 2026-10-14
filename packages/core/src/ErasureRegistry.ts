@@ -12,11 +12,11 @@ import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import * as ContributionRegistry from "./internal/contributionRegistry.ts";
 import type { StoreUnavailable } from "./Errors.ts";
-import type { Models as SqlModels } from "@awthaq/sql";
+import type { Ids } from "@awthaq/ports";
 
 /** What a contribution is told about the user being erased. The email (absent for a phone or anonymous identity) is carried so a plugin can sweep rows keyed by address (an invitation addressed to the user). */
 export interface ErasureSubject {
-  readonly userId: SqlModels.UserId;
+  readonly userId: Ids.UserId;
   readonly email?: string | undefined;
 }
 

@@ -6,17 +6,13 @@
 // `canImpersonate` function (no `Layer.mock` needed — it is a bare config
 // predicate, not a service).
 import { Api } from "@awthaq/api";
-import { AuditChain, AuthEvents, Sessions, Tenant, Users } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, AuthEvents, Sessions, Tenant, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -24,57 +20,8 @@ import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-/**
- * The `admin` group declares `.middleware(Api.Authentication)` — merged into
- * `Admin.Admin.layer` regardless of whether a test ever dispatches real
- * HTTP, so this domain-level suite still has to satisfy it, the same way
- * `@awthaq/passkey`'s own `Passkey.test.ts` does.
- */
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-// AR-003: the admin group sits behind `Api.AdminAuthentication`; the default just delegates.
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-
-/**
- * `admin` also now declares `.middleware(Api.CsrfProtection)` — merged into
- * `Admin.Admin.layer` regardless of whether a test ever issues real HTTP
- * (`HttpApiBuilder.group` requires it in context to even build the handlers
- * layer). No request is ever built in this domain-level suite, so nothing
- * downstream of this actually exercises the double-submit check — only its
- * presence in context is load-bearing here.
- */
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("admin-domain-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 const buildLayerWith = (config: Partial<Admin.AdminConfigShape>) =>
-  Admin.Admin.layer.pipe(
-    Layer.provide(Admin.config(config)),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      ImpersonationRecords.layerMemory.pipe(
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
-      ),
-    ),
-  );
+  TestAuth.layer(Auth.make([Admin.Admin]), { services: Admin.config(config) });
 
 const buildLayer = (canImpersonate: Admin.AdminConfigShape["canImpersonate"]) =>
   buildLayerWith({ canImpersonate });

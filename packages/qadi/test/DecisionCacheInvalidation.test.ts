@@ -15,21 +15,14 @@
 // below shares it (each test uses its own organization/user ids, so shared
 // state cannot leak between them).
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { Auth, Users } from "@awthaq/core";
 import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
   Organization,
-  OrganizationHooks,
+  OrganizationActor,
+  OrganizationDirectory,
+  OrganizationMembers,
   OrganizationQadi,
-  OrganizationRecords,
-  OrgRoleRecords,
-  TeamRecords,
 } from "@awthaq/organization";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, layer } from "@effect/vitest";
 import {
   currentSubjectLayer,
@@ -46,57 +39,22 @@ import {
 } from "@qadi/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
+import * as Option from "effect/Option";
 import * as DecisionCacheInvalidation from "../src/DecisionCacheInvalidation.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import { TestAuth } from "@awthaq/test";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("decision-cache-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const records = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
-  layer.pipe(Layer.provide(NodeCrypto.layer));
-
-const OrganizationLive = Organization.Organization.layer.pipe(
-  Layer.provide(
-    Organization.config({
-      dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 10 },
-      teams: {
-        enabled: true,
-        maximumTeams: Number.POSITIVE_INFINITY,
-        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
-        allowRemovingAllTeams: false,
-      },
-    }),
-  ),
-  Layer.provide(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(records(OrganizationRecords.layerMemory)),
-  Layer.provideMerge(records(MembershipRecords.layerMemory)),
-  Layer.provideMerge(ActiveContextRecords.layerMemory),
-  Layer.provideMerge(records(InvitationRecords.layerMemory)),
-  Layer.provideMerge(records(OrgRoleRecords.layerMemory)),
-  Layer.provideMerge(records(TeamRecords.layerMemory)),
-  Layer.provideMerge(Mailer.layerMemory),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-);
+const OrganizationLive = TestAuth.layer(Auth.make([Organization.Organization]), {
+  services: Organization.config({
+    dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 10 },
+    teams: {
+      enabled: true,
+      maximumTeams: Number.POSITIVE_INFINITY,
+      maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+      allowRemovingAllTeams: false,
+    },
+  }),
+});
 
 // The app-scoped cache, plus the opt-in bridge that keeps it honest.
 const RelationshipsLive = OrganizationQadi.relationships.pipe(
@@ -112,6 +70,17 @@ const AppLive = Layer.mergeAll(
   Layer.provideMerge(decisionCacheLayer({ capacity: 64 })),
   Layer.provideMerge(OrganizationLive),
 );
+
+/** Arranges a membership the way `Organization.addMember` once did: a trusted add by the application. */
+const addMember = (organizationId: string, user: string, role: ReadonlyArray<string>) =>
+  Effect.flatMap(OrganizationMembers.OrganizationMembers, (members) =>
+    members.add(OrganizationActor.application("qadi test"), {
+      organizationId,
+      userId: Users.UserId(user),
+      role,
+      bound: OrganizationActor.Bound.Unbounded(),
+    }),
+  );
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({
@@ -149,11 +118,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-rm");
         const record = yield* organization.create({ caller: owner, name: "Rm", slug: "rm" });
-        yield* organization.addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-rm"),
-          role: ["member"],
-        });
+        yield* addMember(record.id, "member-rm", ["member"]);
         assert.isTrue(yield* decide("member", record.id, "member-rm"));
 
         yield* organization.removeMember(owner, record.id, Users.UserId("member-rm"));
@@ -167,11 +132,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-lv");
         const record = yield* organization.create({ caller: owner, name: "Lv", slug: "lv" });
-        yield* organization.addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-lv"),
-          role: ["member"],
-        });
+        yield* addMember(record.id, "member-lv", ["member"]);
         assert.isTrue(yield* decide("member", record.id, "member-lv"));
 
         yield* organization.leave(asCaller("member-lv"), record.id);
@@ -185,11 +146,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-role");
         const record = yield* organization.create({ caller: owner, name: "Role", slug: "role" });
-        yield* organization.addMember({
-          organizationId: record.id,
-          userId: Users.UserId("admin-role"),
-          role: ["admin"],
-        });
+        yield* addMember(record.id, "admin-role", ["admin"]);
         assert.isTrue(yield* decide("admin", record.id, "admin-role"));
 
         yield* organization.updateMemberRole(owner, record.id, Users.UserId("admin-role"), [
@@ -242,11 +199,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-tm");
         const record = yield* organization.create({ caller: owner, name: "Tm", slug: "tm" });
-        yield* organization.addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-tm"),
-          role: ["member"],
-        });
+        yield* addMember(record.id, "member-tm", ["member"]);
         const team = yield* organization.createTeam(owner, record.id, "Eng");
         yield* organization.addTeamMember(owner, record.id, team.id, Users.UserId("member-tm"));
         assert.isTrue(yield* decide("team-member", team.id, "member-tm"));
@@ -254,6 +207,68 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
         yield* organization.removeTeamMember(owner, record.id, team.id, Users.UserId("member-tm"));
 
         assert.isFalse(yield* decide("team-member", team.id, "member-tm"));
+      }),
+    );
+  });
+
+  // Plan 04 (D10): the points a long-lived cache used to miss.
+  layer(AppLive)((it) => {
+    it.effect("suspending an organization clears the cache, and reinstating clears it again", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const directory = yield* OrganizationDirectory.OrganizationDirectory;
+        const owner = asCaller("owner-sus");
+        const record = yield* organization.create({ caller: owner, name: "Sus", slug: "sus" });
+        yield* addMember(record.id, "member-sus", ["member"]);
+        assert.isTrue(yield* decide("member", record.id, "member-sus"));
+        const admin = OrganizationActor.platformAdmin(Users.UserId("admin-sus"));
+
+        yield* directory.suspend(admin, { organizationId: record.id });
+        assert.isFalse(yield* decide("member", record.id, "member-sus"));
+
+        yield* directory.reinstate(admin, { organizationId: record.id });
+        assert.isTrue(yield* decide("member", record.id, "member-sus"));
+      }),
+    );
+
+    it.effect("changing a team role clears the cache so team-role follows it", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-ur");
+        const record = yield* organization.create({ caller: owner, name: "Ur", slug: "ur" });
+        yield* addMember(record.id, "member-ur", ["member"]);
+        const team = yield* organization.createTeam(owner, record.id, "Eng");
+        yield* organization.addTeamMember(owner, record.id, team.id, Users.UserId("member-ur"));
+        assert.isFalse(yield* decide("team-role:lead", team.id, "member-ur"));
+
+        yield* organization.updateTeamMemberRole(
+          owner,
+          record.id,
+          team.id,
+          Users.UserId("member-ur"),
+          ["lead"],
+        );
+
+        assert.isTrue(yield* decide("team-role:lead", team.id, "member-ur"));
+      }),
+    );
+
+    it.effect("moving a team clears the cache so inherited team-role follows the move", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-mv");
+        const record = yield* organization.create({ caller: owner, name: "Mv", slug: "mv" });
+        yield* addMember(record.id, "lead-mv", ["member"]);
+        const parent = yield* organization.createTeam(owner, record.id, "Parent");
+        const child = yield* organization.createTeam(owner, record.id, "Child", parent.id);
+        yield* organization.addTeamMember(owner, record.id, parent.id, Users.UserId("lead-mv"), [
+          "lead",
+        ]);
+        assert.isTrue(yield* decide("team-role:lead", child.id, "lead-mv"));
+
+        yield* organization.moveTeam(owner, record.id, child.id, Option.none());
+
+        assert.isFalse(yield* decide("team-role:lead", child.id, "lead-mv"));
       }),
     );
   });
@@ -272,11 +287,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
           const organization = yield* Organization.Organization;
           const owner = asCaller("owner-ctl");
           const record = yield* organization.create({ caller: owner, name: "Ctl", slug: "ctl" });
-          yield* organization.addMember({
-            organizationId: record.id,
-            userId: Users.UserId("member-ctl"),
-            role: ["member"],
-          });
+          yield* addMember(record.id, "member-ctl", ["member"]);
           assert.isTrue(yield* decide("member", record.id, "member-ctl"));
 
           yield* organization.removeMember(owner, record.id, Users.UserId("member-ctl"));

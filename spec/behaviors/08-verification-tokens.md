@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-08 |
-> | Revision | 1.1 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.3 (2026-10-13): the PV-220 note: `consume` records a miss through the unit of work; `deferMiss`/`recordMiss` removed (ADR-EA-037, plan 10 item 5) <br> 1.4 (2026-10-13): `Verification.redeem` owns the claim-and-use transaction in both adapters; BEH-EA-058 "as shipped" text, BEH-EA-059 and BEH-EA-062 notes (ADR-EA-039, plan 07) <br> 1.5 (2026-10-13): BEH-EA-063: a reservation is expired iff `now >= expiresAt` in both layers; SOS-004: a miss is charged to the row it was judged against (plan 02 phase 0) <br> 1.6 (2026-10-13): One implementation over `VerificationStore`: a consumed row is kept as evidence in every adapter and is never consumable again (BEH-EA-062, was `MUST be gone` in memory), the payload is one JSON codec, a reservation's tenant is stamped by every adapter (plan 02 phase 3) <br> 1.7 (2026-10-14): BEH-EA-337, plugins contribute their table-expiry rules to `Retention.sweep` (plan 10 item 6) |
 
 ---
 
@@ -53,6 +53,8 @@ REQUIREMENT: Marking a verification token consumed and applying the state
              remains replayable.
 ```
 
+**As shipped (ADR-EA-039):** `Verification.redeem({ identifier, value, use, onFailure })` claims the token and runs `use` in one transaction. `layerSql` uses one transaction (a savepoint inside an outer one, such as the RLS tenant transaction). `layerMemory` holds the claimed row and gives it back on rollback (unless a newer `issue` or a `deleteAllByUser` got there first), so a failed `use` leaves the token live **in both adapters**. A typed failure settles as `"rollback"` (the default) or `"commit"` (`onFailure`, for a refusal that is itself the outcome the token paid for: a second-factor divert, a veto after a valid presentation; `Verification.commitUnlessUnavailable` spends the token on any refusal and gives it back on an outage). A defect or an interruption always rolls back. A `SqlError` from the transaction is `StoreUnavailable("Verification.redeem")`. `consume` remains for burn-first tokens (OAuth/SAML request state, the native exchange code): never for a token that authorises a state change.
+
 `archive/PRD.md` §13 and §18 both require tokens to be "single-use in-transaction." `archive/design/usage-examples-v4.md` §6.1 is the worked confirmation of this for password reset: `confirmReset` both consumes the token and rotates the password (and, per BEH-EA-053, issues a fresh session while revoking others) as one operation, so a race between two requests bearing the same token cannot apply the change twice or leave it applied with the token still valid.
 
 ## BEH-EA-059: Replaying an already-consumed or unknown token publishes `auth.token.replay`
@@ -73,7 +75,9 @@ REQUIREMENT: A consumption attempt against a token that has already been
 
 `archive/design/usage-examples-v4.md` §6.2 documents the exact response shape (`410 TokenConsumed`) alongside the event. Without a distinguishable, queryable signal, an attacker probing stale reset or verification links is indistinguishable from ordinary user error in any downstream monitoring; publishing the event is designed to make replay attempts a first-class operational signal, independent of whatever the audit table separately records (see [13-events.md](13-events.md#beh-ea-100-the-audit-table-is-the-durable-record-of-record-independent-of-the-pubsub-stream)).
 
-**As shipped (PV-220):** an endpoint that consumes inside its own transaction (`Password.confirmReset`/`verifyEmail`/`confirmEmailChange`) fails that transaction with the replay itself, so a row written inline would roll back with it. Such a caller passes `consume(identifier, value, { deferMiss: true })` (which then records nothing) and calls `Verification.recordMiss(identifier)` after the transaction has ended; `recordMiss` writes the `auth.token.replay` event and durable audit row and, over SQL, spends the attempt a budgeted token is owed (REQ-EA-688, `packages/core/test/Verification.test.ts`).
+**As shipped (PV-220, ADR-EA-037):** an endpoint that consumes inside its own transaction (`Password.confirmReset`/`verifyEmail`/`confirmEmailChange`) fails that transaction with the replay itself, which would roll back a row written inline. `Verification.consume` therefore records a miss through the unit of work (BEH-EA-321): `auth.token.replay` is an attempt event, so its audit row and bus copy are recorded after the transaction ends, and over SQL the attempt a budgeted token is owed is spent in the same `afterUnit` lane (best effort: a store failure there is logged, never turned into a different answer). No caller does anything: the former `deferMiss` option and `recordMiss` are gone, and a type gate keeps them gone (REQ-EA-688, REQ-EA-1282, `packages/core/test/Verification.test.ts`).
+
+A miss inside `redeem` is an outcome, not a failure: `use` never runs, the transaction commits having written nothing, and the replay event and the budgeted token's spent attempt go through the same lane (ADR-EA-039). A `use` that fails and rolls back publishes no replay: the token is live, not replayed.
 
 ## BEH-EA-060: A verification token is hashed at rest
 
@@ -95,7 +99,7 @@ REQUIREMENT: A verification token past its `expiresAt` MUST be treated as
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 states this as a lifecycle property of the entity, not of whatever garbage-collection process eventually removes expired rows: "rows past this instant are treated as already invalid by every read operation, even before they are physically removed." awthaq's plan follows the same rule so that expiry enforcement never depends on the timeliness of a background sweep.
 
-**As shipped (CSG-003, ADR-EA-033):** the physical removal that rule anticipates is `Retention.sweep`, an explicit, opt-in operation (`Retention.layerScheduled` runs it on `RetentionConfig.sweepInterval`; nothing else calls it). `Verification.purgeExpired(before)` deletes tokens consumed or expired before the cutoff and reservations expired before it, in bounded batches, in both layers; the sweep passes `now - verificationForensicWindow` (default 90 days), so a consumed row stays as replay evidence (BEH-EA-058) for that window and a live token is never touched. Ordinary reads and `issue` still never delete history (`packages/core/test/Retention.test.ts`).
+**As shipped (CSG-003, ADR-EA-031):** the physical removal that rule anticipates is `Retention.sweep`, an explicit, opt-in operation (`Retention.layerScheduled` runs it on `RetentionConfig.sweepInterval`; nothing else calls it). `Verification.purgeExpired(before)` deletes tokens consumed or expired before the cutoff and reservations expired before it, in bounded batches, in both layers; the sweep passes `now - verificationForensicWindow` (default 90 days), so a consumed row stays as replay evidence (BEH-EA-058) for that window and a live token is never touched. Ordinary reads and `issue` still never delete history (`packages/core/test/Retention.test.ts`).
 
 ## BEH-EA-062: Consuming a verification token is race-safe — at most one concurrent caller succeeds
 
@@ -108,6 +112,10 @@ REQUIREMENT: When multiple callers race to consume the same token
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as the `consume-verification-value` operation's core guarantee, with an explicit blame rule alongside it: a caller that proceeds with a state change without gating on a non-null consume result is responsible for the resulting violation — the race-safety guarantee protects only callers that actually check the result. awthaq's plan carries the same operation and the same blame assignment into its own `Verification` domain service.
+
+**One implementation over a store port (plan 02, ADR-EA-041).** `Verification` is written once, over `VerificationStore` (a `Ref` adapter in `@awthaq/ports`, a SQL adapter in `@awthaq/sql`), whose primitives are atomic by contract (`StoreContract.verification`, run on the `Ref`, SQLite, WAL-file and Postgres adapters): `upsertLive` replaces the identifier's one unconsumed row; `present` claims it in one step and, on a miss against a budgeted live row, spends an attempt charged to the row the miss was judged against; `reserve`, `deleteByUser` and `purgeExpired`. Two consequences replace text this behavior used to carry. A **consumed row is kept in every adapter** (as replay evidence, until `Retention.sweep`'s forensic window passes): the requirement is that a spent token MUST NOT be consumable again, and "the row MUST be gone" held only of the `Ref` twin. The **payload** is JSON text, encoded and decoded once by the service: a value JSON cannot carry (a `bigint`, a cycle) is a defect on every backend, and a `DateTime` or a class instance comes back as its JSON form on every backend, not by reference on one of them. An outage in a store primitive is `StoreUnavailable` named for the service operation (`Verification.consume`, `Verification.redeem`, ...).
+
+**Memory concurrency (ADR-EA-039, TRBS-005).** While a `redeem`'s `use` runs, `layerMemory` holds the claimed row, so a *concurrent* redeem of the same identifier misses at once (and publishes `auth.token.replay`). Over SQL the second claim's `UPDATE` waits on the row lock and then wins if the first rolled back. At most one succeeds in both; only the loser's timing differs.
 
 **Bounded guesses (SOS-004).** An issued token may carry a `maxAttempts` budget. A wrong presentation against the *live* row spends one attempt — in the same atomic step as the consume (`layerMemory`'s `Ref.modify`; `layerSql`'s single `UPDATE attempts = attempts + 1, consumedAt = CASE WHEN attempts + 1 >= maxAttempts ...`, core migration 28) — and the row is burned at the budget, so the right value no longer works. The failure is still the uniform `TokenConsumed`; a token with no budget, an unknown identifier and an expired row are untouched, exactly as before.
 
@@ -124,6 +132,10 @@ REQUIREMENT: A caller that needs to claim an identifier exclusively (a
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as a distinct operation from ordinary consumption — `reserve-verification-value` — used, for example, to serialize the "promote an unverified user on email proof" operation (§2.3) against a concurrent second promotion of the same user. awthaq's plan reuses the same generic `Verification` entity for this purpose rather than introducing a second, lock-specific table.
+
+**The boundary (plan 02 phase 0).** A reservation is expired iff `now >= expiresAt`, so a reservation made with a zero `ttl` is free at once in both layers, and one made with a positive `ttl` is free at exactly `expiresAt`.
+
+**A miss is charged to the token it was judged against (SOS-004).** `layerSql` reads the live row before it tries to claim, and spends a failed attempt on that row's id, not on the identifier: a reissue between the miss and the spend replaces the live row and its id, so the new token is never charged for a presentation it did not see.
 
 **The resend window (MLO-002).** `reserve` is the resend-window primitive: `MagicLink` and `EmailOtp` reserve `<purpose>-resend:<normalised address>` for their `resendWindow` before minting and mailing a second artifact, so two concurrent requests (or a client hammering "resend") send one message, below and independent of the rate limiter (BEH-EA-268, BEH-EA-272).
 
@@ -149,3 +161,23 @@ REQUIREMENT: A verification-token-issuing endpoint (password reset,
 
 _Previous: [BEH-EA-056](07-sessions.md#beh-ea-056-session-secret-verification-is-a-constant-time-comparison-over-a-fixed-length-hash)_
 _Next: [BEH-EA-065](09-authentication-middleware.md#beh-ea-065-the-authentication-middleware-tries-a-cookie-handler-first-in-its-declared-security-record)_
+
+## BEH-EA-337: `Retention.sweep` runs every installed plugin's retention contribution; one failing contribution does not stop the others
+
+> **See:** [ADR-EA-031](../decisions/031-erasure-registry-and-retention.md) Decision 6, [BEH-EA-282](34-webhooks.md#beh-ea-282-the-delivery-log-takes-part-in-erasure-and-export-and-is-pruned), [BEH-EA-306](37-device-authorization.md#beh-ea-306-grants-are-audited-erased-exported-and-retained-like-any-personal-data)
+
+```text
+REQUIREMENT: A plugin that owns a table whose rows expire or end MUST
+             contribute its own retention rule through `Retention.contribute`
+             rather than prune inside a request. `Retention.sweep` MUST run
+             every registered contribution with the sweep's `now`, after the
+             core purges, and report what each deleted. A contribution that
+             fails MUST be logged and reported as failed, and MUST NOT stop
+             the other contributions or undo the core purges. A request never
+             prunes a plugin's table as a side effect, except where the table
+             is fed by an anonymous endpoint (passkey challenges).
+```
+
+**As shipped (plan 10 item 6).** Contributions: `saml.sessions` (records older than `sessionRecordRetention`, 90 days; the ACS no longer prunes, so a host that never sweeps keeps them), `device_authorization.grants` (grants past `expiresAt`), `jwt.revocations` (denylist rows past the denied token's `exp`), `organization.invitations` (invitations `invitationRetention`, default 30 days, past `expiresAt`, whatever their status), `passkey.challenges` (expired challenges; `issue` still prunes inline) and `webhooks.deliveries` (finished deliveries older than `deliveryRetention`; the opt-in worker keeps its own hourly prune). Not contributed, by decision: impersonation records, API keys and clients, recovery codes, signing keys (ADR-EA-031). `SweepReport.plugins` lists `{ id, deleted, failed }` in run order. Tests: `packages/core/test/Retention.test.ts` (two fakes, one failing), one test per contributing plugin, and the device-authorization scenario in `28-device-authorization.feature`.
+
+_Previous: [BEH-EA-064](08-verification-tokens.md#beh-ea-064-purpose-scoped-flows-respond-uniformly-regardless-of-whether-their-target-exists)_

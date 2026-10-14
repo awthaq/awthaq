@@ -15,15 +15,17 @@
 //   - an email domain routes to exactly one connection;
 //   - a connection that signs its AuthnRequests has an SP signing key (generated when there is none, BEH-EA-314);
 //   - a role mapping names only roles the organization has, confers no more than its ceiling (the `canGrant` rule of RRM-001,
-//     `Organization.checkRoleCeiling`), and mentions `owner` only where the deployment allowed it (BEH-EA-316).
+//     `OrganizationAuthority.checkRoleCeiling`), and mentions `owner` only where the deployment allowed it (BEH-EA-316).
 //
 // An IdP's metadata can be imported (`idp: { metadataXml }`, or fetched by the caller from a URL and passed the same way) and
 // refreshed (`refreshMetadata`): the certificates it lists become the trust set. That is exactly as trustworthy as the channel
 // the metadata arrived by (TLS from the IdP's own URL, through the SSRF-safe pinned fetcher, or pasted from its administrator);
 // what gets pinned afterwards is the fingerprint, not the document.
 
-import { Organization, OrganizationRecords } from "@awthaq/organization";
-import { OutboundUrl } from "@awthaq/ports";
+import type { Api } from "@awthaq/api";
+import { DomainClaims, OrganizationAuthority, OrganizationDirectory } from "@awthaq/organization";
+import { OutboundUrl, SqlTransaction } from "@awthaq/ports";
+import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
 import { X509Certificate } from "node:crypto";
 import * as Context from "effect/Context";
@@ -111,6 +113,15 @@ export type IdpSource =
 const MAX_RULES = 50;
 const MAX_NAME = 255;
 
+/** The admin surface names a connection by its own id; `SamlAdmin` authorizes the caller against that connection's organization. */
+const adminGrant = TenantScoped.crossTenant(
+  "saml admin: a connection is named by its own id; the caller is authorized against its organization",
+);
+/** Home-realm discovery routes an email domain to exactly one connection, across organizations. */
+const discoveryGrant = TenantScoped.crossTenant(
+  "saml: home-realm discovery routes an email domain to exactly one connection, across organizations",
+);
+
 export interface SamlConnectionStoreShape {
   readonly create: (input: {
     readonly organizationId: string;
@@ -130,12 +141,14 @@ export interface SamlConnectionStoreShape {
     readonly roleMapping?: SamlRecords.RoleMapping | undefined;
   }) => Effect.Effect<
     SamlRecords.ConnectionRecord,
-    InvalidSamlConnection | SamlRecords.SamlDomainTaken
+    InvalidSamlConnection | SamlRecords.SamlDomainTaken | Api.StoreUnavailable
   >;
-  readonly get: (id: string) => Effect.Effect<SamlRecords.ConnectionRecord, SamlConnectionNotFound>;
+  readonly get: (
+    id: string,
+  ) => Effect.Effect<SamlRecords.ConnectionRecord, SamlConnectionNotFound | Api.StoreUnavailable>;
   readonly list: (
     organizationId: string,
-  ) => Effect.Effect<ReadonlyArray<SamlRecords.ConnectionRecord>>;
+  ) => Effect.Effect<ReadonlyArray<SamlRecords.ConnectionRecord>, Api.StoreUnavailable>;
   /** Fields left out are unchanged; `certificates`, when given, REPLACES the trust set (that is how a rotation retires the old key). */
   readonly update: (
     id: string,
@@ -155,7 +168,10 @@ export interface SamlConnectionStoreShape {
     },
   ) => Effect.Effect<
     SamlRecords.ConnectionRecord,
-    InvalidSamlConnection | SamlConnectionNotFound | SamlRecords.SamlDomainTaken
+    | InvalidSamlConnection
+    | SamlConnectionNotFound
+    | SamlRecords.SamlDomainTaken
+    | Api.StoreUnavailable
   >;
   /**
    * BEH-EA-318: re-reads the IdP's metadata (fetched by the caller) into the connection: the trust set is REPLACED by the
@@ -165,8 +181,13 @@ export interface SamlConnectionStoreShape {
   readonly refreshMetadata: (
     id: string,
     metadataXml: string,
-  ) => Effect.Effect<SamlRecords.ConnectionRecord, InvalidSamlConnection | SamlConnectionNotFound>;
-  readonly remove: (id: string) => Effect.Effect<void, SamlConnectionNotFound>;
+  ) => Effect.Effect<
+    SamlRecords.ConnectionRecord,
+    InvalidSamlConnection | SamlConnectionNotFound | Api.StoreUnavailable
+  >;
+  readonly remove: (
+    id: string,
+  ) => Effect.Effect<void, SamlConnectionNotFound | Api.StoreUnavailable>;
   /**
    * Home-realm discovery: the connection an organization id (its first-created one) or an email's domain routes
    * to. `None` when there is none — the caller falls back to another way in.
@@ -174,7 +195,7 @@ export interface SamlConnectionStoreShape {
   readonly discover: (hint: {
     readonly organizationId?: string | undefined;
     readonly email?: string | undefined;
-  }) => Effect.Effect<Option.Option<string>>;
+  }) => Effect.Effect<Option.Option<string>, Api.StoreUnavailable>;
 }
 
 export class SamlConnectionStore extends Context.Service<
@@ -182,16 +203,33 @@ export class SamlConnectionStore extends Context.Service<
   SamlConnectionStoreShape
 >()("awthaq/saml/SamlConnectionStore") {}
 
-/** Requires `SamlRecords`, `OrganizationRecords`, the `Organization` service, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
+/** Requires `SamlRecords`, `DomainClaims` (organization's record store), `SqlTransaction`, the exposed `OrganizationDirectory`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
 export const layerStore = Layer.effect(
   SamlConnectionStore,
   Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
-    const orgs = yield* OrganizationRecords.OrganizationRecords;
-    const organization = yield* Organization.Organization;
+    const claims = yield* DomainClaims.DomainClaims;
+    const transaction = yield* SqlTransaction.SqlTransaction;
+    const directory = yield* OrganizationDirectory.OrganizationDirectory;
+    const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
     const crypto = yield* Crypto.Crypto;
     const settings = yield* SamlConfig.SamlConfig;
+
+    /** BEH-EA-317: a domain another organization owns, over any protocol, is a taken domain; the claim and the row are one unit. */
+    const claimed = <A, E, R>(
+      input: DomainClaims.DomainClaim,
+      previous: ReadonlyArray<string> | undefined,
+      write: Effect.Effect<A, E, R>,
+    ) =>
+      DomainClaims.withClaim(
+        claims,
+        transaction,
+        input,
+        previous,
+        write,
+        (domain) => new SamlRecords.SamlDomainTaken({ domain }),
+      );
 
     const validatedUrl = (field: string, url: string) => {
       const problem = OutboundUrl.problem(field, url, {
@@ -257,7 +295,7 @@ export const layerStore = Layer.effect(
       const conferred = [
         ...new Set([...mapping.rules.flatMap((rule) => rule.roles), ...mapping.defaultRoles]),
       ];
-      const verdict = yield* organization
+      const verdict = yield* authority
         .checkRoleCeiling({ organizationId, roles: conferred, ceiling: mapping.ceiling })
         .pipe(
           Effect.catchTag("OrganizationNotFound", () =>
@@ -290,7 +328,7 @@ export const layerStore = Layer.effect(
         : Effect.void;
 
     const create: SamlConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
-      const found = yield* orgs.findById(input.organizationId);
+      const found = yield* directory.find(input.organizationId);
       if (Option.isNone(found))
         return yield* Effect.fail(invalid("the organization does not exist"));
       const name = input.name.trim();
@@ -324,29 +362,40 @@ export const layerStore = Layer.effect(
         input.roleMapping === undefined
           ? undefined
           : yield* validatedRoleMapping(input.organizationId, input.roleMapping);
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
-      const created = yield* records.create({
-        id,
-        organizationId: input.organizationId,
-        name,
-        idpEntityId: idp.entityId.trim(),
-        ssoUrl,
-        idpCertificates,
-        emailDomains,
-        trustsEmail: input.trustsEmail ?? false,
-        authnRequestsSigned: input.authnRequestsSigned ?? idp.wantsSignedRequests,
-        sloUrl,
-        sloBinding:
-          input.sloBinding ?? (sloUrl === idp.sloUrl ? idp.sloBinding : undefined) ?? "redirect",
-        metadataUrl: input.metadataUrl,
-        roleMapping,
-      });
+      const id = yield* crypto.randomUUIDv7.pipe(
+        Effect.catch(StoreFailure.storeUnavailable("SamlConnectionStore.create")),
+      );
+      const created = yield* claimed(
+        {
+          organizationId: input.organizationId,
+          protocol: "saml",
+          connectionId: id,
+          domains: emailDomains,
+        },
+        undefined,
+        records.create({
+          id,
+          organizationId: input.organizationId,
+          name,
+          idpEntityId: idp.entityId.trim(),
+          ssoUrl,
+          idpCertificates,
+          emailDomains,
+          trustsEmail: input.trustsEmail ?? false,
+          authnRequestsSigned: input.authnRequestsSigned ?? idp.wantsSignedRequests,
+          sloUrl,
+          sloBinding:
+            input.sloBinding ?? (sloUrl === idp.sloUrl ? idp.sloBinding : undefined) ?? "redirect",
+          metadataUrl: input.metadataUrl,
+          roleMapping,
+        }),
+      );
       yield* ensureSigningKey(created);
       return created;
     });
 
     const get: SamlConnectionStoreShape["get"] = (id) =>
-      records.findById(id).pipe(
+      records.findById(adminGrant, id).pipe(
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.fail(new SamlConnectionNotFound({ id })),
@@ -374,8 +423,8 @@ export const layerStore = Layer.effect(
         patch.roleMapping === undefined
           ? undefined
           : yield* validatedRoleMapping(current.organizationId, patch.roleMapping);
-      const updated = yield* records
-        .update(id, {
+      const write = records
+        .update(current.organizationId, id, {
           name: patch.name?.trim(),
           idpEntityId: patch.entityId?.trim(),
           ssoUrl,
@@ -393,6 +442,18 @@ export const layerStore = Layer.effect(
             Effect.fail(new SamlConnectionNotFound({ id })),
           ),
         );
+      const updated = yield* emailDomains === undefined
+        ? write
+        : claimed(
+            {
+              organizationId: current.organizationId,
+              protocol: "saml",
+              connectionId: id,
+              domains: emailDomains,
+            },
+            current.emailDomains,
+            write,
+          );
       yield* ensureSigningKey(updated);
       return updated;
     });
@@ -413,7 +474,7 @@ export const layerStore = Layer.effect(
           metadata.slo === undefined ? null : yield* validatedUrl("sloUrl", metadata.slo.url);
         const idpCertificates = yield* certificatesOf(metadata.certificates);
         return yield* records
-          .update(id, {
+          .update(current.organizationId, id, {
             ssoUrl,
             idpCertificates,
             sloUrl,
@@ -436,7 +497,7 @@ export const layerStore = Layer.effect(
       }
       const domain = hint.email?.split("@")[1]?.trim().toLowerCase();
       if (domain === undefined || domain === "") return Option.none<string>();
-      return Option.map(yield* records.findByDomain(domain), (record) => record.id);
+      return Option.map(yield* records.findByDomain(discoveryGrant, domain), (record) => record.id);
     });
 
     return SamlConnectionStore.of({
@@ -446,13 +507,20 @@ export const layerStore = Layer.effect(
       update,
       refreshMetadata,
       remove: (id) =>
-        records
-          .remove(id)
-          .pipe(
-            Effect.catchTag("SamlRecordNotFound", () =>
-              Effect.fail(new SamlConnectionNotFound({ id })),
+        get(id).pipe(
+          Effect.flatMap((current) =>
+            DomainClaims.withRelease(
+              claims,
+              transaction,
+              current.organizationId,
+              id,
+              records.remove(current.organizationId, id),
             ),
           ),
+          Effect.catchTag("SamlRecordNotFound", () =>
+            Effect.fail(new SamlConnectionNotFound({ id })),
+          ),
+        ),
       discover,
     });
   }),

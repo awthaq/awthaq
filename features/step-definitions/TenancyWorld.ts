@@ -1,3 +1,4 @@
+// Hand-wired on purpose: the identity, organization and connection stacks are built on separate memo maps, on the real clock, outside the step's `TestClock` (plan 08 exemption).
 // P20a (tenancy follow-up to AH-003): the compositions 28-tenancy.feature runs against.
 //
 // Three independent stacks, each rebuilt per scenario, because the rules under test live in
@@ -16,33 +17,35 @@
 //
 // The tenant middleware (BEH-EA-234/236) is exercised as what it is, a global router
 // middleware, behind `HttpRouter.toWebHandler`.
+import { TestEncryption } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { Admin, AdminTenants } from "@awthaq/admin";
-import { AuditLog, AuthEvents, Accounts, Hooks, Sessions, Users, Verification } from "@awthaq/core";
 import {
-  ConnectionRecords,
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  Auth,
+  HookPoint,
+  Hooks,
+  Persistence,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
+import {
   Organization,
   OrganizationConnections,
+  OrganizationDirectory,
   OrganizationHooks,
+  OrganizationMembers,
   OrganizationQadi,
-  OrganizationRecords,
   TenantMiddleware,
   TenantResolver,
-  OrganizationMemory,
 } from "@awthaq/organization";
+import { ConnectionRecords, DomainClaims, OrganizationRecords } from "@awthaq/organization/records";
 import { OAuth, OAuthConnections, OAuthProvider } from "@awthaq/oauth";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  RateLimiter,
-  SqlTransaction,
-  Tenant,
-} from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Encryption, KeyProvider, SqlTransaction, Tenant } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
-import { RateLimits } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { RelationshipResolver } from "@qadi/core";
@@ -54,6 +57,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as LayerMap from "effect/LayerMap";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
@@ -64,9 +68,12 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
-import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 import { TestAuth } from "@awthaq/test";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
@@ -104,25 +111,27 @@ const buildIdentityStack = () => {
     Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
   ).pipe(Layer.provide(SqlLive));
   const Stores = Layer.mergeAll(
-    Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
+    Users.layer.pipe(Layer.provide(SqlStores)),
     Repositories.UsersRepositoryLive,
-    Accounts.layerSql.pipe(
-      Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-    ),
-    Sessions.layerSql.pipe(Layer.provide(Repositories.SessionsRepositoryLive)),
-    Verification.layerSql.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Repositories.VerificationRepositoryLive,
-          Repositories.VerificationReservationsRepositoryLive,
+    Accounts.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
+    Sessions.layer.pipe(Layer.provide(SqlStores)),
+    Verification.layer
+      .pipe(Layer.provide(SqlStores))
+      .pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Repositories.VerificationRepositoryLive,
+            Repositories.VerificationReservationsRepositoryLive,
+          ),
         ),
       ),
-    ),
     SqlTransaction.layerSql,
   );
   return Stores.pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(SqlLive),
@@ -156,53 +165,43 @@ export const PLATFORM_ADMIN = "superadmin";
 
 export type OrganizationServices =
   | Organization.Organization
+  | OrganizationMembers.OrganizationMembers
   | OrganizationRecords.OrganizationRecords
   | AdminTenants.AdminTenants
   | AuditLog.AuditLog
   | TenantConfig
   | RelationshipResolver;
 
-const buildOrganizationStack = () => {
-  const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-    Layer.provide(Authentication.PrincipalResolverLive),
-  );
-  const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-    Layer.provide(AuthenticationLive),
-  );
-  const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-    Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-    Layer.provide(NodeCrypto.layer),
-  );
-  const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-    Layer.provideMerge(TestAuth.memoryFoundation),
-  );
-  return Layer.mergeAll(
-    AdminTenants.AdminTenants.layer,
+/**
+ * Plan 04: a platform suspension runs `BeforeSuspendOrganization`; this world's policy hook refuses
+ * one whose reason is "billing hold", as a billing system holding an account would (BEH-EA-237).
+ */
+const RefuseBillingHold = OrganizationHooks.BeforeSuspendOrganization.tap((input) =>
+  input.reason === "billing hold"
+    ? Effect.fail(new HookPoint.HookAbort({ code: "BILLING_HOLD" }))
+    : Effect.succeed(input),
+);
+
+const buildOrganizationStack = () =>
+  // Built ABOVE the composition: the qadi relationships resolver reads the exposed organization authority.
+  Layer.mergeAll(
     OrganizationQadi.relationships.pipe(
       Layer.provide(OrganizationQadi.ResourceOrganizationLookup.layerNone),
     ),
     TenantConfig.layer,
   ).pipe(
     Layer.provideMerge(
-      Organization.Organization.layer.pipe(
-        Layer.provide(Organization.config({ membershipLimit: BUILD_TIME_MEMBERSHIP_LIMIT })),
-        Layer.provide(AuthenticationLive),
-      ),
-    ),
-    Layer.provide(
-      Admin.config({
-        canAdministerTenants: ({ admin }) => Effect.succeed(admin.id === PLATFORM_ADMIN),
+      TestAuth.layer(Auth.make([Organization.Organization, AdminTenants.AdminTenants]), {
+        services: Layer.mergeAll(
+          Organization.config({ membershipLimit: BUILD_TIME_MEMBERSHIP_LIMIT }),
+          Admin.config({
+            canAdministerTenants: ({ admin }) => Effect.succeed(admin.id === PLATFORM_ADMIN),
+          }),
+        ),
+        taps: RefuseBillingHold,
       }),
     ),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
-};
 
 // ---- the OAuth connection store ----------------------------------------------------------
 
@@ -210,10 +209,46 @@ export type ConnectionServices =
   | OrganizationConnections.OrganizationConnectionStore
   | ConnectionRecords.ConnectionRecords;
 
+/**
+ * The connection store asks the Directory only whether an organization is active. These scenarios name
+ * organizations by string and never create them, so a stub answers "active" for any id.
+ */
+const connectionOrganization = (id: string): OrganizationRecords.OrganizationRecord => ({
+  id,
+  name: id,
+  slug: id,
+  logo: Option.none(),
+  metadata: Option.none(),
+  homeRegion: Option.none(),
+  suspendedAt: Option.none(),
+  createdAt: DateTime.makeUnsafe(0),
+});
+const notUsedByTheStore = () => Effect.die(new Error("not used by the connection store"));
+const ActiveOrganizations = Layer.succeed(
+  OrganizationDirectory.OrganizationDirectory,
+  OrganizationDirectory.OrganizationDirectory.of({
+    find: (id) => Effect.succeed(Option.some(connectionOrganization(id))),
+    findActive: (id) => Effect.succeed(Option.some(connectionOrganization(id))),
+    requireActive: notUsedByTheStore,
+    isSlugAvailable: notUsedByTheStore,
+    listForUser: notUsedByTheStore,
+    listPage: notUsedByTheStore,
+    create: notUsedByTheStore,
+    update: notUsedByTheStore,
+    delete: notUsedByTheStore,
+    suspend: notUsedByTheStore,
+    reinstate: notUsedByTheStore,
+  }),
+);
+
 const buildConnectionStack = () =>
   Layer.mergeAll(OrganizationConnections.layerStore, OrganizationConnections.oauthConnections).pipe(
     Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
     Layer.provideMerge(ConnectionRecords.layerMemory),
+    Layer.provideMerge(DomainClaims.layerMemory),
+    Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(ActiveOrganizations),
+    Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(NodeCrypto.layer),
   );
@@ -246,25 +281,11 @@ export const OAUTH_BASE_URL = "https://app.example.com";
 const buildOAuthLayer = (
   providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>,
   connections: OAuthConnections.OAuthConnectionResolverShape | undefined,
-) => {
-  const CoreLive = Layer.mergeAll(
-    Users.layerMemory,
-    Accounts.layerMemory,
-    Sessions.layerMemory,
-    Verification.layerMemory,
-  ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-  return OAuth.OAuth.layer.pipe(
-    Layer.provide(connections === undefined ? Layer.empty : OAuthConnections.layer(connections)),
-    Layer.provide(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(RateLimiter.layerPermissive),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provide(NoProviderTransport),
-    Layer.provide(
+) =>
+  TestAuth.layer(Auth.make([OAuth.OAuth]), {
+    services: Layer.mergeAll(
+      NoProviderTransport,
+      connections === undefined ? Layer.empty : OAuthConnections.layer(connections),
       OAuth.config({
         providers,
         linking: "explicit",
@@ -273,8 +294,7 @@ const buildOAuthLayer = (
         retry: { base: Duration.zero },
       }),
     ),
-  );
-};
+  });
 
 // ---- the tenant-middleware gateway -------------------------------------------------------
 
@@ -342,7 +362,7 @@ const buildGateway = (
         Layer.provide(Layer.succeed(OrganizationRecords.OrganizationRecords, records)),
         Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
         Layer.provide(TenantConfig.layer),
-        Layer.provideMerge(TestServices),
+        Layer.provideMerge(HttpServer.layerServices),
         Layer.provideMerge(HttpRouter.layer),
       ),
     );

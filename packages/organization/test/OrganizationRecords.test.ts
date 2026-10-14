@@ -5,6 +5,7 @@
 // inline `CREATE TABLE` — BAM-002 (.issues/high) verification, the same
 // `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -13,7 +14,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
+import { grant, vitestFramework } from "./support.ts";
 
 const MemoryLayer = OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
@@ -112,13 +114,13 @@ const suite = (
         const records = yield* OrganizationRecords.OrganizationRecords;
         const a = yield* records.create({ name: "Acme", slug: "acme" });
         const b = yield* records.create({ name: "Globex", slug: "globex" });
-        const found = yield* records.listByIds([a.id, "does-not-exist", b.id]);
+        const found = yield* records.listByIds(grant, [a.id, "does-not-exist", b.id]);
         assert.strictEqual(found.length, 2);
         assert.sameMembers(
           found.map((r) => r.id),
           [a.id, b.id],
         );
-        const empty = yield* records.listByIds([]);
+        const empty = yield* records.listByIds(grant, []);
         assert.strictEqual(empty.length, 0);
       }).pipe(Effect.provide(layer)),
     );
@@ -149,14 +151,14 @@ const suite = (
         const created = yield* records.create({ name: "Acme", slug: "acme" });
         assert.isTrue(Option.isNone(created.suspendedAt));
         const at = yield* DateTime.now;
-        const suspended = yield* records.setSuspended(created.id, Option.some(at));
+        const suspended = yield* records.setSuspended(grant, created.id, Option.some(at));
         assert.isTrue(Option.isSome(suspended.suspendedAt));
         const reread = yield* records.findById(created.id);
         assert.isTrue(Option.isSome(reread) && Option.isSome(reread.value.suspendedAt));
-        const reinstated = yield* records.setSuspended(created.id, Option.none());
+        const reinstated = yield* records.setSuspended(grant, created.id, Option.none());
         assert.isTrue(Option.isNone(reinstated.suspendedAt));
         const missing = yield* records
-          .setSuspended("does-not-exist", Option.some(at))
+          .setSuspended(grant, "does-not-exist", Option.some(at))
           .pipe(Effect.flip);
         assert.strictEqual(missing._tag, "OrganizationRecordNotFound");
       }).pipe(Effect.provide(layer)),
@@ -168,11 +170,11 @@ const suite = (
         const created = yield* Effect.forEach(["a", "b", "c", "d", "e"], (slug) =>
           records.create({ name: slug, slug }),
         );
-        const first = yield* records.listPage({ after: Option.none(), limit: 2 });
+        const first = yield* records.listPage(grant, { after: Option.none(), limit: 2 });
         assert.strictEqual(first.length, 2);
         const last = first[first.length - 1];
         assert.isDefined(last);
-        const second = yield* records.listPage({
+        const second = yield* records.listPage(grant, {
           after: Option.some({
             createdAt: last?.createdAt ?? (yield* DateTime.now),
             id: last?.id ?? "",
@@ -191,3 +193,115 @@ const suite = (
 
 suite("OrganizationRecords (layerMemory)", MemoryLayer);
 suite("OrganizationRecords (layerSql)", SqlLayer);
+
+// Plan 05: the tenant-isolation conformance suite. `organization_org` is Keyed by its own id: a method
+// that takes the id (or the slug that resolves it) can only reach that organization; the three that
+// read or write across organizations (the platform listing, suspension, a caller's own memberships)
+// take a witness. It replaces the regex guard of `TenantScoping.test.ts`.
+let isolationCounter = 0;
+const isolationCase: TestAuth.TableCase<
+  OrganizationRecords.OrganizationRecordsShape,
+  string,
+  OrganizationRecords.OrganizationRecords
+> = {
+  table: "organization_org",
+  insert: Effect.gen(function* () {
+    const records = yield* OrganizationRecords.OrganizationRecords;
+    isolationCounter += 1;
+    const created = yield* records.create({
+      name: `Isolation ${isolationCounter}`,
+      slug: `isolation-${isolationCounter}`,
+    });
+    return created.id;
+  }),
+  methods: {
+    create: { insert: true },
+    findById: {
+      keyed: {
+        run: (id, as) =>
+          Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
+            Effect.map(
+              records.findById(as === "owner" ? id : "another-organization"),
+              Option.isSome,
+            ),
+          ),
+      },
+    },
+    findBySlug: {
+      keyed: {
+        run: (id, as) =>
+          Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
+            Effect.gen(function* () {
+              const own = yield* records.findById(id);
+              const slug =
+                as === "owner" ? (Option.isSome(own) ? own.value.slug : "") : "another-slug";
+              return Option.isSome(yield* records.findBySlug(slug));
+            }),
+          ),
+      },
+    },
+    update: {
+      keyed: {
+        run: (id, as) =>
+          Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
+            records.update(as === "owner" ? id : "another-organization", { name: "Renamed" }).pipe(
+              Effect.as(true),
+              Effect.catchTag("OrganizationRecordNotFound", () => Effect.succeed(false)),
+            ),
+          ),
+      },
+    },
+    delete: {
+      keyed: {
+        run: (id, as) =>
+          Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
+            records.delete(as === "owner" ? id : "another-organization").pipe(
+              Effect.as(true),
+              Effect.catchTag("OrganizationRecordNotFound", () => Effect.succeed(false)),
+            ),
+          ),
+      },
+    },
+    setSuspended: {
+      crossTenant: {
+        run: (id) =>
+          Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
+            Effect.flatMap(DateTime.now, (now) =>
+              records.setSuspended(grant, id, Option.some(now)).pipe(
+                Effect.as(true),
+                Effect.catchTag("OrganizationRecordNotFound", () => Effect.succeed(false)),
+              ),
+            ),
+          ),
+      },
+    },
+    listPage: {
+      crossTenant: {
+        run: (id) =>
+          Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
+            Effect.map(records.listPage(grant, { after: Option.none(), limit: 1_000 }), (rows) =>
+              rows.some((row) => row.id === id),
+            ),
+          ),
+      },
+    },
+    listByIds: {
+      crossTenant: {
+        run: (id) =>
+          Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
+            Effect.map(records.listByIds(grant, [id]), (rows) => rows.some((row) => row.id === id)),
+          ),
+      },
+    },
+  },
+};
+
+TestAuth.runTenantIsolationTests(vitestFramework, {
+  plugin: Organization.Organization,
+  covers: ["organization_org"],
+  adapters: [
+    { name: "layerMemory", layer: MemoryLayer },
+    { name: "layerSql", layer: SqlLayer },
+  ],
+  cases: [isolationCase],
+});

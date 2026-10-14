@@ -66,6 +66,17 @@ export const passwordlessCommonSteps = defineSteps<World>(({ Given, When, Then }
     yield* Ref.update(app.vetoed, (existing) => [...existing, email]);
   });
 
+  // ADR-EA-039: a session store that is down makes the completion fail with the typed outage.
+  Given("the session store is down", function* () {
+    const app = yield* appOf();
+    yield* Ref.set(app.sessionOutage, true);
+  });
+
+  When("the session store is back", function* () {
+    const app = yield* appOf();
+    yield* Ref.set(app.sessionOutage, false);
+  });
+
   Then("no session was issued", function* () {
     const world = yield* World;
     const before = yield* world.numbers.get("issuedBefore");

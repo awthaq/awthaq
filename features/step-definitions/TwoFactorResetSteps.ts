@@ -7,9 +7,11 @@ import { Password } from "@awthaq/password";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { mailedToken } from "./MailedToken.ts";
 import {
+  auditRows,
   currentCode,
   direct,
   directExit,
@@ -120,6 +122,15 @@ export const twoFactorResetSteps = defineSteps<World>(({ Given, When, Then }) =>
       assert.equal(field(failureOf(exit), "code"), code);
     },
   );
+
+  Then("the audit log holds an {string} event for {string}", function* (tag: string, name: string) {
+    const person = yield* getPerson(name);
+    const rows = yield* auditRows(tag);
+    assert.ok(
+      rows.some((row) => Option.getOrUndefined(row.actorUserId) === person.userId),
+      `no ${tag} row names ${name}`,
+    );
+  });
 
   Then("the reset succeeds", function* () {
     successValue(yield* answer);

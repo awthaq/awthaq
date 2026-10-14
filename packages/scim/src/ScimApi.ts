@@ -17,6 +17,7 @@
 //     case-insensitively, a boolean may arrive as `"False"`), strict everywhere
 //     that matters for safety (see `Scim.ts`).
 
+import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -128,7 +129,7 @@ export class ScimAuthentication extends HttpApiMiddleware.Service<
   { provides: CurrentScimConnection }
 >()("ScimAuthentication", {
   security: { bearer: HttpApiSecurity.bearer },
-  error: ScimUnauthorized,
+  error: [ScimUnauthorized, Api.StoreUnavailable],
 }) {}
 
 // ---- resources (RFC 7643) ----------------------------------------------------------------
@@ -409,7 +410,7 @@ export const ScimGroup = HttpApiGroup.make("scim")
     HttpApiEndpoint.delete("deleteGroup", "/scim/v2/Groups/:id", {
       params: IdParams,
       success: HttpApiSchema.Empty(204),
-      error: [ScimNotFound, ScimConflict, ScimUnavailable],
+      error: [ScimNotFound, ScimConflict, ScimForbidden, ScimUnavailable],
     }),
   )
   .middleware(ScimAuthentication);

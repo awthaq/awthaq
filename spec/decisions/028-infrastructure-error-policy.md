@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-028 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.5 |
+> | Effective Date | 2026-10-13 |
 > | Status | Accepted — implemented for `Sessions`, `Verification`, `Users`, `Accounts` and `AuditLog` |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006); 1.1 (2026-09-29): `AuditLog` converted, the audit-write failure policy, the transient-retry helper (MA-004, SEA-002) |
+> | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006); 1.1 (2026-09-29): `AuditLog` converted, the audit-write failure policy, the transient-retry helper (MA-004, SEA-002) <br> 1.2 (2026-10-13): the sign-in completions of the first-party plugins converted (plan 10 item 2) <br> 1.3 (2026-10-13): Plugin records modules are in scope; the helper moved to `@awthaq/sql` `StoreFailure`; decision 3a: refused statements die; credential-resolver contributions may fail with `StoreUnavailable` (plan 05) <br> 1.4 (2026-10-13): Rollout: every first-party plugin records module is converted (plan 05 phases 4-11) <br> 1.5 (2026-10-13): The mapping happens at the store seam: `SqlStore.write`/`read` map `SqlError` to `StoreUnavailable`, the domain relabels the operation, and `retryTransient` applies to every top-level write primitive (plan 02, ADR-EA-041) |
 
 ---
 
@@ -23,9 +23,10 @@ Core services fail in two different ways. A *domain* failure (`SessionNotFound`,
 **Option B: one typed infrastructure error.** Every core Shape's `E` is its domain errors plus `StoreUnavailable`, and nothing else environmental.
 
 1. **The class** is `StoreUnavailable` (`{ operation: string }`, HTTP 503), defined once in `@awthaq/api` and re-exported by `@awthaq/core` (`Errors.StoreUnavailable`). It is a `Schema.TaggedError` so the same class is the error a service fails with and the wire error a client decodes; there is no second `Data` twin to keep in step (ESS-008). Its cause is *not* a field. `Errors.storeUnavailable(operation)` logs the underlying `SqlError`/`PlatformError` once, where it happened, and fails with the label alone, so a database message can never reach a response body.
-2. **What maps to it:** a `SqlError` from a repository and a `PlatformError` from `Crypto` (`layerSql` and `layerMemory` alike), applied at each service method's seam with `Effect.catchTags`.
+2. **What maps to it, and where it lives.** The helper is defined once in `@awthaq/sql` (`StoreFailure`: `storeUnavailable`, `orStoreUnavailable`, `retryTransient`) and `@awthaq/core` re-exports it. The policy covers plugin records modules too: "a repository" includes them, and option A is rejected for plugins on the same grounds. Operation labels are `<Records>.<method>`. A `SqlError` from a repository and a `PlatformError` from `Crypto` (`layerSql` and `layerMemory` alike), applied at each service method's seam with `Effect.catchTags`.
 3. **What still dies:** a `SchemaError` (a stored row no longer decodes, or a model was constructed with invalid input) and any invariant this code itself broke. Those are bugs a retry cannot fix.
-4. **The HTTP edge:** `Authentication`, `AdminAuthentication`, `OptionalAuthentication` and `CsrfProtection` declare `StoreUnavailable` in their error lists, so every endpoint behind either accepts it without naming it, and the framework answers 503. `resolveSession` maps only `SessionNotFound`/`SessionExpired` to `Unauthenticated`. Because Effect's security chain falls through to the next scheme on any typed failure and answers with the last scheme's, the first scheme to see an outage records it against the request and every later scheme of that request fails with it, so the answer is 503 rather than the bearer scheme's "no credential" 401. `@awthaq/qadi`'s subject extractor reports it as `SubjectExtractionFailed`, the outage signal that error exists for.
+4. **The HTTP edge:** `Authentication`, `AdminAuthentication`, `OptionalAuthentication` and `CsrfProtection` declare `StoreUnavailable` in their error lists, so every endpoint behind either accepts it without naming it, and the framework answers 503. `resolveSession` maps only `SessionNotFound`/`SessionExpired` to `Unauthenticated`. Because Effect's security chain falls through to the next scheme on any typed failure and answers with the last scheme's, the first scheme to see an outage records it against the request and every later scheme of that request fails with it, so the answer is 503 rather than the bearer scheme's "no credential" 401. A credential-resolver contribution may fail with `StoreUnavailable` too, recorded as the request's outage exactly like the cookie scheme's. `@awthaq/qadi`'s subject extractor reports it as `SubjectExtractionFailed`, the outage signal that error exists for.
+3a. **A statement the database refused dies (plan 05).** A `SqlError` whose reason is `SqlSyntaxError` or `AuthorizationError` (a bug, a missing GRANT, or a row-level-security refusal of a forgotten tenant filter) is a defect (`Defects/InvariantViolation`, `store.statementRefused`, logged at error level with the operation), because a retry cannot fix it and a 503 would misreport it.
 5. **Callers** no longer carry `catchTag("PlatformError", Effect.die)`; a plugin Shape that composes a core service adds `StoreUnavailable` to its own `E`.
 
 ## Alternatives considered
@@ -42,7 +43,7 @@ Core services fail in two different ways. A *domain* failure (`SessionNotFound`,
 
 **Negative**: every Shape that reaches a core service widens by one error, a one-time cascade through the plugin Shapes; `StoreUnavailable` is declared on the middleware rather than per endpoint, so a public endpoint behind neither cannot fail with it without declaring it itself (none does today).
 
-**Rollout**: `Sessions` (the hot path), `Verification`, `VerificationLink`, `Users`, `Accounts` and `AuditLog` are done, in both layers (`Users.create`'s crypto `PlatformError` included). Every `AuditLog` method (`record`, `list`, `replay`, `pseudonymizeActor`, `purge`) fails with `StoreUnavailable` instead of dying; `DataExport`, `Retention` and `EventRelay` carry it in their own `E`.
+**Rollout**: the plugin records modules are all converted too (`webhooks`, `admin`, `organization`, `saml`, `jwt`, `scim`, `two-factor`, `api-key`, `device-authorization`, `passkey`, `roles`, `qadi` claims): each method of theirs fails with `StoreUnavailable`, and the few `orDie` left in those packages are on `Crypto` (id minting, digests, cookies) or inside a hook point whose `E` can only be `HookAbort`. `Sessions` (the hot path), `Verification`, `VerificationLink`, `Users`, `Accounts` and `AuditLog` are done, in both layers (`Users.create`'s crypto `PlatformError` included). Every `AuditLog` method (`record`, `list`, `replay`, `pseudonymizeActor`, `purge`) fails with `StoreUnavailable` instead of dying; `DataExport`, `Retention` and `EventRelay` carry it in their own `E`. The sign-in completions of the first-party plugins (`password`, `passkey`, `oauth`, `saml`) no longer `orDie` the `Sessions.issue`, `Users.findById` and `Accounts` reads on the hot path; a domain error impossible by construction dies on its own tag only.
 
 ## Audit-write failure policy (1.1)
 
@@ -58,3 +59,7 @@ Widening `publish`'s `E` to `StoreUnavailable` was rejected: it would cascade th
 `Errors.retryTransient()` retries an effect while it fails with a *retryable* `SqlError` (`SQLITE_BUSY`/`SQLITE_LOCKED`, a Postgres deadlock or serialization failure, a lock or statement timeout, a dropped connection) up to three times on a jittered exponential schedule from 25 ms, and nothing else (constraint violations, `SchemaError`, defects are never retried). It wraps a whole unit of work: `Sessions.issue`'s statement or transaction and `Sessions.verify`'s idle-refresh touch (SEA-002). Once the retries are spent the last `SqlError` reaches the service's own `storeUnavailable(operation)`. See [the SQLite embedded-deployment appendix](../appendices/04-sqlite-embedded-deployment.md).
 
 _Related: [ADR-EA-013](013-error-taxonomy-http-mapping.md), [BEH-EA-035](../behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions)._
+
+### Revision note (plan 02)
+
+The `SqlError` to `StoreUnavailable` mapping now lives in `SqlStore.write` and `SqlStore.read` (one per adapter, asserted once per adapter), `SqlStore.once` is never retried, and the domain only relabels the operation (`Errors.relabel`, for example `"Sessions.issue"`).

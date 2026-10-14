@@ -12,7 +12,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Passkey from "../src/Passkey.ts";
 import { assertionCredential, mockWebAuthn } from "./passkeyTestFixtures.ts";
-import { buildLayer, realRateLimiter, registerNewUser } from "./passkeyTestLayers.ts";
+import { buildLayer, registerNewUser } from "./passkeyTestLayers.ts";
 
 const decoysFor = (email: string) =>
   Effect.gen(function* () {
@@ -149,7 +149,7 @@ describe("TSS-004: an unknown credential id costs one signature verification, li
 });
 
 describe("WPS-005/TC-001: the anonymous ceremony is rate-limited", () => {
-  const limited = buildLayer(mockWebAuthn(), undefined, { rateLimiter: realRateLimiter });
+  const limited = buildLayer(mockWebAuthn(), undefined, { rateLimiter: "enforcing" });
 
   it.effect("authenticate/options is throttled per email", () =>
     Effect.gen(function* () {
@@ -165,6 +165,30 @@ describe("WPS-005/TC-001: the anonymous ceremony is rate-limited", () => {
       // Another email from a fresh address is unaffected.
       yield* passkey.authenticateOptions({ email: "other@example.com", ip: "10.0.1.2" });
     }).pipe(Effect.provide(limited)),
+  );
+
+  it.effect(
+    "TMS-006: case, whitespace and +tag aliases of one address share the email budget",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        // 10 per 15 minutes per address bucket; every alias is a distinct literal address (and a fresh
+        // IP), so only a shared bucket can throttle them. Before the shared normaliser each `+N` alias
+        // was a fresh budget.
+        for (let attempt = 1; attempt <= 10; attempt++) {
+          yield* passkey.authenticateOptions({
+            email:
+              attempt % 2 === 0
+                ? ` Victim+${attempt}@Example.com `
+                : `victim+${attempt}@example.com`,
+            ip: `10.1.0.${attempt}`,
+          });
+        }
+        const failure = yield* passkey
+          .authenticateOptions({ email: "victim+11@example.com", ip: "10.1.1.1" })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RateLimited");
+      }).pipe(Effect.provide(limited)),
   );
 
   it.effect("authenticate/options is throttled per source address", () =>

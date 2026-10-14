@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-03 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-10-14 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-024 rate-limit example uses a `rateLimitRules` table and `RateLimits.budget` (plan 06)  <br> 1.4 (2026-10-14): BEH-EA-335: a plugin declares the hook points it owns (architecture plan 08) |
 
 ---
 
@@ -170,11 +170,12 @@ REQUIREMENT: A hook point declared `kind: "observe"` MUST NOT allow a
 > **Invariant:** [INV-EA-005](../invariants.md#inv-ea-005-a-hook-tap-on-an-undefined-hook-point-keeps-the-application-from-compiling)
 
 ```ts
+// on AuthPlugin.Service: rateLimitRules: { create: RateLimits.rule({ group: "acme.invite", endpoint: "create",
+//   key: RateLimits.Key.user, limit: 10, window: "10 minutes" }) }
 static readonly layer = AuthPlugin.layer(Invite, {
-  make: /* … */,
+  make: Effect.gen(function* () { yield* RateLimits.budget(Invite) /* … */ }),
   taps: [
-    BeforeUserDelete.tap((u) => Invite.use((i) => i.purgeFor(u.id))),
-    RateLimits.rule({ group: "acme.invite", endpoint: "create", limit: 10, window: "10 minutes" })
+    BeforeUserDelete.tap((u) => Invite.use((i) => i.purgeFor(u.id)))
   ]
 })
 ```
@@ -193,4 +194,28 @@ REQUIREMENT: Tapping a hook point MUST place that point's service in the
 `archive/design/plugins-as-layers.md` §3.4 and §3.6 draw the contrast this entry is built on: a slot is exclusive because two overrides of one `Context.Reference` are ambiguous, while a registry (hook taps, event subscribers, rate-limit rules, session claims, OpenAPI tags) is designed to aggregate because many contributions to it are exactly what is wanted. `archive/design/plugins-as-layers.md` §1 lists "a plugin taps a hook point nobody defines" as a row in its compiler-catches-this table with the same enforcement mechanism as a missing port: the point's service remains in `RIn` until some plugin's `ROut` supplies it, so a mistyped hook-point key or a tap left behind after its defining plugin is uninstalled is a type error, never a silent no-op.
 
 _Previous: [BEH-EA-016](02-plugin-composition-validate.md#beh-ea-016-the-linker-still-performs-two-runtime-checks-the-type-system-cannot-express-cycle-detection-and-migration-ordering)_
-_Next: [BEH-EA-025](04-contract-stratum.md#beh-ea-025-a-principal-is-a-tagged-union-carrying-a-zanzibar-shaped-reference)_
+_Next: [BEH-EA-335](03-ports-slots-hooks-registries.md#beh-ea-335-a-plugin-declares-the-hook-points-it-owns)_
+
+## BEH-EA-335: A plugin declares the hook points it owns
+
+```ts
+class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
+  // ...
+  hookPoints: Layer.mergeAll(BeforeCreateNote.layer, AfterCreateNote.layer),
+}) {}
+```
+
+```text
+REQUIREMENT: A plugin declares the default (no-tap) layers of the hook points
+             it owns as `hookPoints` on `AuthPlugin.Service` (`Layer.empty`
+             when it owns none). A plugin whose layer requires, or whose taps
+             name, a hook point that is neither core's (`Hooks.HooksLive`) nor
+             declared by it or by a `dependsOn` plugin MUST fail to compile,
+             naming the point's key. `TestAuth.layer` MUST provide the declared
+             points once per composition, beneath application taps, so a tap
+             registers in the instance the plugins run.
+```
+
+The point's tap registry lives in the point's own built layer (BEH-EA-024), so one composition must build each point exactly once; a plugin that owns 46 points (`Organization`) used to rely on every host remembering `OrganizationHooksLive`. Declaring them makes the requirement checkable and printable without making `Auth.make` provide them in production: a tap provided outside would otherwise bind a second instance and never run, so the host still builds the one instance its taps register into.
+
+_Previous: [BEH-EA-024](03-ports-slots-hooks-registries.md#beh-ea-024-tapping-a-hook-point-nobody-defines-is-a-compile-error-and-registries-aggregate-through-layereffectdiscard-ordered-and-frozen-at-first-read) | Next: [BEH-EA-025](04-contract-stratum.md#beh-ea-025-a-principal-is-a-tagged-union-carrying-a-zanzibar-shaped-reference)_

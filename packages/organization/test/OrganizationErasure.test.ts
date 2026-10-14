@@ -1,6 +1,6 @@
 // CSG-001/DRS-002 (.issues/high): `MembershipRecords.deleteAllByUser` and
 // `Organization.organizationErasure` (the plugin's `Erasure` contribution, CSG-001).
-import { Erasure, Hooks, Users } from "@awthaq/core";
+import { Erasure, Hooks, Persistence, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -12,6 +12,7 @@ import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
+import { grant } from "./support.ts";
 
 const MemoryLayer = MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
@@ -25,10 +26,10 @@ describe("MembershipRecords.deleteAllByUser", () => {
       yield* members.create({ userId: userA, organizationId: "org-2", role: ["member"] });
       yield* members.create({ userId: userB, organizationId: "org-1", role: ["member"] });
 
-      yield* members.deleteAllByUser(userA);
+      yield* members.deleteAllByUser(grant, userA);
 
-      assert.deepStrictEqual(yield* members.listByUser(userA), []);
-      const remaining = yield* members.listByUser(userB);
+      assert.deepStrictEqual(yield* members.listByUser(grant, userA), []);
+      const remaining = yield* members.listByUser(grant, userB);
       assert.strictEqual(remaining.length, 1);
     }).pipe(Effect.provide(MemoryLayer)),
   );
@@ -36,7 +37,7 @@ describe("MembershipRecords.deleteAllByUser", () => {
 
 describe("Organization erasure contribution", () => {
   const TestLayer = Layer.mergeAll(
-    Users.layerMemory,
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
     TeamRecords.layerMemory,
     InvitationRecords.layerMemory,
   ).pipe(
@@ -99,17 +100,17 @@ describe("Organization erasure contribution", () => {
         );
         for (const c of contributions) yield* c.erase({ userId: mine, email: "mine@example.com" });
 
-        assert.deepStrictEqual(yield* members.listByUser(mine), []);
-        assert.strictEqual((yield* members.listByUser(theirs)).length, 1);
+        assert.deepStrictEqual(yield* members.listByUser(grant, mine), []);
+        assert.strictEqual((yield* members.listByUser(grant, theirs)).length, 1);
         assert.isTrue(Option.isNone(yield* activeContext.findBySessionId("session-mine")));
         assert.isTrue(Option.isSome(yield* activeContext.findBySessionId("session-theirs")));
         assert.deepStrictEqual(
           (yield* teams.listTeamMembers(team.id)).map((m) => m.userId),
           [theirs],
         );
-        assert.isTrue(Option.isNone(yield* invitations.findById(sentByMe.id)));
-        assert.isTrue(Option.isNone(yield* invitations.findById(toMe.id)));
-        assert.isTrue(Option.isSome(yield* invitations.findById(unrelated.id)));
+        assert.isTrue(Option.isNone(yield* invitations.findById(grant, sentByMe.id)));
+        assert.isTrue(Option.isNone(yield* invitations.findById(grant, toMe.id)));
+        assert.isTrue(Option.isSome(yield* invitations.findById(grant, unrelated.id)));
       }).pipe(Effect.scoped, Effect.provide(TestLayer)),
   );
 });

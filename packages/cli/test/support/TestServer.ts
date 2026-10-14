@@ -1,3 +1,4 @@
+// Hand-wired on purpose: a real HTTP listener the CLI talks to over a socket (plan 08 exemption).
 // A REAL auth server for the session commands: core's own `session` and `account` groups
 // (`AuthCore.AuthCoreApi`) served by the real handlers, real `Authentication` middleware and real CSRF
 // protection over in-memory `Users`/`Sessions`, on a real Node HTTP socket. `whoami` and `login`
@@ -8,6 +9,7 @@ import {
   Accounts,
   DataExport,
   Erasure,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -36,10 +38,10 @@ const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
     Layer.mergeAll(
       SqlTransaction.layerNoop,
       RateLimiter.layerPermissive,
-      Sessions.layerMemory,
-      Users.layerMemory,
-      Accounts.layerMemory,
-      Verification.layerMemory,
+      Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+      Users.layer.pipe(Layer.provide(Persistence.memory)),
+      Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+      Verification.layer.pipe(Layer.provide(Persistence.memory)),
     ),
   ),
   Layer.provideMerge(TestAuth.memoryFoundation),

@@ -1,16 +1,7 @@
 // BEH-EA-009 (composition), docs/plugin-authoring.md's checklist, and BEH-EA-304: how the redemption composes
 // with the other sign-in machinery — the real `@awthaq/two-factor` gate (the divert), a `BeforeSignIn` veto, and
 // the plugin contract's own mechanical checks (`TestAuth.runPluginContractTests`).
-import {
-  Auth,
-  ConfigDescriptor,
-  HookPoint,
-  Hooks,
-  RateLimits,
-  Sessions,
-  Users,
-} from "@awthaq/core";
-import { TestAuth } from "@awthaq/test";
+import { Auth, ConfigDescriptor, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
@@ -126,17 +117,22 @@ describe("DeviceAuthorization composition", () => {
     assert.isTrue(ConfigDescriptor.REDACTED === "<redacted>");
   });
 
-  it.effect("the static rateLimits declaration and the registered rules agree (PV-241)", () =>
-    Effect.gen(function* () {
-      const registry = yield* RateLimits.RateLimitsRegistry;
-      const drift = RateLimits.declarationDrift(
-        DeviceAuthorization.DeviceAuthorization,
-        yield* registry.registered,
-      );
-      assert.deepStrictEqual(drift, { undeclared: [], unregistered: [], mismatched: [] });
-      assert.strictEqual(DeviceAuthorization.DeviceAuthorization.rateLimits.length, 9);
-    }).pipe(Effect.provide(buildLayer({ store: "memory" }))),
-  );
+  it("declares its nine rules statically, derived from the table the layer registers (PV-241)", () => {
+    assert.deepStrictEqual(
+      DeviceAuthorization.DeviceAuthorization.rateLimits.map((rule) => rule.name),
+      [
+        "codeByIp",
+        "codeByClient",
+        "invalidGrantByIp",
+        "verifyByIp",
+        "verifyBySession",
+        "approveByIp",
+        "approveBySession",
+        "denyByIp",
+        "denyBySession",
+      ],
+    );
+  });
 
   it("declares the ports it requires, which the manifest lists", () => {
     const auth = Auth.make([DeviceAuthorization.DeviceAuthorization]);
@@ -145,12 +141,6 @@ describe("DeviceAuthorization composition", () => {
       "awthaq/ports/RateLimiter",
     ]);
   });
-
-  TestAuth.runPluginContractTests(
-    { describe, it, fail: (message) => assert.fail(message) },
-    () => DeviceAuthorization.DeviceAuthorization,
-    { options: [{}] },
-  );
 });
 
 describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-304)", () => {

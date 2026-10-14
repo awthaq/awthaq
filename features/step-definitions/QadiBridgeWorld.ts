@@ -1,3 +1,4 @@
+// Hand-wired on purpose: qadi's `RequirePermission` guard must be built above `Roles.layer` to read the `SubjectResolver` slot, which `TestAuth.layer` cannot order (plan 08 exemption).
 // AH-003 (decision 36, Tier 2): the shared World for the qadi authorization-bridge features
 // (18-roles-subject-resolver, 19-qadi-bridge-path-a, 20-qadi-bridge-path-b,
 // 21-qadi-resolvers-obligations).
@@ -21,6 +22,7 @@ import {
   DataExport,
   Erasure,
   Hooks,
+  Persistence,
   Sessions,
   Slots,
   Users,
@@ -92,7 +94,8 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type { OrganizationFixtureServices, WalkProbe } from "./QadiOrganizationFixture.ts";
 import { makeWalkProbe } from "./QadiOrganizationFixture.ts";
-import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 
 // ---- the fixture's authorization vocabulary ----
 
@@ -374,12 +377,12 @@ export const configure = Effect.fn("features.qadiBridge.configure")(function* (
 // ---- the app ----
 
 export const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
+  Users.layer.pipe(Layer.provide(Persistence.memory)),
+  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(Slots.layer),
   Layer.provideMerge(Erasure.registryLayer),
@@ -683,7 +686,10 @@ const buildBridge = (world: WorldShape, options: BridgeOptions) => {
   const rolesLayer =
     options.roles === undefined
       ? Layer.empty
-      : Roles.Roles.layer.pipe(Layer.provide(Roles.config(options.roles)));
+      : Roles.Roles.layer.pipe(
+          Layer.provide(Roles.Roles.records.memory),
+          Layer.provide(Roles.config(options.roles)),
+        );
   // `Roles` claims the exclusive slot; the counting decorator wraps whichever resolver is in effect.
   const subjects = countingResolver(world).pipe(Layer.provideMerge(rolesLayer));
   return { subjects, evaluation: evaluationPorts(world, options) };
@@ -732,7 +738,7 @@ const buildApp = (world: WorldShape, options: BridgeOptions) => {
     Layer.provide(Authentication.OptionalAuthenticationLive),
     Layer.provideMerge(requestServices),
     Layer.provideMerge(captureLogs(world)),
-    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
   );
   return { appLayer, requestServices };

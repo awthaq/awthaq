@@ -1,13 +1,12 @@
 // @awthaq/core — Users
 //
 // spec/behaviors/06-domain-users-accounts.md, BEH-EA-041, BEH-EA-042.
-// Two `Layer`s over the same `UsersShape`: `layerMemory` (a `Ref`) and
-// `layerSql` (`@awthaq/sql`'s `Model.Class`/repository, BEH-EA-033–036)
-// — neither changes this service's public interface, the same deferral
-// `Migrations.ts` documents for the persistence stratum generally.
+// Plan 02 (ADR-EA-041): written once, over `@awthaq/ports`' `UserStore` (a `Ref` adapter there, a SQL
+// adapter over `@awthaq/sql`'s repository, BEH-EA-033-036). The service owns the rules (the identity
+// union, the folding of an email, the verified-flag transitions, the uniqueness errors, the id and
+// the clock, the announcements); the store owns persistence and the atomicity of each primitive.
 
-import { Defects } from "@awthaq/ports";
-import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
+import { Defects, type Ids, UserStore } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -15,45 +14,19 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import { now } from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import type { SqlError } from "effect/unstable/sql/SqlError";
-import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
-import * as HookPoint from "./HookPoint.ts";
+import { relabel, storeUnavailable, StoreUnavailable } from "./Errors.ts";
 import * as Hooks from "./Hooks.ts";
+import type { ErasureClearance } from "./internal/erasureClearance.ts";
 import type * as Phone from "./Phone.ts";
-import * as Tenant from "./Tenant.ts";
 import * as UserFields from "./UserFields.ts";
 
-/**
- * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s own
- * `veto` helper — the same translation, one-point version): BEH-EA-090
- * requires a veto abort to reach the caller as a typed `HookAborted`, not
- * the bare `HookAbort` a tap itself fails with.
- */
-const beforeUserDeleteVeto = <A>(
-  effect: Effect.Effect<A, HookPoint.HookAbort>,
-): Effect.Effect<A, HookPoint.HookAborted> =>
-  effect.pipe(
-    Effect.catchTag(
-      "HookAbort",
-      (abort) =>
-        new HookPoint.HookAborted({
-          point: "auth.user.beforeDelete",
-          code: abort.code,
-          message: abort.message,
-        }),
-    ),
-  );
-
 /** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. INV-EA-018: an identifier, never a capability — UUIDv7, time-ordered and partially predictable, so nothing may act on it without a credential's proof. */
-// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
-export type UserId = SqlModels.UserId;
+// MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
+export type UserId = Ids.UserId;
 export const UserId = Brand.nominal<UserId>();
 
 /** FAMS-002: a user with an email address — BEH-EA-041/042 exactly as before (lower-cased, unique, monotone-verified, never client-settable). */
@@ -248,6 +221,9 @@ export interface CreateInput {
  * is unproven). `updateProfile`'s input has no identity or status field, so
  * there is no generic write path a plugin-level caller could use to change
  * either. SCP-001: `setStatus` is the only writer of `status`.
+ *
+ * ADR-EA-038: a sign-up never calls `create` directly; it goes through `SignUp`, which runs `BeforeSignUp`
+ * and owns the transaction and the announcements. `assertCanSignIn` is called by `SignIn` for every flow.
  */
 export interface UsersShape {
   readonly create: (
@@ -330,14 +306,21 @@ export interface UsersShape {
     },
   ) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
   /**
-   * AOMS-006/CSG-002 (.issues/high): consults `Hooks.BeforeUserDelete`
-   * (BEH-EA-095's own worked example — an Invite-purge veto) after the
-   * existence check, before the row is actually removed; a tap's abort
-   * surfaces as `HookPoint.HookAborted`, never a bare defect.
+   * BEH-EA-046: creates a user and runs `complete` with it. If `complete` fails, dies or is
+   * interrupted, the user is abandoned: its row and declared fields are removed, no veto runs and
+   * nothing is announced, because nobody outside this call has been told the user exists. This is
+   * how a multi-step provisioning (SCIM `POST /Users`: create, link, add to the organization)
+   * leaves nothing behind. It cannot remove any user it did not just create; a committed user is
+   * deleted only by `Erasure.AccountErasure`.
    */
-  readonly delete: (
-    id: UserId,
-  ) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted | StoreUnavailable>;
+  readonly createWith: <A, E, R>(
+    input: CreateInput,
+    complete: (user: UserRecord) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<
+    { readonly user: UserRecord; readonly value: A },
+    E | EmailAlreadyExists | PhoneAlreadyExists | StoreUnavailable,
+    R
+  >;
   /**
    * BAM-005/BEH-EA-036: the admin surface's user listing — keyset-paginated on
    * `(createdAt, id)`, oldest first, opaque cursor in / `nextCursor` out, never an
@@ -397,6 +380,22 @@ export interface UsersPage {
 const DEFAULT_LIST_LIMIT = 50;
 
 export class Users extends Context.Service<Users, UsersShape>()("awthaq/core/Users") {}
+
+/**
+ * ADR-EA-031: the user row's store primitive. Removes the row and its declared fields only: no
+ * veto, no cascade, no event (`Erasure.AccountErasure` owns those). The clearance can only be
+ * minted by `AccountErasure` after the `BeforeUserDelete` veto passed, so nothing else can call
+ * this. Both `Users` layers provide it from the same build, so the row store is shared.
+ */
+export interface UserRemovalShape {
+  readonly remove: (
+    clearance: ErasureClearance,
+  ) => Effect.Effect<void, UserNotFound | StoreUnavailable>;
+}
+
+export class UserRemoval extends Context.Service<UserRemoval, UserRemovalShape>()(
+  "awthaq/core/UserRemoval",
+) {}
 
 /** SAM-004: the held values among `keys` (an unset field is absent). */
 const pickFields = (held: UserFields.Values, keys: ReadonlyArray<string>): UserFields.Values => {
@@ -465,75 +464,10 @@ const statusFields = (
       }
     : { statusReason: Option.none<string>(), suspendedUntil: Option.none<DateTime.Utc>() };
 
-/** `Hooks.BeforeUserDelete`'s payload: an Anonymous/Phone user has no email to report. */
-const deleteHookInput = (record: UserRecord) =>
-  Option.match(emailOf(record), {
-    onNone: () => ({ id: record.id }),
-    onSome: (email) => ({ id: record.id, email }),
-  });
-
-interface State {
-  readonly byId: HashMap.HashMap<UserId, UserRecord>;
-  readonly byEmail: HashMap.HashMap<string, UserId>;
-  readonly byPhone: HashMap.HashMap<string, UserId>;
-}
-
-const indexRecord = (s: State, record: UserRecord): State => {
-  const byId = HashMap.set(s.byId, record.id, record);
-  switch (record.identity._tag) {
-    case "Email":
-      return { ...s, byId, byEmail: HashMap.set(s.byEmail, record.identity.email, record.id) };
-    case "Phone":
-      return { ...s, byId, byPhone: HashMap.set(s.byPhone, record.identity.phone, record.id) };
-    case "Anonymous":
-      return { ...s, byId };
-  }
-};
-
-const unindexRecord = (s: State, record: UserRecord): State => {
-  const byId = HashMap.remove(s.byId, record.id);
-  switch (record.identity._tag) {
-    case "Email":
-      return { ...s, byId, byEmail: HashMap.remove(s.byEmail, record.identity.email) };
-    case "Phone":
-      return { ...s, byId, byPhone: HashMap.remove(s.byPhone, record.identity.phone) };
-    case "Anonymous":
-      return { ...s, byId };
-  }
-};
-
-/** The user already holding `identity`'s uniqueness key, if any (never for Anonymous). */
-const holderOf = (s: State, identity: IdentityInput): Option.Option<UserRecord> => {
-  const id =
-    identity._tag === "Email"
-      ? HashMap.get(s.byEmail, identity.email)
-      : identity._tag === "Phone"
-        ? HashMap.get(s.byPhone, identity.phone)
-        : Option.none<UserId>();
-  return Option.flatMap(id, (userId) => HashMap.get(s.byId, userId));
-};
-
-const emptyState: State = {
-  byId: HashMap.empty(),
-  byEmail: HashMap.empty(),
-  byPhone: HashMap.empty(),
-};
-
-const identityFromInput = (identity: IdentityInput): UserIdentity => {
-  switch (identity._tag) {
-    case "Email":
-      return { _tag: "Email", email: identity.email, emailVerified: false };
-    case "Phone":
-      return { _tag: "Phone", phone: identity.phone, phoneVerified: false };
-    case "Anonymous":
-      return { _tag: "Anonymous" };
-  }
-};
-
 /**
  * AAPS-005: fires `Hooks.AfterUserAttributesChanged` (an observe point) when a
  * policy-readable attribute really changed. Read through `Effect.serviceOption`
- * so it adds nothing to either layer's requirements — a composition that does
+ * so it adds nothing to the layer's requirements — a composition that does
  * not provide the point simply announces nothing.
  */
 const attributesChangedAnnouncer = Effect.gen(function* () {
@@ -542,356 +476,9 @@ const attributesChangedAnnouncer = Effect.gen(function* () {
     Option.isSome(hook) ? hook.value.run({ userId, attributes }) : Effect.void;
 });
 
-/**
- * TRBS-005: single-process, test-grade storage — see `Sessions.layerMemory`. Use `layerSql` for any multi-instance deployment.
- *
- * BEH-EA-046: dropping a user's own row is this Layer's whole job — cascading to `Accounts`/`Sessions` is each of those services' own responsibility, triggered by the caller that also calls `Users.delete`, not by this module reaching into them.
- */
-export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.BeforeUserDelete> =
-  Layer.effect(
-    Users,
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const crypto = yield* Crypto.Crypto;
-      const beforeDelete = yield* Hooks.BeforeUserDelete;
-      const announce = yield* attributesChangedAnnouncer;
-      // SAM-004: the declared fields, beside (not inside) the user record.
-      const registry = yield* UserFields.UserFieldRegistry;
-      const heldFields = yield* Ref.make(HashMap.empty<UserId, UserFields.Values>());
-
-      const findById: UsersShape["findById"] = (id) =>
-        Ref.get(state).pipe(
-          Effect.flatMap((s) =>
-            Option.match(HashMap.get(s.byId, id), {
-              onNone: () => Effect.fail(userNotFound(id)),
-              onSome: Effect.succeed,
-            }),
-          ),
-        );
-
-      const findByEmail: UsersShape["findByEmail"] = (email) =>
-        Ref.get(state).pipe(
-          Effect.map((s) => holderOf(s, { _tag: "Email", email: email.toLowerCase() })),
-        );
-
-      const findByPhone: UsersShape["findByPhone"] = (phone) =>
-        Ref.get(state).pipe(Effect.map((s) => holderOf(s, { _tag: "Phone", phone })));
-
-      // SCP-003: one `Ref.modify` decides "insert or return the holder", so a
-      // concurrent pair cannot both insert. `Result.fail` carries the holder.
-      const insertOrHolder = Effect.fnUntraced(function* (input: CreateInput) {
-        const identity = normalizeIdentity(input.identity);
-        const id = UserId(
-          yield* crypto.randomUUIDv7.pipe(
-            Effect.catchTag("PlatformError", storeUnavailable("Users.create")),
-          ),
-        );
-        const timestamp = yield* now;
-        const tenantId = yield* Tenant.TenantContext;
-        const record: UserRecord = {
-          id,
-          identity: identityFromInput(identity),
-          name: input.name,
-          metadata: Option.fromNullishOr(input.metadata),
-          image: Option.fromNullishOr(input.image),
-          tenantId,
-          status: "active",
-          statusReason: Option.none(),
-          suspendedUntil: Option.none(),
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        };
-        const outcome = yield* Ref.modify(
-          state,
-          (s): readonly [Result.Result<UserRecord, UserRecord>, State] => {
-            const holder = holderOf(s, identity);
-            return Option.isSome(holder)
-              ? ([Result.fail(holder.value), s] as const)
-              : ([Result.succeed(record), indexRecord(s, record)] as const);
-          },
-        );
-        return { identity, outcome };
-      });
-
-      const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
-        const { identity, outcome } = yield* insertOrHolder(input);
-        return yield* Result.match(outcome, {
-          onFailure: () => identityAlreadyExists(identity),
-          onSuccess: Effect.succeed,
-        });
-      });
-
-      const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
-        const { outcome } = yield* insertOrHolder(input);
-        return Result.match(outcome, {
-          onFailure: (user) => ({ user, created: false }),
-          onSuccess: (user) => ({ user, created: true }),
-        });
-      });
-
-      /** One atomic read-check-write over a single user; `step` decides, `Ref.modify` applies. */
-      const transition = <E>(
-        id: UserId,
-        step: (
-          existing: UserRecord,
-          s: State,
-        ) => Result.Result<
-          { readonly next: State; readonly record: UserRecord; readonly changed: boolean },
-          E
-        >,
-      ): Effect.Effect<readonly [UserRecord, boolean], UserNotFound | E> =>
-        Ref.modify(
-          state,
-          (
-            s,
-          ): readonly [Result.Result<readonly [UserRecord, boolean], UserNotFound | E>, State] => {
-            const existing = HashMap.get(s.byId, id);
-            if (Option.isNone(existing)) return [Result.fail(userNotFound(id)), s] as const;
-            return Result.match(step(existing.value, s), {
-              onFailure: (error) => [Result.fail(error), s] as const,
-              onSuccess: ({ next, record, changed }) =>
-                [Result.succeed([record, changed] as const), next] as const,
-            });
-          },
-        ).pipe(Effect.flatMap(Effect.fromResult));
-
-      /** Rewrites the stored record, leaving both unique indexes untouched. */
-      const replaceRecord = (s: State, record: UserRecord): State => ({
-        ...s,
-        byId: HashMap.set(s.byId, record.id, record),
-      });
-
-      const updateProfile: UsersShape["updateProfile"] = (id, input) =>
-        transition(id, (existing, s) => {
-          const updated: UserRecord = {
-            ...existing,
-            name: input.name,
-            metadata:
-              input.metadata === undefined
-                ? existing.metadata
-                : Option.fromNullishOr(input.metadata),
-            image: input.image === undefined ? existing.image : Option.fromNullishOr(input.image),
-          };
-          return Result.succeed({
-            next: replaceRecord(s, updated),
-            record: updated,
-            changed: true,
-          });
-        }).pipe(
-          Effect.tap(([record]) => announce(record.id, ["name"])),
-          Effect.map(([record]) => record),
-        );
-
-      const verifyEmail: UsersShape["verifyEmail"] = (id) =>
-        transition(id, (existing, s) => {
-          const identity = existing.identity;
-          if (identity._tag !== "Email") {
-            return Result.fail(identityMismatch(id, "Email", identity._tag));
-          }
-          if (identity.emailVerified) {
-            return Result.succeed({ next: s, record: existing, changed: false });
-          }
-          const updated: UserRecord = {
-            ...existing,
-            identity: { ...identity, emailVerified: true },
-          };
-          return Result.succeed({
-            next: replaceRecord(s, updated),
-            record: updated,
-            changed: true,
-          });
-        }).pipe(
-          Effect.tap(([record, changed]) =>
-            changed ? announce(record.id, ["emailVerified"]) : Effect.void,
-          ),
-          Effect.map(([record]) => record),
-        );
-
-      const verifyPhone: UsersShape["verifyPhone"] = (id) =>
-        transition(id, (existing, s) => {
-          const identity = existing.identity;
-          if (identity._tag !== "Phone") {
-            return Result.fail(identityMismatch(id, "Phone", identity._tag));
-          }
-          if (identity.phoneVerified) {
-            return Result.succeed({ next: s, record: existing, changed: false });
-          }
-          const updated: UserRecord = {
-            ...existing,
-            identity: { ...identity, phoneVerified: true },
-          };
-          return Result.succeed({
-            next: replaceRecord(s, updated),
-            record: updated,
-            changed: true,
-          });
-        }).pipe(Effect.map(([record]) => record));
-
-      const promoteIdentity: UsersShape["promoteIdentity"] = (id, requested) => {
-        const wanted = normalizePromoted(requested);
-        return transition<IdentityMismatch | EmailAlreadyExists | PhoneAlreadyExists>(
-          id,
-          (existing, s) => {
-            if (existing.identity._tag !== "Anonymous") {
-              return Result.fail(identityMismatch(id, "Anonymous", existing.identity._tag));
-            }
-            if (Option.isSome(holderOf(s, wanted))) return Result.fail(alreadyExists(wanted));
-            const updated: UserRecord = { ...existing, identity: identityFromInput(wanted) };
-            return Result.succeed({
-              next: indexRecord(s, updated),
-              record: updated,
-              changed: true,
-            });
-          },
-        ).pipe(Effect.map(([record]) => record));
-      };
-
-      const changeEmail: UsersShape["changeEmail"] = (id, requested) => {
-        const email = requested.toLowerCase();
-        return transition<IdentityMismatch | EmailAlreadyExists>(id, (existing, s) => {
-          const identity = existing.identity;
-          if (identity._tag !== "Email") {
-            return Result.fail(identityMismatch(id, "Email", identity._tag));
-          }
-          if (identity.email === email) {
-            return Result.succeed({ next: s, record: existing, changed: false });
-          }
-          if (HashMap.has(s.byEmail, email)) {
-            return Result.fail(emailExists(email));
-          }
-          const updated: UserRecord = {
-            ...existing,
-            identity: { _tag: "Email", email, emailVerified: false },
-          };
-          return Result.succeed({
-            next: indexRecord(unindexRecord(s, existing), updated),
-            record: updated,
-            changed: identity.emailVerified,
-          });
-        }).pipe(
-          Effect.tap(([record, lowered]) =>
-            lowered ? announce(record.id, ["emailVerified"]) : Effect.void,
-          ),
-          Effect.map(([record]) => record),
-        );
-      };
-
-      const setStatus: UsersShape["setStatus"] = (id, status, options) =>
-        transition(id, (existing, s) => {
-          const updated: UserRecord = { ...existing, status, ...statusFields(status, options) };
-          return Result.succeed({
-            next: replaceRecord(s, updated),
-            record: updated,
-            changed: true,
-          });
-        }).pipe(
-          Effect.tap(([record]) => announce(record.id, ["status"])),
-          Effect.map(([record]) => record),
-        );
-
-      // AOMS-006/CSG-002: `Hooks.BeforeUserDelete` runs between the
-      // existence read and the actual removal — ticket 03's own accepted
-      // trade-off, splitting what used to be one atomic `Ref.modify` into
-      // read-then-hook-then-update. Nothing else in this in-memory,
-      // test-only layer observes a concurrent mutation in that gap (a
-      // single-threaded Effect fiber has no true concurrent writer unless a
-      // tap itself yields to one).
-      const delete_: UsersShape["delete"] = (id) =>
-        Effect.gen(function* () {
-          const existing = yield* findById(id);
-          yield* beforeUserDeleteVeto(beforeDelete.run(deleteHookInput(existing)));
-          yield* Ref.update(state, (s) => unindexRecord(s, existing));
-          yield* Ref.update(heldFields, HashMap.remove(id));
-        });
-
-      const getFields: UsersShape["getFields"] = Effect.fnUntraced(function* (id, keys) {
-        yield* findById(id);
-        const wanted = yield* UserFields.resolve(registry, keys);
-        const held = yield* Ref.get(heldFields).pipe(
-          Effect.map((all) => Option.getOrElse(HashMap.get(all, id), () => ({}))),
-        );
-        return pickFields(
-          held,
-          wanted.map((descriptor) => descriptor.key),
-        );
-      });
-
-      const setFields: UsersShape["setFields"] = Effect.fnUntraced(function* (id, patch, options) {
-        yield* findById(id);
-        const checked = yield* UserFields.check(registry, patch, options?.source ?? "server");
-        const next = yield* Ref.modify(
-          heldFields,
-          (all): readonly [UserFields.Values, HashMap.HashMap<UserId, UserFields.Values>] => {
-            const merged: Record<string, UserFields.Scalar> = {
-              ...Option.getOrElse(HashMap.get(all, id), () => ({})),
-            };
-            for (const [descriptor, value] of checked) {
-              if (value === null) delete merged[descriptor.key];
-              else merged[descriptor.key] = value;
-            }
-            return [merged, HashMap.set(all, id, merged)];
-          },
-        );
-        if (checked.length > 0) {
-          yield* announce(
-            id,
-            checked.map(([descriptor]) => descriptor.key),
-          );
-        }
-        return pickFields(next, [...registry.keys()]);
-      });
-
-      const list: UsersShape["list"] = (input) =>
-        Ref.get(state).pipe(
-          Effect.map((s) => {
-            const limit = input?.limit ?? DEFAULT_LIST_LIMIT;
-            const cursor = input?.cursor;
-            const after = Array.from(HashMap.values(s.byId))
-              .sort((a, b) => {
-                const byTime =
-                  DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt);
-                return byTime !== 0 ? byTime : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-              })
-              .filter(
-                (user) =>
-                  cursor === undefined ||
-                  DateTime.toEpochMillis(user.createdAt) >
-                    DateTime.toEpochMillis(cursor.createdAt) ||
-                  (DateTime.toEpochMillis(user.createdAt) ===
-                    DateTime.toEpochMillis(cursor.createdAt) &&
-                    user.id > cursor.id),
-              );
-            const items = after.slice(0, limit);
-            const last = items.at(-1);
-            return {
-              items,
-              nextCursor:
-                after.length > limit && last !== undefined
-                  ? Option.some({ createdAt: last.createdAt, id: last.id })
-                  : Option.none(),
-            };
-          }),
-        );
-
-      return {
-        create,
-        createOrGet,
-        findById,
-        findByEmail,
-        findByPhone,
-        updateProfile,
-        verifyEmail,
-        verifyPhone,
-        promoteIdentity,
-        changeEmail,
-        setStatus,
-        delete: delete_,
-        list,
-        getFields,
-        setFields,
-      };
-    }),
-  );
+/** The identity kind of a stored user's columns. */
+const identityTagOf = (user: UserStore.StoredUser): UserIdentity["_tag"] =>
+  Option.isSome(user.email) ? "Email" : Option.isSome(user.phone) ? "Phone" : "Anonymous";
 
 /**
  * FAMS-002: folds the flattened `email`/`phone` columns into the identity union
@@ -899,345 +486,402 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
  * writer here produces (the union says a user has one identity), so it dies
  * with a defect rather than picking a side silently.
  */
-const toIdentity = (row: SqlModels.User): Effect.Effect<UserIdentity> => {
-  if (row.email !== null && row.phone !== null) {
+const toIdentity = (user: UserStore.StoredUser): Effect.Effect<UserIdentity> => {
+  if (Option.isSome(user.email) && Option.isSome(user.phone)) {
     return Defects.invariantViolation(
       "UserIdentityAmbiguous",
       "awthaq: a user row has both an email and a phone",
     );
   }
-  if (row.email !== null) {
-    return Effect.succeed({ _tag: "Email", email: row.email, emailVerified: row.emailVerified });
+  if (Option.isSome(user.email)) {
+    return Effect.succeed({
+      _tag: "Email",
+      email: user.email.value,
+      emailVerified: user.emailVerified,
+    });
   }
-  if (row.phone !== null) {
-    return Effect.succeed({ _tag: "Phone", phone: row.phone, phoneVerified: row.phoneVerified });
+  if (Option.isSome(user.phone)) {
+    return Effect.succeed({
+      _tag: "Phone",
+      phone: user.phone.value,
+      phoneVerified: user.phoneVerified,
+    });
   }
   return Effect.succeed({ _tag: "Anonymous" });
 };
 
-const toUserRecord = (row: SqlModels.User): Effect.Effect<UserRecord> =>
-  Effect.map(toIdentity(row), (identity) => ({
-    id: UserId(row.id),
+const toUserRecord = (user: UserStore.StoredUser): Effect.Effect<UserRecord> =>
+  Effect.map(toIdentity(user), (identity) => ({
+    id: UserId(user.id),
     identity,
-    name: row.name,
-    metadata: Option.fromNullOr(row.metadata),
-    image: Option.fromNullOr(row.image),
-    tenantId: Option.fromNullOr(row.tenantId),
-    status: row.status,
-    statusReason: Option.fromNullOr(row.statusReason),
-    suspendedUntil: Option.fromNullOr(row.suspendedUntil),
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
+    name: user.name,
+    metadata: user.metadata,
+    image: user.image,
+    tenantId: user.tenantId,
+    status: user.status,
+    statusReason: user.statusReason,
+    suspendedUntil: user.suspendedUntil,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
   }));
 
 const toUserRecordOption = (
-  row: Option.Option<SqlModels.User>,
+  user: Option.Option<UserStore.StoredUser>,
 ): Effect.Effect<Option.Option<UserRecord>> =>
-  Option.match(row, {
+  Option.match(user, {
     onNone: () => Effect.succeedNone,
     onSome: (found) => Effect.map(toUserRecord(found), Option.some),
   });
 
+/** What an identity operation decided to do to the row it just read. */
+type Plan<Conflict> =
+  | { readonly _tag: "Unchanged" }
+  | {
+      readonly _tag: "Change";
+      readonly next: UserStore.IdentityColumns;
+      /** Fails with the domain's own error when the new email or phone belongs to someone else. */
+      readonly taken: Effect.Effect<never, Conflict>;
+    };
+
+/** How often an identity operation re-reads and retries after losing a compare-and-swap. */
+const SWAP_ATTEMPTS = 3;
+
+/** BEH-EA-036: a page is at least one row and at most this many. */
+const MAX_LIST_LIMIT = 200;
+
+const listLimit = (limit: number | undefined): number =>
+  limit === undefined || !Number.isFinite(limit)
+    ? DEFAULT_LIST_LIMIT
+    : Math.min(Math.max(Math.trunc(limit), 1), MAX_LIST_LIMIT);
+
+/** A profile column as the store takes it: `undefined` keeps, `null` clears. */
+const profileChange = (value: string | null | undefined): UserStore.Change<string> =>
+  value === undefined
+    ? { _tag: "Keep" }
+    : value === null
+      ? { _tag: "Clear" }
+      : { _tag: "Set", value };
+
 /**
- * BEH-EA-041's uniqueness is a real database constraint here (a `UNIQUE`
- * index on `lower(email)`, declared by whichever schema/migration creates
- * the `users` table) rather than `layerMemory`'s in-process `HashMap`
- * check — a duplicate `create` surfaces as `SqlError`'s `UniqueViolation`
- * reason, mapped to `EmailAlreadyExists`; every other repository failure
- * (a schema mismatch, a dropped connection) is a genuine defect, not a
- * domain error this service's callers are meant to recover from, so it is
- * left to `die`. FAMS-002: the same holds for the partial `users_phone_unique`
- * index and `PhoneAlreadyExists`.
+ * Written once over `UserStore` (ADR-EA-041). Needs the store and `Crypto` (the id); the clock is
+ * read once per operation and handed to the store.
+ *
+ * BEH-EA-046: deleting a user is `Erasure.AccountErasure`'s job; this layer also provides the row
+ * store (`UserRemoval`) it calls with a clearance.
  */
-export const layerSql: Layer.Layer<
-  Users,
-  never,
-  SqlRepositories.UsersRepository | Hooks.BeforeUserDelete
-> = Layer.effect(
-  Users,
+export const layer = Layer.effectContext(
   Effect.gen(function* () {
-    const repo = yield* SqlRepositories.UsersRepository;
-    const beforeDelete = yield* Hooks.BeforeUserDelete;
+    const store = yield* UserStore.UserStore;
+    const crypto = yield* Crypto.Crypto;
     const announce = yield* attributesChangedAnnouncer;
     // SAM-004: the composition's declared fields; their columns exist because `Auth.make`'s generated migrations added them.
     const registry = yield* UserFields.UserFieldRegistry;
 
-    /** The declared fields of `descriptors` that `id` holds a value for, or `UserNotFound`. */
-    const readDeclared = (
-      operation: string,
-      id: UserId,
-      descriptors: ReadonlyArray<UserFields.Descriptor>,
-    ) =>
-      repo
-        .readFields(
-          id,
-          descriptors.map((descriptor) => ({ name: descriptor.column, kind: descriptor.kind })),
-        )
-        .pipe(
-          orStoreUnavailable(operation),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(userNotFound(id)),
-              onSome: (byColumn) =>
-                Effect.succeed(
-                  pickFields(
-                    Object.fromEntries(
-                      descriptors.flatMap((descriptor) => {
-                        const value = byColumn[descriptor.column];
-                        return value === undefined ? [] : [[descriptor.key, value]];
-                      }),
-                    ),
-                    descriptors.map((descriptor) => descriptor.key),
-                  ),
-                ),
-            }),
-          ),
-        );
-
-    const buildInsert = (input: CreateInput, identity: IdentityInput) =>
-      repo.models.User.insert
-        .makeEffect({
-          email: identity._tag === "Email" ? identity.email : null,
-          phone: identity._tag === "Phone" ? identity.phone : null,
-          name: input.name,
-          metadata: input.metadata ?? null,
-          image: input.image ?? null,
-        })
-        .pipe(Effect.orDie);
-
-    /** A `UniqueViolation` is the domain conflict for `identity`; any other `SqlError` is an outage (`StoreUnavailable`). */
-    const conflictOrUnavailable = (operation: string, identity: IdentityInput) =>
-      Effect.fnUntraced(function* (error: SqlError) {
-        if (error.reason._tag === "UniqueViolation") return yield* identityAlreadyExists(identity);
-        return yield* storeUnavailable(operation)(error);
-      });
-
-    const emailConflictOrUnavailable = (operation: string, email: string) =>
-      Effect.fnUntraced(function* (error: SqlError) {
-        if (error.reason._tag === "UniqueViolation") return yield* Effect.fail(emailExists(email));
-        return yield* storeUnavailable(operation)(error);
-      });
-
-    const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
-      const identity = normalizeIdentity(input.identity);
-      const insert = yield* buildInsert(input, identity);
-      const row = yield* repo
-        .insert(insert)
-        .pipe(
-          Effect.catchTag("SqlError", conflictOrUnavailable("Users.create", identity)),
-          Effect.catchTag("SchemaError", Effect.die),
-        );
-      return yield* toUserRecord(row);
-    });
+    /** The stored user, or `UserNotFound`. */
+    const getStored = (id: UserId, operation: string) =>
+      store.get(id).pipe(
+        relabel(operation),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(userNotFound(id)),
+            onSome: Effect.succeed,
+          }),
+        ),
+      );
 
     const findById: UsersShape["findById"] = (id) =>
-      repo.findById(id).pipe(
-        Effect.catchTags({
-          NoSuchElementError: () => Effect.fail(userNotFound(id)),
-          SchemaError: Effect.die,
-          SqlError: storeUnavailable("Users.findById"),
-        }),
-        Effect.flatMap(toUserRecord),
-      );
+      getStored(id, "Users.findById").pipe(Effect.flatMap(toUserRecord));
 
     const findByEmail: UsersShape["findByEmail"] = (email) =>
-      repo
-        .findByEmail(email.toLowerCase())
-        .pipe(orStoreUnavailable("Users.findByEmail"), Effect.flatMap(toUserRecordOption));
+      store
+        .getByEmail(email.toLowerCase())
+        .pipe(relabel("Users.findByEmail"), Effect.flatMap(toUserRecordOption));
 
     const findByPhone: UsersShape["findByPhone"] = (phone) =>
-      repo
-        .findByPhone(phone)
-        .pipe(orStoreUnavailable("Users.findByPhone"), Effect.flatMap(toUserRecordOption));
+      store
+        .getByPhone(phone)
+        .pipe(relabel("Users.findByPhone"), Effect.flatMap(toUserRecordOption));
 
-    // SCP-003: `INSERT ... ON CONFLICT DO NOTHING` (not catch-the-violation):
-    // a Postgres unique violation would abort an enclosing transaction, and an
-    // import runs one per user.
-    const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
+    /** The row `create` and `createOrGet` hand the store: the domain mints the id and reads the clock. */
+    const newUser = Effect.fnUntraced(function* (input: CreateInput, operation: string) {
       const identity = normalizeIdentity(input.identity);
-      const insert = yield* buildInsert(input, identity);
-      const inserted = yield* repo
-        .insertIfAbsent(insert)
-        .pipe(orStoreUnavailable("Users.createOrGet"));
-      if (Option.isSome(inserted)) {
-        return { user: yield* toUserRecord(inserted.value), created: true };
-      }
-      const holder =
-        identity._tag === "Email"
-          ? yield* findByEmail(identity.email)
-          : identity._tag === "Phone"
-            ? yield* findByPhone(identity.phone)
-            : Option.none<UserRecord>();
-      // `None` here means the holder vanished between the two statements, or an
-      // Anonymous insert hit a primary-key collision — neither is a domain state.
-      return yield* Option.match(holder, {
-        onNone: () =>
-          Defects.invariantViolation(
-            "CreateOrGetRowVanished",
-            "awthaq: createOrGet found no row after a conflict",
-          ),
-        onSome: (user) => Effect.succeed({ user, created: false }),
-      });
+      const id = UserId(
+        yield* crypto.randomUUIDv7.pipe(
+          Effect.catchTag("PlatformError", storeUnavailable(operation)),
+        ),
+      );
+      const at = yield* now;
+      const row: UserStore.NewUser = {
+        id,
+        email: identity._tag === "Email" ? Option.some(identity.email) : Option.none(),
+        emailVerified: false,
+        phone: identity._tag === "Phone" ? Option.some(identity.phone) : Option.none(),
+        phoneVerified: false,
+        name: input.name,
+        image: Option.fromNullishOr(input.image),
+        metadata: Option.fromNullishOr(input.metadata),
+        status: "active",
+        statusReason: Option.none(),
+        suspendedUntil: Option.none(),
+        createdAt: at,
+        updatedAt: at,
+      };
+      return { identity, row };
     });
+
+    const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
+      const { identity, row } = yield* newUser(input, "Users.create");
+      const outcome = yield* store.insertOrHolder(row);
+      return outcome._tag === "Inserted"
+        ? yield* toUserRecord(outcome.user)
+        : yield* identityAlreadyExists(identity);
+    }, relabel("Users.create"));
+
+    // SCP-003: the store decides "insert or return the holder" in one atomic primitive, so a
+    // concurrent pair cannot both insert.
+    const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
+      const { row } = yield* newUser(input, "Users.createOrGet");
+      const outcome = yield* store.insertOrHolder(row);
+      return outcome._tag === "Inserted"
+        ? { user: yield* toUserRecord(outcome.user), created: true }
+        : { user: yield* toUserRecord(outcome.holder), created: false };
+    }, relabel("Users.createOrGet"));
 
     // GC-004: one targeted statement, so a row deleted between the caller's read and this write is
-    // `UserNotFound` — what `layerMemory` answers — not a defect, and no other column is rewritten
-    // from a stale read.
+    // `UserNotFound`, never a defect, and no other column is rewritten from a stale read.
     const updateProfile: UsersShape["updateProfile"] = Effect.fnUntraced(function* (id, input) {
-      const row = yield* repo
-        .updateProfile({ id, name: input.name, metadata: input.metadata, image: input.image })
-        .pipe(orStoreUnavailable("Users.updateProfile"));
-      if (Option.isNone(row)) return yield* Effect.fail(userNotFound(id));
+      const at = yield* now;
+      const row = yield* store.updateProfile({
+        id,
+        name: input.name,
+        image: profileChange(input.image),
+        metadata: profileChange(input.metadata),
+        at,
+      });
+      if (Option.isNone(row)) return yield* userNotFound(id);
       yield* announce(id, ["name"]);
       return yield* toUserRecord(row.value);
-    });
+    }, relabel("Users.updateProfile"));
 
-    // `emailVerified` is excluded from the generic `update`/`jsonUpdate`
-    // variants (BEH-EA-042) — flipping it goes through the repository's own
-    // dedicated `verifyEmail` operation, which is the only write that can
-    // touch that column at all.
+    /**
+     * An identity transition (BEH-EA-041/042): read the user, decide what to change (`plan`), and apply it
+     * as a compare-and-swap against what was read. A concurrent change is `Stale`: the user is re-read and
+     * the decision made again (at most `SWAP_ATTEMPTS` times), so a transition and its announcement
+     * happen exactly once. Resolves to the user as it is, the user as it was read, and whether it changed.
+     */
+    const swap = <E, Conflict>(
+      operation: string,
+      id: UserId,
+      plan: (current: UserStore.StoredUser) => Effect.Effect<Plan<Conflict>, E>,
+    ) =>
+      Effect.gen(function* () {
+        let current = yield* getStored(id, operation);
+        for (let attempt = 0; attempt < SWAP_ATTEMPTS; attempt++) {
+          const decided = yield* plan(current);
+          if (decided._tag === "Unchanged") {
+            return { user: current, before: current, changed: false };
+          }
+          const at = yield* now;
+          const outcome = yield* store
+            .casIdentity({ id, expected: UserStore.identityOf(current), next: decided.next, at })
+            .pipe(relabel(operation));
+          switch (outcome._tag) {
+            case "Updated":
+              return { user: outcome.user, before: current, changed: true };
+            case "Stale":
+              current = outcome.current;
+              break;
+            case "Taken":
+              return yield* decided.taken;
+            case "Missing":
+              return yield* userNotFound(id);
+          }
+        }
+        return yield* new StoreUnavailable({ operation });
+      });
+
     const verifyEmail: UsersShape["verifyEmail"] = Effect.fnUntraced(function* (id) {
-      const existing = yield* findById(id);
-      if (existing.identity._tag !== "Email") {
-        return yield* Effect.fail(identityMismatch(id, "Email", existing.identity._tag));
-      }
-      if (existing.identity.emailVerified) return existing;
-      const row = yield* repo.verifyEmail(id).pipe(
-        Effect.catchTags({
-          NoSuchElementError: () => Effect.fail(userNotFound(id)),
-          SchemaError: Effect.die,
-          SqlError: storeUnavailable("Users.verifyEmail"),
-        }),
+      const done = yield* swap("Users.verifyEmail", id, (current) =>
+        Option.isNone(current.email)
+          ? Effect.fail(identityMismatch(id, "Email", identityTagOf(current)))
+          : Effect.succeed<Plan<never>>(
+              current.emailVerified
+                ? { _tag: "Unchanged" }
+                : {
+                    _tag: "Change",
+                    next: { ...UserStore.identityOf(current), emailVerified: true },
+                    taken: Effect.never,
+                  },
+            ),
       );
-      yield* announce(id, ["emailVerified"]);
-      return yield* toUserRecord(row);
+      // AAPS-005: announced exactly once, by the call that made the change.
+      if (done.changed) yield* announce(id, ["emailVerified"]);
+      return yield* toUserRecord(done.user);
     });
 
     const verifyPhone: UsersShape["verifyPhone"] = Effect.fnUntraced(function* (id) {
-      const existing = yield* findById(id);
-      if (existing.identity._tag !== "Phone") {
-        return yield* Effect.fail(identityMismatch(id, "Phone", existing.identity._tag));
-      }
-      if (existing.identity.phoneVerified) return existing;
-      const row = yield* repo.verifyPhone(id).pipe(
-        Effect.catchTags({
-          NoSuchElementError: () => Effect.fail(userNotFound(id)),
-          SchemaError: Effect.die,
-          SqlError: storeUnavailable("Users.verifyPhone"),
-        }),
+      const done = yield* swap("Users.verifyPhone", id, (current) =>
+        Option.isNone(current.phone)
+          ? Effect.fail(identityMismatch(id, "Phone", identityTagOf(current)))
+          : Effect.succeed<Plan<never>>(
+              current.phoneVerified
+                ? { _tag: "Unchanged" }
+                : {
+                    _tag: "Change",
+                    next: { ...UserStore.identityOf(current), phoneVerified: true },
+                    taken: Effect.never,
+                  },
+            ),
       );
-      return yield* toUserRecord(row);
+      return yield* toUserRecord(done.user);
     });
 
     const promoteIdentity: UsersShape["promoteIdentity"] = Effect.fnUntraced(
       function* (id, requested) {
         const wanted = normalizePromoted(requested);
-        const existing = yield* findById(id);
-        if (existing.identity._tag !== "Anonymous") {
-          return yield* Effect.fail(identityMismatch(id, "Anonymous", existing.identity._tag));
-        }
-        const promoted = yield* repo
-          .promoteIdentity(id, wanted)
-          .pipe(
-            Effect.catchTag("SqlError", conflictOrUnavailable("Users.promoteIdentity", wanted)),
-            Effect.catchTag("SchemaError", Effect.die),
-          );
-        if (Option.isNone(promoted)) {
-          // Lost a race: another promotion landed between the read and the guarded UPDATE.
-          const current = yield* findById(id);
-          return yield* Effect.fail(identityMismatch(id, "Anonymous", current.identity._tag));
-        }
-        return yield* toUserRecord(promoted.value);
+        const done = yield* swap("Users.promoteIdentity", id, (current) =>
+          identityTagOf(current) !== "Anonymous"
+            ? Effect.fail(identityMismatch(id, "Anonymous", identityTagOf(current)))
+            : Effect.succeed<Plan<EmailAlreadyExists | PhoneAlreadyExists>>({
+                _tag: "Change",
+                next: {
+                  email: wanted._tag === "Email" ? Option.some(wanted.email) : Option.none(),
+                  emailVerified: false,
+                  phone: wanted._tag === "Phone" ? Option.some(wanted.phone) : Option.none(),
+                  phoneVerified: false,
+                },
+                taken: Effect.fail(alreadyExists(wanted)),
+              }),
+        );
+        return yield* toUserRecord(done.user);
       },
     );
 
     const changeEmail: UsersShape["changeEmail"] = Effect.fnUntraced(function* (id, requested) {
       const email = requested.toLowerCase();
-      const existing = yield* findById(id);
-      const identity = existing.identity;
-      if (identity._tag !== "Email") {
-        return yield* Effect.fail(identityMismatch(id, "Email", identity._tag));
-      }
-      if (identity.email === email) return existing;
-      const changed = yield* repo
-        .changeEmail(id, email)
-        .pipe(
-          Effect.catchTag("SqlError", emailConflictOrUnavailable("Users.changeEmail", email)),
-          Effect.catchTag("SchemaError", Effect.die),
-        );
-      if (Option.isNone(changed)) {
-        const current = yield* findById(id);
-        return yield* Effect.fail(identityMismatch(id, "Email", current.identity._tag));
-      }
-      if (identity.emailVerified) yield* announce(id, ["emailVerified"]);
-      return yield* toUserRecord(changed.value);
+      const done = yield* swap("Users.changeEmail", id, (current) =>
+        Option.isNone(current.email)
+          ? Effect.fail(identityMismatch(id, "Email", identityTagOf(current)))
+          : Effect.succeed<Plan<EmailAlreadyExists>>(
+              current.email.value === email
+                ? { _tag: "Unchanged" }
+                : {
+                    _tag: "Change",
+                    next: {
+                      ...UserStore.identityOf(current),
+                      email: Option.some(email),
+                      emailVerified: false,
+                    },
+                    taken: Effect.fail(emailExists(email)),
+                  },
+            ),
+      );
+      // BEH-EA-042's one permitted lowering: announced only when the address really was verified.
+      if (done.changed && done.before.emailVerified) yield* announce(id, ["emailVerified"]);
+      return yield* toUserRecord(done.user);
     });
 
     const setStatus: UsersShape["setStatus"] = Effect.fnUntraced(function* (id, status, options) {
       const fields = statusFields(status, options);
-      const row = yield* repo
-        .setStatus(id, {
-          status,
-          reason: Option.getOrNull(fields.statusReason),
-          until: Option.getOrNull(fields.suspendedUntil),
-        })
-        .pipe(
-          Effect.catchTags({
-            NoSuchElementError: () => Effect.fail(userNotFound(id)),
-            SchemaError: Effect.die,
-            SqlError: storeUnavailable("Users.setStatus"),
-          }),
-        );
+      const at = yield* now;
+      const row = yield* store.setStatus({
+        id,
+        status,
+        reason: fields.statusReason,
+        until: fields.suspendedUntil,
+        at,
+      });
+      if (Option.isNone(row)) return yield* userNotFound(id);
       yield* announce(id, ["status"]);
-      return yield* toUserRecord(row);
-    });
+      return yield* toUserRecord(row.value);
+    }, relabel("Users.setStatus"));
 
-    const delete_: UsersShape["delete"] = Effect.fnUntraced(function* (id) {
-      const found = yield* findById(id);
-      yield* beforeUserDeleteVeto(beforeDelete.run(deleteHookInput(found)));
-      yield* repo.delete(id).pipe(orStoreUnavailable("Users.delete"));
-    });
+    /** The row and its declared fields, atomically. The only deleter, shared by `remove` and `createWith`. */
+    const removeRow = Effect.fnUntraced(function* (id: UserId) {
+      const removed = yield* store.delete(id);
+      if (!removed) return yield* userNotFound(id);
+    }, relabel("UserRemoval.remove"));
+
+    const createWith: UsersShape["createWith"] = (input, complete) =>
+      Effect.gen(function* () {
+        const user = yield* create(input);
+        const value = yield* complete(user).pipe(
+          Effect.onError(() => removeRow(user.id).pipe(Effect.ignoreCause({ log: true }))),
+        );
+        return { user, value };
+      });
 
     const list: UsersShape["list"] = (input) =>
-      repo.listPage(input?.cursor, input?.limit).pipe(
-        orStoreUnavailable("Users.list"),
-        Effect.flatMap((page) =>
-          Effect.map(Effect.forEach(page.items, toUserRecord), (items) => ({
-            items,
-            nextCursor: page.nextCursor,
-          })),
+      store
+        .listPage({ after: Option.fromNullishOr(input?.cursor), limit: listLimit(input?.limit) })
+        .pipe(
+          relabel("Users.list"),
+          Effect.flatMap((page) =>
+            Effect.map(Effect.forEach(page.items, toUserRecord), (items) => ({
+              items,
+              nextCursor: page.next,
+            })),
+          ),
+        );
+
+    /** The declared fields among `descriptors` the page holds, keyed by field key. */
+    const byKey = (
+      descriptors: ReadonlyArray<UserFields.Descriptor>,
+      held: UserStore.FieldValues,
+    ): UserFields.Values =>
+      pickFields(
+        Object.fromEntries(
+          descriptors.flatMap((descriptor) => {
+            const value = held[descriptor.column];
+            return value === undefined ? [] : [[descriptor.key, value]];
+          }),
         ),
+        descriptors.map((descriptor) => descriptor.key),
       );
 
+    const columnsOf = (descriptors: ReadonlyArray<UserFields.Descriptor>) =>
+      descriptors.map((descriptor) => ({ name: descriptor.column, kind: descriptor.kind }));
+
+    // U-4: every pure check runs before any I/O, so the answer to an unknown field, a refused write or an
+    // invalid value does not depend on whether the user exists.
     const getFields: UsersShape["getFields"] = Effect.fnUntraced(function* (id, keys) {
       const wanted = yield* UserFields.resolve(registry, keys);
-      return yield* readDeclared("Users.getFields", id, wanted);
+      const held = yield* store.readFields(id, columnsOf(wanted)).pipe(relabel("Users.getFields"));
+      if (Option.isNone(held)) return yield* userNotFound(id);
+      return byKey(wanted, held.value);
     });
 
     const setFields: UsersShape["setFields"] = Effect.fnUntraced(function* (id, patch, options) {
       const checked = yield* UserFields.check(registry, patch, options?.source ?? "server");
+      const every = [...registry.values()];
+      const at = yield* now;
+      const after =
+        checked.length === 0
+          ? yield* store.readFields(id, columnsOf(every)).pipe(relabel("Users.setFields"))
+          : yield* store
+              .writeFields({
+                id,
+                values: Object.fromEntries(
+                  checked.map(([descriptor, value]): [string, UserFields.Scalar | null] => [
+                    descriptor.column,
+                    value,
+                  ]),
+                ),
+                returning: columnsOf(every),
+                at,
+              })
+              .pipe(relabel("Users.setFields"));
+      if (Option.isNone(after)) return yield* userNotFound(id);
       if (checked.length > 0) {
-        const written = yield* repo
-          .writeFields(
-            id,
-            Object.fromEntries(
-              checked.map(([descriptor, value]): [string, UserFields.Scalar | null] => [
-                descriptor.column,
-                value,
-              ]),
-            ),
-          )
-          .pipe(orStoreUnavailable("Users.setFields"));
-        if (!written) return yield* Effect.fail(userNotFound(id));
         yield* announce(
           id,
           checked.map(([descriptor]) => descriptor.key),
         );
       }
-      return yield* readDeclared("Users.setFields", id, [...registry.values()]);
+      return byKey(every, after.value);
     });
 
-    return {
+    const users: UsersShape = {
       create,
       createOrGet,
       findById,
@@ -1249,11 +893,13 @@ export const layerSql: Layer.Layer<
       promoteIdentity,
       changeEmail,
       setStatus,
-      delete: delete_,
+      createWith,
       list,
       getFields,
       setFields,
     };
+    const removal: UserRemovalShape = { remove: (clearance) => removeRow(clearance.userId) };
+    return Context.make(Users, users).pipe(Context.add(UserRemoval, removal));
   }),
 );
 

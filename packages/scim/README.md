@@ -26,7 +26,7 @@ A SCIM **connection** is one organization's directory-sync credential. `ScimConn
 | `POST /Users` | Creates the user (an `Email` identity from the primary `emails` value or an address-shaped `userName`, else `Anonymous`), maps it to the connection, adds it to the organization. A repeat `POST` with the same `externalId` returns the existing user (reactivated if the directory now wants it active). |
 | `GET /Users?filter=userName eq "…"` / `externalId eq "…"` | The two filters an IdP uses to find its own resource; `startIndex`/`count` paging. Anything else is `400 invalidFilter`. |
 | `PUT` / `PATCH /Users/:id` | `displayName`/`name`, `externalId`, `active`. `PATCH` takes `add`/`replace`/`remove` (any case), with a `path` or Okta's path-less object, and `"True"`/`"False"` strings (Entra); attributes it does not manage are ignored. |
-| `DELETE /Users/:id` | Deactivates by default; `Scim.config({ deleteBehavior: "erase" })` erases the user (`Users.delete`, running the erasure taps). |
+| `DELETE /Users/:id` | Deactivates by default; `Scim.config({ deleteBehavior: "erase" })` runs the account erasure (`AccountErasure.eraseAccount`, `Directory` initiator): every plugin's rows, accounts, sessions, tokens, the user and the audit pseudonymization, in one transaction; a `BeforeUserDelete` veto is `403`. |
 | `/Groups` | A group is an organization **team**; members are the users the connection provisioned. |
 | `/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas` | Discovery, behind the same token. |
 
@@ -39,7 +39,7 @@ A SCIM **connection** is one organization's directory-sync credential. `ScimConn
 
 ## Not built
 
-`/Bulk`, `sortBy`, `/Me`, ETag concurrency, compound filters beyond the two `eq` forms, and nested-group push (a team's own hierarchy is not exposed). Group changes go straight to the team records, so the organization plugin's team *hooks* do not run for them; they publish `auth.scim.groupChanged`. There is no HTTP CRUD for connections yet — create and revoke them with `ScimConnectionStore` (or your own admin surface); directory-side rate limiting is the host's (put your usual limiter in front of `/scim`).
+`/Bulk`, `sortBy`, `/Me`, ETag concurrency, compound filters beyond the two `eq` forms, and nested-group push (a team's own hierarchy is not exposed). Group changes go through `OrganizationTeams` (with a `Directory` actor), so the organization's team hooks, quotas and events apply to a directory as to a member, and they also publish `auth.scim.groupChanged`. Groups need `OrganizationConfig.teams.enabled: true` (else `403`); set `teams.allowRemovingAllTeams: true` if your directory may delete every group (else deleting the last one is `409`). There is no HTTP CRUD for connections yet — create and revoke them with `ScimConnectionStore` (or your own admin surface); directory-side rate limiting is the host's (put your usual limiter in front of `/scim`).
 
 ## Interim recipe (no directory wired yet)
 

@@ -1,3 +1,4 @@
+// Hand-wired on purpose: the in-process client against a minimal router (plan 08 exemption).
 // spec/behaviors/24-nextjs-ssr.md, BEH-EA-189/190 (BO-002/NSA-008): the typed
 // in-process server-action client, against a *real* composed router — the
 // same `HttpRouter.toWebHandler` shape an application builds next to its

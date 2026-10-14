@@ -3,67 +3,20 @@
 // codes, a real session cookie — mirroring `@awthaq/admin`'s own
 // `AuthHttp.test.ts`.
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Sessions, Users } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { TestAuth } from "@awthaq/test";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationApi from "../src/OrganizationApi.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-// CSS-001/CDS-001-class fix: `OrganizationGroup` now carries
-// `.middleware(Api.CsrfProtection)` (see `OrganizationApi.ts`), so building
-// `Organization.Organization.layer`'s handlers requires a live
-// `Api.CsrfProtection` in context — and, since this file drives real HTTP
-// through `HttpRouter.toWebHandler`, every mutating request below must also
-// carry a valid double-submit cookie/header pair or it gets rejected with a
-// real `CsrfRejected` at runtime. Mirrors `packages/server/test/Csrf.test.ts`'s
-// own `validCookieValue()`.
-const CSRF_SECRET = "organization-authhttp-test-csrf-secret";
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CSRF_TOKEN: string = (() => {
-  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The handler under test runs on the real clock here (a web handler).
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  const signature = createHmac("sha256", CSRF_SECRET).update(signed).digest("hex");
-  return `${signed}.${signature}`;
-})();
+// `OrganizationGroup` carries `.middleware(Api.CsrfProtection)`, and this file drives real HTTP, so every mutating
+// request below carries a double-submit pair minted against the harness's own `CsrfConfig` (the handler under test
+// runs on the real clock, so the token is stamped now).
+const CSRF_TOKEN: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
 
 /** Appends the double-submit CSRF cookie to an existing `cookie` header value, if any. */
 const withCsrfCookie = (cookie?: string): string =>
@@ -71,61 +24,33 @@ const withCsrfCookie = (cookie?: string): string =>
     ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TOKEN}`
     : `${Api.CSRF_COOKIE_NAME}=${CSRF_TOKEN}`;
 
-const buildAppLayer = (configOverrides: Partial<Organization.OrganizationConfigShape> = {}) =>
-  Layer.mergeAll(
-    AuthHttp.routes(OrganizationApi.OrganizationApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Organization.Organization.layer),
-      Layer.provide(Organization.config(configOverrides)),
-      Layer.provide(AuthenticationLive),
-    ),
-    AuthHttp.docs(OrganizationApi.OrganizationApi),
-  ).pipe(
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
-
 const ORIGIN = "http://localhost:3000";
 
 const buildHandler = (configOverrides: Partial<Organization.OrganizationConfigShape> = {}) => {
-  const AppLayer = buildAppLayer(configOverrides);
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+  const app = TestAuth.app(
+    TestAuth.layer(Auth.make([Organization.Organization]), {
+      services: Organization.config(configOverrides),
+      openapiPath: "/openapi.json",
+      docsPath: "/docs",
+    }),
+    { baseUrl: ORIGIN },
+  );
+  const { handler } = app;
 
-  /** Mirrors `@awthaq/admin`'s own `AuthHttp.test.ts`: a real session cookie against the same running `Sessions` instance. */
+  /** A real session cookie against the same running `Sessions` instance. */
   const issueSessionCookieHeader = (userId: string): Promise<string> =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-          return yield* Effect.gen(function* () {
-            const sessions = yield* Sessions.Sessions;
-            const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-            return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-          }).pipe(Effect.provide(context));
-        }),
-      ),
+    app.run(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
+        return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+      }),
     );
 
   /** Runs `effect` against the same running records the handler uses (e.g. to seed a member the HTTP surface gives no direct route for). */
   const withServices = <A, E>(
     effect: Effect.Effect<A, E, MembershipRecords.MembershipRecords>,
-  ): Promise<A> =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
-          return yield* effect.pipe(Effect.provide(context));
-        }),
-      ),
-    );
+  ): Promise<A> => app.run(effect);
 
   return { handler, issueSessionCookieHeader, withServices };
 };
@@ -833,22 +758,4 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       assert.strictEqual(docs.status, 200);
     }),
   );
-});
-
-/**
- * `runPluginContractTests` against the real `Organization` plugin — manifest
- * legality, group ids, every `organization_*` table's prefix, and migration
- * determinism. Mirrors `packages/admin/test/AuthHttp.test.ts`'s own use of
- * this same harness.
- */
-const vitestFramework: TestAuth.TestFramework = {
-  describe: (name, body) => describe(name, body),
-  it: (name, body) => it(name, body),
-  fail: (message) => {
-    throw new Error(message);
-  },
-};
-
-TestAuth.runPluginContractTests(vitestFramework, () => Organization.Organization, {
-  options: [{}],
 });

@@ -3,8 +3,8 @@
 // (`/verify-email`, `/password/*`) where a scenario is about what a caller sees, the
 // `Verification` service directly (under `TestClock`) where it is about expiry or races, and
 // raw row reads where the claim is about what is persisted.
-import { AuditLog, AuthEvents, Hooks, Verification } from "@awthaq/core";
-import { Repositories } from "@awthaq/sql";
+import { AuditLog, AuthEvents, Hooks, Persistence, Verification } from "@awthaq/core";
+import { Repositories, VerificationStoreSql } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import assert from "node:assert/strict";
@@ -87,7 +87,7 @@ const consumeDirect = (held: HeldToken) =>
 
 const tokenRows = (identifier: string) =>
   rows(
-    "SELECT identifier, valueHash, consumedAt, userId FROM verification_tokens WHERE identifier = ?",
+    'SELECT identifier, "valueHash", "consumedAt", "userId" FROM verification_tokens WHERE identifier = ?',
     identifier,
   );
 
@@ -274,8 +274,8 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("both effects commit under one SQL transaction", function* () {
     const { probes } = yield* World;
     const sightings = yield* Ref.get(probes.sightings);
-    // One `SqlTransaction.withTransaction` saw the token consumed, the password written and
-    // the sessions revoked: same non-zero transaction id for all three.
+    // One real SQL transaction (`Verification.redeem`'s, ADR-EA-039) saw the token claimed, the
+    // password written and the sessions revoked: same non-zero transaction id for all three.
     const byTransaction = new Map<number, Set<string>>();
     for (const sighting of sightings) {
       if (sighting.transaction === 0) continue;
@@ -286,13 +286,13 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
     }
     const together = [...byTransaction.values()].some(
       (operations) =>
-        operations.has("Verification.consume") &&
+        operations.has("Verification.redeem") &&
         operations.has("Accounts.updateCredentialHash") &&
         operations.has("Sessions.revokeAll"),
     );
     assert.ok(
       together,
-      `consume, the credential write and the session revocation must share one transaction; saw ${JSON.stringify(sightings)}`,
+      `redeem, the credential write and the session revocation must share one transaction; saw ${JSON.stringify(sightings)}`,
     );
     const outside = sightings.filter(
       (sighting) =>
@@ -516,8 +516,8 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
     "this publication happens regardless of whatever the audit table separately records as the durable record of record",
     function* () {
       // The bus copy is published exactly once for the presented identifier whatever the audit
-      // table holds: the transaction the replayed consume ran in rolled back with the failure
-      // (PV-220), yet the subscriber still saw the event.
+      // table holds: the replay is an attempt event (ADR-EA-037), so a transaction that
+      // rolled back with the failure cannot hide it from the subscriber.
       const { strings, probes } = yield* World;
       const identifier = yield* strings.get("presented");
       yield* awaitEvent(REPLAY, identifier);
@@ -769,13 +769,13 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "no live VerificationToken row for it remains once the race resolves, regardless of which caller won",
     function* () {
-      // As shipped (CSG-003/BEH-EA-061): `layerSql` keeps the consumed row as replay evidence
+      // As shipped (CSG-003/BEH-EA-061): `Persistence.sql()` keeps the consumed row as replay evidence
       // until the retention window passes, so "gone" means no *live* row remains and no caller
       // can consume it again — not that the record was physically deleted.
       const { tokens } = yield* World;
       const held = yield* tokens.get("live");
       const live = yield* rows(
-        "SELECT id FROM verification_tokens WHERE identifier = ? AND consumedAt IS NULL",
+        'SELECT id FROM verification_tokens WHERE identifier = ? AND "consumedAt" IS NULL',
         held.identifier,
       );
       assert.equal(live.length, 0);
@@ -897,11 +897,14 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
         };
       }),
     ).pipe(Layer.provide(Repositories.VerificationReservationsRepositoryLive));
-    const DownVerification = Verification.layerSql.pipe(
+    const DownStore = VerificationStoreSql.layer.pipe(
       Layer.provide(Layer.mergeAll(Repositories.VerificationRepositoryLive, DownReservations)),
+    );
+    const DownVerification = Verification.layer.pipe(
+      Layer.provide(DownStore),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(AuthEvents.layer),
-      Layer.provide(AuditLog.layerMemory),
+      Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provide(Hooks.HooksLive),
     );
     yield* exits.set(

@@ -1,0 +1,44 @@
+// features/step-definitions/shared — the CSRF pair a hand-wired World posts with (plan 08: the token is `TestAuth.csrfToken`;
+// a World built on `TestAuth.app` never needs this, `app.request` mints its own)
+//
+// CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every mutating
+// production group now carries `Api.CsrfProtection` (see each plugin's own
+// `*Api.ts`). These BDD worlds call their composed app's real HTTP handler
+// directly (`HttpRouter.toWebHandler`), never through `@awthaq/client`'s
+// generated `CsrfClientLive` — so a world posting to a CSRF-protected group
+// has to play the double-submit role a real browser client would, or every
+// existing mutating scenario starts failing with `CsrfRejected`.
+//
+// Mirrors `packages/server/test/Csrf.test.ts`'s own `validCookieValue()`:
+// an HMAC-SHA256 computed independently (Node's `node:crypto`, not
+// `Csrf.ts`'s own implementation), so a passing scenario run exercises RFC
+// 2104 compatibility, not just self-consistency with the code under test.
+
+import { TestAuth } from "@awthaq/test";
+import * as Redacted from "effect/Redacted";
+
+/**
+ * The `CsrfConfig` every world's `CsrfProtectionLive` is built against: `TestAuth`'s own default, so a world
+ * that still hand-builds the middleware and a composition `TestAuth.layer` derives it for agree on the secret.
+ */
+export const CsrfConfigForTests = TestAuth.TestCsrfConfig;
+
+export const CSRF_COOKIE_NAME = "__Host-csrf";
+export const CSRF_HEADER_NAME = "x-csrf-token";
+
+/**
+ * One signed double-submit token, valid against `CsrfConfigForTests`'s
+ * secret for the lifetime of the test process — `CsrfProtectionLive` never
+ * rotates a cookie it already considers valid, so a single fixed value
+ * reused across every request in every scenario is exactly what a real
+ * client that bootstrapped the cookie once would also do.
+ */
+export const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(
+  Redacted.value(CsrfConfigForTests.secret),
+);
+
+/** Appends the double-submit CSRF cookie to an existing `cookie` header value, if any. */
+export const withCsrfCookie = (cookie?: string): string =>
+  cookie
+    ? `${cookie}; ${CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
+    : `${CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;

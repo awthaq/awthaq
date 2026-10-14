@@ -7,7 +7,7 @@
 // caller (`Organization.ts`) transitions it explicitly via `updateStatus`.
 
 import { Users } from "@awthaq/core";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -56,50 +56,87 @@ export interface InvitationRecordsShape {
     readonly role: ReadonlyArray<string>;
     readonly expiresAt: DateTime.Utc;
     readonly tokenHash: string;
-  }) => Effect.Effect<InvitationRecord>;
-  readonly findById: (id: string) => Effect.Effect<Option.Option<InvitationRecord>>;
+  }) => Effect.Effect<InvitationRecord, StoreFailure.StoreUnavailable>;
+  readonly findById: (
+    grant: TenantScoped.CrossTenant,
+
+    id: string,
+  ) => Effect.Effect<Option.Option<InvitationRecord>, StoreFailure.StoreUnavailable>;
   /** MTI-010: resolves an invitation from the hash of its emailed token (the landing-page lookup). */
-  readonly findByTokenHash: (tokenHash: string) => Effect.Effect<Option.Option<InvitationRecord>>;
+  readonly findByTokenHash: (
+    grant: TenantScoped.CrossTenant,
+
+    tokenHash: string,
+  ) => Effect.Effect<Option.Option<InvitationRecord>, StoreFailure.StoreUnavailable>;
   /** MTI-010: replaces the stored token hash — a resend mints a new token, so the old emailed one stops working. */
   readonly setTokenHash: (
+    organizationId: string,
     id: string,
     tokenHash: string,
-  ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound>;
+  ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound | StoreFailure.StoreUnavailable>;
   readonly findPendingByEmailAndOrg: (
     email: string,
     organizationId: string,
-  ) => Effect.Effect<Option.Option<InvitationRecord>>;
+  ) => Effect.Effect<Option.Option<InvitationRecord>, StoreFailure.StoreUnavailable>;
   readonly listByOrganization: (
     organizationId: string,
-  ) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
-  readonly listByEmail: (email: string) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
+  ) => Effect.Effect<ReadonlyArray<InvitationRecord>, StoreFailure.StoreUnavailable>;
+  readonly listByEmail: (
+    grant: TenantScoped.CrossTenant,
+
+    email: string,
+  ) => Effect.Effect<ReadonlyArray<InvitationRecord>, StoreFailure.StoreUnavailable>;
   /** CSG-005: every invitation the user sent, any status — the data-subject export's "invitations sent". */
   readonly listByInviter: (
+    grant: TenantScoped.CrossTenant,
+
     inviterId: Users.UserId,
-  ) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
-  readonly countPendingByInviter: (inviterId: Users.UserId) => Effect.Effect<number>;
+  ) => Effect.Effect<ReadonlyArray<InvitationRecord>, StoreFailure.StoreUnavailable>;
+  readonly countPendingByInviter: (
+    grant: TenantScoped.CrossTenant,
+
+    inviterId: Users.UserId,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   readonly updateStatus: (
+    organizationId: string,
     id: string,
     status: InvitationStatus,
-  ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound>;
+  ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound | StoreFailure.StoreUnavailable>;
+  /**
+   * Retention (plan 10 item 6): deletes every invitation, whatever its status, whose `expiresAt` is
+   * before `before` (an expired pending one is dead, a terminal one is history); returns how many.
+   * A maintenance sweep over every organization, so it presents a witness.
+   */
+  readonly purgeExpired: (
+    grant: TenantScoped.CrossTenant,
+    before: DateTime.Utc,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   /** Deletes every invitation row for an organization — used by `Organization.delete`'s cascade. */
-  readonly removeAllForOrganization: (organizationId: string) => Effect.Effect<void>;
+  readonly removeAllForOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /**
    * CSG-001: deletes every invitation that names an erased user — one they sent
    * (`inviterId`) or one addressed to their email (compared case-insensitively;
    * the row holds the invitee's address in plaintext). Idempotent.
    */
   readonly removeAllForUser: (
+    grant: TenantScoped.CrossTenant,
+
     userId: Users.UserId,
     email: string | undefined,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class InvitationRecords extends Context.Service<InvitationRecords, InvitationRecordsShape>()(
-  "awthaq/organization/InvitationRecords",
+  "awthaq/organization/records/InvitationRecords",
 ) {}
 
 const notFound = (id: string): InvitationRecordNotFound => new InvitationRecordNotFound({ id });
+
+/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
+const mintId = <E>(operation: string, minted: Effect.Effect<string, E>) =>
+  Effect.catch(minted, StoreFailure.storeUnavailable(`InvitationRecords.${operation}`));
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -112,7 +149,7 @@ export const layerMemory = Layer.effect(
     const crypto = yield* Crypto.Crypto;
 
     const create: InvitationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const record: InvitationRecord = {
         id,
@@ -130,10 +167,10 @@ export const layerMemory = Layer.effect(
       return record;
     });
 
-    const findById: InvitationRecordsShape["findById"] = (id) =>
+    const findById: InvitationRecordsShape["findById"] = (_grant, id) =>
       Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
 
-    const findByTokenHash: InvitationRecordsShape["findByTokenHash"] = (tokenHash) =>
+    const findByTokenHash: InvitationRecordsShape["findByTokenHash"] = (_grant, tokenHash) =>
       Ref.get(state).pipe(
         Effect.map((s) =>
           Option.fromNullishOr(
@@ -144,12 +181,13 @@ export const layerMemory = Layer.effect(
         ),
       );
 
-    const setTokenHash: InvitationRecordsShape["setTokenHash"] = (id, tokenHash) =>
+    const setTokenHash: InvitationRecordsShape["setTokenHash"] = (organizationId, id, tokenHash) =>
       Ref.modify(
         state,
         (s): readonly [Result.Result<InvitationRecord, InvitationRecordNotFound>, State] => {
           const existing = HashMap.get(s, id);
-          if (Option.isNone(existing)) return [Result.fail(notFound(id)), s] as const;
+          if (Option.isNone(existing) || existing.value.organizationId !== organizationId)
+            return [Result.fail(notFound(id)), s] as const;
           const updated: InvitationRecord = {
             ...existing.value,
             tokenHash: Option.some(tokenHash),
@@ -182,21 +220,24 @@ export const layerMemory = Layer.effect(
         ),
       );
 
-    const listByEmail: InvitationRecordsShape["listByEmail"] = (email) =>
+    const listByEmail: InvitationRecordsShape["listByEmail"] = (_grant, email) =>
       Ref.get(state).pipe(
         Effect.map((s) =>
           Array.from(HashMap.values(s)).filter((row) => row.email === email.toLowerCase()),
         ),
       );
 
-    const listByInviter: InvitationRecordsShape["listByInviter"] = (inviterId) =>
+    const listByInviter: InvitationRecordsShape["listByInviter"] = (_grant, inviterId) =>
       Ref.get(state).pipe(
         Effect.map((s) =>
           Array.from(HashMap.values(s)).filter((row) => row.inviterId === inviterId),
         ),
       );
 
-    const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>
+    const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (
+      _grant,
+      inviterId,
+    ) =>
       Ref.get(state).pipe(
         Effect.map(
           (s) =>
@@ -206,12 +247,13 @@ export const layerMemory = Layer.effect(
         ),
       );
 
-    const updateStatus: InvitationRecordsShape["updateStatus"] = (id, status) =>
+    const updateStatus: InvitationRecordsShape["updateStatus"] = (organizationId, id, status) =>
       Ref.modify(
         state,
         (s): readonly [Result.Result<InvitationRecord, InvitationRecordNotFound>, State] => {
           const existing = HashMap.get(s, id);
-          if (Option.isNone(existing)) return [Result.fail(notFound(id)), s] as const;
+          if (Option.isNone(existing) || existing.value.organizationId !== organizationId)
+            return [Result.fail(notFound(id)), s] as const;
           const updated: InvitationRecord = { ...existing.value, status };
           return [Result.succeed(updated), HashMap.set(s, id, updated)] as const;
         },
@@ -228,7 +270,16 @@ export const layerMemory = Layer.effect(
         ),
       );
 
-    const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (userId, email) =>
+    const purgeExpired: InvitationRecordsShape["purgeExpired"] = (_grant, before) =>
+      Ref.modify(state, (s) => {
+        const kept = HashMap.filter(
+          s,
+          (row) => DateTime.toEpochMillis(row.expiresAt) >= DateTime.toEpochMillis(before),
+        );
+        return [HashMap.size(s) - HashMap.size(kept), kept] as const;
+      });
+
+    const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (_grant, userId, email) =>
       Ref.update(state, (s) =>
         Array.from(HashMap.entries(s)).reduce(
           (acc, [key, row]) =>
@@ -251,6 +302,7 @@ export const layerMemory = Layer.effect(
       listByInviter,
       countPendingByInviter,
       updateStatus,
+      purgeExpired,
       removeAllForOrganization,
       removeAllForUser,
     };
@@ -294,6 +346,8 @@ export const layerSql = Layer.effect(
   InvitationRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`InvitationRecords.${operation}`);
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const InvitationRow = makeInvitationRow(wire);
@@ -334,11 +388,15 @@ export const layerSql = Layer.effect(
     });
 
     const setTokenHashQuery = SqlSchema.findOneOption({
-      Request: Schema.Struct({ id: Schema.String, tokenHash: Schema.String }),
+      Request: Schema.Struct({
+        organizationId: Schema.String,
+        id: Schema.String,
+        tokenHash: Schema.String,
+      }),
       Result: InvitationRow,
       execute: (r) => sql`
           UPDATE organization_invitation SET "tokenHash" = ${r.tokenHash}
-          WHERE id = ${r.id}
+          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
           RETURNING *
         `,
     });
@@ -378,18 +436,29 @@ export const layerSql = Layer.effect(
         sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_invitation WHERE "inviterId" = ${inviterId} AND status = 'pending'`,
     });
 
+    const purgeExpiredQuery = SqlSchema.findAll({
+      Request: wire.dateTime,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (before) =>
+        sql`DELETE FROM organization_invitation WHERE "expiresAt" < ${before} RETURNING id`,
+    });
+
     const updateStatusQuery = SqlSchema.findOneOption({
-      Request: Schema.Struct({ id: Schema.String, status: Schema.String }),
+      Request: Schema.Struct({
+        organizationId: Schema.String,
+        id: Schema.String,
+        status: Schema.String,
+      }),
       Result: InvitationRow,
       execute: (r) => sql`
           UPDATE organization_invitation SET status = ${r.status}
-          WHERE id = ${r.id}
+          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
           RETURNING *
         `,
     });
 
     const create: InvitationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const row = yield* insert({
         id,
@@ -402,19 +471,29 @@ export const layerSql = Layer.effect(
         createdAt: now,
         expiresAt: input.expiresAt,
         tokenHash: input.tokenHash,
-      }).pipe(Effect.orDie);
+      }).pipe(unavailable("create"));
       return toRecord(row);
     });
 
-    const findById: InvitationRecordsShape["findById"] = (id) =>
-      findByIdQuery(id).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+    const findById: InvitationRecordsShape["findById"] = (grant, id) =>
+      findByIdQuery(id).pipe(
+        Effect.map(Option.map(toRecord)),
+        TenantScoped.liftOn(sql, grant),
+        unavailable("findById"),
+      );
 
-    const findByTokenHash: InvitationRecordsShape["findByTokenHash"] = (tokenHash) =>
-      findByTokenHashQuery(tokenHash).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+    const findByTokenHash: InvitationRecordsShape["findByTokenHash"] = (grant, tokenHash) =>
+      findByTokenHashQuery(tokenHash).pipe(
+        Effect.map(Option.map(toRecord)),
+        TenantScoped.liftOn(sql, grant),
+        unavailable("findByTokenHash"),
+      );
 
     const setTokenHash: InvitationRecordsShape["setTokenHash"] = Effect.fnUntraced(
-      function* (id, tokenHash) {
-        const row = yield* setTokenHashQuery({ id, tokenHash }).pipe(Effect.orDie);
+      function* (organizationId, id, tokenHash) {
+        const row = yield* setTokenHashQuery({ organizationId, id, tokenHash }).pipe(
+          unavailable("setTokenHash"),
+        );
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
         return toRecord(row.value);
       },
@@ -426,54 +505,69 @@ export const layerSql = Layer.effect(
     ) =>
       findPendingByEmailAndOrgQuery({ email: email.toLowerCase(), organizationId }).pipe(
         Effect.map(Option.map(toRecord)),
-        Effect.orDie,
+        unavailable("findPendingByEmailAndOrg"),
       );
 
     const listByOrganization: InvitationRecordsShape["listByOrganization"] = (organizationId) =>
       listByOrganizationQuery(organizationId).pipe(
         Effect.map((rows) => rows.map(toRecord)),
-        Effect.orDie,
+        unavailable("listByOrganization"),
       );
 
-    const listByEmail: InvitationRecordsShape["listByEmail"] = (email) =>
+    const listByEmail: InvitationRecordsShape["listByEmail"] = (grant, email) =>
       listByEmailQuery(email.toLowerCase()).pipe(
         Effect.map((rows) => rows.map(toRecord)),
-        Effect.orDie,
+        TenantScoped.liftOn(sql, grant),
+        unavailable("listByEmail"),
       );
 
-    const listByInviter: InvitationRecordsShape["listByInviter"] = (inviterId) =>
+    const listByInviter: InvitationRecordsShape["listByInviter"] = (grant, inviterId) =>
       listByInviterQuery(inviterId).pipe(
         Effect.map((rows) => rows.map(toRecord)),
-        Effect.orDie,
+        TenantScoped.liftOn(sql, grant),
+        unavailable("listByInviter"),
       );
 
-    const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>
+    const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (
+      grant,
+      inviterId,
+    ) =>
       countPendingByInviterQuery(inviterId).pipe(
         Effect.map((row) => row.count),
-        Effect.orDie,
+        TenantScoped.liftOn(sql, grant),
+        unavailable("countPendingByInviter"),
       );
 
     const updateStatus: InvitationRecordsShape["updateStatus"] = Effect.fnUntraced(
-      function* (id, status) {
-        const row = yield* updateStatusQuery({ id, status }).pipe(Effect.orDie);
+      function* (organizationId, id, status) {
+        const row = yield* updateStatusQuery({ organizationId, id, status }).pipe(
+          unavailable("updateStatus"),
+        );
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
         return toRecord(row.value);
       },
     );
 
+    const purgeExpired: InvitationRecordsShape["purgeExpired"] = (grant, before) =>
+      purgeExpiredQuery(before).pipe(
+        Effect.map((rows) => rows.length),
+        TenantScoped.liftOn(sql, grant),
+        unavailable("purgeExpired"),
+      );
+
     const removeAllForOrganization: InvitationRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
       sql`DELETE FROM organization_invitation WHERE "organizationId" = ${organizationId}`.pipe(
-        Effect.orDie,
+        unavailable("removeAllForOrganization"),
         Effect.asVoid,
       );
 
-    const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (userId, email) =>
+    const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (grant, userId, email) =>
       (email === undefined
         ? sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId}`
         : sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId} OR lower("email") = lower(${email})`
-      ).pipe(Effect.orDie, Effect.asVoid);
+      ).pipe(TenantScoped.liftOn(sql, grant), unavailable("removeAllForUser"), Effect.asVoid);
 
     return {
       create,
@@ -486,6 +580,7 @@ export const layerSql = Layer.effect(
       listByInviter,
       countPendingByInviter,
       updateStatus,
+      purgeExpired,
       removeAllForOrganization,
       removeAllForUser,
     };

@@ -193,6 +193,20 @@ Feature: Two-Factor Authentication
       Then her first challenge is refused as an "InvalidTwoFactorCode"
       And her second challenge is still spendable
 
+    # ADR-EA-039: the challenge, the code check and the session share one redeem transaction.
+    @REQ-EA-1286
+    Scenario: An outage while finishing a second-factor sign-in leaves the challenge usable
+      Given a registered user "alice" with a verified mailbox
+      And "alice" has enrolled a second factor
+      And "alice" holds a challenge from a diverted password sign-in
+      And a new time step begins
+      And the session store is down
+      And "alice" presents her current authenticator code with her challenge
+      Then the answer is an "StoreUnavailable"
+      When the session store is back
+      And she presents the next authenticator code with the same challenge
+      Then the second factor issues a session for "alice" recording "pwd", "otp" and "mfa"
+
     @REQ-EA-1041
     Scenario: The challenge is a Verification row under the account's own identifier
       Given a registered user "alice" with a verified mailbox
@@ -316,7 +330,7 @@ Feature: Two-Factor Authentication
       And a registered user "bob" with a verified mailbox
       And "bob" has enrolled a second factor
       Then the stored secret row of "alice" does not contain her base32 secret
-      And "alice"'s envelope decrypts to her secret under the additional data "two_factor_secret:" followed by her user id
+      And "alice"'s envelope decrypts to her secret under the additional data "two_factor_secret:" followed by her user id and ":secret"
       And "alice"'s envelope moved to "bob"'s row fails authentication
 
     @REQ-EA-1053

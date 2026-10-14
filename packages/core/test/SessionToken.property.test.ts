@@ -7,16 +7,19 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as Users from "../src/Users.ts";
 
-const MemoryLayer = Sessions.layerMemory.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(AuthEvents.layer),
-  Layer.provide(AuditLog.layerMemory),
-);
+const MemoryLayer = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  );
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
 

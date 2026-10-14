@@ -54,7 +54,7 @@ export class PasswordFixture extends AuthPlugin.Service<
 >()("password", {
   apiVersion: 1,
   contract: PasswordApiFixture,
-  tables: ["password_account"],
+  tables: { password_account: AuthPlugin.Table.global("test fixture") },
   migrations: [{ name: "create_password_account", up: Effect.void }],
 }) {
   static readonly layer = AuthPlugin.layer(PasswordFixture, {
@@ -79,7 +79,7 @@ export class PasskeyFixture extends AuthPlugin.Service<
 >()("passkey", {
   apiVersion: 1,
   contract: PasskeyApiFixture,
-  tables: ["passkey_credential"],
+  tables: { passkey_credential: AuthPlugin.Table.global("test fixture") },
   migrations: [{ name: "create_passkey_credential", up: Effect.void }],
 }) {
   static readonly layer = AuthPlugin.layer(PasskeyFixture, {
@@ -100,7 +100,7 @@ export class TwoFactorFixture extends AuthPlugin.Service<
 >()("twoFactor", {
   apiVersion: 1,
   contract: TwoFactorApiFixture,
-  tables: ["twoFactor_secret"],
+  tables: { twoFactor_secret: AuthPlugin.Table.global("test fixture") },
   migrations: [{ name: "create_two_factor_secret", up: Effect.void }],
 }) {
   static readonly layer = AuthPlugin.layer(TwoFactorFixture, {
@@ -122,7 +122,7 @@ export class SessionsFixture extends AuthPlugin.Service<SessionsFixture, Record<
   {
     apiVersion: 1,
     contract: HttpApi.make("auth"),
-    tables: ["sessions_row"],
+    tables: { sessions_row: AuthPlugin.Table.global("test fixture") },
     migrations: [{ name: "create_sessions_row", up: Effect.void }],
   },
 ) {
@@ -134,7 +134,7 @@ export class UsersFixture extends AuthPlugin.Service<UsersFixture, Record<string
   {
     apiVersion: 1,
     contract: HttpApi.make("auth"),
-    tables: ["users_row"],
+    tables: { users_row: AuthPlugin.Table.global("test fixture") },
     migrations: [{ name: "create_users_row", up: Effect.void }],
   },
 ) {
@@ -146,7 +146,7 @@ export class DependentFixture extends AuthPlugin.Service<DependentFixture, Recor
   {
     apiVersion: 1,
     contract: HttpApi.make("auth"),
-    tables: ["dependent_row"],
+    tables: { dependent_row: AuthPlugin.Table.global("test fixture") },
     migrations: [{ name: "create_dependent_row", up: Effect.void }],
   },
 ) {
@@ -180,7 +180,7 @@ export class InviteFixture extends AuthPlugin.Service<
 >()("acme.invite", {
   apiVersion: 1,
   contract: InviteApiFixture,
-  tables: ["acme.invite_row"],
+  tables: { "acme.invite_row": AuthPlugin.Table.global("test fixture") },
 }) {}
 
 /** A second, independently valid plugin sharing the id "invite" with `InviteTwin` — BEH-EA-010's duplicate. */

@@ -10,7 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as LegacySessionBridgeLive from "../src/LegacySessionBridgeLive.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const SqlLive = TestSql.layer("migrate-better-auth_LegacySessionBridgeLive");
 

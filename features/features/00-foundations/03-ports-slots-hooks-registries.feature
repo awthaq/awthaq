@@ -229,3 +229,14 @@ Feature: Ports, Slots, Hook Points, and Registries
       Given a registry "RateLimits" that has already been read once by the application
       When another plugin's Layer attempts to contribute a new rule to "RateLimits" after that first read
       Then the registry's contents no longer change for any subsequent read
+
+  # BEH-EA-335 — spec/behaviors/03-ports-slots-hooks-registries.md. The compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (the hookpoints-complete gate).
+  @BEH-EA-335 @compile-time
+  Rule: A plugin declares the hook points it owns
+
+    @REQ-EA-1304
+    Scenario: A plugin requiring a hook point that neither core nor the plugin declares fails to compile
+      Given a plugin whose layer requires a hook point that its "hookPoints" does not declare
+      When the plugin's "AuthPlugin.layer" is type-checked
+      Then it fails to compile, naming the hook point

@@ -2,7 +2,10 @@ import { describeFeature, loadFeature } from "@effect-cucumber/vitest";
 import { fileURLToPath } from "node:url";
 import { rateLimitingSteps } from "../../step-definitions/RateLimitingSteps.ts";
 import { WorldLive } from "../../step-definitions/RateLimitingWorld.ts";
-import { rateLimitKeyTypeSteps } from "../../step-definitions/CompileTimeSteps.ts";
+import {
+  rateLimitDeclaredTypeSteps,
+  rateLimitKeyTypeSteps,
+} from "../../step-definitions/CompileTimeSteps.ts";
 
 const feature = await loadFeature(
   fileURLToPath(new URL("./14-rate-limiting.feature", import.meta.url)),
@@ -11,4 +14,5 @@ const feature = await loadFeature(
 describeFeature(feature, WorldLive, ({ use }) => {
   use(rateLimitingSteps);
   use(rateLimitKeyTypeSteps);
+  use(rateLimitDeclaredTypeSteps);
 });

@@ -104,7 +104,7 @@ export const SamlGroup = HttpApiGroup.make("saml")
       success: Schema.String.pipe(
         HttpApiSchema.asText({ contentType: "application/samlmetadata+xml" }),
       ),
-      error: SamlConnectionNotFound,
+      error: [SamlConnectionNotFound, Api.StoreUnavailable],
     }),
   )
   .add(

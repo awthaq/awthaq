@@ -10,6 +10,7 @@
 //
 // A gate is a `// type-gate: <name>` line followed by its block (up to the next blank line).
 import { Auth, AuthPlugin, HookPoint, Hooks } from "@awthaq/core";
+import * as Context from "effect/Context";
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { cheapArgon2id } from "./shared/Harness.ts";
 import { Password } from "@awthaq/password";
@@ -62,7 +63,7 @@ export class PrefixedTablePlugin extends AuthPlugin.Service<
 >()("password", {
   apiVersion: 1,
   contract: HttpApi.make("auth"),
-  tables: ["password_account"],
+  tables: { password_account: AuthPlugin.Table.global("test fixture") },
 }) {}
 
 // type-gate: table-bare
@@ -71,8 +72,10 @@ export class BareTablePlugin extends AuthPlugin.Service<BareTablePlugin, Record<
   {
     apiVersion: 1,
     contract: HttpApi.make("auth"),
-    // @ts-expect-error - the bare table name "account" does not start with "password_" (BEH-EA-005)
-    tables: ["account"],
+    tables: {
+      // @ts-expect-error - the bare table name "account" does not start with "password_" (BEH-EA-005)
+      account: AuthPlugin.Table.global("test fixture"),
+    },
   },
 ) {}
 
@@ -85,8 +88,10 @@ export class ForeignTablePlugin extends AuthPlugin.Service<
 >()("password", {
   apiVersion: 1,
   contract: HttpApi.make("auth"),
-  // @ts-expect-error - "oauth_account" starts with another plugin's prefix, not "password_" (BEH-EA-005)
-  tables: ["oauth_account"],
+  tables: {
+    // @ts-expect-error - "oauth_account" starts with another plugin's prefix, not "password_" (BEH-EA-005)
+    oauth_account: AuthPlugin.Table.global("test fixture"),
+  },
 }) {}
 
 // type-gate: duplicate-id
@@ -305,3 +310,55 @@ export const launchWithoutThePoint = (): void => {
   const closed: Effect.Effect<never, unknown, never> = Layer.launch(auth.layer);
   void closed;
 };
+
+// ---- 01-plugin-contract.feature: BEH-EA-334 (a plugin's record stores and hook points are checked) ----
+class GateStoreOne extends Context.Service<GateStoreOne, {}>()("gate/records/GateStoreOne") {}
+class GateStoreTwo extends Context.Service<GateStoreTwo, {}>()("gate/records/GateStoreTwo") {}
+class GatePort extends Context.Service<GatePort, {}>()("gate/ports/GatePort") {}
+class GatePoint extends HookPoint.veto<GatePoint>()("gate.point", Schema.String) {}
+const gateStoreOne = Layer.succeed(GateStoreOne, {});
+const gateStoreTwo = Layer.succeed(GateStoreTwo, {});
+const gateContract = HttpApi.make("auth");
+
+// type-gate: records-complete
+export class NeedsAStore extends AuthPlugin.Service<NeedsAStore, {}>()("needsastore", {
+  apiVersion: 1,
+  contract: gateContract,
+}) {
+  // @ts-expect-error - the layer requires `gate/records/GateStoreOne`, but no `records` bundle provides it
+  static readonly layer = AuthPlugin.layer(NeedsAStore, {
+    make: Effect.map(GateStoreOne, () => ({})),
+  });
+}
+
+// type-gate: records-matched
+// @ts-expect-error - `gate/records/GateStoreTwo` is provided by `memory` but not by `sql`
+export class Lopsided extends AuthPlugin.Service<Lopsided, {}>()("lopsided", {
+  apiVersion: 1,
+  contract: gateContract,
+  records: { memory: Layer.merge(gateStoreOne, gateStoreTwo), sql: gateStoreOne },
+}) {}
+
+// type-gate: records-only-records
+// @ts-expect-error - a `/ports/` service is not a record store
+export class Smuggler extends AuthPlugin.Service<Smuggler, {}>()("smuggler", {
+  apiVersion: 1,
+  contract: gateContract,
+  records: {
+    memory: Layer.merge(gateStoreOne, Layer.succeed(GatePort, {})),
+    sql: Layer.merge(gateStoreOne, Layer.succeed(GatePort, {})),
+  },
+}) {}
+
+// ---- 03-ports-slots-hooks-registries.feature: BEH-EA-335 (a plugin declares the hook points it owns) ----
+
+// type-gate: hookpoints-complete
+export class UndeclaredPoint extends AuthPlugin.Service<UndeclaredPoint, {}>()("undeclaredpoint", {
+  apiVersion: 1,
+  contract: gateContract,
+}) {
+  // @ts-expect-error - the layer requires `awthaq/hook/gate.point`, but no `hookPoints` declares it
+  static readonly layer = AuthPlugin.layer(UndeclaredPoint, {
+    make: Effect.map(GatePoint, () => ({})),
+  });
+}

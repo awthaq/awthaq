@@ -8,8 +8,13 @@
     "rootDir": "./src",
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@awthaq/api": ["../api/src/index.ts"]
     }
   },
-  "references": []
+  "references": [
+    {
+      "path": "../api/tsconfig.src.json"
+    }
+  ]
 }

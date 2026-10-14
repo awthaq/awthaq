@@ -211,7 +211,10 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
   // does not override the slot today, so the exclusivity mechanism is exercised with it as the owner).
   const buildBothClaimants = Effect.fn("features.roles.buildBothClaimants")(function* () {
     const claimants = Layer.mergeAll(
-      Roles.Roles.layer.pipe(Layer.provide(Roles.config([]))),
+      Roles.Roles.layer.pipe(
+        Layer.provide(Roles.Roles.records.memory),
+        Layer.provide(Roles.config([])),
+      ),
       Slots.override(
         Organization.Organization,
         SubjectResolver.SubjectResolver,

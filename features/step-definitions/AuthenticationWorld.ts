@@ -1,3 +1,4 @@
+// Hand-wired on purpose: the probe groups re-declare the authentication record and wrap every scheme handler, so `Authentication`'s own composition is what is under test (plan 08 exemption).
 // P20a/AH-003 (decision 36, tier 1): the World for 09-authentication-middleware.feature.
 //
 // A real `HttpRouter.toWebHandler` app whose probe groups declare the shipped
@@ -14,7 +15,15 @@
 // which scheme authenticated. Nothing about resolution is stubbed.
 import { Api } from "@awthaq/api";
 import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
-import { AuditLog, AuthEvents, Hooks, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Hooks,
+  Persistence,
+  RateLimits,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
@@ -34,8 +43,9 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
-import { TestServices } from "./shared/Harness.ts";
+import { CsrfConfigForTests } from "./shared/Csrf.ts";
+import * as HttpServer from "effect/unstable/http/HttpServer";
+import { EncryptionLive } from "./shared/TestEncryption.ts";
 
 /**
  * BEH-EA-072: a *different* declaration of the same two schemes, in the opposite order. Its
@@ -237,6 +247,7 @@ const buildApp = (options: AppOptions) => {
       ),
       Layer.provideMerge(KeyRing.KeyRing.layer),
       Layer.provideMerge(SigningKeyRecords.layerMemory),
+      Layer.provideMerge(EncryptionLive),
       Layer.provideMerge(RevocationStore.layerMemory),
       Layer.provideMerge(SqlTransaction.layerNoop),
       Layer.provideMerge(ReorderedLive),
@@ -249,16 +260,16 @@ const buildApp = (options: AppOptions) => {
       Layer.provideMerge(SessionSettings),
     )
     .pipe(
-      Layer.provideMerge(Sessions.layerMemory),
-      Layer.provideMerge(Users.layerMemory),
+      Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
+      Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provideMerge(AuthEvents.layer),
-      Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
       Layer.provideMerge(Hooks.HooksLive),
       Layer.provideMerge(RateLimits.layer),
       Layer.provideMerge(RateLimiter.layerPermissive),
       Layer.provideMerge(ClientAddress.layerDirect),
       Layer.provideMerge(NodeCrypto.layer),
-      Layer.provideMerge(TestServices),
+      Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
       Layer.provideMerge(ApiKey.config({})),
       Layer.provideMerge(

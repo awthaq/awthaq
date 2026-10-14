@@ -40,6 +40,8 @@ export type CallbackFailureReason =
   | "userinfo-sub-mismatch"
   | "no-subject"
   | "account-already-linked"
+  // ADR-EA-038: the user was erased between the provider's proof and the session.
+  | "account-missing"
   | "provider-unavailable"
   // MNA-003: the native exchange-code redemption.
   | "exchange-malformed"

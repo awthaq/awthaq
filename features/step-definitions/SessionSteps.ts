@@ -3,7 +3,7 @@
 // hardcodes an actor — pronoun steps resolve the current actor from the World's registry.
 import { defineSteps } from "@effect-cucumber/vitest";
 import { Hmac } from "@awthaq/ports";
-import { SecretHash } from "@awthaq/core";
+import { SecretHash, Sessions, Users } from "@awthaq/core";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,7 @@ import {
   countSessionRows,
   gateAdmitted,
   getSession,
+  inApp,
   mailedTo,
   nowMillis,
   pinSessionSecret,
@@ -54,7 +55,9 @@ const sha256Hex = (value: string) => createHash("sha256").update(value).digest("
 
 const column = (row: SessionRow, name: string) => {
   const value = row[name];
-  assert.equal(typeof value, "string", `expected column "${name}" to be text`);
+  // SQLite stores timestamps as text; Postgres hands back a `Date`: both read as one ISO string.
+  if (value instanceof Date) return value.toISOString();
+  assert.equal(typeof value, "string", `expected column "${name}" to be text or a timestamp`);
   return String(value);
 };
 
@@ -674,13 +677,118 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       // The row first: presenting the superseded token is itself refresh-reuse (RRS-003), which
       // revokes the whole family, replacement included.
       const row = yield* readSessionRow(column(original, "id"));
-      assert.equal(typeof row["supersededAt"], "string", "the superseded row carries a tombstone");
+      assert.ok(
+        typeof row["supersededAt"] === "string" || row["supersededAt"] instanceof Date,
+        "the superseded row carries a tombstone",
+      );
       const replacement = tokenParts(cookieFrom(yield* responses.get(yield* actors.current))).id;
       assert.equal(row["supersededBy"], replacement);
       assert.equal(
         (yield* getSession("/session", (yield* actors.get(sessionName)).cookie)).status,
         401,
       );
+    },
+  );
+
+  // ---- REQ-EA-1276 (BEH-EA-319): reauthenticate advances only a live session ----
+
+  When(
+    "{string} reauthenticates the superseded session {string} a minute later",
+    function* (name: string, sessionName: string) {
+      const { snapshots, texts } = yield* World;
+      const original = yield* snapshots.get(`session:${sessionName}`);
+      yield* advance(Duration.minutes(1));
+      const outcome = yield* inApp(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const userId = Users.UserId(column(original, "userId"));
+          const id = Sessions.SessionId(column(original, "id"));
+          return yield* sessions.reauthenticate(userId, id).pipe(
+            Effect.match({
+              onFailure: (failure) => failure._tag,
+              onSuccess: () => "reauthenticated",
+            }),
+          );
+        }),
+      );
+      yield* texts.set(`reauthenticate:${name}`, outcome);
+    },
+  );
+
+  Then(
+    "the reauthentication of {string} is refused as a missing session",
+    function* (name: string) {
+      const { texts } = yield* World;
+      assert.equal(yield* texts.get(`reauthenticate:${name}`), "Sessions/NotFound");
+    },
+  );
+
+  Then(
+    "session {string}'s row keeps its original authentication time",
+    function* (sessionName: string) {
+      const { snapshots } = yield* World;
+      const original = yield* snapshots.get(`session:${sessionName}`);
+      const row = yield* readSessionRow(column(original, "id"));
+      assert.equal(column(row, "authenticatedAt"), column(original, "authenticatedAt"));
+    },
+  );
+
+  // ---- REQ-EA-1277 (BEH-EA-320): requireFresh ----
+
+  When(
+    "{int} minutes pass without {string} proving a credential",
+    function* (minutes: number, _name: string) {
+      yield* advance(Duration.minutes(minutes));
+    },
+  );
+
+  When("{string} reauthenticates session {string}", function* (_name: string, sessionName: string) {
+    const { snapshots } = yield* World;
+    const original = yield* snapshots.get(`session:${sessionName}`);
+    yield* inApp(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* sessions.reauthenticate(
+          Users.UserId(column(original, "userId")),
+          Sessions.SessionId(column(original, "id")),
+        );
+      }),
+    );
+  });
+
+  const freshness = Effect.fn("features.session.freshness")(function* (
+    sessionName: string,
+    minutes: number,
+  ) {
+    const { snapshots } = yield* World;
+    const original = yield* snapshots.get(`session:${sessionName}`);
+    return yield* inApp(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        return yield* sessions
+          .requireFresh(
+            Users.UserId(column(original, "userId")),
+            Sessions.SessionId(column(original, "id")),
+            Duration.minutes(minutes),
+          )
+          .pipe(
+            Effect.match({
+              onFailure: (failure) => failure._tag,
+              onSuccess: () => "fresh",
+            }),
+          );
+      }),
+    );
+  });
+
+  Then("session {string} is fresh within {int} minutes", function* (name: string, minutes: number) {
+    assert.equal(yield* freshness(name, minutes), "fresh");
+  });
+
+  Then(
+    "session {string} is not fresh within {int} minutes",
+    function* (name: string, minutes: number) {
+      assert.equal(yield* freshness(name, minutes), "Sessions/Stale");
     },
   );
 

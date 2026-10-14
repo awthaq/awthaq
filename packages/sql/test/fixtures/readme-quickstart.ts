@@ -7,12 +7,13 @@ import {
   DataExport,
   Erasure,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
+import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
 import {
   ClientAddress,
   Encryption,
@@ -20,7 +21,6 @@ import {
   Mailer,
   PasswordHasher,
   RateLimiter,
-  SqlTransaction,
 } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
@@ -65,25 +65,19 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const RepositoriesLive = Layer.mergeAll(
-  Repositories.UsersRepositoryLive,
-  Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
-  Repositories.SessionsRepositoryLive,
-  Repositories.VerificationRepositoryLive,
-  Repositories.VerificationReservationsRepositoryLive,
-  Repositories.AuditLogRepositoryLive,
-).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
-
-// 4. The domain services, backed by those repositories instead of memory.
+// 4. The domain services, backed by the SQL stores (`Persistence.sql()`: users, accounts,
+//    sessions, verification and audit log over one `SqlClient`) instead of memory.
 //    `AuthEvents` publishes every event into the durable `AuditLog` table.
 const CoreLive = Layer.mergeAll(
-  Users.layerSql,
-  Accounts.layerSql,
-  Sessions.layerSql,
-  Verification.layerSql,
+  Users.layer,
+  Accounts.layer,
+  Sessions.layer,
+  Verification.layer,
 ).pipe(
-  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerSql))),
-  Layer.provideMerge(RepositoriesLive),
+  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layer))),
+  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(EncryptionLive))),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -127,9 +121,7 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect, SqlTransaction.layerSql),
-  ),
+  Layer.provideMerge(Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect)),
 );
 
 // 7. Mount the composed api onto the router — `AuthHttp.routes` registers

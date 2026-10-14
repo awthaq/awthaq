@@ -10,52 +10,50 @@
 //    otherwise (or if that user has vanished) the address is looked up again, and a brand-new address
 //    creates a user — *only* when the plugin's `allowSignUp` is on, through the same `BeforeSignUp`
 //    veto every user-creating path consults (NAM-002), and announced with `auth.user.created` and
-//    `AfterSignUp`. The user is created here, after the proof, never at request time: an unanswered
-//    request creates nothing.
+//    `AfterSignUp` (all through core's `SignUp`). The user is created here, after the proof, never at request time: an unanswered
+//    request creates nothing. The plugins call this from inside `Verification.redeem` (ADR-EA-039), so the
+//    user is created in the same transaction as the link's spend, and a race on the address is contained
+//    by `SignUp`'s own savepoint rather than poisoning that transaction.
 // 2. **The mailbox is now proven**, so `emailVerified` flips (idempotent).
-// 3. **The shared sign-in gate**: `Users.assertCanSignIn` (a suspended user gets no session), then the
-//    `BeforeSignIn` veto, then `BeforeSessionIssue` — the MFA divert (ARF-005 Fix A). A user with a
+// 3. **The shared sign-in** is core's `SignIn.complete` (ADR-EA-038): the suspension gate, the
+//    `BeforeSignIn` veto, then `BeforeSessionIssue`, the MFA divert (ARF-005 Fix A). A user with a
 //    confirmed second factor is diverted to `TwoFactorRequired` exactly as a password or passkey
 //    sign-in is: mailbox possession alone never mints a session for a 2FA-protected account.
 // 4. **The session** records how it was proven (`amr`), the sign-in is announced (`auth.user.signedIn`)
-//    and `AfterSignIn` observes.
+//    and `AfterSignIn` observes. A user erased between the proof and the session is refused with
+//    the same opaque `ChannelInvalid`.
 //
 // Nothing here touches an existing password credential: a magic link or code signs the person in; it
 // does not link, unlink or replace any credential.
 
-import { AuthEvents, Hooks, HookPoint, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuthEvents,
+  Hooks,
+  HookPoint,
+  Sessions,
+  SignIn,
+  SignUp,
+  Users,
+} from "@awthaq/core";
+import { Defects, SqlTransaction } from "@awthaq/ports";
+
+// The services `SignUp.make` requires ride this module so the plugins' inferred layer types can name them (TS2883).
+export { Accounts, AuthEvents, SqlTransaction };
 import type { Errors } from "@awthaq/core";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import type * as Redacted from "effect/Redacted";
 
 /** The address exactly as compared and stored: trimmed and lower-cased (`Users` lower-cases too, BEH-EA-041). */
 export const normalizeEmail = (email: string): string => email.trim().toLowerCase();
-
-/**
- * TMS-006: the bucket a per-address limit counts against — lower-cased with a `+tag` stripped, so
- * `victim+1@x.com` and `victim+2@x.com` share one budget instead of mail-bombing one inbox.
- * Only the key is normalised; the address a mail is delivered to stays literal.
- */
-export const emailRateKey = (email: string): string => {
-  const lowered = normalizeEmail(email);
-  const at = lowered.lastIndexOf("@");
-  if (at === -1) return lowered;
-  const local = lowered.slice(0, at);
-  const plus = local.indexOf("+");
-  return `${plus > 0 ? local.slice(0, plus) : local}${lowered.slice(at)}`;
-};
 
 /** The consumed proof named no usable user and no address to create one for. Each plugin maps it onto its own wire error. */
 export class ChannelInvalid extends Data.TaggedError("MagicLink/ChannelInvalid")<{
   readonly reason: "noAddress" | "userMissing" | "signUpDisabled";
 }> {}
 
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
+export type IssuedSession = SignIn.IssuedSession;
 
 export interface Completion {
   /** The plugin's own strategy label — `magicLink` or `emailOtp` (also the `BeforeSessionIssue` strategy). */
@@ -88,13 +86,8 @@ export interface Channel {
 /** Resolves the core services once, at plugin build; the returned closure carries no further requirements. */
 export const make = Effect.gen(function* () {
   const users = yield* Users.Users;
-  const sessions = yield* Sessions.Sessions;
-  const events = yield* AuthEvents.AuthEvents;
-  const beforeSignUp = yield* Hooks.BeforeSignUp;
-  const afterSignUp = yield* Hooks.AfterSignUp;
-  const beforeSignIn = yield* Hooks.BeforeSignIn;
-  const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-  const afterSignIn = yield* Hooks.AfterSignIn;
+  const creation = yield* SignUp.make;
+  const signIn = yield* SignIn.make;
 
   /** A user for `email`: the existing one, or — when allowed and the veto passes — a new one. */
   const resolveUser = Effect.fnUntraced(function* (completion: Completion) {
@@ -114,39 +107,33 @@ export const make = Effect.gen(function* () {
     if (!completion.allowSignUp) {
       return yield* Effect.fail(new ChannelInvalid({ reason: "signUpDisabled" }));
     }
-    // NAM-002/SCP-008: creation through any path is a sign-up, so the same veto guards it.
+    // ADR-EA-038: `SignUp` vets (NAM-002/SCP-008: creation through any path is a sign-up, so the same
+    // veto guards it), then creates in one unit, announcing only once it commits. The mailbox has just
+    // been proven, so the new user is created verified.
     const local = email.slice(0, Math.max(email.indexOf("@"), 1));
-    const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
-      beforeSignUp.run({ email, name: local, strategy: completion.strategy }),
+    const vetted = yield* creation.vet({
+      identity: { _tag: "Email", email },
+      name: local,
+      strategy: completion.strategy,
+    });
+    return yield* creation.create(vetted, { verified: true }).pipe(
+      // A concurrent request claimed the address between our lookup and this insert: use theirs.
+      Effect.catchTag("SignUp/IdentityTaken", (taken) =>
+        taken.kind === "Email"
+          ? users
+              .findByEmail(vetted.identity._tag === "Email" ? vetted.identity.email : email)
+              .pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.fail(new ChannelInvalid({ reason: "userMissing" })),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              )
+          : // FAMS-002: an Email identity cannot collide on a phone, and a fresh user links no account.
+            Defects.invariantViolation("ChannelSignUpConflict", taken.message),
+      ),
     );
-    const vetoed = { ...vetoedSignUp, email: vetoedSignUp.email ?? email };
-    const created = yield* users
-      .create({ identity: { _tag: "Email", email: vetoed.email }, name: vetoed.name })
-      .pipe(
-        Effect.map((user) => ({ user, fresh: true })),
-        // A concurrent request claimed the address between our lookup and this insert: use theirs.
-        Effect.catchTag("Users/EmailAlreadyExists", () =>
-          users.findByEmail(vetoed.email).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(new ChannelInvalid({ reason: "userMissing" })),
-                onSome: (winner) => Effect.succeed({ user: winner, fresh: false }),
-              }),
-            ),
-          ),
-        ),
-        // FAMS-002: `create` here is an Email identity, so a phone conflict is unreachable.
-        Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
-      );
-    if (created.fresh) {
-      yield* events.publish({ _tag: "auth.user.created", userId: created.user.id });
-      yield* afterSignUp.run({
-        userId: created.user.id,
-        email: vetoed.email,
-        strategy: completion.strategy,
-      });
-    }
-    return created.user;
   });
 
   const complete: Channel["complete"] = Effect.fnUntraced(function* (completion) {
@@ -159,39 +146,18 @@ export const make = Effect.gen(function* () {
         IdentityMismatch: Effect.die,
       }),
     );
-    // SCP-001/BAM-005: THE shared sign-in gate, after the proof and before any session exists.
-    yield* Users.assertCanSignIn(user);
-    // NAM-002: the sign-in veto, before the MFA divert point below.
-    yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-      beforeSignIn.run({
-        userId: user.id,
-        ...Users.emailField(user),
-        strategy: completion.strategy,
-      }),
-    );
-    // ARF-005 Fix A / BCR-004: THE canonical MFA attachment point, consulted right before this
-    // flow's own `sessions.issue` — a user with a confirmed second factor is diverted here.
-    const point = yield* beforeSessionIssue.run({
-      userId: user.id,
-      strategy: completion.strategy,
-      amr: completion.amr,
-    });
-    if (point._tag === "Diverted") return yield* Effect.fail(point.value);
-    const issued = yield* sessions.issue({
-      userId: user.id,
-      request: {
-        ...(completion.ip === undefined ? {} : { ip: completion.ip }),
-        ...(completion.userAgent === undefined ? {} : { userAgent: completion.userAgent }),
-      },
-      amr: completion.amr,
-    });
-    yield* events.publish({
-      _tag: "auth.user.signedIn",
-      userId: user.id,
-      strategy: completion.strategy,
-    });
-    yield* afterSignIn.run({ userId: user.id, strategy: completion.strategy });
-    return issued;
+    // ADR-EA-038: the shared sign-in (gate, veto, MFA divert, session, announcement) is core's.
+    return yield* signIn
+      .complete(
+        { userId: user.id, strategy: completion.strategy, amr: completion.amr },
+        { ip: completion.ip, userAgent: completion.userAgent },
+      )
+      .pipe(
+        // An erasure can run between the proof and the session: the one opaque refusal.
+        Effect.catchTag("SignIn/UserGone", () =>
+          Effect.fail(new ChannelInvalid({ reason: "userMissing" })),
+        ),
+      );
   });
 
   return { complete } satisfies Channel;

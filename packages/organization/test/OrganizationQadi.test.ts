@@ -5,55 +5,28 @@
 // `RelationshipResolver`/`AttributeResolver` straight, the same way an
 // application's own qadi policy evaluation would reach them.
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import { AttributeResolver, makeResourceId, makeSubjectId, RelationshipResolver } from "@qadi/core";
-import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
-import * as InvitationRecords from "../src/InvitationRecords.ts";
-import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
-import * as OrganizationHooks from "../src/OrganizationHooks.ts";
+import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
 import * as OrganizationQadi from "../src/OrganizationQadi.ts";
 import * as PermissionEngine from "../src/PermissionEngine.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import * as TeamRecords from "../src/TeamRecords.ts";
 import { TestAuth } from "@awthaq/test";
-
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("organization-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+import { grant, addMember } from "./support.ts";
 
 const buildOrganizationLive = (
-  orgRolesLayer: Layer.Layer<OrgRoleRecords.OrgRoleRecords> = OrgRoleRecords.layerMemory.pipe(
-    Layer.provide(NodeCrypto.layer),
-  ),
+  // A wrapper over the bundle's own `OrgRoleRecords` (a spy), shadowing it for the plugin through `services`.
+  orgRolesSpy?: Layer.Layer<OrgRoleRecords.OrgRoleRecords, never, OrgRoleRecords.OrgRoleRecords>,
 ) =>
-  Organization.Organization.layer.pipe(
-    Layer.provide(
+  TestAuth.layer(Auth.make([Organization.Organization]), {
+    services: Layer.mergeAll(
       Organization.config({
         dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 10 },
         permissionStatements: { hr: { member: ["update"], invitation: ["create"] } },
@@ -64,20 +37,9 @@ const buildOrganizationLive = (
           allowRemovingAllTeams: false,
         },
       }),
+      orgRolesSpy ?? Layer.empty,
     ),
-    Layer.provide(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(ActiveContextRecords.layerMemory),
-    Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(orgRolesLayer),
-    Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(Mailer.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-  );
+  });
 
 const OrganizationLive = buildOrganizationLive();
 
@@ -116,12 +78,12 @@ describe("OrganizationQadi", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("admin-1"),
         role: ["admin"],
       });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -215,7 +177,7 @@ describe("OrganizationQadi", () => {
         const owner = asCaller("owner-1");
         const acme = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
         yield* organization.create({ caller: owner, name: "Globex", slug: "globex" });
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: acme.id,
           userId: Users.UserId("member-1"),
           role: ["member"],
@@ -266,7 +228,7 @@ describe("OrganizationQadi", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
@@ -314,7 +276,7 @@ describe("OrganizationQadi", () => {
         "Related",
       ]);
 
-      yield* records.setSuspended(record.id, Option.some(yield* DateTime.now));
+      yield* records.setSuspended(grant, record.id, Option.some(yield* DateTime.now));
       assert.deepStrictEqual(yield* relations(), [
         "Unrelated",
         "Unrelated",
@@ -323,7 +285,7 @@ describe("OrganizationQadi", () => {
         "Unrelated",
       ]);
 
-      yield* records.setSuspended(record.id, Option.none());
+      yield* records.setSuspended(grant, record.id, Option.none());
       assert.strictEqual(yield* check("member", record.id, "owner-1"), "Related");
     }).pipe(Effect.provide(QadiLive)),
   );
@@ -335,7 +297,7 @@ describe("OrganizationQadi", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("lead-1"),
         role: ["member"],
@@ -392,7 +354,7 @@ describe("OrganizationQadi", () => {
         ["lead-1", "team-lead"],
         ["plain-1", "member"],
       ] as const) {
-        yield* organization.addMember({
+        yield* addMember({
           organizationId: record.id,
           userId: Users.UserId(user),
           role: [role],
@@ -434,7 +396,10 @@ describe("OrganizationQadi", () => {
           ([resource, actions]) => actions.map((action) => [resource, action] as const),
         );
         for (const user of ["owner-1", "admin-1", "hr-1", "lead-1", "plain-1"]) {
-          const attrs = yield* organization.attributesFor(record.id, Users.UserId(user));
+          const attrs = yield* (yield* OrganizationAuthority.OrganizationAuthority).attributesFor(
+            record.id,
+            Users.UserId(user),
+          );
           assert.isTrue(Option.isSome(attrs));
           if (Option.isNone(attrs)) continue;
           for (const [resource, action] of vocabulary) {
@@ -482,12 +447,12 @@ describe("OrganizationQadi", () => {
           },
         };
       }),
-    ).pipe(Layer.provide(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))));
+    );
     return Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.addMember({
+      yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("admin-1"),
         role: ["admin"],

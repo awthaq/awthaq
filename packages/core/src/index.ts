@@ -11,17 +11,23 @@
 // AuthEvents.ts (spec/behaviors/13-events.md, BEH-EA-097-104),
 // HookPoint.ts (spec/behaviors/12-hooks.md, BEH-EA-089-096, scoped as
 // documented in that module's own header),
-// RateLimits.ts (spec/behaviors/14-rate-limiting.md, BEH-EA-107/108/110/111 —
-// the port half, `RateLimiter`, lives in `@awthaq/ports`),
+// RateLimits.ts (spec/behaviors/14-rate-limiting.md, BEH-EA-105-111 — a plugin
+// declares a typed rule table and spends it by name through `RateLimits.budget`; the
+// vocabulary is in RateLimitModel.ts and the key strategies in RateLimitKey.ts. The
+// port half, `RateLimiter`, lives in `@awthaq/ports`),
+// SignIn.ts (spec/behaviors/06-domain-users-accounts.md, BEH-EA-322, ADR-EA-038 — the one
+// implementation of sign-in completion: a branded `Clearance`, then the session),
+// SignUp.ts (spec/behaviors/06-domain-users-accounts.md, BEH-EA-323, ADR-EA-038 — the one
+// implementation of user creation for a sign-up: a branded `Vetted` application, then the unit),
 // Slots.ts (spec/behaviors/03-ports-slots-hooks-registries.md, BEH-EA-017/019/021,
 // scoped as documented in that module's own header — its `SlotConflict<P>`
 // check is real but runtime, not the compile-time one BEH-EA-012 illustrates,
 // a confirmed structural limit of `Context.Reference` in this effect
 // version, not a scoping choice).
-// `Users`/`Accounts`/`Sessions`/`Verification` each have both a `layerMemory`
-// and a SQL-backed `layerSql` (over `@awthaq/sql`'s repositories,
-// BEH-EA-033/034; `Verification.layerSql` per
-// spec/decisions/016-verification-sql-claiming.md, ADR-EA-016).
+// `Users`/`Accounts`/`Sessions`/`Verification`/`AuditLog` are each written once, as `layer`, over a store
+// port (ADR-EA-041); `Persistence.memory` and `Persistence.sql(options)` provide the five stores and the
+// matching `SqlTransaction` (the SQL adapters are over `@awthaq/sql`'s repositories, BEH-EA-033/034;
+// `Verification` per spec/decisions/016-verification-sql-claiming.md, ADR-EA-016).
 // See spec/overview.md for the full package map.
 
 export * as Accounts from "./Accounts.ts";
@@ -50,6 +56,7 @@ export * from "./HttpApiTypes.ts";
 export * as MailDispatch from "./MailDispatch.ts";
 export * as Migrations from "./Migrations.ts";
 export * as Observability from "./Observability.ts";
+export * as Persistence from "./Persistence.ts";
 export * as Phone from "./Phone.ts";
 export * as RateLimits from "./RateLimits.ts";
 export * as Retention from "./Retention.ts";
@@ -57,6 +64,8 @@ export * as SecretHash from "./SecretHash.ts";
 export * as SecuritySignals from "./SecuritySignals.ts";
 export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
+export * as SignIn from "./SignIn.ts";
+export * as SignUp from "./SignUp.ts";
 export * as Slots from "./Slots.ts";
 export * as Tenant from "./Tenant.ts";
 export * as UserFields from "./UserFields.ts";

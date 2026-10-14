@@ -7,19 +7,22 @@
 //
 // See spec/overview.md for the full package map.
 
-export * as ActiveContextRecords from "./ActiveContextRecords.ts";
-export * as ConnectionRecords from "./ConnectionRecords.ts";
-export * as InvitationRecords from "./InvitationRecords.ts";
-export * as MembershipRecords from "./MembershipRecords.ts";
 export * as Organization from "./Organization.ts";
+export * as DomainClaims from "./DomainClaims.ts";
+export * as OrganizationActor from "./OrganizationActor.ts";
+export * as OrganizationActiveContext from "./OrganizationActiveContext.ts";
+export * as OrganizationAuthority from "./OrganizationAuthority.ts";
 export * as OrganizationConnections from "./OrganizationConnections.ts";
+export * as OrganizationDeletion from "./OrganizationDeletion.ts";
+export * as OrganizationDirectory from "./OrganizationDirectory.ts";
 export * as OrganizationHooks from "./OrganizationHooks.ts";
-export * as OrganizationMemory from "./OrganizationMemory.ts";
+export * as OrganizationInvitations from "./OrganizationInvitations.ts";
+export * as OrganizationMembers from "./OrganizationMembers.ts";
 export * as OrganizationApi from "./OrganizationApi.ts";
 export * as OrganizationQadi from "./OrganizationQadi.ts";
-export * as OrganizationRecords from "./OrganizationRecords.ts";
-export * as OrgRoleRecords from "./OrgRoleRecords.ts";
+export * as OrganizationRoles from "./OrganizationRoles.ts";
+export * as OrganizationSystem from "./OrganizationSystem.ts";
+export * as OrganizationTeams from "./OrganizationTeams.ts";
 export * as PermissionEngine from "./PermissionEngine.ts";
-export * as TeamRecords from "./TeamRecords.ts";
 export * as TenantMiddleware from "./TenantMiddleware.ts";
 export * as TenantResolver from "./TenantResolver.ts";

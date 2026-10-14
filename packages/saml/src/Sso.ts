@@ -14,7 +14,7 @@
 // which is what a "Sign in with SSO" button needs to know and what a scraper should not be able to sweep for.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, RateLimits } from "@awthaq/core";
+import { AuthPlugin, RateLimits } from "@awthaq/core";
 import { OrganizationConnections } from "@awthaq/organization";
 import { ClientAddress, RateLimiter } from "@awthaq/ports";
 import * as Context from "effect/Context";
@@ -77,7 +77,7 @@ export const SsoGroup = HttpApiGroup.make("sso")
     HttpApiEndpoint.post("start", "/auth/sso/start", {
       payload: StartPayload,
       success: StartResponse,
-      error: [SsoNotFound, Api.RateLimited],
+      error: [SsoNotFound, Api.RateLimited, Api.StoreUnavailable],
     }),
   )
   // BEH-EA-201: a pre-authentication lookup (which login does this address route to?) that reads no credential and changes
@@ -109,18 +109,18 @@ export interface SsoShape {
     readonly email?: string | undefined;
     readonly organizationId?: string | undefined;
     readonly callbackURL?: string | undefined;
-  }) => Effect.Effect<ReadonlyArray<SsoRoute>>;
+  }) => Effect.Effect<ReadonlyArray<SsoRoute>, Api.StoreUnavailable>;
   /** The route the hint resolves to: the preferred protocol's, else the other's; `None` when nothing routes. */
   readonly discover: (hint: {
     readonly email?: string | undefined;
     readonly organizationId?: string | undefined;
     readonly callbackURL?: string | undefined;
-  }) => Effect.Effect<Option.Option<SsoRoute>>;
+  }) => Effect.Effect<Option.Option<SsoRoute>, Api.StoreUnavailable>;
   /** The HTTP operation: rate limited per source address, then `discover`. */
   readonly start: (
     input: StartPayload,
     ip: string | undefined,
-  ) => Effect.Effect<SsoRoute, SsoNotFound | Api.RateLimited>;
+  ) => Effect.Effect<SsoRoute, SsoNotFound | Api.RateLimited | Api.StoreUnavailable>;
 }
 
 const withCallback = (path: string, callbackURL: string | undefined, hasQuery: boolean) =>
@@ -128,10 +128,27 @@ const withCallback = (path: string, callbackURL: string | undefined, hasQuery: b
     ? path
     : `${path}${hasQuery ? "&" : "?"}callbackURL=${encodeURIComponent(callbackURL)}`;
 
+/**
+ * BEH-EA-317/105/107/111: `POST /auth/sso/start` tells a caller whether an email domain has single sign-on,
+ * so it is throttled per source address, declared once (it used to be enforced without being declared or
+ * registered). The static `rateLimits` listing is derived from this table at the default number
+ * (`SamlConfig.rateLimits.sso` tunes it at build).
+ */
+const rules = {
+  start: RateLimits.rule({
+    group: "sso",
+    endpoint: "start",
+    key: RateLimits.Key.ip,
+    ...SamlConfig.defaultRateLimits.sso,
+  }),
+};
+
 export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
   apiVersion: 1,
   contract: SsoApi,
-  tables: [],
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
+  tables: {},
   migrations: [],
 }) {
   static readonly layer = AuthPlugin.layer(Sso, {
@@ -163,8 +180,9 @@ export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
       const oidc = yield* OrganizationConnections.OrganizationConnectionStore;
       const settings = yield* SamlConfig.SamlConfig;
       const preference = yield* SsoConfig;
-      const events = yield* AuthEvents.AuthEvents;
-      const limiter = yield* RateLimiter.RateLimiter;
+      const limits = yield* RateLimits.budget(Sso, {
+        tune: Effect.succeed({ start: settings.rateLimits.sso }),
+      });
 
       const samlRoute = (
         hint: { readonly email?: string | undefined; readonly organizationId?: string | undefined },
@@ -234,19 +252,7 @@ export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
         Effect.map(discoverAll(hint), (routes) => Option.fromNullishOr(routes[0]));
 
       const start: SsoShape["start"] = Effect.fnUntraced(function* (input, ip) {
-        yield* RateLimits.enforce({
-          key: `sso:start:${ip ?? "unknown"}`,
-          limit: settings.rateLimits.sso.limit,
-          window: settings.rateLimits.sso.window,
-          meta: { group: "sso", endpoint: "start", rule: "start", dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("start", { ip });
         const found = yield* discover({
           email: input.email,
           organizationId: input.organizationId,

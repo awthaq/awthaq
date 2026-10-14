@@ -78,7 +78,7 @@ const PgLive = PgClient.layerConfig({
   // PgClient.layerConfig({ url, types })
   ```
 
-  `test/Repositories.postgres.test.ts` proves a re-run applies nothing with it; the plugin store suites use the same codec (`test/support/TestSql.ts`).
+  `test/Repositories.postgres.test.ts` proves a re-run applies nothing with it; the plugin store suites use the same codec (`TestSql` in `@awthaq/test`, `packages/test/src/TestSql.ts`).
 
 - **Timeouts.** Set `statement_timeout` at the role level (`ALTER ROLE app SET statement_timeout = '5s'`), which works regardless of pooler. Pool exhaustion surfaces as the driver's own error; distinguishing it is an upstream `@effect/sql-pg` concern.
 
@@ -158,7 +158,19 @@ yield * TenantScope.enableRls(); // idempotent; sessions, verification_tokens/re
 yield * handler.pipe(TenantScope.withTenant("acme"));
 ```
 
-Inside `withTenant`, a forgotten application filter, a cross-tenant `UPDATE` and a forged cross-tenant `INSERT` all fail closed at the database (proven by `test/Repositories.postgres.test.ts`). The policy is deliberately fail-open when no tenant is set, so a single-tenant deployment, a migration and a maintenance script keep working with RLS on. `enableRls`/`disableRls` are idempotent functions, not numbered migrations: RLS is an operator's reversible choice, not a step every deployment must apply in order. SQLite has no RLS; there `withTenant` only provides the ambient tenant. Rows written before you adopted tenancy have `NULL` and are invisible inside a tenant scope, so backfill before enabling.
+Inside `withTenant`, a forgotten application filter, a cross-tenant `UPDATE` and a forged cross-tenant `INSERT` all fail closed at the database (proven by `test/Repositories.postgres.test.ts`). The policy is deliberately fail-open when no tenant is set, so a single-tenant deployment, a migration and a maintenance script keep working with RLS on. `enableRls`/`disableRls` are idempotent functions, not numbered migrations: RLS is an operator's reversible choice, not a step every deployment must apply in order. The tenant transaction is a unit of work (`SqlTransaction.transactional`, ADR-EA-037): an event published inside it reaches live subscribers only when the request's transaction commits, and an attempt event is recorded after it ends, on its own connection (the policy admits an unset tenant, and the row is stamped with the event's tenant). SQLite has no RLS; there `withTenant` only provides the ambient tenant, with no transaction and so no deferral. Rows written before you adopted tenancy have `NULL` and are invisible inside a tenant scope, so backfill before enabling.
+
+**Plugin tables (plan 05).** Every plugin declares each table it owns as Partitioned (a nullable `"tenantId"`, stamped at insert), Keyed (the organization id is the row's own key), Derived (scoped through a parent table) or Global (deliberately tenant-blind, with a reason), and `Auth.make` exposes the declarations as `auth.tenancy`. RLS covers them when you hand them over:
+
+```ts
+yield *
+  TenantScope.enableRls({
+    plugins: auth.tenancy, // Partitioned tables by their column; Derived tables through their parent's policy
+    includeKeyed: true, // also the organization-keyed tables (organization, saml, scim): opt in, see below
+  });
+```
+
+Global tables are never covered. Keyed tables are opt-in (`includeKeyed`) because their rows carry no ambient tenant: a request under tenant `acme` is confined to organizations whose id is `acme`, which only fits a deployment where a tenant is one organization. `disableRls` drops the `awthaq_tenant` policy from every table that has one, whatever `enableRls` was called with, and `enableRls()` with no argument still covers only the core tables. A records method that must see more than the ambient tenant (an erasure sweep, the platform listing, a protocol message that names its connection before any tenant is known) takes a `TenantScoped.CrossTenant` witness and runs its statement under `TenantScoped.lift`, which clears the setting for that one statement inside the request's transaction and restores it afterwards, on success and on failure: without it, `Tenant.withoutTenant` clears the fiber's tenant but not the transaction-local setting the policies read, and a cross-tenant maintenance read would be silently confined to the request's tenant. Backfill `NULL` `"tenantId"` rows first if they must stay visible inside tenant scopes.
 
 **Run as a non-owner role.** RLS is bypassed by superusers, roles with `BYPASSRLS`, and (unless `FORCE` is set, which `enableRls` does) the table owner. Run migrations as the owner role and the application as a separate role with only the DML grants it needs (`SELECT, INSERT, UPDATE, DELETE` on the core tables); the guarantee then holds even without `FORCE`, and ad-hoc scripts using the application role are scoped too.
 
@@ -219,7 +231,7 @@ pnpm run test:pg                  # + the real-Postgres suites, against a throwa
 
 `test/contract.ts` holds the dialect-neutral contract cases as one function, run by the `:memory:`, file-backed and real-Postgres suites, so a case added there runs on every dialect. `AWTHAQ_POSTGRES_URL` points the Postgres suites at an existing server instead; they drop and recreate the core tables, so use a scratch database. Without it the `*.postgres.test.ts` files skip.
 
-The plugin record-store suites (admin, jwt, organization, passkey, roles, qadi claims, migrate-better-auth) build their database through `test/support/TestSql.ts`: `:memory:` SQLite normally, but under `AWTHAQ_POSTGRES_URL` the _same tests_ run on Postgres, each suite in its own schema, which is what `pnpm run test:pg` does. `TestSql.injectFailure` makes an atomicity test fail a statement for real on either dialect.
+The plugin record-store suites (admin, jwt, organization, passkey, roles, qadi claims, migrate-better-auth) build their database through `TestSql` (`import { TestSql } from "@awthaq/test"`, `packages/test/src/TestSql.ts`): `:memory:` SQLite normally, but under `AWTHAQ_POSTGRES_URL` the _same tests_ run on Postgres, each suite in its own schema, which is what `pnpm run test:pg` does. `TestSql.injectFailure` makes an atomicity test fail a statement for real on either dialect.
 
 ## Migrating from another auth system
 

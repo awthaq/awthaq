@@ -1,10 +1,13 @@
 # @awthaq/roles
 
-The Roles plugin: a global (platform-wide) assignment of role names to users, flattened through qadi's role DAG into `AuthSubject.roles` / `permissions` by overriding the `SubjectResolver` slot (BEH-EA-137–143). Persistence is `Roles.layer` (memory) or `Roles.layerSql` (`roles_assignments`, `UNIQUE(userId, role)`).
+The Roles plugin: a global (platform-wide) assignment of role names to users, flattened through qadi's role DAG into `AuthSubject.roles` / `permissions` by overriding the `SubjectResolver` slot (BEH-EA-137–143). Persistence is the `RoleAssignments` record store, declared as `Roles.records`: `Roles.records.memory` or `Roles.records.sql` (`roles_assignments`, `UNIQUE(userId, role)`); `Roles.layer` is written once over whichever one the composition provides.
 
 ```ts
 const catalog = [editor, owner]; // built with @qadi/core's role()
-const RolesLive = Roles.layerSql.pipe(Layer.provide(Roles.config(catalog)));
+const RolesLive = Roles.layer.pipe(
+  Layer.provide(Roles.records.sql),
+  Layer.provide(Roles.config(catalog)),
+);
 ```
 
 - **`Roles.config(catalog)` is required for any effect.** With no catalog every user resolves role-less and the layer logs `awthaq.roles.emptyCatalog` at build. A duplicate role name in the catalog fails the build.

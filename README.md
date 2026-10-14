@@ -2,7 +2,7 @@
 
 *Effect Native Auth* — an authentication runtime for TypeScript, built natively on Effect v4, with authorization delegated to the sibling library [qadi](../qadi). The name comes from Arabic أوثق (*awthaq*, "most trustworthy/reliable") — the original working name, `effect-auth`, was already taken on npm by an abandoned package (see `research/01-effect-ecosystem.md`).
 
-**Status:** actively implemented, pre-`1.0`/pre-publish. `spec/` is still the canonical specification — user requirements, architectural decisions, functional behaviors, invariants, and a traceability matrix tying them together — but it is no longer just a plan: every plugin in [Plugins](#plugins) has a real, tested implementation under `packages/`, except `two-factor` and `magic-link`, which are placeholder packages with no exports yet. SAML (service provider only) and an OIDC provider are specified in `spec/`, not built (device authorization, RFC 8628, ships as `@awthaq/device-authorization`). See [`spec/roadmap.md`](spec/roadmap.md) for the milestone plan and what has shipped against it, and [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md) for the most recent gap-closure pass.
+**Status:** actively implemented, pre-`1.0`/pre-publish. `spec/` is still the canonical specification — user requirements, architectural decisions, functional behaviors, invariants, and a traceability matrix tying them together — but it is no longer just a plan: every plugin in [Plugins](#plugins) has a real, tested implementation under `packages/`. An OIDC provider is specified in `spec/`, not built. See [`spec/roadmap.md`](spec/roadmap.md) for the milestone plan and what has shipped against it, and [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md) for the most recent gap-closure pass.
 
 No package is published to npm yet (`packages/*/package.json` are all still `"private": true` — see [Publishing status](#publishing-status)). This quickstart runs the library from a clone of this repository.
 
@@ -11,6 +11,7 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 - [Repository map](#repository-map)
 - [Quickstart](#quickstart)
 - [Running it](#running-it)
+- [Persistence](#persistence)
 - [Swapping in Postgres for real](#swapping-in-postgres-for-real)
 - [Configuration](#configuration)
 - [Plugins](#plugins)
@@ -23,7 +24,7 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 
 | Path | What it is |
 |---|---|
-| [`packages/`](packages) | The implementation, one package per `@awthaq/*` name. Foundations: `@awthaq/core` (domain services), `@awthaq/api` and `@awthaq/server` (the HTTP contract stratum), `@awthaq/sql` (persistence), `@awthaq/ports` (adapters — password hashing, mail, encryption, rate limiting, WebAuthn, key management), `@awthaq/qadi` (authorization over qadi) and `@awthaq/test` (the memory backend and test harness). Plugins: `@awthaq/password`, `@awthaq/oauth`, `@awthaq/organization`, `@awthaq/roles`, `@awthaq/admin`, `@awthaq/passkey`, `@awthaq/jwt`, `@awthaq/api-key`, `@awthaq/scim`, `@awthaq/device-authorization`, plus `@awthaq/magic-link` and `@awthaq/two-factor` (placeholders not yet built out). Clients: `@awthaq/client`, `@awthaq/react`, `@awthaq/web` (the framework-neutral adapter core) and `@awthaq/next`. Tooling: `@awthaq/cli` and the migration importers `@awthaq/migrate-auth0`, `@awthaq/migrate-better-auth`, `@awthaq/migrate-firebase`. Each package's own README says what it ships. `pnpm workspace:check` fails when this list falls behind `packages/`. |
+| [`packages/`](packages) | The implementation, one package per `@awthaq/*` name. Foundations: `@awthaq/core` (domain services), `@awthaq/api` and `@awthaq/server` (the HTTP contract stratum), `@awthaq/sql` (persistence), `@awthaq/ports` (adapters — password hashing, mail, encryption, rate limiting, WebAuthn, key management), `@awthaq/qadi` (authorization over qadi) and `@awthaq/test` (the memory backend and test harness). Plugins: `@awthaq/password`, `@awthaq/oauth`, `@awthaq/organization`, `@awthaq/roles`, `@awthaq/admin`, `@awthaq/passkey`, `@awthaq/jwt`, `@awthaq/api-key`, `@awthaq/scim`, `@awthaq/device-authorization`, `@awthaq/magic-link`, `@awthaq/two-factor`, `@awthaq/saml` and `@awthaq/webhooks`. Clients: `@awthaq/client`, `@awthaq/react`, `@awthaq/web` (the framework-neutral adapter core) and `@awthaq/next`. Tooling: `@awthaq/cli` and the migration importers `@awthaq/migrate-auth0`, `@awthaq/migrate-better-auth`, `@awthaq/migrate-firebase`. Each package's own README says what it ships. `pnpm workspace:check` fails when this list falls behind `packages/`. |
 | [`examples/`](examples) | Runnable compositions: [`memory-server`](examples/memory-server/README.md) (Password + Organization + Roles over the memory backend, no database), [`sql-server`](examples/sql-server/README.md) (Password over a real, migrated SQL backend: a SQLite file by default, Postgres when `DATABASE_URL` is set) and [`plugin-template`](examples/plugin-template) (the plugin [`docs/plugin-authoring.md`](docs/plugin-authoring.md) walks through). |
 | [`docs/`](docs) | Guides: [plugin authoring](docs/plugin-authoring.md) and [migrations](docs/migrations). |
 | [`features/`](features) | The Gherkin/BDD acceptance suite (`spec/behaviors/` scenarios, executed for real against each plugin's HTTP surface). |
@@ -56,12 +57,13 @@ import {
   DataExport,
   Erasure,
   Hooks,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
+import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
 import {
   ClientAddress,
   Encryption,
@@ -69,7 +71,6 @@ import {
   Mailer,
   PasswordHasher,
   RateLimiter,
-  SqlTransaction,
 } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
@@ -114,25 +115,19 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const RepositoriesLive = Layer.mergeAll(
-  Repositories.UsersRepositoryLive,
-  Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
-  Repositories.SessionsRepositoryLive,
-  Repositories.VerificationRepositoryLive,
-  Repositories.VerificationReservationsRepositoryLive,
-  Repositories.AuditLogRepositoryLive,
-).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
-
-// 4. The domain services, backed by those repositories instead of memory.
+// 4. The domain services, backed by the SQL stores (`Persistence.sql()`: users, accounts,
+//    sessions, verification and audit log over one `SqlClient`) instead of memory.
 //    `AuthEvents` publishes every event into the durable `AuditLog` table.
 const CoreLive = Layer.mergeAll(
-  Users.layerSql,
-  Accounts.layerSql,
-  Sessions.layerSql,
-  Verification.layerSql,
+  Users.layer,
+  Accounts.layer,
+  Sessions.layer,
+  Verification.layer,
 ).pipe(
-  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerSql))),
-  Layer.provideMerge(RepositoriesLive),
+  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layer))),
+  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(EncryptionLive))),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -176,9 +171,7 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect, SqlTransaction.layerSql),
-  ),
+  Layer.provideMerge(Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect)),
 );
 
 // 7. Mount the composed api onto the router — `AuthHttp.routes` registers
@@ -289,6 +282,15 @@ The session cookie is `SameSite=Strict` (BEH-EA-055), so a browser does not send
 
 This exact composition was run end to end against an in-memory SQLite `SqlClient` while writing this section (sign-up, verify, sign-in, profile update, export and delete all answered as shown; with `AWTHAQ_EXPOSE_DOCS` unset, `/openapi.json` and `/docs` answered `404`). `packages/sql`'s domain layers are dialect-agnostic, so swapping `PgClient.layerConfig({ url })` for `SqliteClient.layer({ filename })` is the only change between the two; CI's `postgres:16` service (`.github/workflows/check.yml`) is the signal against Postgres itself, the same caveat `packages/sql/test/Repositories.postgres.test.ts` documents. Nothing here has been run against a real Postgres by hand.
 
+## Persistence
+
+`Users`, `Accounts`, `Sessions`, `Verification` and `AuditLog` are each written once, over a store port (`UserStore`, `AccountStore`, `SessionStore`, `VerificationStore`, `AuditLogStore` in `@awthaq/ports`), so you choose where state lives by providing one bundle from `@awthaq/core`, not by picking a layer per service:
+
+- `Persistence.memory`: the in-process `Ref` adapters plus `SqlTransaction.layerNoop`. For tests and a single process.
+- `Persistence.sql({ encryptPii? })`: the SQL adapters over the ambient `SqlClient`, the repositories they need, and `SqlTransaction.layerSql`. It requires `SqlClient` and `Encryption`; pass `encryptPii: true` to seal the PII columns.
+
+Swapping one store (for example a Redis-backed `SessionStore`, ADR-EA-014) means providing your adapter in place of that one service; every adapter has to pass `StoreContract` from `@awthaq/test`. Mixing stores across bundles is allowed, but the swapped store is then outside the `SqlTransaction` the SQL bundle opens, so a multi-store operation (an account erasure, for example) is no longer atomic across it.
+
 ## Swapping in Postgres for real
 
 `packages/sql` ships one migration set (`CoreMigrations.coreMigrations`, in `@awthaq/sql`) that branches per dialect internally (`sql.onDialectOrElse`), so the same `Migrator.make({})({ loader: CoreMigrations.coreMigrations })` call in the quickstart above brings a fresh Postgres database to schema-equality with what `packages/sql/src/Models.ts` declares — no separate Postgres-specific schema file to maintain. See [`.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md`](.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md) for how this was proven (a dedicated contract-test suite runs against SQLite, then Postgres, with the same test bodies).
@@ -347,7 +349,7 @@ Every `layerMemory` in this repository (`Users`, `Accounts`, `Sessions`, `Verifi
 
 | What | How to share it |
 |---|---|
-| Domain state: users, accounts, sessions, verification tokens, the audit log | The `layerSql` variants over one database (`Users.layerSql`, `Accounts.layerSql`, `Sessions.layerSql`, `Verification.layerSql`, `AuditLog.layerSql`); a session revoked on one replica is then revoked on all |
+| Domain state: users, accounts, sessions, verification tokens, the audit log | `Persistence.sql()` over one database (the same `Users.layer`, `Accounts.layer`, `Sessions.layer`, `Verification.layer` and `AuditLog.layer`, written once over store ports; `Persistence.memory` is the matching in-memory bundle); a session revoked on one replica is then revoked on all |
 | Encryption keyset (provider tokens, `users.metadata`) | The same `AWTHAQ_ENCRYPTION_KEYS` and `AWTHAQ_ENCRYPTION_KEY_ID` on every replica, or one KMS-backed `KeyProvider`; rotate by adding the new entry everywhere before pointing `AWTHAQ_ENCRYPTION_KEY_ID` at it (`spec/decisions/019-encryption-key-rotation.md`) |
 | CSRF secret | The same `Csrf.CsrfConfig` secret (at least 32 bytes) and `allowedOrigins`; a token minted by one replica must verify on another |
 | JWT signing keys, token denylist | `SigningKeyRecords.layerSql` and `RevocationStore.layerSql` (keys live in the database; private key material at rest is encrypted through `Encryption`), the same `JwtConfig`; rotation follows `spec/decisions/017-jwt-signing-key-rotation.md` |
@@ -413,9 +415,12 @@ Expiry is a read-time rejection, so expired rows stay until something deletes th
 | Admin | `@awthaq/admin` | Impersonation, session force-stop, user and tenant administration |
 | SCIM | `@awthaq/scim` | Inbound SCIM 2.0 provisioning: directory sync of users and groups, deactivation ends sessions |
 | SAML | `@awthaq/saml` | SAML 2.0 service provider (SP only): SP-initiated login through an organization's own IdP, hardened XML-signature verification (`XmlSignature` port over `xml-crypto`) |
+| Device authorization | `@awthaq/device-authorization` | The OAuth 2.0 Device Authorization Grant (RFC 8628): a CLI or TV shows a short code, the person approves it on a signed-in device |
+| Magic link and email OTP | `@awthaq/magic-link` | Passwordless sign-in by a single-use emailed link or a six-digit emailed code |
+| Two-factor | `@awthaq/two-factor` | TOTP second factor with single-use recovery codes; diverts every first-factor sign-in for an enrolled user |
 | Webhooks | `@awthaq/webhooks` | Opt-in signed outbound webhooks over the event relay: per-endpoint filters, retry/backoff/dead-letter, SSRF-safe endpoints, admin API |
 
-Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id. `two-factor` and `magic-link` are placeholder packages with no exports; see [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md)'s "Out of scope" section for why they are not part of that pass.
+Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id.
 
 ### Around the plugins
 

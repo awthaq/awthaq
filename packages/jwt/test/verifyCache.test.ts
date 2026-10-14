@@ -3,8 +3,8 @@
 // `fakeCountingHttpClient` records every outbound JWKS request. The full `Jwt`
 // plugin is composed only to produce a really-signed token and a real JWKS
 // document, exactly like `verify.test.ts`.
-import { SqlTransaction } from "@awthaq/ports";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -14,34 +14,16 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { AuditLog, AuthEvents, Sessions } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
-import * as KeyRing from "../src/KeyRing.ts";
-import * as RevocationStore from "../src/RevocationStore.ts";
-import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 import * as Verify from "../src/verify.ts";
 
 const ISSUER = "https://issuer.test";
 const JWKS_URL = "https://issuer.test/jwt/jwks";
 
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const JwtLive = Jwt.Jwt.layer.pipe(
-  Layer.provideMerge(KeyRing.KeyRing.layer),
-  Layer.provideMerge(SigningKeyRecords.layerMemory),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(AuthenticationLive),
-  Layer.provideMerge(Sessions.layerMemory),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(RevocationStore.layerMemory),
-  Layer.provideMerge(NodeCrypto.layer),
-  Layer.provideMerge(JwtConfig.config({ issuer: ISSUER })),
-);
+const JwtLive = TestAuth.layer(Auth.make([Jwt.Jwt]), {
+  services: JwtConfig.config({ issuer: ISSUER }),
+});
 
 const fakeCountingHttpClient = (served: Ref.Ref<unknown>, requests: Ref.Ref<number>) =>
   Layer.succeed(

@@ -3,9 +3,9 @@
 // audience, `verifyJWT` does not demand a `sub`, and an algorithm switch keeps
 // grace-period keys of the old algorithm verifying.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Auth, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -13,12 +13,10 @@ import * as Layer from "effect/Layer";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
-import * as RevocationStore from "../src/RevocationStore.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
+const built = Auth.make([Jwt.Jwt]);
 
 const asCaller = (id: string, sessionId: string) =>
   new Api.UserPrincipal({
@@ -27,18 +25,9 @@ const asCaller = (id: string, sessionId: string) =>
   });
 
 const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
-  Jwt.Jwt.layer.pipe(
-    Layer.provide(KeyRing.KeyRing.layer),
-    Layer.provide(SigningKeyRecords.layerMemory),
-    Layer.provide(SqlTransaction.layerNoop),
-    Layer.provide(AuthenticationLive),
-    Layer.provideMerge(Sessions.layerMemory),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(RevocationStore.layerMemory),
-    Layer.provide(NodeCrypto.layer),
-    Layer.provide(JwtConfig.config({ issuer: "https://issuer.test", ...overrides })),
-  );
+  TestAuth.layer(built, {
+    services: JwtConfig.config({ issuer: "https://issuer.test", ...overrides }),
+  });
 
 const headerOf = (token: string) =>
   JSON.parse(Buffer.from(token.split(".")[0] ?? "", "base64url").toString("utf8"));
@@ -73,7 +62,10 @@ describe("token classes (VB-005)", () => {
       if (live._tag !== "JwtInvalidError") return assert.fail(live._tag);
       assert.strictEqual(live.reason, "typ mismatch");
       const plain = yield* jwt.verify(forged).pipe(Effect.flip);
-      assert.strictEqual(plain.reason, "typ mismatch");
+      assert.strictEqual(
+        plain._tag === "JwtInvalidError" ? plain.reason : plain._tag,
+        "typ mismatch",
+      );
     }).pipe(Effect.provide(buildLayer())),
   );
 
@@ -82,7 +74,10 @@ describe("token classes (VB-005)", () => {
       const jwt = yield* Jwt.Jwt;
       const token = yield* jwt.sign(asCaller("user-1", "session-1"));
       const result = yield* jwt.verifyJWT(token).pipe(Effect.flip);
-      assert.strictEqual(result.reason, "typ mismatch");
+      assert.strictEqual(
+        result._tag === "JwtInvalidError" ? result.reason : result._tag,
+        "typ mismatch",
+      );
     }).pipe(Effect.provide(buildLayer())),
   );
 
@@ -93,7 +88,10 @@ describe("token classes (VB-005)", () => {
         const jwt = yield* Jwt.Jwt;
         const token = yield* jwt.signJWT({ sub: "svc" }, { audience: "svc-a" });
         const atOrigin = yield* jwt.verifyJWT(token).pipe(Effect.flip);
-        assert.strictEqual(atOrigin.reason, "iss/aud mismatch");
+        assert.strictEqual(
+          atOrigin._tag === "JwtInvalidError" ? atOrigin.reason : atOrigin._tag,
+          "iss/aud mismatch",
+        );
         const claims = yield* jwt.verifyJWT(token, { audience: "svc-a" });
         assert.strictEqual(claims["aud"], "svc-a");
       }).pipe(Effect.provide(buildLayer())),
@@ -125,20 +123,22 @@ describe("subject requirement (JJS-007)", () => {
       const jwt = yield* Jwt.Jwt;
       const token = yield* jwt.signJWT({ machine: "etl-job" }, { typ: "at+jwt" });
       const result = yield* jwt.verify(token).pipe(Effect.flip);
-      assert.strictEqual(result.reason, "missing sub");
+      assert.strictEqual(
+        result._tag === "JwtInvalidError" ? result.reason : result._tag,
+        "missing sub",
+      );
     }).pipe(Effect.provide(buildLayer())),
   );
 });
 
 // `Effect.provide` builds each layer in its own scope, so two KeyRings only
 // share a store if the store *service* is built once and handed to both.
-const sharedRecords = Effect.map(
-  Effect.provide(SigningKeyRecords.SigningKeyRecords, SigningKeyRecords.layerMemory),
-  (service) =>
-    Layer.mergeAll(
-      Layer.succeed(SigningKeyRecords.SigningKeyRecords, service),
-      SqlTransaction.layerNoop,
-    ),
+const sharedStore = Effect.map(
+  Effect.provide(SigningKeyRecords.SigningKeyRecords, SigningKeyRecordsLive),
+  (service) => Layer.succeed(SigningKeyRecords.SigningKeyRecords, service),
+);
+const sharedRecords = Effect.map(sharedStore, (store) =>
+  Layer.mergeAll(store, SqlTransaction.layerNoop),
 );
 
 describe("algorithm switch (JJS-003)", () => {
@@ -173,19 +173,16 @@ describe("algorithm switch (JJS-003)", () => {
     "a token minted before an algorithm switch keeps verifying; new ones use the new algorithm",
     () =>
       Effect.gen(function* () {
-        const records = yield* sharedRecords;
+        // The subject is two compositions over ONE signing-key store, so the shared store is handed in
+        // through `services` (it sits closest to the plugin and shadows the bundle's own).
+        const store = yield* sharedStore;
         const layerWith = (algorithm: JwtConfig.JwtConfigShape["algorithm"]) =>
-          Jwt.Jwt.layer.pipe(
-            Layer.provide(Layer.fresh(KeyRing.KeyRing.layer)),
-            Layer.provide(records),
-            Layer.provide(AuthenticationLive),
-            Layer.provideMerge(Sessions.layerMemory),
-            Layer.provideMerge(AuthEvents.layer),
-            Layer.provideMerge(AuditLog.layerMemory),
-            Layer.provideMerge(RevocationStore.layerMemory),
-            Layer.provide(NodeCrypto.layer),
-            Layer.provide(JwtConfig.config({ issuer: "https://issuer.test", algorithm })),
-          );
+          TestAuth.layer(built, {
+            services: Layer.mergeAll(
+              store,
+              JwtConfig.config({ issuer: "https://issuer.test", algorithm }),
+            ),
+          });
         const oldToken = yield* Effect.gen(function* () {
           const jwt = yield* Jwt.Jwt;
           return yield* jwt.signJWT({ sub: "a" });

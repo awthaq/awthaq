@@ -6,7 +6,7 @@
 // the step that receives the name maps it and says so.
 import { Api } from "@awthaq/api";
 import { HookPoint, RateLimits } from "@awthaq/core";
-import { ClientAddress, RateLimiter } from "@awthaq/ports";
+import { RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
@@ -14,16 +14,16 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import {
   AcmeAudit,
   AcmeGate,
   AcmeNormalize,
   buildLimiter,
+  composeForgetful,
   composeInvite,
   consume,
   consumeOn,
@@ -96,8 +96,14 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(call, "RateLimiter.consume");
     const { spyKeys } = yield* World;
     const keys = yield* readerOf(spyKeys, "spy limiter");
-    assert.ok(keys.includes("password:signup:alice@example.com"), "sign-up never called consume");
-    assert.ok(keys.includes("password:signin:alice@example.com"), "sign-in never called consume");
+    assert.ok(
+      keys.includes("ratelimit:password.signUp:email:alice@example.com"),
+      "sign-up never called consume",
+    );
+    assert.ok(
+      keys.includes("ratelimit:password.signIn:email:alice@example.com"),
+      "sign-in never called consume",
+    );
   });
 
   Then(
@@ -623,26 +629,23 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(call, "consume");
       const [strategy] = yield* getTexts("strategy");
       const ORIGIN = "203.0.113.7";
-      const derive = (user: string) => {
-        const ruleFor = { group: "invite", endpoint: "create" };
-        const request = HttpServerRequest.fromWeb(new Request("http://localhost/invite/create"));
-        const principal = Layer.succeed(
-          Api.CurrentPrincipal,
-          new Api.UserPrincipal({
-            ref: new Api.PrincipalRef({ type: "user", id: user }),
-            sessionId: `session-${user}`,
-          }),
+      // The handler resolves the principal (`CurrentPrincipal`) and the origin (`ClientAddress`) and
+      // passes them in; the built-in strategies key on exactly those fields.
+      const spec = {
+        group: "invite",
+        endpoint: "create",
+        limit: 5,
+        window: Duration.minutes(1),
+        bucket: "invite.create",
+      } as const;
+      const principalRule = RateLimits.rule({ ...spec, key: RateLimits.Key.user });
+      const ipRule = RateLimits.rule({ ...spec, key: RateLimits.Key.ip });
+      const derive = (user: string) =>
+        Effect.succeed(
+          strategy === "principal"
+            ? RateLimits.bucketKey(principalRule, { userId: user })
+            : RateLimits.bucketKey(ipRule, { ip: ORIGIN }),
         );
-        const address = Layer.succeed(ClientAddress.ClientAddress, {
-          resolve: () => Effect.succeed(Option.some(ORIGIN)),
-        });
-        return strategy === "principal"
-          ? RateLimits.bucketKey({ ...ruleFor, key: "principal" }).pipe(Effect.provide(principal))
-          : RateLimits.bucketKey({ ...ruleFor, key: "ip" }).pipe(
-              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-              Effect.provide(address),
-            );
-      };
       yield* setTexts("derived", [yield* derive(name), yield* derive("someone-else")]);
     },
   );
@@ -671,46 +674,35 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("{string} derives a bucket key for a sign-in request", function* (call: string) {
     assert.equal(call, "consume");
-    const registry = yield* Effect.scoped(
-      Effect.gen(function* () {
-        const context = yield* Layer.build(RateLimits.layer);
-        return yield* Effect.gen(function* () {
-          const registry = yield* RateLimits.RateLimitsRegistry;
-          // The custom function reads the sign-in payload's email (narrowed, never cast).
-          yield* registry
-            .register(fakeOwner("invite"), {
-              group: "invite",
-              endpoint: "signIn",
-              key: (input) =>
-                typeof input === "object" &&
-                input !== null &&
-                typeof Reflect.get(input, "email") === "string"
-                  ? `signin:${String(Reflect.get(input, "email"))}`
-                  : "signin:unknown",
-              limit: 5,
-              window: Duration.minutes(15),
-            })
-            .pipe(Effect.orDie);
-          const [rule] = yield* registry.registered;
-          assert.ok(rule !== undefined && typeof rule.key === "function");
-          return [
-            rule.key({ email: "alice@example.com", password: "irrelevant" }),
-            rule.key({ email: "alice@example.com", password: "irrelevant" }),
-            rule.key({ email: "bob@example.com", password: "irrelevant" }),
-          ];
-        }).pipe(Effect.provide(context));
-      }),
-    );
-    yield* setTexts("derived", registry);
+    // The explicit opt-in: the author names the dimension and the input schema and owns the reasoning.
+    const signIn = RateLimits.rule({
+      group: "invite",
+      endpoint: "signIn",
+      key: RateLimits.Key.custom(
+        "custom",
+        Schema.Struct({ email: Schema.String }),
+        (input) => `signin:${input.email}`,
+      ),
+      limit: 5,
+      window: Duration.minutes(15),
+      bucket: "invite.signIn",
+    });
+    // Extra payload fields (the password) are ignored by the key's own schema, never read.
+    const payload = (email: string) => ({ email, password: "irrelevant" });
+    yield* setTexts("derived", [
+      RateLimits.bucketKey(signIn, payload("alice@example.com")),
+      RateLimits.bucketKey(signIn, payload("alice@example.com")),
+      RateLimits.bucketKey(signIn, payload("bob@example.com")),
+    ]);
   });
 
   Then(
     "the bucket key is the deterministic value that function computes for that request",
     function* () {
       const [first, second, other] = yield* getTexts("derived");
-      assert.equal(first, "signin:alice@example.com");
+      assert.equal(first, "ratelimit:invite.signIn:custom:signin:alice@example.com");
       assert.equal(second, first);
-      assert.equal(other, "signin:bob@example.com");
+      assert.equal(other, "ratelimit:invite.signIn:custom:signin:bob@example.com");
     },
   );
 
@@ -721,10 +713,7 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     // The password plugin's per-source sign-up rule, as the registry reports it.
     const rules = yield* registeredRules;
     const byIp = rules.find(
-      (rule) =>
-        rule.endpoint === "signUp" &&
-        typeof rule.key === "function" &&
-        rule.key({ ip: "203.0.113.7" }) === "password:signup:ip:203.0.113.7",
+      (rule) => rule.plugin === "password" && rule.endpoint === "signUp" && rule.key === "ip",
     );
     assert.ok(byIp !== undefined, "no per-source sign-up rule is registered");
   });
@@ -756,10 +745,7 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       // Password's per-account sign-in rule is exactly that: its key is a function of the email in the payload.
       const rules = yield* registeredRules;
       const perAccount = rules.find(
-        (rule) =>
-          rule.endpoint === "signIn" &&
-          typeof rule.key === "function" &&
-          rule.key({ email: "anyone@example.com" }) === "password:signin:anyone@example.com",
+        (rule) => rule.plugin === "password" && rule.endpoint === "signIn" && rule.key === "email",
       );
       assert.ok(perAccount !== undefined);
     },
@@ -783,6 +769,51 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       for (let i = 0; i < 8; i++) yield* signInOverHttp("one-victim", "guess");
       const fixed = yield* Ref.get(statuses);
       assert.deepEqual(fixed, [401, 401, 401, 401, 401, 429, 429, 429]);
+    },
+  );
+
+  // ---- BEH-EA-108 (plan 06): one address normaliser ----
+
+  Given(
+    "an application installing the official {string} plugin with a real limiter",
+    function* (plugin: string) {
+      assert.equal(plugin, "password");
+      const { host, compose } = yield* World;
+      yield* host.configure((spec) => ({ ...spec, rateLimiter: RateLimiter.layerMemory }));
+      yield* Ref.set(compose, Effect.asVoid(host.context));
+    },
+  );
+
+  When(
+    "six sign-ups arrive for differently cased and subaddressed spellings of one address",
+    function* () {
+      const { statuses } = yield* World;
+      yield* Ref.set(statuses, []);
+      // `signUp` is five an hour per address bucket; each spelling is a distinct literal address.
+      for (const address of [
+        "Victim+1@X.com",
+        "victim+2@x.com",
+        "VICTIM+3@x.COM",
+        "victim+4@X.COM",
+        "victim@x.com",
+        "victim+6@x.com",
+      ]) {
+        yield* signUpOverHttp(address);
+      }
+    },
+  );
+
+  Then(
+    "the sixth is refused with a 429 because the five before it shared one per-address bucket",
+    function* () {
+      const { statuses } = yield* World;
+      const seen = yield* Ref.get(statuses);
+      assert.equal(seen.length, 6);
+      assert.ok(
+        seen.slice(0, 5).every((status) => status !== 429),
+        `an early sign-up was refused: ${seen.join(",")}`,
+      );
+      assert.equal(seen[5], 429, `the sixth spelling got its own bucket: ${seen.join(",")}`);
     },
   );
 
@@ -890,6 +921,63 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       const rules = yield* registeredRules;
       assert.ok(rules.length > 0);
       assert.ok(rules.every((rule) => rule.plugin === "password"));
+    },
+  );
+
+  Given(
+    "an application installing the official {string} plugin and tuning its {string} rule to a limit of {int} with {string}",
+    function* (plugin: string, rule: string, limit: number, how: string) {
+      assert.deepEqual([plugin, rule, how], ["password", "signIn", "RateLimits.overrides"]);
+      const { host, compose } = yield* World;
+      // The application's whole intervention: one layer over the plugin's own declared rule, typed per
+      // plugin (a name that is not a rule of `Password` would not compile).
+      const overrides = RateLimits.overrides(
+        RateLimits.tune(Password.Password, { signIn: { limit } }),
+      );
+      yield* host.configure((spec) => ({
+        ...spec,
+        rateLimiter: RateLimiter.layerMemory,
+        contributions: [...spec.contributions, overrides],
+      }));
+      yield* Ref.set(compose, Effect.asVoid(host.context));
+    },
+  );
+
+  When("a user signs in with a wrong password {int} times", function* (times: number) {
+    yield* signUpOverHttp("alice");
+    const { statuses } = yield* World;
+    yield* Ref.set(statuses, []);
+    for (let i = 0; i < times; i++) yield* signInOverHttp("alice", "guess");
+  });
+
+  Then(
+    "the first two attempts are refused as invalid credentials and the third with a 429",
+    function* () {
+      const { statuses } = yield* World;
+      assert.deepEqual(yield* Ref.get(statuses), [401, 401, 429]);
+    },
+  );
+
+  // ---- BEH-EA-111 (plan 06): declared means opened ----
+
+  Given(
+    "plugin {string} declares a rate-limit rule but its layer never opens a budget",
+    function* (plugin: string) {
+      assert.equal(plugin, "forgetful");
+      const { compose, texts } = yield* World;
+      yield* Ref.set(
+        compose,
+        Effect.flatMap(composeForgetful, (outcome) =>
+          Ref.update(texts, (existing) => ({ ...existing, forgetful: outcome })),
+        ),
+      );
+    },
+  );
+
+  Then(
+    "composition is refused because {string} declared a rule it never opened a budget for",
+    function* (plugin: string) {
+      assert.deepEqual(yield* getTexts("forgetful"), ["never-opened", plugin, "go"]);
     },
   );
 

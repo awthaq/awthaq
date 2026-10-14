@@ -1,3 +1,4 @@
+// Hand-wired on purpose: the CSRF middleware is the unit under test, built over several configurations (plan 08 exemption).
 // spec/behaviors/10-csrf.md, BEH-EA-073 through BEH-EA-080.
 import { Api } from "@awthaq/api";
 import { SessionCookie } from "@awthaq/core";

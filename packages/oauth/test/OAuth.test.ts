@@ -8,14 +8,12 @@
 // RSA keypair signing a real RS256 `id_token` that `Jwt.ts`'s own verifier
 // checks — not a stub that always returns `true`.
 import { createHmac, generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
-import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { Authentication } from "@awthaq/server";
+import { Accounts, AuditLog, Auth, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Encryption } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
-import * as ConfigProvider from "effect/ConfigProvider";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -30,25 +28,7 @@ import * as OAuthProvider from "../src/OAuthProvider.ts";
 import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { FakeReply, fakeHttpClient, hangingRoute, type FakeRoutes } from "./FakeProvider.ts";
-import { TestAuth } from "@awthaq/test";
-
-// Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
-// requires `Encryption` — a fixed test key, isolated from the real
-// `process.env`.
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+import { SignInProbe, TestAuth } from "@awthaq/test";
 
 // ---- RS256 test signing (a real keypair, a real signature — not a stub) ----
 
@@ -109,21 +89,16 @@ const optionalField = <K extends string, V>(
 ): { readonly [P in K]: V } | {} =>
   value === undefined ? {} : ({ [key]: value } as { [P in K]: V });
 
-// ---- shared core/domain layers ----
+// ---- the composition: `OAuth` through the harness ----
 
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+const built = Auth.make([OAuth.OAuth]);
 
 const baseUrl = "https://app.example.com";
 
 /** The claims the FAMS-006 test's fake token endpoint signs (the nonce is only known after `authorize`). */
 let currentAnchorClaims: Record<string, unknown> = {};
 
-const buildLayer = (options: {
+const buildLayer = <Wrapped extends Sessions.Sessions | Users.Users = never>(options: {
   readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
   readonly linking?: "explicit" | { readonly trustedProviders: ReadonlyArray<string> };
   readonly trustedOrigins?: ReadonlyArray<string>;
@@ -135,38 +110,16 @@ const buildLayer = (options: {
   readonly config?: Partial<OAuth.OAuthConfigInput>;
   /** EP-004: per-organization connections, consulted after the static registry. */
   readonly connections?: OAuthConnections.OAuthConnectionResolverShape;
+  /** The limiter the plugin captures; permissive by default so an ordinary loop never trips a production limit. */
+  readonly limiter?: "permissive" | "enforcing";
+  /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
+  readonly coreOverride?: Layer.Layer<Wrapped, never, Wrapped>;
 }) =>
-  OAuth.OAuth.layer.pipe(
-    Layer.provide(
+  TestAuth.layer(built, {
+    // The provider transport and the plugin's own configuration: what is genuinely this test's own.
+    services: Layer.mergeAll(
+      fakeHttpClient(options.httpRoutes ?? {}),
       options.connections === undefined ? Layer.empty : OAuthConnections.layer(options.connections),
-    ),
-    // `OAuthApi.OAuthGroup`'s own `.middleware(Api.OptionalAuthentication)`
-    // is part of what `OAuth.layer` merges its handlers with — required
-    // even for these domain-level tests, which never issue an HTTP
-    // request at all, because `AuthPlugin.layer` ties a plugin's own
-    // service and its handlers together in one `Layer.provideMerge`.
-    // Order matters: a `Layer.provide` call can only satisfy a
-    // requirement introduced *earlier* in the pipe, so `CoreLive` (which
-    // satisfies `OptionalAuthenticationLive`'s own `Sessions` need) has to
-    // come after it, not before.
-    Layer.provide(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(CoreLive),
-    // Ticket 13: `callback` is now rate-limited — a real, permissive
-    // default here, mirroring `TestAuth`'s own posture, so an ordinary
-    // test loop never trips a limit tuned for production.
-    Layer.provideMerge(RateLimiter.layerPermissive),
-    Layer.provideMerge(RateLimits.layer),
-    // Ticket 16: `SqlTransaction`'s no-op layer — this test's own `CoreLive`
-    // is in-memory, with nothing a transaction would need to wrap.
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    // AGA-001/NHS-003: `OAuth`'s callback handler now resolves through
-    // `ClientAddress` — the direct passthrough is byte-for-byte today's
-    // `remoteAddress` behavior.
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provide(fakeHttpClient(options.httpRoutes ?? {})),
-    Layer.provide(
       OAuth.config({
         providers: options.providers,
         linking: options.linking ?? "explicit",
@@ -178,7 +131,10 @@ const buildLayer = (options: {
         ...options.config,
       }),
     ),
-  );
+    // Permissive by default, so an ordinary test loop never trips a limit tuned for production.
+    rateLimiter: options.limiter ?? "permissive",
+    ...(options.coreOverride === undefined ? {} : { decorate: options.coreOverride }),
+  });
 
 // ---- a plain OAuth2 provider (no id_token — GitHub-shaped) ----
 
@@ -1616,24 +1572,21 @@ describe("OAuth", () => {
       "NAM-004: OAuth and OAuthTokenAccess share one resolved registry (discovery fetched once)",
       () => {
         let discoveryCalls = 0;
-        const both = Layer.merge(OAuth.OAuth.layer, OAuthTokenAccess.layer).pipe(
-          Layer.provide(Authentication.OptionalAuthenticationLive),
-          Layer.provide(Authentication.PrincipalResolverLive),
-          Layer.provideMerge(CoreLive),
-          Layer.provideMerge(RateLimiter.layerPermissive),
-          Layer.provideMerge(RateLimits.layer),
-          Layer.provideMerge(SqlTransaction.layerNoop),
-          Layer.provideMerge(ClientAddress.layerDirect),
-          Layer.provideMerge(EncryptionLive),
-          Layer.provide(
-            fakeHttpClient({
-              ".well-known/openid-configuration": () => {
-                discoveryCalls += 1;
-                return oktaDiscovery;
-              },
+        // `OAuthTokenAccess` is stacked over the very composition `OAuth` is built in, so both read one registry.
+        const both = OAuthTokenAccess.layer.pipe(
+          Layer.provideMerge(
+            TestAuth.layer(built, {
+              services: Layer.mergeAll(
+                fakeHttpClient({
+                  ".well-known/openid-configuration": () => {
+                    discoveryCalls += 1;
+                    return oktaDiscovery;
+                  },
+                }),
+                OAuth.config({ providers: [okta()], baseUrl }),
+              ),
             }),
           ),
-          Layer.provide(OAuth.config({ providers: [okta()], baseUrl })),
         );
         return Effect.gen(function* () {
           yield* OAuthTokenAccess.OAuthTokenAccess;
@@ -1656,17 +1609,59 @@ describe("OAuth", () => {
     );
   });
 
-  describe("PV-241: the static rateLimits declaration matches the registry", () => {
-    it.effect("declares exactly what the layer registers, at the default configuration", () =>
+  describe("EP-007: the rate limits in force are the operation's configuration", () => {
+    it.effect(
+      "a tenant's OAuth.config provided in the calling fiber tunes the authorize budget without a rebuild",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const input = { callbackURL: undefined, link: undefined, ip: "203.0.113.5" };
+          // Built value: the default 30 a minute. Two calls pass.
+          yield* oauth.authorize("acme", input);
+          yield* oauth.authorize("acme", input);
+          // A tenant's configuration allows one: its second call is refused.
+          const tenant = Context.get(
+            yield* Layer.build(
+              OAuth.config({
+                providers: [acme()],
+                baseUrl,
+                rateLimits: { authorize: { limit: 1, window: Duration.minutes(1) } },
+              }),
+            ),
+            OAuth.OAuthConfig,
+          );
+          const tenantInput = { ...input, ip: "203.0.113.6" };
+          yield* oauth
+            .authorize("acme", tenantInput)
+            .pipe(Effect.provideService(OAuth.OAuthConfig, tenant));
+          const refused = yield* oauth
+            .authorize("acme", tenantInput)
+            .pipe(Effect.provideService(OAuth.OAuthConfig, tenant), Effect.flip);
+          assert.strictEqual(refused._tag, "RateLimited");
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              limiter: "enforcing",
+            }),
+          ),
+        ),
+    );
+
+    it.effect("the registry records the same three rules the static declaration lists", () =>
       Effect.gen(function* () {
         const registry = yield* RateLimits.RateLimitsRegistry;
+        const mine = (yield* registry.registered).filter((rule) => rule.plugin === "oauth");
         assert.deepStrictEqual(
-          RateLimits.declarationDrift(OAuth.OAuth, yield* registry.registered),
-          {
-            undeclared: [],
-            unregistered: [],
-            mismatched: [],
-          },
+          mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.key, rule.bucket]),
+          OAuth.OAuth.rateLimits.map((rule) => [
+            rule.name,
+            rule.group,
+            rule.endpoint,
+            rule.key,
+            `${rule.group}.${rule.name}`,
+          ]),
         );
       }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
     );
@@ -3678,4 +3673,106 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
       );
     },
   );
+
+  // ADR-EA-038: sign-in/sign-up policy (gate, veto, divert, announcement) is tested once at `SignIn`
+  // and `SignUp`; these prove only what OAuth hands them and how it answers a refusal.
+  describe("sign-in wiring (ADR-EA-038)", () => {
+    const acmeRoutes = {
+      "/token": { access_token: "at-1" },
+      "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
+    } as const;
+
+    const callbackOnce = Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+      return yield* oauth.callback("acme", {
+        code: "auth-code",
+        state,
+        iss: undefined,
+        cookieState: state,
+      });
+    });
+
+    it.effect(
+      "hands SignIn strategy = provider id and amr [fed]; the silent sign-up reaches BeforeSignUp with the provider id",
+      () =>
+        Effect.gen(function* () {
+          const probe = yield* SignInProbe.SignInProbe;
+          const result = yield* callbackOnce;
+          assert.deepStrictEqual(result.session?.session.amr, ["fed"]);
+          const recorded = yield* probe.recorded;
+          assert.deepStrictEqual(
+            recorded.beforeSignUp.map((input) => [input.email, input.strategy]),
+            [["ada@example.com", "acme"]],
+          );
+          assert.deepStrictEqual(
+            recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
+            [["acme", ["fed"]]],
+          );
+        }).pipe(
+          Effect.provide(
+            SignInProbe.layer.pipe(
+              Layer.provideMerge(buildLayer({ providers: [acme()], httpRoutes: acmeRoutes })),
+            ),
+          ),
+        ),
+    );
+
+    it.effect(
+      "a user erased between the provider's proof and the session is OAuthCallbackFailed, not a server error",
+      () =>
+        Effect.gen(function* () {
+          const failure = yield* callbackOnce.pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: acmeRoutes,
+              coreOverride: Layer.effect(
+                Users.Users,
+                Effect.map(Users.Users, (real) =>
+                  Users.Users.of({
+                    ...real,
+                    findById: (id) =>
+                      Effect.fail(new Users.UserNotFound({ id, message: "erased" })),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+    );
+
+    // CSD-004: a rejected callback is the OAuth strategy's failure signal.
+    it.effect(
+      "a callback whose state does not match publishes auth.user.signInFailed (callbackRejected)",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const auditLog = yield* AuditLog.AuditLog;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          const failure = yield* oauth
+            .callback("acme", {
+              code: "auth-code",
+              state,
+              iss: undefined,
+              cookieState: "not-the-state",
+              ip: "203.0.113.4",
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+          const [event] = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+          assert.deepStrictEqual(event?.payload, {
+            _tag: "auth.user.signInFailed",
+            strategy: "acme",
+            reason: "callbackRejected",
+            clientIp: "203.0.113.4",
+          });
+        }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+    );
+  });
 });

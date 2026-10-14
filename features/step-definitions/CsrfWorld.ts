@@ -1,3 +1,4 @@
+// Hand-wired on purpose: the shipped CSRF middleware in front of small plugins, with its configuration varied per scenario (plan 08 exemption).
 // P20a/AH-003 (decision 36, tier 1): the World for 10-csrf.feature.
 //
 // Real `CsrfProtectionLive` (the shipped middleware, unmodified) in front of small plugins that
@@ -24,7 +25,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
+import { CsrfConfigForTests } from "./shared/Csrf.ts";
 
 /** How many times an endpoint's own handler code ran — "not subject to rejection" means it ran. */
 class Hits extends Context.Service<Hits, Ref.Ref<number>>()("features/CsrfHits") {}
@@ -95,7 +96,7 @@ const BillingHandlers = HttpApiBuilder.group(BillingApi, "billing", (handlers) =
 class AppPlugin extends AuthPlugin.Service<AppPlugin, Record<string, never>>()("app", {
   apiVersion: 1,
   contract: AppApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(AppPlugin, {
     make: Effect.succeed({}),
@@ -106,7 +107,7 @@ class AppPlugin extends AuthPlugin.Service<AppPlugin, Record<string, never>>()("
 class BillingPlugin extends AuthPlugin.Service<BillingPlugin, Record<string, never>>()("billing", {
   apiVersion: 1,
   contract: BillingApi,
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(BillingPlugin, {
     make: Effect.succeed({}),
@@ -168,10 +169,10 @@ export const buildApp = (
   const services = makeServices(hits, originChecks, extraConfig);
   const handler =
     composition === "app"
-      ? HttpRouter.toWebHandler(TestAuth.layer(builtApp, services)).handler
+      ? HttpRouter.toWebHandler(TestAuth.layer(builtApp, { services })).handler
       : composition === "billing"
-        ? HttpRouter.toWebHandler(TestAuth.layer(builtBilling, services)).handler
-        : HttpRouter.toWebHandler(TestAuth.layer(builtBoth, services)).handler;
+        ? HttpRouter.toWebHandler(TestAuth.layer(builtBilling, { services })).handler
+        : HttpRouter.toWebHandler(TestAuth.layer(builtBoth, { services })).handler;
   return { handler, hits, originChecks };
 };
 

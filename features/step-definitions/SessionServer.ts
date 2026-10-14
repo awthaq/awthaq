@@ -1,3 +1,4 @@
+// Hand-wired on purpose: a real listening socket in front of the shipped middleware; `TestAuth.app` serves no socket (plan 08 exemption).
 // BEH-EA-227/228/318 (26-cli.feature): a REAL auth server for the session commands — core's `session`
 // group and the real `@awthaq/device-authorization` plugin, served by the real handlers behind real bearer
 // authentication and CSRF over in-memory `Users`/`Sessions`, on a real Node HTTP socket. `login` and `whoami`
@@ -11,6 +12,7 @@ import {
   Accounts,
   DataExport,
   Erasure,
+  Persistence,
   RateLimits,
   Sessions,
   Users,
@@ -43,10 +45,10 @@ const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
     Layer.mergeAll(
       SqlTransaction.layerNoop,
       RateLimiter.layerPermissive,
-      Sessions.layerMemory,
-      Users.layerMemory,
-      Accounts.layerMemory,
-      Verification.layerMemory,
+      Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+      Users.layer.pipe(Layer.provide(Persistence.memory)),
+      Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+      Verification.layer.pipe(Layer.provide(Persistence.memory)),
     ),
   ),
   Layer.provideMerge(TestAuth.memoryFoundation),

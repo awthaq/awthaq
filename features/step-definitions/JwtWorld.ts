@@ -4,19 +4,10 @@
 // downstream service would: by decoding the compact JWS and by verifying against the served
 // JWKS. Defective tokens are signed with the issuer's *real* current key (or a real key it
 // never published) so a rejection is about the defect, not about a bad signature by accident.
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp } from "@awthaq/server";
-import {
-  Jwt,
-  JwtApi,
-  JwtCodec,
-  JwtConfig,
-  KeyRing,
-  RevocationStore,
-  SigningKeyRecords,
-} from "@awthaq/jwt";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Sessions, Users } from "@awthaq/core";
+import { Jwt, JwtCodec, JwtConfig, KeyRing } from "@awthaq/jwt";
+import { SealedColumn } from "@awthaq/sql";
+import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -24,65 +15,44 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
 import { parseJson, isRecord, snapshot, type Snapshot } from "./shared/WireJson.ts";
 
 export const ISSUER = "https://issuer.test";
 
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
 export type JwtConfigInput = Parameters<typeof JwtConfig.config>[0];
 
+const built = Auth.make([Jwt.Jwt]);
+
+// The stateless recipe through the harness: in-memory stores, the derived `Authentication`, and the credential-resolver
+// registry `acceptAsBearer` registers into (always composed: with it off nothing changes, and opting in without it
+// fails the build).
 const buildAppLayer = (config: JwtConfigInput) =>
-  AuthHttp.routes(JwtApi.JwtApi).pipe(
-    Layer.provideMerge(Jwt.Jwt.layer),
-    Layer.provideMerge(AuthenticationLive),
-    // Always composed: with `acceptAsBearer` off it changes nothing (a bearer that no
-    // contribution claims falls back to the opaque session lookup), and opting in without it
-    // fails the build.
-    Layer.provideMerge(Authentication.CredentialResolversLive),
-    Layer.provideMerge(KeyRing.KeyRing.layer),
-    Layer.provideMerge(SigningKeyRecords.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(Sessions.layerMemory),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(RevocationStore.layerMemory),
-    Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-    Layer.provideMerge(JwtConfig.config(config)),
-  );
+  TestAuth.layer(built, { services: JwtConfig.config(config) });
 
 type AppLayer = ReturnType<typeof buildAppLayer>;
 export type AppServices = Layer.Success<AppLayer>;
 
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
+  /** The wire request a browser client would send: with the harness's own double-submit CSRF pair. */
+  readonly request: TestAuth.App<AppServices>["request"];
   readonly withContext: <A, E>(effect: Effect.Effect<A, E, AppServices>) => Promise<A>;
   readonly close: Effect.Effect<void>;
 }
 
+// One `TestAuth.app` owns the built layer, so the key ring and stores are the very instances `handler` runs on for the
+// whole scenario.
 const buildApp = (config: JwtConfigInput): AppHandle => {
-  const layer = buildAppLayer(config);
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(layer, { memoMap });
-  // One long-lived scope owns the built layer, so the key ring and stores are the very
-  // instances `handler` runs on for the whole scenario.
-  const scope = Effect.runSync(Scope.make());
-  let built: Promise<Context.Context<AppServices>> | undefined;
-  const context = () =>
-    (built ??= Effect.runPromise(Layer.buildWithMemoMap(layer, memoMap, scope)));
-  const withContext: AppHandle["withContext"] = (effect) =>
-    context().then((services) => Effect.runPromise(effect.pipe(Effect.provide(services))));
-  return { handler, withContext, close: Scope.close(scope, Exit.void) };
+  const app = TestAuth.app(buildAppLayer(config), { baseUrl: "http://localhost" });
+  return {
+    handler: app.handler,
+    request: app.request,
+    withContext: app.run,
+    close: Effect.promise(() => app.dispose()),
+  };
 };
 
 /** One signed-in caller: a real user id and a real session, with both its cookie and its raw opaque token. */
@@ -221,18 +191,12 @@ export const request = Effect.fn("features.jwt.request")(function* (
   options: { readonly observe?: boolean } = {},
 ) {
   const world = yield* World;
-  const { handler } = yield* currentApp;
+  const { request: send } = yield* currentApp;
   const response = yield* Effect.promise(() =>
-    handler(
-      new Request(`http://localhost${init.path}`, {
-        method: init.method,
-        headers: {
-          ...(init.body === undefined ? {} : { "content-type": "application/json" }),
-          ...init.headers,
-        },
-        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-      }),
-    ),
+    send(init.method, init.path, {
+      ...(init.body === undefined ? {} : { json: init.body }),
+      headers: init.headers ?? {},
+    }),
   );
   const drained = yield* snapshot(response);
   if (options.observe !== true) yield* Ref.set(world.last, drained);
@@ -320,7 +284,7 @@ export const signWithCurrentKey = Effect.fn("features.jwt.signWithCurrentKey")(f
       Effect.gen(function* () {
         const key = yield* KeyRing.current;
         const material = yield* Option.match(key.privateKeyJwk, {
-          onSome: (redacted) => Effect.succeed(Redacted.value(redacted)),
+          onSome: (sealed) => Effect.map(SealedColumn.orDie(sealed.open), Redacted.value),
           onNone: () => Effect.die(new Error("the current signing key has no local private key")),
         });
         const iat = nowSeconds();

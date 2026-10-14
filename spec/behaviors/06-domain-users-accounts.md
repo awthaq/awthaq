@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-06 |
-> | Revision | 1.2 |
+> | Revision | 1.9 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-046 names `@awthaq/api-key` among the paths the sign-in gate covers (architecture plan 10 item 0) <br> 1.4 (2026-10-13): deleting a user is `AccountErasure`'s job and only its: `Users` has no `delete`, the row store primitive takes an `ErasureClearance`, and `createWith` abandons a half-made user (architecture plan 03) <br> 1.5 (2026-10-13): BEH-EA-322, every sign-in completes through `SignIn` (architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-323, every sign-up creates through `SignUp` (architecture plan 01) <br> 1.7 (2026-10-13): BEH-EA-045 is race-safe on Postgres (the user's account rows are locked before the sibling count); `verifyEmail` announces exactly once under concurrency (plan 02 phase 0) <br> 1.8 (2026-10-13): One implementation over `AccountStore`: an empty issuer reads as none, an identity read never decrypts a token, `updatedAt` bumps on a credential or token write in every adapter, `listByUser` is ordered (plan 02 phase 4) <br> 1.9 (2026-10-13): One implementation over `UserStore`: identity transitions are one compare-and-swap and announce exactly once, a declared-field error precedes `UserNotFound`, `setFields` bumps `updatedAt` and returns its own post-state, a page limit is clamped (plan 02 phase 5) |
 
 ---
 
@@ -70,6 +70,8 @@ The one fold is JavaScript's `String.prototype.toLowerCase()`, applied at the do
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §2.1 documents email uniqueness as better-auth's primary identity key, enforced by a schema-level unique constraint, and awthaq's plan follows the same choice for the same reason: it is the key both password sign-in and OAuth implicit account matching rely on. The same source file's note is worth carrying forward as a documented constraint rather than an eternal one — requiring email specifically is "the *current* invariant, not an eternal one," and any future relaxation toward a wider identity key must be an explicit, versioned design change, never a silent one.
 
+**One implementation over a store port (plan 02, ADR-EA-041).** `Users` is written once, over `UserStore` (a `Ref` adapter in `@awthaq/ports`, a SQL adapter over `@awthaq/sql`'s repository), whose primitives are atomic by contract (`StoreContract.users`, run on the `Ref`, SQLite, WAL-file and Postgres adapters). The insert is one primitive that answers the new user or the holder of the email or phone, never aborting an enclosing Postgres transaction (a duplicate `create` is `EmailAlreadyExists`, not a poisoned transaction) and never a defect when the holder vanishes between the two statements. `verifyEmail`, `verifyPhone`, `promoteIdentity` and `changeEmail` are each "read, decide, compare-and-swap the four identity columns against what was read": a concurrent change is re-read and decided again (three attempts, then `StoreUnavailable`), so a transition, and the `AfterUserAttributesChanged` announcement it owes (AAPS-005), happen exactly once, and a lowering of `emailVerified` is announced from what the swap really did. Every write bumps `updatedAt` (`setFields` included, ADR-EA-035: declared fields are columns of the row), a `list` limit is an integer clamped to 1 to 200, and `delete` takes the declared fields with the row, so neither a deleted user's fields nor a field of a user deleted mid-write can outlive it.
+
 ## BEH-EA-042: `emailVerified` is monotone and never client-settable through a generic write
 
 ```text
@@ -98,6 +100,8 @@ REQUIREMENT: The pair `(providerId, subject)` MUST identify at most one
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §3.1 documents better-auth's deliberately weaker choice here: `(providerId, accountId)` uniqueness is maintained only by application-level query discipline ("query with a small limit and treat more than one match as a defect"), not a database constraint, accepting a race window between two concurrent link operations. awthaq's plan deliberately strengthens this: `archive/PRD.md` §18 lists "`(provider, subject, issuer)` uniqueness" among its security-model guarantees, and the design intent is a schema-level constraint from the start rather than a documented, best-effort weaker guarantee a deployment must remember to add.
+
+**One implementation over a store port (plan 02, ADR-EA-041).** `Accounts` is written once, over `AccountStore` (a `Ref` adapter in `@awthaq/ports`, a SQL adapter over `@awthaq/sql`'s repository), whose primitives are atomic by contract (`StoreContract.accounts`, run on the `Ref`, SQLite, WAL-file and Postgres adapters). The key is `(providerId, subject, issuer)` and the insert is one conditional statement, so a taken key is the typed `AccountAlreadyLinked` and never a unique violation that would abort an enclosing Postgres transaction. `issuer` is `""` in the key and `None` in the record whether the caller omitted it or passed `""` (the memory twin used to return `Some("")`). An **identity read** (`findById`, `findByProviderSubject`, `listByUser`) selects the identity columns only: it decrypts no provider token and writes nothing on the read path, so a sign-in does not pay for, or write back, tokens it never reads; `findProviderTokens` is the one strict path, and `findCredentialHash` reads the hash alone. `listByUser` answers in `(createdAt, id)` order, and `updateCredentialHash` and `updateProviderTokens` bump `updatedAt` in every adapter.
 
 ## BEH-EA-044: A password credential is an ordinary Account row, not a separate entity
 
@@ -131,6 +135,8 @@ REQUIREMENT: Unlinking an Account MUST be refused when it is the User's
 
 **As shipped (PV-221):** the deployment policy is `Accounts.config({ allowZeroAccounts: true })` (`Accounts.AccountsPolicy`, default `false`), read by both `layerMemory` and `layerSql`; it may also be applied to a single call with `Effect.provideService` or per tenant with `Tenant.configApplied`. `@awthaq/passkey`'s last-credential guard (BEH-EA-134) is the plugin-side twin and is unchanged (REQ-EA-125, `packages/core/test/Accounts.test.ts`).
 
+**Race-safe on Postgres (plan 02 phase 0).** The sibling count and the delete run in one transaction, and `layerSql` first locks the user's account rows (`SELECT ... FOR UPDATE`, a no-op on SQLite and libSQL, whose drivers already open the transaction as a write transaction). Without the lock, two concurrent unlinks of a user's two *different* accounts each counted two siblings under READ COMMITTED and both committed, leaving none. The case runs under `pnpm test:pg`.
+
 ## BEH-EA-046: Deleting a User cascades to its Accounts and Sessions; deleting or unlinking an Account never cascades to Sessions
 
 ```text
@@ -140,7 +146,9 @@ REQUIREMENT: Deleting a `User` row MUST make every `Account` and `Session`
              or any Session belonging to the same User.
 ```
 
-**Suspension is never deletion (Revision 1.1; SCP-001, BAM-005).** A `User` also has `status: "active" | "suspended"` (with an operator-only reason and an optional expiry). `Users.setStatus(id, status, { reason?, until? })` is the *only* writer of `status`: `updateProfile` has no such field and the SQL `update` variant excludes the columns, so no generic write can reach it. `setStatus` leaves Accounts and Sessions alone (the caller — an admin, a SCIM handler — composes `Sessions.revokeAll(id, "suspended")`), and reactivating restores sign-in with every row intact; `delete` keeps the destructive cascade above unchanged, and SCIM `active:false` maps to suspension, not deletion. One shared gate, `Users.assertCanSignIn(user)`, fails `UserSuspended` (403, no body) for a user whose suspension is in force at the current instant (a `suspendedUntil` in the past has lapsed with no write); password sign-in, passkey `authenticateVerify` and the OAuth callback each call it with the `UserRecord` they already hold, *after* the credential proof and *before* `Sessions.issue`, so a wrong credential never learns whether an account is suspended. It is deliberately a plain call, not a hook point (a tap left out of a composition would silently un-gate a flow), and deliberately not inside `Users.findById` (an administrator must still resolve and reactivate a suspended user); admin impersonation does not consult it.
+**Deleting a user is `Erasure.AccountErasure`'s job, and only its (Revision 1.4; architecture plan 03).** `Users` has no `delete`. A committed user is deleted by `Erasure.AccountErasure.eraseAccount(userId, initiator)` (ADR-EA-031), the only path: the `BeforeUserDelete` veto is consulted exactly once, before anything is touched, and its passing mints an `ErasureClearance` that the row store primitive `UserRemoval.remove` requires. The clearance can be minted only inside core (a private constructor on a class that the package barrel exports as a type only), so outside core `users.delete(...)`, `UserRemoval.remove(id)` and a forged clearance all fail to compile (`UserDeletion.types.test.ts`, `ErasureClearance.boundary.test.ts`). `Users.createWith(input, complete)` is the one other way a row disappears: it abandons the user it just created, with no veto and no event, when `complete` (SCIM `POST /Users`: link, add to the organization) fails, dies or is interrupted, because nobody outside the call was told the user exists; abandonment is not erasure, so it does not sweep invitations addressed to the email.
+
+**Suspension is never deletion (Revision 1.1; SCP-001, BAM-005).** A `User` also has `status: "active" | "suspended"` (with an operator-only reason and an optional expiry). `Users.setStatus(id, status, { reason?, until? })` is the *only* writer of `status`: `updateProfile` has no such field and the SQL `update` variant excludes the columns, so no generic write can reach it. `setStatus` leaves Accounts and Sessions alone (the caller — an admin, a SCIM handler — composes `Sessions.revokeAll(id, "suspended")`), and reactivating restores sign-in with every row intact; erasure (`AccountErasure`) keeps the destructive cascade above unchanged, and SCIM `active:false` maps to suspension, not deletion. One shared gate, `Users.assertCanSignIn(user)`, fails `UserSuspended` (403, no body) for a user whose suspension is in force at the current instant (a `suspendedUntil` in the past has lapsed with no write); `SignIn.clear` and `SignIn.resume` call it for every strategy (password, passkey, OAuth, SAML, device authorization, magic link, email OTP and the second factor's completion), *after* the credential proof and *before* the session exists, so a wrong credential never learns whether an account is suspended; a refusal publishes `auth.user.signInFailed { reason: "suspended" }` for every strategy (BEH-EA-322). It is deliberately a plain call, not a hook point (a tap left out of a composition would silently un-gate a flow), and deliberately not inside `Users.findById` (an administrator must still resolve and reactivate a suspended user); admin impersonation does not consult it. **Machine credentials are gated too (architecture plan 10 item 0).** `@awthaq/api-key` consults the same gate: a key (and a `client_credentials` client minting a service token) whose owner is suspended, or no longer exists, is refused exactly like an unknown credential (`None` / `InvalidClient`, never `UserSuspended`, so a presented key reveals nothing about the account), and `Users.setStatus(…, "active")` restores it with nothing lost.
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §3.4 states the reasoning this design carries forward unchanged: "a Session's validity is tied to the User, not to any one linked identity." Unlinking the `google` account from a user who also has a password credential must leave every live session, and every other linked account, intact — a session's authority derives from the user record, never from the specific identity that happened to establish it.
 
@@ -198,3 +206,62 @@ This is GDPR Art. 15 (access) and Art. 20 (portability) as the mirror image of e
 
 _Previous: [BEH-EA-040](05-persistence-stratum.md#beh-ea-040-a-plugin-migration-may-only-alter-tables-under-its-own-prefix-shared-tables-are-altered-only-through-a-declared-extension-point)_
 _Next: [BEH-EA-049](07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair)_
+
+## BEH-EA-322: Every sign-in completes through `SignIn`, and a session for a proven credential is minted only from a clearance
+
+```ts
+// @awthaq/core: one implementation of "a proven credential becomes a session" (ADR-EA-038)
+const signIn = yield* SignIn.make
+const cleared = yield* signIn.clear({ userId, strategy: "password", amr: ["pwd"] }) // Clearance
+const issued = yield* signIn.issue(cleared, { ip, userAgent })                     // the only way to mint
+// or: signIn.complete(attempt, request) = clear then issue; signIn.resume(...) for a divert owner
+```
+
+```text
+REQUIREMENT: Every flow that turns a proven credential into a session MUST
+             mint it from a `SignIn.Clearance`, obtained by the user lookup,
+             the suspension gate, the BeforeSignIn veto and the
+             BeforeSessionIssue divert, in that order. The `amr` the divert
+             sees MUST be the `amr` the session records. After the mint, the
+             first factor's continuation (if any) MUST run, then
+             `auth.user.signedIn` MUST be published and `AfterSignIn` run.
+             A user who vanished between the proof and the session MUST be
+             refused through the flow's own uniform refusal, never a
+             defect. A suspended refusal MUST publish
+             `auth.user.signInFailed { reason: "suspended" }` for every
+             strategy. A divert owner that completes the sign-in later MUST
+             return the divert's handoff to `SignIn.resume`, so the session
+             records both factors, is minted in the first factor's tenant and
+             runs the first factor's continuation.
+```
+
+**As shipped (ADR-EA-038).** `clear` fails `SignIn/UserGone`, `UserSuspended`, `HookAborted` (the veto), `TwoFactorRequired` (the divert) or `StoreUnavailable`; the `Clearance` is a brand whose constructor is package-private, so `issue` accepts nothing else and no plugin can forge one (`SignIn.types.test.ts`). A suspended or gone user never reaches the veto. The divert context is `{ userId, strategy, amr, handoff }` with `amr` required; the handoff is `{ tenantId?, continuation? }`. `resume` re-runs the gate only (the veto and the divert already ran for this sign-in), and `issue` mints under the clearance's tenant even when the minting request runs in another. A *continuation* is work a first factor owes once its session exists (SAML: the Single Logout record and role mapping, BEH-EA-315/316), registered through `SignIn.continuation` in an aggregating registry that rides `Hooks.HooksLive`; an unregistered `kind` is a defect, not a silent skip. Request facts (`ip`, `userAgent`) come from the explicit `request` argument per field, else from `AuthRequestContext`. `Sessions.issue` is called only from `SignIn.issue` and three non-sign-in mints (`changePassword` rotation, admin impersonation, `TestAuth`), which `SignInSeams.test.ts` pins by count. Tests: `packages/core/test/SignIn.test.ts`, `SignIn.types.test.ts`, `SignInSeams.test.ts`; each plugin keeps one wiring probe (its strategy, its `amr`, its refusal for a vanished user).
+
+## BEH-EA-323: Every sign-up creates through `SignUp`, and a user is created only from a vetted application
+
+```ts
+// @awthaq/core: one implementation of "an account comes to exist" (ADR-EA-038)
+const signUp = yield* SignUp.make
+const vetted = yield* signUp.vet({ identity: { _tag: "Email", email }, name, strategy: "password" }) // BeforeSignUp
+const user = yield* signUp.create(vetted, { verified: true, link: { providerId, subject } })          // one unit
+// or: createWith(vetted, options, within) for the caller's own work in the same unit,
+//     createSignedIn(vetted, { amr, link }, request) for create + cleared sign-in + first session
+```
+
+```text
+REQUIREMENT: Every flow in which a person or a directory causes an account to
+             exist (password in both modes, OAuth first login, SAML first
+             login, magic link, email OTP, SCIM) MUST consult `BeforeSignUp`
+             before any write, create through `SignUp`, and publish
+             `auth.user.created` and run `AfterSignUp` only after the unit
+             that created the user committed. Create, mark verified, link the
+             credential and the caller's own work MUST be one unit that
+             leaves nothing behind on failure, in memory compositions too. A
+             collision on the email, the phone number or the linked credential
+             MUST be the one `SignUp/IdentityTaken`. A session minted at
+             sign-up MUST be a cleared sign-in (BEH-EA-322). Operator
+             migrations (`UserImport.importUser`, `awthaq seed admin`) are not
+             sign-ups and are exempt.
+```
+
+**As shipped (ADR-EA-038).** `vet` returns a `Vetted` brand whose constructor is module-private, and `create`, `createWith` and `createSignedIn` accept nothing else (`SignIn.types.test.ts`). The unit is `SqlTransaction` around `Users.createWith`, which abandons the half-made user (no `BeforeUserDelete` veto, no `auth.user.deleted`, because nobody was told it existed) when a composition has no real transaction, plus the credentials the call linked; a transaction's own `SqlError` is `StoreUnavailable("SignUp.create")`, never a defect. A tap can amend `name` and `email`: an email application keeps its address even if a tap drops it, an anonymous one (an OAuth profile without an email) becomes an email identity if a tap supplies an address, and a phone application is unchanged. `createSignedIn` keeps BEH-EA-113's "user and session in one transaction": a `BeforeSignIn` veto or a session-store failure rolls the account back, and a `BeforeSessionIssue` divert commits the account (and the owner's challenge) and answers `TwoFactorRequired`. SCIM provisioning consults `BeforeSignUp` under the strategy `scim:<organizationId>:<connectionId>` (BEH-EA-247). Tests: `packages/core/test/SignUp.test.ts` (memory), `SignUpSql.test.ts` (SQLite, and Postgres under `pnpm test:pg`), `SignIn.types.test.ts`, `SignInSeams.test.ts`; each plugin keeps one wiring probe.

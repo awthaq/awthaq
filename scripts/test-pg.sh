@@ -10,7 +10,7 @@
 #   * `*.postgres.test.ts` in @awthaq/sql (skipped without AWTHAQ_POSTGRES_URL);
 #   * every plugin record-store suite (admin, jwt, organization, passkey, roles,
 #     qadi claims, migrate-better-auth), which builds its database through
-#     `packages/sql/test/support/TestSql.ts`: the same tests, on Postgres instead
+#     `packages/test/src/TestSql.ts`: the same tests, on Postgres instead
 #     of `:memory:` SQLite, each suite in its own schema.
 #
 # The suites `DROP TABLE`/`DROP SCHEMA` — point the URL at a scratch database.
@@ -20,24 +20,38 @@ suites=(
   packages/cli/test/Migration.postgres.test.ts
   packages/sql/test/Repositories.postgres.test.ts
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
+  packages/sql/test/TenantScope.postgres.test.ts
+  packages/sql/test/TenantScoped.test.ts
+  packages/sql/test/SealedColumn.test.ts
+  packages/sql/test/UnitOfWork.test.ts
+  packages/test/test/StoreContract.sql.test.ts
+  packages/test/test/TestAuthRecords.test.ts
+  examples/plugin-template/test/Template.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
+  packages/api-key/test/StoreOutage.test.ts
+  packages/core/test/AuthEventsUnitOfWork.test.ts
+  packages/core/test/SignUpSql.test.ts
   packages/core/test/Users.test.ts
   packages/core/test/UserFields.test.ts
   packages/core/test/UserImport.test.ts
+  packages/core/test/Verification.test.ts
   packages/device-authorization/test/DeviceAuthorization.test.ts
   packages/device-authorization/test/AuthHttp.test.ts
+  packages/device-authorization/test/StoreOutage.test.ts
   packages/jwt/test/KeyRing.test.ts
   packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
   packages/organization/test/ActiveContextRecords.test.ts
   packages/organization/test/ConnectionRecords.test.ts
+  packages/organization/test/DomainClaims.test.ts
   packages/organization/test/InvitationRecords.test.ts
   packages/organization/test/MembershipRecords.test.ts
   packages/organization/test/OrgRoleRecords.test.ts
   packages/organization/test/OrganizationRecords.test.ts
   packages/organization/test/OrganizationSql.test.ts
   packages/organization/test/TeamRecords.test.ts
+  packages/organization/test/TenantMiddleware.test.ts
   packages/passkey/test/ChallengeStore.test.ts
   packages/passkey/test/PasskeyCredentials.test.ts
   packages/passkey/test/PasskeyUserHandle.test.ts
@@ -45,6 +59,7 @@ suites=(
   packages/scim/test/ScimRecords.test.ts
   packages/two-factor/test/TwoFactorStore.test.ts
   packages/roles/test/RolesSql.test.ts
+  packages/saml/test/SamlDomainClaimMigration.test.ts
   packages/saml/test/SamlRecords.test.ts
   packages/webhooks/test/WebhookRecords.test.ts
 )

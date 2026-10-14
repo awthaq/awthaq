@@ -5,61 +5,50 @@
 // cross-tenant Rule asserts exactly what an attacker holding a valid session would see.
 // The World is rebuilt per scenario, so the tenants a scenario names are the only tenants
 // that exist.
+import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Admin } from "@awthaq/admin";
+import type { Mailer } from "@awthaq/ports";
 import {
-  Accounts,
-  AuditChain,
-  AuthEvents,
-  Erasure,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { Admin, AdminApi, ImpersonationRecords } from "@awthaq/admin";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import {
+  DomainClaims,
   Organization,
-  OrganizationApi,
+  OrganizationActiveContext,
+  OrganizationAuthority,
+  OrganizationDeletion,
+  OrganizationDirectory,
   OrganizationHooks,
-  OrganizationMemory,
+  OrganizationInvitations,
+  OrganizationMembers,
+  OrganizationRoles,
+  OrganizationTeams,
 } from "@awthaq/organization";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import {
+  ActiveContextRecords,
+  ConnectionRecords,
+  InvitationRecords,
+  MembershipRecords,
+  OrganizationRecords,
+  OrgRoleRecords,
+  TeamRecords,
+} from "@awthaq/organization/records";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
-import { makeCapturingMailer, makeNamedRegistry, TestServices } from "./shared/Harness.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
+import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
 import { TestAuth } from "@awthaq/test";
 
-// `Accounts`/`Verification` are here only because `Erasure.layer` (BEH-EA-290's erasure
-// clause) sweeps them too; the organization group itself never touches them.
-const CoreLive = Layer.mergeAll(
-  Sessions.layerMemory,
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-// AR-003: the admin group sits behind `Api.AdminAuthentication`; the default just delegates.
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
+/** The record stores the memory layer provides, named so the inferred layer type below can be emitted. */
+export type RecordServiceNames =
+  | ActiveContextRecords.ActiveContextRecords
+  | InvitationRecords.InvitationRecords
+  | MembershipRecords.MembershipRecords
+  | OrganizationRecords.OrganizationRecords
+  | OrgRoleRecords.OrgRoleRecords
+  | TeamRecords.TeamRecords;
 
 type HookTaps = Layer.Layer<
   never,
@@ -75,45 +64,43 @@ export interface AppOptions {
   readonly hooks?: HookTaps;
 }
 
+const built = Auth.make([Organization.Organization, Admin.Admin]);
+
+/**
+ * `Auth.make([Organization, Admin])` through `TestAuth.layer`: the real organization plugin and, beside it, the admin
+ * plugin (REQ-EA-723) so an impersonated session can be opened for real, over the real in-memory core, served behind
+ * the derived authentication, admin authentication and CSRF middleware. A scenario's hook taps ride `taps`; the
+ * capturing mailer and the events subscriber are this world's `services`.
+ */
 const buildAppLayer = (
   options: AppOptions,
   mailer: Layer.Layer<Mailer.Mailer>,
   eventsLayer: Layer.Layer<never, never, AuthEvents.AuthEvents>,
 ) =>
-  Layer.mergeAll(
-    AuthHttp.routes(OrganizationApi.OrganizationApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(Organization.Organization.layer),
-      Layer.provide(Organization.config(options.config ?? {})),
-      Layer.provide(AuthenticationLive),
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Organization.config(options.config ?? {}),
+      Admin.config({ canImpersonate: () => Effect.succeed(options.canImpersonate === true) }),
+      mailer,
+      eventsLayer,
     ),
-    AuthHttp.docs(OrganizationApi.OrganizationApi),
-    // The admin plugin beside this one, so an impersonated session can be opened for real.
-    AuthHttp.routes(AdminApi.AdminApi).pipe(
-      Layer.provide(Admin.Admin.layer),
-      Layer.provide(
-        Admin.config({ canImpersonate: () => Effect.succeed(options.canImpersonate === true) }),
-      ),
-      Layer.provide(AdminAuthenticationLive),
-    ),
-  ).pipe(
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(eventsLayer),
-    Layer.provideMerge(Erasure.layer),
-    Layer.provideMerge(OrganizationMemory.layer),
-    Layer.provideMerge(
-      ImpersonationRecords.layerMemory.pipe(
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
-      ),
-    ),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(mailer),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(options.hooks ?? Layer.empty),
-    Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
+    taps: options.hooks ?? Layer.empty,
+    openapiPath: "/openapi.json",
+    docsPath: "/docs",
+  });
+
+/** The organization services and record stores the composition provides, named so its inferred type can be emitted (declaration emit needs each namespace in scope). */
+export type OrganizationServiceNames =
+  | OrganizationActiveContext.OrganizationActiveContext
+  | OrganizationAuthority.OrganizationAuthority
+  | OrganizationDeletion.OrganizationDeletion
+  | OrganizationDirectory.OrganizationDirectory
+  | OrganizationInvitations.OrganizationInvitations
+  | OrganizationMembers.OrganizationMembers
+  | OrganizationRoles.OrganizationRoles
+  | OrganizationTeams.OrganizationTeams
+  | ConnectionRecords.ConnectionRecords
+  | DomainClaims.DomainClaims;
 
 type AppLayer = ReturnType<typeof buildAppLayer>;
 
@@ -144,23 +131,13 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
       );
     }),
   );
-  const layer = buildAppLayer(options, mailer, eventsLayer);
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(layer, { memoMap });
-  // One long-lived scope owns the built layer (and with it the events subscriber): a scope
-  // closed after every helper call would tear the subscription down and lose later events.
-  const scope = Effect.runSync(Scope.make());
-  let built: Promise<Context.Context<Layer.Success<AppLayer>>> | undefined;
-  const context = () =>
-    (built ??= Effect.runPromise(Layer.buildWithMemoMap(layer, memoMap, scope)));
-  const withContext: AppHandle["withContext"] = (effect) =>
-    context().then((services) => Effect.runPromise(effect.pipe(Effect.provide(services))));
+  const app = TestAuth.app(buildAppLayer(options, mailer, eventsLayer));
   return {
-    handler,
-    withContext,
+    handler: app.handler,
+    withContext: (effect) => app.run(effect),
     sentMail: sent,
     publishedEvents: Ref.get(events),
-    close: Scope.close(scope, Exit.void),
+    close: Effect.promise(() => app.dispose()),
   };
 };
 

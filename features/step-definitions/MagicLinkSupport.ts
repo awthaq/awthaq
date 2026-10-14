@@ -193,7 +193,9 @@ export const presentCode = (email: string, code: string, ip?: string) =>
 export const consumeChallenge = (challengeId: string) =>
   direct(
     SecondFactor.SecondFactor.pipe(
-      Effect.flatMap((factor) => factor.consumeChallenge(Redacted.make(challengeId))),
+      Effect.flatMap((factor) =>
+        factor.redeemChallenge(Redacted.make(challengeId), Effect.succeed),
+      ),
     ),
   );
 

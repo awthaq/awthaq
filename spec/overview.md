@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-OVERVIEW |
-> | Revision | 1.2 |
+> | Revision | 1.9 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) <br> 1.4 (2026-10-13): the Ports table names the `SqlTransaction` unit of work (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): Ports surface lists `Ids`, `Store` and `PruneExpired` (plan 02 phase 1) <br> 1.6 (2026-10-13): Ports surface lists `VerificationStore` (plan 02 phase 3) <br> 1.7 (2026-10-13): Ports surface lists `AccountStore` (plan 02 phase 4) <br> 1.8 (2026-10-13): Ports surface lists `UserStore` (plan 02 phase 5) <br> 1.9 (2026-10-13): Ports surface lists `SessionStore` (plan 02 phase 6) |
 
 ---
 
-> **Status: implemented, pre-1.0, unpublished.** Every package in the map below exists under `packages/` with a passing test suite, except `@awthaq/two-factor` and `@awthaq/magic-link` (placeholder packages with no exports yet) and the SAML service provider (`@awthaq/saml`, specified in [ADR-EA-023](decisions/023-enterprise-federation-packages.md) and [behaviors/29-saml-sp.md](behaviors/29-saml-sp.md), not built). No package is published to npm. The tables below list what the packages export today; a row is called out where the design commits to more than has shipped. The Ports table is bracketed by `surface:` markers because `spec/scripts/check-drift.mjs` diffs it against the source exports and fails `pnpm check` on drift, so it cannot silently rot.
+> **Status: implemented, pre-1.0, unpublished.** Every package in the map below exists under `packages/` with a passing test suite, including `@awthaq/two-factor`, `@awthaq/magic-link` (magic link and email OTP), `@awthaq/saml` (the SAML service provider and the `Sso` dispatcher, [ADR-EA-023](decisions/023-enterprise-federation-packages.md), [behaviors/29-saml-sp.md](behaviors/29-saml-sp.md)) and `@awthaq/webhooks`. No package is published to npm. The tables below list what the packages export today; a row is called out where the design commits to more than has shipped. The Ports table is bracketed by `surface:` markers because `spec/scripts/check-drift.mjs` diffs it against the source exports and fails `pnpm check` on drift, so it cannot silently rot.
 
 ## Mission
 
@@ -52,7 +52,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 | 7 Composition | (application code) | `Auth.make([...])` and the application's own `Layer.provide` stack. |
 | client | `@awthaq/client`, `@awthaq/react`, `@awthaq/web`, `@awthaq/next` | `HttpApiClient` bindings, reactive atoms, provider glue, framework adapters (`@awthaq/web` is the framework-neutral core; `@awthaq/next` is the Next adapter over it). Headless by design: no drop-in sign-in/sign-up/user-button/organization-switcher components, ever — apps build their own UI against typed contract errors and atoms. |
 | tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, `runPluginContractTests`, the redaction guard; the `awthaq` command line (`doctor`, `config list`, `plugin list`, `routes`, `migration`, `openapi`, `seed admin`, `import`, `login`). |
-| plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim`, `device-authorization` (shipped); `magic-link`, `two-factor` (placeholders); `saml` (specified only) | One `AuthPlugin.Service` class each. |
+| plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim`, `device-authorization`, `magic-link` (magic link and email OTP), `two-factor`, `saml` (with the `Sso` dispatcher), `webhooks` | One or more `AuthPlugin.Service` classes each. |
 | migration | `@awthaq/migrate-auth0`, `@awthaq/migrate-firebase`, `@awthaq/migrate-better-auth` | Verify a foreign password hash on first sign-in, or bridge a still-live foreign session, so a cutover needs no mass reset. |
 
 ## Public API surface
@@ -65,7 +65,7 @@ Each table lists what the package exports. "Source" is the file under the stratu
 |---|---|---|
 | `Auth.make` | function | `Auth.ts` |
 | `Auth.Validate<P>` | conditional type | `Auth.ts` |
-| `Auth.Built<P>` | interface (`api`, `publicApi`, `adminApi`, `layer`, `migrations`, `manifest`) | `Auth.ts` |
+| `Auth.Built<P>` | interface (`api`, `publicApi`, `adminApi`, `layer`, `migrations`, `manifest`, `tenancy`) | `Auth.ts` |
 
 ### Plugin contract (stratum 4, cross-cutting)
 
@@ -73,7 +73,7 @@ Each table lists what the package exports. "Source" is the file under the stratu
 |---|---|---|
 | `AuthPlugin.Service` | class factory (`Context.Service` producer) | `AuthPlugin.ts` |
 | `AuthPlugin.layer` | function | `AuthPlugin.ts` |
-| `AuthPlugin.Class` | interface (`id`, `apiVersion`, `contract`, `tables`, `migrations`, `dependsOn`, `taps`, `config`) | `AuthPlugin.ts` |
+| `AuthPlugin.Class` | interface (`id`, `apiVersion`, `contract`, `tables`, `tenancy`, `migrations`, `dependsOn`, `taps`, `config`) | `AuthPlugin.ts` |
 | `AuthPlugin.Any` | interface | `AuthPlugin.ts` |
 
 ### Contract stratum (1)
@@ -93,11 +93,14 @@ The exact core endpoint inventory is in [ADR-EA-003](decisions/003-httpapi-as-co
 ### Ports stratum (2)
 
 <!-- surface:ports -->
+AccountStore
+AuditLogStore
 ClientAddress
 Defects
 Encryption
 Hmac
 HostResolver
+Ids
 KeyProvider
 LegacySessionBridge
 Mailer
@@ -105,11 +108,16 @@ OutboundUrl
 PasswordHasher
 PasswordHasherWorkerPool
 PinnedHttp
+PruneExpired
 RateLimiter
 RefreshingCache
+SessionStore
 SmsSender
 SqlTransaction
+Store
 Tenant
+UserStore
+VerificationStore
 WebAuthn
 WebCrypto
 XmlSignature
@@ -121,12 +129,12 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 |---|---|---|
 | `PasswordHasher` | `Context.Service` | `layerArgon2id`, `layerScrypt`; worker-pool variants in `PasswordHasherWorkerPool`; a verify-only `LegacyPasswordVerifiers` `Context.Reference` for imported foreign hashes (bcrypt, Firebase scrypt, better-auth scrypt) |
 | `Mailer` | `Context.Service` | `layerNoop`, `layerMemory`; `send` fails with a typed `MailDeliveryFailed` (EEM-002) |
-| `SmsSender` | `Context.Service` | `layerNoop`, `layerMemory`, `layerConsole`; `send` fails with a typed `SmsDeliveryFailed` (SOS-002); the destination is an E.164 string, its rate-limit key is `RateLimits.phoneKey` (SOS-007) |
+| `SmsSender` | `Context.Service` | `layerNoop`, `layerMemory`, `layerConsole`; `send` fails with a typed `SmsDeliveryFailed` (SOS-002); the destination is an E.164 string, its rate-limit key is `RateLimits.Key.phone` (SOS-007) |
 | `WebAuthn` | `Context.Service` | `layerSimpleWebAuthn` |
 | `Encryption` | `Context.Service` | `layer` (requires `KeyProvider` and `Crypto`); keyed envelopes, lazy re-encryption ([ADR-EA-019](decisions/019-encryption-key-rotation.md)) |
 | `KeyProvider` | `Context.Service` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS`, `AWTHAQ_ENCRYPTION_KEY_ID`); `layerEphemeral` (dev only, opt-in, never a fallback; refused under `NODE_ENV=production` without `AWTHAQ_ALLOW_EPHEMERAL_KEY=true`); implement the port for a KMS |
 | `RateLimiter` | `Context.Service` | `layer` over a `RateLimiterStore`, `layerMemory`, `layerStoreMemory`, `layerPermissive` (tests only); `RateLimiterConfig` reference |
-| `SqlTransaction` | `Context.Service` | `layerSql`, `layerNoop` |
+| `SqlTransaction` | `Context.Service` | `layerSql`, `layerNoop`; also the unit of work every real transaction installs ([ADR-EA-037](decisions/037-unit-of-work-releases-events-on-commit.md)): `UnitOfWork`, `onCommit`, `afterUnit`, `transactional(sql)` |
 | `ClientAddress` | `Context.Service` | `layerDirect`, `layerTrustedProxy(config)` |
 | `LegacySessionBridge` | `Context.Reference` | default resolves nothing; `@awthaq/migrate-better-auth` provides the real one |
 | `WebCrypto` | Layer | `layer`, the `Crypto` service over `globalThis.crypto` for edge runtimes |
@@ -134,6 +142,12 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `HostResolver` | `Context.Service` | `layerNode` (`node:dns`, loaded lazily), `layerStatic(table)`; `pin(url)` resolves once, requires every answer public and returns the address to connect to (BEH-EA-312), `refusal(url)` is its refusal half |
 | `OutboundUrl` | helpers | `problem(field, url, options?)`, the SSRF floor for a URL an administrator supplies (https, no credentials, no private/loopback/link-local/reserved address or internal name; IPv6 parsed); `isPublicAddress`, `isIpLiteral` |
 | `PinnedHttp` | helpers | `send(request)` connects to an address `HostResolver.pin` judged, with the URL's own name as Host and SNI, judging the address again, no redirect, a body only up to a cap (webhooks, IdP metadata import); `pinnedRequestOptions` |
+| `AccountStore` | `Context.Service` | the store port under `Accounts` (`insertIfAbsent`, the token-free identity reads, `readCredentialHash`, `readProviderTokens`, the two targeted writes, `deleteUnlessLast`, `deleteByUser`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `AccountStoreSql`; the bar is `StoreContract.accounts` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
+| `AuditLogStore` | `Context.Service` | the store port under `AuditLog` (`append`, `select`, `pageAfter`, `rewriteReferencing`, `deleteBefore`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `AuditLogStoreSql`; the bar an adapter clears is `@awthaq/test`'s `StoreContract.auditLog` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
+| `SessionStore` | `Context.Service` | the store port under `Sessions` (`insert`, `get`, `rotate`, `flagReuse`, `remove`, `removeForUser`, `listLive`, `reauthenticate`, `purgeExpired`, each atomic by contract) with the shared `isLive`, `evictionOrder` and `unionMethods`; `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `SessionStoreSql`; the bar, for a KV backend too, is `StoreContract.sessions` ([ADR-EA-014](decisions/014-session-storage-backend-neutrality.md), [ADR-EA-041](decisions/041-domain-store-ports.md)) |
+| `UserStore` | `Context.Service` | the store port under `Users` (`insertOrHolder`, `get`/`getByEmail`/`getByPhone`, `updateProfile`, `casIdentity`, `setStatus`, `delete`, `listPage`, `readFields`/`writeFields`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `UserStoreSql`; the bar is `StoreContract.users` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
+| `VerificationStore` | `Context.Service` | the store port under `Verification` (`upsertLive`, `present`, `settle`, `transaction`, `reserve`, `deleteByUser`, `purgeExpired`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `VerificationStoreSql`; the bar is `StoreContract.verification` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
+| `Ids`, `Store`, `PruneExpired` | helpers | the identifier brands of the core entities (`UserId`, `AccountId`, `SessionId`, `VerificationTokenId`, `E164`; `@awthaq/sql`'s `Models` re-exports them), what every core store port shares (`StoreUnavailable`, `Consistency`, `ReadOptions`; [ADR-EA-041](decisions/041-domain-store-ports.md)) and the in-memory eviction the `Ref` adapters use (TMS-004) |
 | `Hmac`, `RefreshingCache`, `Defects`, `Tenant` | helpers | constant-time comparison and HMAC, a single-flight TTL cache, tagged defect classes, the ambient `TenantContext` |
 
 ### Domain stratum (4)
@@ -146,7 +160,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `Verification` | `Context.Service` | `Verification.ts` |
 | `AuthEvents` | `Context.Service` (bounded `PubSub`; in-process, at-most-once — `AuditLog` is the durable record and `EventRelay` the cross-process outbox, ADR-EA-032) | `AuthEvents.ts` |
 | `EventRelay`, `EventTransport`, `RelayCursorStore` | opt-in outbox relay over the audit log, transport port, persisted position | `EventRelay.ts` |
-| `Erasure`, `DataExport` | account erasure and data-subject export over aggregating registries plugins contribute to (ADR-EA-033) | `Erasure.ts`, `DataExport.ts` |
+| `Erasure`, `DataExport` | account erasure and data-subject export over aggregating registries plugins contribute to (ADR-EA-033); `AccountErasure` is the only deletion path (`Users` has no `delete`) | `Erasure.ts`, `DataExport.ts` |
 | `Retention`, `SecuritySignals` | opt-in retention sweep and breach-signal detector | `Retention.ts`, `SecuritySignals.ts` |
 | `BeforeSignUp`, `BeforeSignIn`, `BeforeSessionIssue`, `AfterSignUp`, `AfterSignIn`, `BeforeUserDelete`, `AfterUserAttributesChanged` | hook points (`HookPoint.veto`/`observe`/`divert`), aggregated by the composition's `Hooks.HooksLive` ([ADR-EA-033](decisions/033-hook-registries-per-composition.md)) | `Hooks.ts` |
 

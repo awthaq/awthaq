@@ -4,6 +4,7 @@
 // (`PubSub.dropping` reverted to `PubSub.bounded`) is that the publisher-never-awaits
 // scenarios park their publisher at event CAPACITY + 1 and fail on the poll below.
 import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { SqlTransaction } from "@awthaq/ports";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
@@ -26,19 +27,9 @@ import {
   capturedLogs,
 } from "./EventsWorld.ts";
 
-/** The registry's declared tags, read off the closed union the schema is built from (BEH-EA-101). */
-const registryTags = AuthEvents.AuthEventSchema.members.map((member) => {
-  const literal = member.fields._tag.ast.literal;
-  if (typeof literal !== "string") throw new Error("an event's _tag is not a string literal");
-  return literal;
-});
-
-const isRegistryTag = (tag: string): tag is AuthEvents.AuthEventTag =>
-  registryTags.some((declared) => declared === tag);
-
 /** A Gherkin-named tag must be one the registry declares; anything else is a typo in the scenario, not a reason to pass. */
 const tagNamed = (tag: string): AuthEvents.AuthEventTag => {
-  if (!isRegistryTag(tag)) throw new Error(`"${tag}" is not a declared AuthEvents tag`);
+  if (!AuthEvents.isEventTag(tag)) throw new Error(`"${tag}" is not a declared AuthEvents tag`);
   return tag;
 };
 
@@ -366,10 +357,13 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       const userId = yield* userIdOf("alice");
       const rows = (yield* auditRows).filter((row) => row.eventTag === "auth.user.signedIn");
-      assert.equal(rows.length, 1);
-      const [row] = rows;
-      assert.ok(row?.payload._tag === "auth.user.signedIn");
-      assert.equal(row.payload.userId, userId);
+      // ADR-EA-038: alice's sign-up is itself a cleared sign-in, so her account has two records:
+      // the sign-up's first session, then the sign-in under test.
+      assert.equal(rows.length, 2);
+      for (const row of rows) {
+        assert.ok(row.payload._tag === "auth.user.signedIn");
+        assert.equal(row.payload.userId, userId);
+      }
     },
   );
 
@@ -415,7 +409,7 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the event registry declares {string}, {string}, {string}, and {string}",
     function* (a: string, b: string, c: string, d: string) {
       for (const tag of [a, b, c, d]) {
-        assert.ok(isRegistryTag(tag), `"${tag}" is not declared by the event registry`);
+        assert.ok(AuthEvents.isEventTag(tag), `"${tag}" is not declared by the event registry`);
       }
       yield* subscribe("watcher", [tagNamed(a), tagNamed(b), tagNamed(c), tagNamed(d)]);
     },
@@ -431,11 +425,40 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("the event's tag is one of the registry's declared tags", function* () {
     const seen = yield* Ref.get((yield* getProbe("watcher")).handled);
     assert.equal(seen.length, 2);
-    for (const event of seen) assert.ok(isRegistryTag(event._tag), `${event._tag} is not declared`);
+    for (const event of seen)
+      assert.ok(AuthEvents.isEventTag(event._tag), `${event._tag} is not declared`);
     // The audit log holds the same tags, and a value outside the union does not decode.
-    assert.ok((yield* auditRows).every((row) => isRegistryTag(row.eventTag)));
+    assert.ok((yield* auditRows).every((row) => AuthEvents.isEventTag(row.eventTag)));
     assert.equal(Schema.is(AuthEvents.AuthEventSchema)({ _tag: "auth.not.declared" }), false);
   });
+
+  When("the registry's declarations are read for every declared tag", function* () {
+    yield* publish({ _tag: "auth.user.signedIn", userId: someUser, strategy: "password" });
+    yield* publish({ _tag: "auth.user.created", userId: someUser });
+    yield* publish({ _tag: "auth.token.replay", identifier: "token-1" });
+    yield* letSubscribersRun;
+  });
+
+  Then(
+    "every tag has an actor rule the sample event satisfies and personal-data fields the event carries",
+    function* () {
+      // The personal-data fields each tag declares are fields the event carries.
+      for (const member of AuthEvents.AuthEventSchema.members) {
+        const tag = member.fields._tag.ast.literal;
+        assert.ok(typeof tag === "string" && AuthEvents.isEventTag(tag), `${String(tag)}`);
+        const carried = Object.keys(member.fields);
+        for (const field of AuthEvents.piiFieldsOf(tag)) {
+          assert.ok(carried.includes(field), `${tag}: pii field ${field} is not carried`);
+        }
+      }
+      // The actor column of each durable row is the actor its event declares.
+      const rows = yield* auditRows;
+      assert.ok(rows.length >= 3);
+      for (const row of rows) {
+        assert.deepEqual(row.actorUserId, AuthEvents.actorOf(row.payload), row.eventTag);
+      }
+    },
+  );
 
   Given("a subscriber handling events tagged {string}", function* (tag: string) {
     yield* subscribe("handler", tagNamed(tag));
@@ -779,6 +802,84 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
           (entry) => entry.level !== "Error" || !entry.text.includes(`"tag":"${tag}"`),
         ),
       );
+    },
+  );
+
+  // ---- BEH-EA-321: a unit of work releases state-change events on commit, attempt events either way ----
+
+  /** A fixed event for each tag the BEH-EA-321 scenarios name; anything else is a typo in the scenario. */
+  const sampleFor = (tag: string): AuthEvents.AuthEvent => {
+    switch (tag) {
+      case "auth.user.created":
+        return { _tag: "auth.user.created", userId: someUser };
+      case "auth.user.signInFailed":
+        return {
+          _tag: "auth.user.signInFailed",
+          strategy: "password",
+          reason: "invalidCredentials",
+        };
+      default:
+        throw new Error(`no sample event for "${tag}"`);
+    }
+  };
+
+  Given(
+    "a subscriber {string} handling {string} and {string}",
+    function* (name: string, first: string, second: string) {
+      yield* subscribe(name, [tagNamed(first), tagNamed(second)]);
+    },
+  );
+
+  // The unit's commit/rollback is `transactional`'s job over a real database (packages/sql/test); a
+  // pass-through `withTransaction` drives the same two lanes here.
+  const unitPublishing = (first: string, second: string, outcome: "commits" | "rolls back") =>
+    Effect.gen(function* () {
+      const { host } = yield* World;
+      yield* host.run(
+        Effect.gen(function* () {
+          const events = yield* AuthEvents.AuthEvents;
+          yield* Effect.exit(
+            SqlTransaction.transactional({ withTransaction: (effect) => effect })(
+              Effect.gen(function* () {
+                yield* events.publish(sampleFor(first));
+                yield* events.publish(sampleFor(second));
+                if (outcome === "rolls back") return yield* Effect.fail("rolled back");
+              }),
+            ),
+          );
+        }),
+      );
+      yield* letSubscribersRun;
+    });
+
+  When(
+    "a unit of work publishes {string} and {string} and then rolls back",
+    function* (first: string, second: string) {
+      yield* unitPublishing(first, second, "rolls back");
+    },
+  );
+
+  When(
+    "a unit of work publishes {string} and {string} and then commits",
+    function* (first: string, second: string) {
+      yield* unitPublishing(first, second, "commits");
+    },
+  );
+
+  const handledTags = (name: string) =>
+    Effect.gen(function* () {
+      const probe = yield* getProbe(name);
+      return (yield* Ref.get(probe.handled)).map((event) => event._tag);
+    });
+
+  Then("{string} was handed only {string}", function* (name: string, tag: string) {
+    assert.deepEqual(yield* handledTags(name), [tag]);
+  });
+
+  Then(
+    "{string} was handed {string} and {string} exactly once each",
+    function* (name: string, first: string, second: string) {
+      assert.deepEqual((yield* handledTags(name)).toSorted(), [first, second].toSorted());
     },
   );
 });

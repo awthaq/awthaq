@@ -62,6 +62,8 @@ const STALE = [
   /every gate is \**not yet active/i,
   /remaining feature files are registered but tagged/i,
   /every other feature file is registered with zero steps/i,
+  /placeholder packages? with no exports/i,
+  /\(specified only\)/i,
 ];
 {
   const files = [
@@ -285,6 +287,58 @@ const block = (file, name) => {
   if (unlisted.length > 0) problems.push(`not listed: ${unlisted.join(", ")}`);
   if (problems.length > 0) report("FAIL", "spec/README.md lists the behavior catalog", problems.join("; "));
   else report("PASS", "spec/README.md lists the behavior catalog", `${files.length} file(s), BEH-EA-001–${claimed}`);
+}
+
+// ---------------------------------------------------------------------------
+// 18. An ADR's status in decisions/index.yaml equals the status in the ADR file. The index is the
+// first thing a reader opens; ADR-EA-023 and ADR-EA-028 sat there as "SAML not yet built" and
+// "AuditLog pending" long after the files said otherwise. Both sides are normalised: backticks
+// stripped, and a parenthetical suffix cut, so an index may abbreviate but not contradict.
+// ---------------------------------------------------------------------------
+{
+  const normalise = (status) => status.replace(/`/g, "").replace(/\s+\(.*$/, "").replace(/\s+/g, " ").trim().replace(/[.;]$/, "");
+  const index = readFileSync(join(specDir, "decisions", "index.yaml"), "utf8");
+  const problems = [];
+  let checked = 0;
+  for (const entry of index.split(/^\s*- id: /m).slice(1)) {
+    const id = entry.match(/^"?(ADR-EA-\d{3})"?/)?.[1];
+    const file = entry.match(/^\s*file: "([^"]+)"/m)?.[1];
+    const indexed = entry.match(/^\s*status: "([^"]*)"/m)?.[1];
+    if (!id || !file || indexed === undefined) continue;
+    const adr = readFileSync(join(specDir, "decisions", file), "utf8");
+    const own = adr.match(/^>\s*\|\s*Status\s*\|\s*(.*?)\s*\|\s*$/m)?.[1];
+    if (own === undefined) continue;
+    checked += 1;
+    if (normalise(indexed) !== normalise(own)) problems.push(`${id}: index says "${indexed}", the file says "${own}"`);
+  }
+  if (problems.length > 0) report("FAIL", "ADR index status matches the ADR", problems.join("; "));
+  else report("PASS", "ADR index status matches the ADR", `${checked} entr(ies) agree with their files`);
+}
+
+// ---------------------------------------------------------------------------
+// 19. The plugin roster in overview.md names every package that defines an AuthPlugin.Service
+// (qadi is its own stratum row), and no roster entry is annotated "placeholder" or "specified
+// only" when the package exports something. `webhooks` shipped and was missing for a release.
+// ---------------------------------------------------------------------------
+{
+  const row = lines(join(specDir, "overview.md")).find((l) => l.startsWith("| plugins |")) ?? "";
+  const packagesDir = join(root, "packages");
+  const problems = [];
+  let plugins = 0;
+  for (const name of readdirSync(packagesDir)) {
+    if (["core", "cli", "qadi"].includes(name)) continue;
+    const src = join(packagesDir, name, "src");
+    if (!existsSync(src)) continue;
+    const defines = walk(src, (p) => p.endsWith(".ts")).some((p) => /extends AuthPlugin\.Service</.test(readFileSync(p, "utf8")));
+    if (!defines) continue;
+    plugins += 1;
+    const entry = row.match(new RegExp("`(?:@awthaq/)?" + name + "`[^,|;]*"))?.[0];
+    if (entry === undefined) problems.push(`${name} defines a plugin but is not in the overview roster`);
+    else if (/placeholder|specified only/i.test(entry)) problems.push(`${name} is annotated "${entry}" but ships exports`);
+  }
+  if (row === "") report("FAIL", "plugin roster matches packages", "no `| plugins |` row in overview.md");
+  else if (problems.length > 0) report("FAIL", "plugin roster matches packages", problems.join("; "));
+  else report("PASS", "plugin roster matches packages", `${plugins} plugin package(s) listed`);
 }
 
 console.log(results.join("\n"));

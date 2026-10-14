@@ -2,9 +2,7 @@
 // configuration, dumped through the admin surface behind the same fail-closed gate as user
 // administration — sensitive values redacted, never unwrapped.
 import { Api } from "@awthaq/api";
-import { Auth, AuditChain, AuthEvents, EffectiveConfig, Sessions, Users } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { AuditChain, Auth, AuthEvents, EffectiveConfig } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -14,48 +12,22 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
 import * as Admin from "../src/Admin.ts";
-import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 import { TestAuth } from "@awthaq/test";
 
 const CANARY = "audit-chain-key-canary-7c1f";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
-  Layer.provide(AuthenticationLive),
-);
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("admin-config-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 /** What an application composes: the plugin, its configuration, and the catalog of its composition. */
+const built = Auth.make([Admin.Admin]);
+
 const buildLayer = (config: Partial<Admin.AdminConfigShape>, catalog: boolean) =>
-  Admin.Admin.layer.pipe(
-    Layer.provide(Admin.config(config)),
-    // A configuration override and a secret, provided to the composed layer like any other config.
-    Layer.provide(AuditChain.config({ key: Redacted.make(CANARY) })),
-    Layer.provide(catalog ? EffectiveConfig.layer(Auth.make([Admin.Admin]).manifest) : Layer.empty),
-    Layer.provide(AdminAuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      ImpersonationRecords.layerMemory.pipe(
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
-      ),
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Admin.config(config),
+      // A configuration override and a secret, provided to the composed layer like any other config.
+      AuditChain.config({ key: Redacted.make(CANARY) }),
+      catalog ? EffectiveConfig.layer(built.manifest) : Layer.empty,
     ),
-  );
+  });
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({

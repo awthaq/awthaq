@@ -16,27 +16,18 @@ import { Api } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
+  Auth,
+  Errors,
   HookPoint,
   Hooks,
-  RateLimits,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  type Mailer,
-  PasswordHasher,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
-import { EmailOtp, EmailOtpApi, MagicLink, MagicLinkApi } from "@awthaq/magic-link";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import { SecondFactor, Totp, TwoFactor, TwoFactorStore } from "@awthaq/two-factor";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as ConfigProvider from "effect/ConfigProvider";
+import { type Mailer, type PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { EmailOtp, MagicLink } from "@awthaq/magic-link";
+import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
+import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -49,22 +40,11 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import {
-  CSRF_COOKIE_NAME,
-  CSRF_HEADER_NAME,
-  CSRF_TEST_COOKIE_VALUE,
-  CsrfConfigForTests,
-} from "./CsrfTestSupport.ts";
+import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
 import { mailedToken } from "./MailedToken.ts";
-import {
-  cheapArgon2id,
-  makeCapturingMailer,
-  makeNamedRegistry,
-  TestServices,
-} from "./shared/Harness.ts";
+import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
-import { TestAuth } from "@awthaq/test";
 
 export type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
@@ -90,54 +70,35 @@ export type MagicLinkServices =
   | PasswordHasher.PasswordHasher
   | Crypto.Crypto;
 
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
-
-/** `@awthaq/two-factor`, gates included, so a confirmed second factor really diverts a sign-in. */
-const TwoFactorLive = TwoFactor.TwoFactor.layer.pipe(
-  Layer.provideMerge(TwoFactor.sessionGate),
-  Layer.provideMerge(TwoFactor.credentialResetGate),
-  Layer.provideMerge(SecondFactor.layer),
-  Layer.provideMerge(
-    Layer.mergeAll(TwoFactorStore.layerSecretsMemory, TwoFactorStore.layerRecoveryCodesMemory),
-  ),
-  Layer.provideMerge(EncryptionLive),
-);
-
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+/** ADR-EA-039: while the flag is set, `Sessions.issue` fails with the typed outage, as a down session store would. */
+const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
+  Layer.effect(
+    Sessions.Sessions,
+    Effect.gen(function* () {
+      const real = yield* Sessions.Sessions;
+      return Sessions.Sessions.of({
+        ...real,
+        issue: (input) =>
+          Ref.get(outage).pipe(
+            Effect.flatMap((down) =>
+              down
+                ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
+                : real.issue(input),
+            ),
+          ),
+      });
+    }),
+  );
 
 const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
+
+const built = Auth.make([MagicLink.MagicLink, EmailOtp.EmailOtp, TwoFactor.TwoFactor]);
 
 const buildApp = (options: AppOptions) => {
   const mailer = makeCapturingMailer();
   /** Addresses whose sign-in a `BeforeSignIn` tap refuses (a scenario's own veto, BEH-EA-269). */
   const vetoed = Ref.makeUnsafe<ReadonlyArray<string>>([]);
+  const sessionOutage = Ref.makeUnsafe(false);
 
   const Veto = Hooks.BeforeSignIn.tap((input) =>
     Effect.gen(function* () {
@@ -148,35 +109,25 @@ const buildApp = (options: AppOptions) => {
     }),
   );
 
-  // One build of each plugin serves both the routes and the direct steps (the same layer object,
-  // so the memo map shares the instance).
-  const plugins = Layer.mergeAll(MagicLink.MagicLink.layer, EmailOtp.EmailOtp.layer);
-  const routes = Layer.mergeAll(
-    AuthHttp.routes(MagicLinkApi.MagicLinkApi, { openapiPath: "/magic-link.json" }),
-    AuthHttp.routes(EmailOtpApi.EmailOtpApi, { openapiPath: "/email-otp.json" }),
-  ).pipe(Layer.provide(plugins));
-
-  const appLayer = Layer.merge(routes, plugins).pipe(
-    Layer.provideMerge(Layer.mergeAll(TwoFactorLive, Veto)),
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        cheapArgon2id,
-        mailer.layer,
-        options.realLimits === true ? realLimiter : RateLimiter.layerPermissive,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+  // `Auth.make([MagicLink, EmailOtp, TwoFactor])` through `TestAuth.layer` (one build serves both the routes and
+  // the direct steps). `@awthaq/two-factor`'s gates are always installed, so the MFA divert is real; the limiter sits
+  // beneath them because `SecondFactor` spends its failure budget through it.
+  const appLayer = TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Layer.mergeAll(TwoFactor.sessionGate, TwoFactor.credentialResetGate).pipe(
+        Layer.provideMerge(SecondFactor.layer),
+      ),
+      MagicLink.config(options.magicLink ?? {}),
+      EmailOtp.config(options.emailOtp ?? {}),
+      mailer.layer,
+    ).pipe(
+      Layer.provideMerge(options.realLimits === true ? realLimiter : RateLimiter.layerPermissive),
     ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(SqlTransaction.layerNoop),
-    Layer.provide(ClientAddress.layerDirect),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-    Layer.provideMerge(MagicLink.config(options.magicLink ?? {})),
-    Layer.provideMerge(EmailOtp.config(options.emailOtp ?? {})),
-  );
-  return { appLayer, sentMail: mailer.sent, vetoed };
+    decorate: sessionsWithOutage(sessionOutage),
+    taps: Veto,
+    openapiPath: "/magic-link.json",
+  });
+  return { appLayer, sentMail: mailer.sent, vetoed, sessionOutage };
 };
 
 interface App {
@@ -184,11 +135,12 @@ interface App {
   readonly ctx: Context.Context<MagicLinkServices>;
   readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
   readonly vetoed: Ref.Ref<ReadonlyArray<string>>;
+  readonly sessionOutage: Ref.Ref<boolean>;
   readonly dispose: () => Promise<void>;
 }
 
 const startApp = (options: AppOptions): Promise<App> => {
-  const { appLayer, sentMail, vetoed } = buildApp(options);
+  const { appLayer, sentMail, vetoed, sessionOutage } = buildApp(options);
   const scope = Scope.makeUnsafe();
   const memoMap = Layer.makeMemoMapUnsafe();
   return Effect.runPromise(Layer.buildWithMemoMap(appLayer, memoMap, scope)).then((ctx) => {
@@ -198,6 +150,7 @@ const startApp = (options: AppOptions): Promise<App> => {
       ctx,
       sentMail,
       vetoed,
+      sessionOutage,
       dispose: async () => {
         await Effect.runPromise(Scope.close(scope, Exit.void));
         await web.dispose();

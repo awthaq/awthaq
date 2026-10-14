@@ -7,18 +7,16 @@
 // plugins each prove one specific check actually catches its violation.
 import { Password } from "@awthaq/password";
 import { Auth, AuthPlugin, HookPoint, Hooks } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as RedactionGuard from "../src/RedactionGuard.ts";
 import * as TestAuth from "../src/TestAuth.ts";
+import { PinRecords, Pins } from "./support/Pins.ts";
 
 class Recorder {
   readonly passed: Array<string> = [];
@@ -284,30 +282,9 @@ describe("runPluginContractTests — migration ownership (PV-252, INV-EA-016)", 
 
 // ---- BEH-EA-199: the redaction half ---------------------------------------------
 
-const NoBreachHttpClient = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(request, new Response(`${"F".repeat(35)}:1`, { status: 200 })),
-    ),
-  ),
-);
-
-/** The support layers `Password` needs beyond `TestAuth`'s memory bundle (which already carries `Verification` and a hasher). */
-const PasswordServices = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(
-    Layer.provide(
-      Layer.succeed(Csrf.CsrfConfig, {
-        secret: Redacted.make("redaction-guard-test-csrf-secret-padded-to-32-bytes"),
-        allowedOrigins: [],
-      }),
-    ),
-  ),
-  NoBreachHttpClient,
-).pipe(Layer.provide(NodeCrypto.layer));
-
-const passwordApp = TestAuth.layer(Auth.make([Password.Password]), PasswordServices);
+const passwordApp = TestAuth.layer(Auth.make([Password.Password]), {
+  services: TestAuth.httpClient.noBreach,
+});
 
 describe("runPluginContractTests — the redaction check (EOTS-002, BEH-EA-199)", () => {
   const PASSWORD_CANARY = "canary-Passw0rd-correct-horse";
@@ -510,5 +487,82 @@ describe("runPluginContractTests — hook kinds (PV-260, BEH-EA-200, REQ-EA-569.
     const sink = await run(tapping(Hooks.AfterSignUp.declareTap(() => Effect.void)));
     assert.deepStrictEqual(sink.failed, []);
     assert.isFalse(sink.passed.some((name) => name.includes("obeys its point's kind")));
+  });
+});
+
+describe("runPluginContractTests — records parity, default host, composition builds (plan 08, BEH-EA-T4/T6)", () => {
+  class Extra extends Context.Service<Extra, {}>()("lopsided/records/Extra") {}
+  class Needy extends Context.Service<Needy, {}>()("test/ports/NotInTheBase") {}
+
+  const run = async (
+    make: () => AuthPlugin.Any,
+    config: Partial<Parameters<typeof TestAuth.runPluginContractTests>[2]> = {},
+  ) => {
+    const sink = new Recorder();
+    TestAuth.runPluginContractTests(recordingFramework(sink), make, { options: [{}], ...config });
+    await sink.settled();
+    return sink;
+  };
+
+  it("a well-formed records plugin passes, and the parity check ran", async () => {
+    const sink = await run(() => Pins);
+    assert.deepStrictEqual(sink.failed, []);
+    assert.isTrue(sink.passed.some((name) => name.includes("provide the same stores")));
+  });
+
+  it("a bundle whose memory and sql provide different stores fails, naming the key", async () => {
+    const sink = await run(() =>
+      fakePlugin({
+        id: "lopsided",
+        records: {
+          memory: Layer.mergeAll(PinRecords.layerMemory, Layer.succeed(Extra, {})),
+          sql: Layer.succeed(PinRecords, { add: () => Effect.void, list: Effect.succeed([]) }),
+        },
+      }),
+    );
+    assert.isTrue(
+      sink.failed.some(
+        (message) =>
+          message.includes("records bundle is not matched") &&
+          message.includes("lopsided/records/Extra"),
+      ),
+    );
+  });
+
+  it("omitting `host` defaults to the plugin's dependsOn closure; `host: []` still reports the gap", async () => {
+    const base = fakePlugin({ id: "base" });
+    const middle = fakePlugin({ id: "middle", dependsOn: [base] });
+    const defaulted = await run(() => fakePlugin({ id: "top", dependsOn: [middle] }));
+    assert.deepStrictEqual(defaulted.failed, []);
+    const explicit = await run(() => fakePlugin({ id: "top", dependsOn: [middle] }), { host: [] });
+    assert.isTrue(explicit.failed.some((message) => message.includes("E_PLUGIN_MISSING_DEP")));
+  });
+
+  it("`build` reports a plugin whose records.sql needs a service the base lacks", async () => {
+    const needy = Layer.effect(
+      PinRecords,
+      Effect.gen(function* () {
+        yield* Needy;
+        return PinRecords.of({ add: () => Effect.void, list: Effect.succeed([]) });
+      }),
+    );
+    const sink = await run(
+      () =>
+        fakePlugin({
+          id: "needy",
+          records: { memory: PinRecords.layerMemory, sql: needy },
+        }),
+      { build: { services: Layer.empty } },
+    );
+    assert.isTrue(
+      sink.failed.some((message) => message.includes("does not compose over sql records")),
+    );
+  });
+
+  it("`build` passes a real records plugin over both modes", async () => {
+    const sink = await run(() => Pins, { build: { services: Layer.empty } });
+    assert.deepStrictEqual(sink.failed, []);
+    assert.isTrue(sink.passed.some((name) => name.includes("builds over memory records")));
+    assert.isTrue(sink.passed.some((name) => name.includes("builds over sql records")));
   });
 });

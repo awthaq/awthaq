@@ -1,0 +1,8 @@
+---
+"@awthaq/organization": minor
+"@awthaq/core": patch
+---
+
+The team forest is a system module, `OrganizationTeams` (ADR-EA-040, BEH-EA-330), exposed by `Organization.layer` beside a read-only `OrganizationAuthority` (the one evaluation path the plugin's gating, its role ceilings and `OrganizationQadi` all read). Every team operation takes an explicit `OrganizationActor.Actor` and owns its guards (`teams.enabled`, `maximumTeams`, `maximumMembersPerTeam`, the last-team rule, the parent in the organization), its veto point, one transaction, its events and its observe point; `create` takes `initialMembers` and an `attach` that runs inside the transaction, and `applyRoster` applies a roster change as one unit. The authorized `Organization` team methods are now only visibility, the feature gate, `PermissionEngine` statements and the caller's grant ceiling (`OrganizationActor.Bound`), then a call into the module; their signatures and error unions are unchanged. `OrganizationQadi.relationships` reads `OrganizationAuthority`. `AuthPlugin.layer` counts an `exposes` layer's requirements when it checks that `ports` is complete (`@awthaq/core`).
+
+Migration: every `OrganizationHooks` input (all 20 veto/observe pairs) now carries `actor`, so a tap that constructs an input (a test, `runPluginContractTests({ hooks })`) must add `actor: OrganizationActor.application("...")`; taps that only receive inputs are unaffected. New exports: `OrganizationActor`, `OrganizationAuthority`, `OrganizationTeams`, `OrganizationSystem`. `Organization.layer` now also requires `SqlTransaction` (already a declared port) for the exposed modules.

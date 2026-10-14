@@ -5,6 +5,7 @@
 // late veto, undoes *everything*) need a real transaction, so they run over SQLite, migrated
 // by `@awthaq/sql`'s own `CoreMigrations` — the schema is FK-less on purpose (SEA-001), so
 // this rollback is the only thing standing between a crash and a half-erased account.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -16,16 +17,23 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Persistence from "../src/Persistence.ts";
 import * as Accounts from "../src/Accounts.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as AuthEventSchemas from "../src/AuthEventSchemas.ts";
 import * as Erasure from "../src/Erasure.ts";
 import * as HookPoint from "../src/HookPoint.ts";
 import * as Hooks from "../src/Hooks.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";
+
+/** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
+const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -46,12 +54,11 @@ const EncryptionLive = Encryption.layer.pipe(
 interface Probe {
   /** The order contributions actually ran in. */
   readonly ran: Array<string>;
-  /** A late veto: the point is consulted a second time inside `Users.delete` (BEH-EA-095). */
-  vetoAfter: number;
+  /** How many times the `BeforeUserDelete` point was consulted (BEH-EA-095). */
   consults: number;
 }
 
-const makeProbe = (): Probe => ({ ran: [], vetoAfter: Number.POSITIVE_INFINITY, consults: 0 });
+const makeProbe = (): Probe => ({ ran: [], consults: 0 });
 
 /** Registers `id`'s contribution, which records that it ran and then runs `body`. */
 const contribution = (
@@ -68,12 +75,12 @@ const contribution = (
     ),
   });
 
-/** The veto point: a legal hold on `hold@example.com`, or a veto after `probe.vetoAfter` consults. */
+/** The veto point: a legal hold on `hold@example.com`; every consult is counted. */
 const vetoTap = (probe: Probe) =>
   Hooks.BeforeUserDelete.tap((input) =>
     Effect.suspend(() => {
       probe.consults += 1;
-      return input.email === "hold@example.com" || probe.consults > probe.vetoAfter
+      return input.email === "hold@example.com"
         ? Effect.fail(new HookPoint.HookAbort({ code: "LEGAL_HOLD" }))
         : Effect.succeed(input);
     }),
@@ -90,15 +97,15 @@ const memoryLayer = (
   Layer.mergeAll(Erasure.layer.pipe(Layer.provide(Erasure.config(config))), contributions).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
-        Users.layerMemory,
-        Accounts.layerMemory,
-        Sessions.layerMemory,
-        Verification.layerMemory,
+        Users.layer.pipe(Layer.provide(Persistence.memory)),
+        Accounts.layer.pipe(Layer.provide(Persistence.memory)),
+        Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+        Verification.layer.pipe(Layer.provide(Persistence.memory)),
         SqlTransaction.layerNoop,
       ),
     ),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(hooksFor(probe)),
     Layer.provideMerge(NodeCrypto.layer),
   );
@@ -115,24 +122,28 @@ const sqlLayer = (
   Layer.mergeAll(Erasure.layer, contributions).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
-        Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
-        Accounts.layerSql.pipe(
-          Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-        ),
-        Sessions.layerSql.pipe(Layer.provide(Repositories.SessionsRepositoryLive)),
-        Verification.layerSql.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              Repositories.VerificationRepositoryLive,
-              Repositories.VerificationReservationsRepositoryLive,
+        Users.layer.pipe(Layer.provide(SqlStores)),
+        Accounts.layer
+          .pipe(Layer.provide(SqlStores))
+          .pipe(
+            Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
+          ),
+        Sessions.layer.pipe(Layer.provide(SqlStores)),
+        Verification.layer
+          .pipe(Layer.provide(SqlStores))
+          .pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Repositories.VerificationRepositoryLive,
+                Repositories.VerificationReservationsRepositoryLive,
+              ),
             ),
           ),
-        ),
         SqlTransaction.layerSql,
       ),
     ),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
     Layer.provideMerge(hooksFor(probe)),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(SqlLive),
@@ -203,7 +214,10 @@ const suite = (
         const other = yield* seedUser("keep@example.com");
         yield* Effect.sleep(0);
 
-        yield* erasure.eraseAccount(user.id, { deletedBy: "admin" });
+        yield* erasure.eraseAccount(
+          user.id,
+          Erasure.ErasureInitiator.Admin({ adminUserId: other.user.id }),
+        );
 
         // order, then id
         assert.deepStrictEqual(probe.ran, ["a", "c", "b"]);
@@ -233,13 +247,89 @@ const suite = (
       }).pipe(Effect.provide(layer));
     });
 
+    it.effect(
+      "auth.user.deleted names the initiator: self, admin with adminUserId, directory with connectionId and organizationId",
+      () => {
+        const probe = makeProbe();
+        const layer = build(probe, Layer.empty);
+        return Effect.gen(function* () {
+          const erasure = yield* Erasure.AccountErasure;
+          const auditLog = yield* AuditLog.AuditLog;
+          const self = yield* seedUser("self@example.com");
+          const admin = yield* seedUser("admin@example.com");
+          const directory = yield* seedUser("directory@example.com");
+          const adminUserId = Users.UserId("11111111-1111-4111-8111-111111111111");
+
+          yield* erasure.eraseAccount(self.user.id, Erasure.ErasureInitiator.Self());
+          yield* erasure.eraseAccount(
+            admin.user.id,
+            Erasure.ErasureInitiator.Admin({ adminUserId }),
+          );
+          yield* erasure.eraseAccount(
+            directory.user.id,
+            Erasure.ErasureInitiator.Directory({ connectionId: "conn-1", organizationId: "org-1" }),
+          );
+
+          const deleted = (yield* auditLog.list({ eventTag: "auth.user.deleted" })).map((row) =>
+            AuthEventSchemas.payloadOf(row.payload),
+          );
+          const of = (userId: Users.UserId) =>
+            deleted.find((event) => event._tag === "auth.user.deleted" && event.userId === userId);
+          assert.deepStrictEqual(of(self.user.id), {
+            _tag: "auth.user.deleted",
+            userId: self.user.id,
+            deletedBy: "self",
+          });
+          assert.deepStrictEqual(of(admin.user.id), {
+            _tag: "auth.user.deleted",
+            userId: admin.user.id,
+            deletedBy: "admin",
+            adminUserId,
+          });
+          assert.deepStrictEqual(of(directory.user.id), {
+            _tag: "auth.user.deleted",
+            userId: directory.user.id,
+            deletedBy: "directory",
+            connectionId: "conn-1",
+            organizationId: "org-1",
+          });
+        }).pipe(Effect.provide(layer));
+      },
+    );
+
+    it.effect("the veto is consulted exactly once per erasure, before anything is touched", () => {
+      const probe = makeProbe();
+      const layer = build(probe, contribution(probe, "a", 1));
+      return Effect.gen(function* () {
+        const erasure = yield* Erasure.AccountErasure;
+        const done = yield* seedUser("once@example.com");
+        yield* erasure.eraseAccount(done.user.id, Erasure.ErasureInitiator.Self());
+        assert.strictEqual(probe.consults, 1);
+
+        const held = yield* seedUser("hold@example.com");
+        const failure = yield* erasure
+          .eraseAccount(held.user.id, Erasure.ErasureInitiator.Self())
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "HookAborted");
+        assert.strictEqual(probe.consults, 2);
+        assert.deepStrictEqual(yield* remaining(held.user.id), {
+          user: true,
+          accounts: 1,
+          sessions: 1,
+        });
+      }).pipe(Effect.provide(layer));
+    });
+
     it.effect("an unknown user fails UserNotFound and touches nothing", () => {
       const probe = makeProbe();
       const layer = build(probe, contribution(probe, "a", 1));
       return Effect.gen(function* () {
         const erasure = yield* Erasure.AccountErasure;
         const failure = yield* erasure
-          .eraseAccount(Users.UserId("00000000-0000-4000-8000-000000000000"))
+          .eraseAccount(
+            Users.UserId("00000000-0000-4000-8000-000000000000"),
+            Erasure.ErasureInitiator.Self(),
+          )
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "UserNotFound");
         assert.deepStrictEqual(probe.ran, []);
@@ -256,7 +346,9 @@ const suite = (
           const auditLog = yield* AuditLog.AuditLog;
           const { user } = yield* seedUser("hold@example.com");
 
-          const failure = yield* erasure.eraseAccount(user.id).pipe(Effect.flip);
+          const failure = yield* erasure
+            .eraseAccount(user.id, Erasure.ErasureInitiator.Self())
+            .pipe(Effect.flip);
 
           assert.strictEqual(failure._tag, "HookAborted");
           assert.deepStrictEqual(probe.ran, []);
@@ -307,7 +399,7 @@ describe("AccountErasure over memory: ErasureConfig", () => {
       const { user } = yield* seedUser("retain@example.com");
       const before = (yield* auditLog.list({ actorUserId: user.id })).length;
       assert.isAbove(before, 0);
-      yield* erasure.eraseAccount(user.id);
+      yield* erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self());
       // the same rows are still there, plus the erasure receipt
       assert.isAtLeast((yield* auditLog.list({ actorUserId: user.id })).length, before);
       assert.isTrue(
@@ -348,7 +440,9 @@ describe("AccountErasure over SQLite: atomicity", () => {
         const { user } = yield* seedUser("rollback@example.com");
         const auditBefore = JSON.stringify(yield* auditLog.list({ actorUserId: user.id }));
 
-        const exit = yield* Effect.exit(erasure.eraseAccount(user.id));
+        const exit = yield* Effect.exit(
+          erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self()),
+        );
 
         assert.isTrue(Exit.isFailure(exit));
         assert.deepStrictEqual(probe.ran, ["boom"]);
@@ -364,24 +458,36 @@ describe("AccountErasure over SQLite: atomicity", () => {
     },
   );
 
-  it.effect(
-    "a veto raised late, inside Users.delete, undoes the accounts, sessions and tokens already removed",
-    () => {
-      const probe = makeProbe();
-      // The first consult is `eraseAccount`'s own veto-first check; the second is `Users.delete`'s,
-      // by which point every other core row has been deleted in the transaction.
-      probe.vetoAfter = 1;
-      const layer = sqlLayer(probe, contribution(probe, "a", 1));
-      return Effect.gen(function* () {
+  // ADR-EA-037: the review's example. `sessions.revokeAll` publishes `auth.session.revoked` inside
+  // the erasure transaction; when a later step fails and the transaction rolls back, no live
+  // subscriber may hear that the session was revoked, because it was not.
+  it.effect("a failure after the sessions were revoked publishes no auth.session.revoked", () => {
+    const probe = makeProbe();
+    const layer = sqlLayer(probe, Layer.empty);
+    return Effect.scoped(
+      Effect.gen(function* () {
         const erasure = yield* Erasure.AccountErasure;
-        const { user } = yield* seedUser("late@example.com");
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        const sql = yield* SqlClient.SqlClient;
+        const { user } = yield* seedUser("late-failure@example.com");
+        const stream = yield* events.subscribe;
+        yield* sql.unsafe(
+          `CREATE TRIGGER fail_user_delete BEFORE DELETE ON users BEGIN SELECT RAISE(ABORT, 'injected'); END`,
+        );
 
-        const failure = yield* erasure.eraseAccount(user.id).pipe(Effect.flip);
-
-        assert.strictEqual(failure._tag, "HookAborted");
-        assert.strictEqual(probe.consults, 2);
+        const exit = yield* Effect.exit(
+          erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self()),
+        );
+        assert.isTrue(Exit.isFailure(exit));
+        // the transaction rolled back: the session is still live, the audit trail has no revocation...
         assert.deepStrictEqual(yield* remaining(user.id), { user: true, accounts: 1, sessions: 1 });
-      }).pipe(Effect.provide(layer));
-    },
-  );
+        assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.session.revoked" }), []);
+        // ...and the bus agrees: the next thing a subscriber is handed is the sentinel.
+        yield* events.publish({ _tag: "auth.token.replay", identifier: "sentinel" });
+        const [first] = yield* stream.pipe(Stream.take(1), Stream.runCollect);
+        assert.strictEqual(first?._tag, "auth.token.replay");
+      }).pipe(Effect.provide(layer)),
+    );
+  });
 });

@@ -24,8 +24,9 @@
 // derives the same answers by walking parent pointers. Hierarchy is structure
 // only: it grants no permission inheritance (OHS-004).
 
+import { SqlTransaction } from "@awthaq/ports";
 import { Users } from "@awthaq/core";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -99,27 +100,33 @@ export interface TeamRecordsShape {
     readonly organizationId: string;
     readonly name: string;
     readonly parentId?: string | undefined;
-  }) => Effect.Effect<TeamRecord, TeamRecordNotFound>;
+  }) => Effect.Effect<TeamRecord, TeamRecordNotFound | StoreFailure.StoreUnavailable>;
   readonly findTeamById: (
     organizationId: string,
     id: string,
-  ) => Effect.Effect<Option.Option<TeamRecord>>;
+  ) => Effect.Effect<Option.Option<TeamRecord>, StoreFailure.StoreUnavailable>;
   /**
    * RZS-005: resolves a team from its id alone, for callers (the qadi
    * `team-member` relation) that are handed only a resource id and must tell
    * "no such team" apart from "not a member". Not tenant-scoped by design —
    * it answers existence, never data, to the relationship resolver.
    */
-  readonly findTeamByIdAnyOrg: (id: string) => Effect.Effect<Option.Option<TeamRecord>>;
+  readonly findTeamByIdAnyOrg: (
+    grant: TenantScoped.CrossTenant,
+
+    id: string,
+  ) => Effect.Effect<Option.Option<TeamRecord>, StoreFailure.StoreUnavailable>;
   readonly listTeamsByOrganization: (
     organizationId: string,
-  ) => Effect.Effect<ReadonlyArray<TeamRecord>>;
-  readonly countTeamsByOrganization: (organizationId: string) => Effect.Effect<number>;
+  ) => Effect.Effect<ReadonlyArray<TeamRecord>, StoreFailure.StoreUnavailable>;
+  readonly countTeamsByOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   readonly updateTeam: (
     organizationId: string,
     id: string,
     name: string,
-  ) => Effect.Effect<TeamRecord, TeamRecordNotFound>;
+  ) => Effect.Effect<TeamRecord, TeamRecordNotFound | StoreFailure.StoreUnavailable>;
   /**
    * OHS-001: re-parents a team — with its whole subtree — under `parentId`, or
    * to the root with `None`. A parent in another organization is
@@ -130,22 +137,25 @@ export interface TeamRecordsShape {
     readonly organizationId: string;
     readonly id: string;
     readonly parentId: Option.Option<string>;
-  }) => Effect.Effect<TeamRecord, TeamRecordNotFound | TeamHierarchyCycle>;
+  }) => Effect.Effect<
+    TeamRecord,
+    TeamRecordNotFound | TeamHierarchyCycle | StoreFailure.StoreUnavailable
+  >;
   /** OHS-001: the team's ancestors, nearest first, excluding the team itself. */
   readonly getAncestors: (
     organizationId: string,
     id: string,
-  ) => Effect.Effect<ReadonlyArray<TeamRecord>>;
+  ) => Effect.Effect<ReadonlyArray<TeamRecord>, StoreFailure.StoreUnavailable>;
   /** OHS-001: every team below this one, nearest first, excluding the team itself. */
   readonly getDescendants: (
     organizationId: string,
     id: string,
-  ) => Effect.Effect<ReadonlyArray<TeamRecord>>;
+  ) => Effect.Effect<ReadonlyArray<TeamRecord>, StoreFailure.StoreUnavailable>;
   /** OHS-001: the team itself followed by its descendants. */
   readonly getSubtree: (
     organizationId: string,
     id: string,
-  ) => Effect.Effect<ReadonlyArray<TeamRecord>>;
+  ) => Effect.Effect<ReadonlyArray<TeamRecord>, StoreFailure.StoreUnavailable>;
   /**
    * Removes the team and cascades every one of its `TeamMembershipRecord` rows.
    * OHS-001: a team with children is `TeamHasChildren`.
@@ -153,26 +163,34 @@ export interface TeamRecordsShape {
   readonly removeTeam: (
     organizationId: string,
     id: string,
-  ) => Effect.Effect<void, TeamRecordNotFound | TeamHasChildren>;
+  ) => Effect.Effect<void, TeamRecordNotFound | TeamHasChildren | StoreFailure.StoreUnavailable>;
   /** Used by `Organization.delete`'s own cascade. */
-  readonly removeAllTeamsForOrganization: (organizationId: string) => Effect.Effect<void>;
+  readonly removeAllTeamsForOrganization: (
+    organizationId: string,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** Increments the owning team's `memberCount`; atomic with the row insert under `layerSql`. */
   readonly addTeamMember: (input: {
     readonly teamId: string;
     readonly userId: Users.UserId;
     readonly role?: ReadonlyArray<string> | undefined;
-  }) => Effect.Effect<TeamMembershipRecord, TeamMembershipRecordAlreadyExists>;
+  }) => Effect.Effect<
+    TeamMembershipRecord,
+    TeamMembershipRecordAlreadyExists | StoreFailure.StoreUnavailable
+  >;
   /** OHS-004: replaces a team membership's role names. */
   readonly updateTeamMemberRole: (
     teamId: string,
     userId: Users.UserId,
     role: ReadonlyArray<string>,
-  ) => Effect.Effect<TeamMembershipRecord, TeamMembershipRecordNotFound>;
+  ) => Effect.Effect<
+    TeamMembershipRecord,
+    TeamMembershipRecordNotFound | StoreFailure.StoreUnavailable
+  >;
   /** Decrements the owning team's `memberCount`. */
   readonly removeTeamMember: (
     teamId: string,
     userId: Users.UserId,
-  ) => Effect.Effect<void, TeamMembershipRecordNotFound>;
+  ) => Effect.Effect<void, TeamMembershipRecordNotFound | StoreFailure.StoreUnavailable>;
   /**
    * CWM-003/N9: removes a user from every team of one organization (the
    * user left or was removed from it), decrementing each `memberCount`.
@@ -182,32 +200,42 @@ export interface TeamRecordsShape {
   readonly removeUserFromOrganizationTeams: (
     organizationId: string,
     userId: Users.UserId,
-  ) => Effect.Effect<ReadonlyArray<string>>;
+  ) => Effect.Effect<ReadonlyArray<string>, StoreFailure.StoreUnavailable>;
   /**
    * CSG-001: removes a user from every team of every organization (the account is
    * being erased), decrementing each `memberCount`. Idempotent; atomic under `layerSql`.
    */
-  readonly removeUserFromAllTeams: (userId: Users.UserId) => Effect.Effect<void>;
+  readonly removeUserFromAllTeams: (
+    grant: TenantScoped.CrossTenant,
+
+    userId: Users.UserId,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findTeamMembership: (
     teamId: string,
     userId: Users.UserId,
-  ) => Effect.Effect<Option.Option<TeamMembershipRecord>>;
-  readonly listTeamMembers: (teamId: string) => Effect.Effect<ReadonlyArray<TeamMembershipRecord>>;
+  ) => Effect.Effect<Option.Option<TeamMembershipRecord>, StoreFailure.StoreUnavailable>;
+  readonly listTeamMembers: (
+    teamId: string,
+  ) => Effect.Effect<ReadonlyArray<TeamMembershipRecord>, StoreFailure.StoreUnavailable>;
   /** Every team, within one organization, the given user belongs to. */
   readonly listTeamsByUser: (
     organizationId: string,
     userId: Users.UserId,
-  ) => Effect.Effect<ReadonlyArray<TeamRecord>>;
+  ) => Effect.Effect<ReadonlyArray<TeamRecord>, StoreFailure.StoreUnavailable>;
 }
 
 export class TeamRecords extends Context.Service<TeamRecords, TeamRecordsShape>()(
-  "awthaq/organization/TeamRecords",
+  "awthaq/organization/records/TeamRecords",
 ) {}
 
 const teamNotFound = (id: string): TeamRecordNotFound => new TeamRecordNotFound({ id });
 const teamMembershipNotFound = (teamId: string, userId: string): TeamMembershipRecordNotFound =>
   new TeamMembershipRecordNotFound({ teamId, userId });
+
+/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
+const mintId = <E>(operation: string, minted: Effect.Effect<string, E>) =>
+  Effect.catch(minted, StoreFailure.storeUnavailable(`TeamRecords.${operation}`));
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -227,7 +255,7 @@ export const layerMemory = Layer.effect(
     const crypto = yield* Crypto.Crypto;
 
     const createTeam: TeamRecordsShape["createTeam"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const record: TeamRecord = {
         id,
@@ -367,7 +395,7 @@ export const layerMemory = Layer.effect(
         ),
       );
 
-    const findTeamByIdAnyOrg: TeamRecordsShape["findTeamByIdAnyOrg"] = (id) =>
+    const findTeamByIdAnyOrg: TeamRecordsShape["findTeamByIdAnyOrg"] = (_grant, id) =>
       Ref.get(state).pipe(Effect.map((s) => HashMap.get(s.teams, id)));
 
     const listTeamsByOrganization: TeamRecordsShape["listTeamsByOrganization"] = (organizationId) =>
@@ -447,7 +475,7 @@ export const layerMemory = Layer.effect(
       });
 
     const addTeamMember: TeamRecordsShape["addTeamMember"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
       const record = brandTeamMembership({
         id,
@@ -558,7 +586,7 @@ export const layerMemory = Layer.effect(
         return [removed.map(([, row]) => row.teamId), { teams, memberships }] as const;
       });
 
-    const removeUserFromAllTeams: TeamRecordsShape["removeUserFromAllTeams"] = (userId) =>
+    const removeUserFromAllTeams: TeamRecordsShape["removeUserFromAllTeams"] = (_grant, userId) =>
       Ref.update(state, (s): State => {
         const removed = Array.from(HashMap.entries(s.memberships)).filter(
           ([, row]) => row.userId === userId,
@@ -680,6 +708,8 @@ export const layerSql = Layer.effect(
   TeamRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`TeamRecords.${operation}`);
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const TeamRow = makeTeamRow(wire);
@@ -888,132 +918,128 @@ export const layerSql = Layer.effect(
       );
 
     const createTeam: TeamRecordsShape["createTeam"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
-      return yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const parentId = input.parentId ?? null;
-            if (parentId !== null) {
-              const parent = yield* findTeamByIdQuery({
-                organizationId: input.organizationId,
-                id: parentId,
-              });
-              if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
-            }
-            const row = yield* insertTeam({
-              id,
-              name: input.name,
+      return yield* SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const parentId = input.parentId ?? null;
+          if (parentId !== null) {
+            const parent = yield* findTeamByIdQuery({
               organizationId: input.organizationId,
-              memberCount: 0,
-              parentId,
-              createdAt: now,
-              updatedAt: now,
+              id: parentId,
             });
-            yield* sql`INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth) VALUES (${id}, ${id}, 0)`;
-            if (parentId !== null) {
-              yield* sql`
+            if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
+          }
+          const row = yield* insertTeam({
+            id,
+            name: input.name,
+            organizationId: input.organizationId,
+            memberCount: 0,
+            parentId,
+            createdAt: now,
+            updatedAt: now,
+          });
+          yield* sql`INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth) VALUES (${id}, ${id}, 0)`;
+          if (parentId !== null) {
+            yield* sql`
                 INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth)
                 SELECT "ancestorId", ${id}, depth + 1 FROM organization_team_closure
                 WHERE "descendantId" = ${parentId}`;
-            }
-            return toTeamRecord(row);
-          }),
-        )
-        .pipe(
-          Effect.catchTags({
-            SqlError: Effect.die,
-            SchemaError: Effect.die,
-            NoSuchElementError: Effect.die,
-          }),
-        );
+          }
+          return toTeamRecord(row);
+        }),
+      ).pipe(
+        Effect.catchTags({
+          SqlError: StoreFailure.storeUnavailable("TeamRecords.createTeam"),
+          SchemaError: Effect.die,
+          NoSuchElementError: Effect.die,
+        }),
+      );
     });
 
     const moveTeam: TeamRecordsShape["moveTeam"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
-      return yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const team = yield* findTeamByIdQuery({
+      return yield* SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const team = yield* findTeamByIdQuery({
+            organizationId: input.organizationId,
+            id: input.id,
+          });
+          if (Option.isNone(team)) return yield* Effect.fail(teamNotFound(input.id));
+          const parentId = Option.getOrNull(input.parentId);
+          if (parentId !== null) {
+            const parent = yield* findTeamByIdQuery({
               organizationId: input.organizationId,
-              id: input.id,
+              id: parentId,
             });
-            if (Option.isNone(team)) return yield* Effect.fail(teamNotFound(input.id));
-            const parentId = Option.getOrNull(input.parentId);
-            if (parentId !== null) {
-              const parent = yield* findTeamByIdQuery({
-                organizationId: input.organizationId,
-                id: parentId,
-              });
-              if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
-              // The closure holds (id, id, 0), so this also covers "under itself".
-              const below = yield* isInSubtreeQuery({
-                ancestorId: input.id,
-                descendantId: parentId,
-              });
-              if (below.count > 0) {
-                return yield* Effect.fail(new TeamHierarchyCycle({ id: input.id, parentId }));
-              }
+            if (Option.isNone(parent)) return yield* Effect.fail(teamNotFound(parentId));
+            // The closure holds (id, id, 0), so this also covers "under itself".
+            const below = yield* isInSubtreeQuery({
+              ancestorId: input.id,
+              descendantId: parentId,
+            });
+            if (below.count > 0) {
+              return yield* Effect.fail(new TeamHierarchyCycle({ id: input.id, parentId }));
             }
-            // Detach the subtree from its old ancestors, then hang it under the new parent.
-            yield* sql`
+          }
+          // Detach the subtree from its old ancestors, then hang it under the new parent.
+          yield* sql`
               DELETE FROM organization_team_closure
               WHERE "descendantId" IN (SELECT "descendantId" FROM organization_team_closure WHERE "ancestorId" = ${input.id})
                 AND "ancestorId" NOT IN (SELECT "descendantId" FROM organization_team_closure WHERE "ancestorId" = ${input.id})`;
-            if (parentId !== null) {
-              yield* sql`
+          if (parentId !== null) {
+            yield* sql`
                 INSERT INTO organization_team_closure ("ancestorId", "descendantId", depth)
                 SELECT p."ancestorId", c."descendantId", p.depth + c.depth + 1
                 FROM organization_team_closure p
                 CROSS JOIN organization_team_closure c
                 WHERE p."descendantId" = ${parentId} AND c."ancestorId" = ${input.id}`;
-            }
-            const row = yield* setParentQuery({
-              organizationId: input.organizationId,
-              id: input.id,
-              parentId,
-              updatedAt: now,
-            });
-            return toTeamRecord(row);
-          }),
-        )
-        .pipe(
-          Effect.catchTags({
-            SqlError: Effect.die,
-            SchemaError: Effect.die,
-            NoSuchElementError: Effect.die,
-          }),
-        );
+          }
+          const row = yield* setParentQuery({
+            organizationId: input.organizationId,
+            id: input.id,
+            parentId,
+            updatedAt: now,
+          });
+          return toTeamRecord(row);
+        }),
+      ).pipe(
+        Effect.catchTags({
+          SqlError: StoreFailure.storeUnavailable("TeamRecords.moveTeam"),
+          SchemaError: Effect.die,
+          NoSuchElementError: Effect.die,
+        }),
+      );
     });
 
     const getAncestors: TeamRecordsShape["getAncestors"] = (organizationId, id) =>
       ancestorsQuery({ organizationId, id }).pipe(
         Effect.map((rows) => rows.map(toTeamRecord)),
-        Effect.orDie,
+        unavailable("getAncestors"),
       );
 
     const getDescendants: TeamRecordsShape["getDescendants"] = (organizationId, id) =>
       descendantsQuery({ organizationId, id }).pipe(
         Effect.map((rows) => rows.map(toTeamRecord)),
-        Effect.orDie,
+        unavailable("getDescendants"),
       );
 
     const getSubtree: TeamRecordsShape["getSubtree"] = (organizationId, id) =>
       subtreeQuery({ organizationId, id }).pipe(
         Effect.map((rows) => rows.map(toTeamRecord)),
-        Effect.orDie,
+        unavailable("getSubtree"),
       );
 
     const findTeamById: TeamRecordsShape["findTeamById"] = (organizationId, id) =>
       findTeamByIdQuery({ organizationId, id }).pipe(
         Effect.map(Option.map(toTeamRecord)),
-        Effect.orDie,
+        unavailable("findTeamById"),
       );
 
     const listTeamsByOrganization: TeamRecordsShape["listTeamsByOrganization"] = (organizationId) =>
       listTeamsByOrganizationQuery(organizationId).pipe(
         Effect.map((rows) => rows.map(toTeamRecord)),
-        Effect.orDie,
+        unavailable("listTeamsByOrganization"),
       );
 
     const countTeamsByOrganization: TeamRecordsShape["countTeamsByOrganization"] = (
@@ -1021,17 +1047,21 @@ export const layerSql = Layer.effect(
     ) =>
       countTeamsByOrganizationQuery(organizationId).pipe(
         Effect.map((row) => row.count),
-        Effect.orDie,
+        unavailable("countTeamsByOrganization"),
       );
 
-    const findTeamByIdAnyOrg: TeamRecordsShape["findTeamByIdAnyOrg"] = (id) =>
-      findTeamByIdAnyOrgQuery(id).pipe(Effect.map(Option.map(toTeamRecord)), Effect.orDie);
+    const findTeamByIdAnyOrg: TeamRecordsShape["findTeamByIdAnyOrg"] = (grant, id) =>
+      findTeamByIdAnyOrgQuery(id).pipe(
+        Effect.map(Option.map(toTeamRecord)),
+        TenantScoped.liftOn(sql, grant),
+        unavailable("findTeamByIdAnyOrg"),
+      );
 
     const updateTeam: TeamRecordsShape["updateTeam"] = Effect.fnUntraced(
       function* (organizationId, id, name) {
         const now = yield* DateTime.now;
         const row = yield* updateTeamQuery({ organizationId, id, name, updatedAt: now }).pipe(
-          Effect.orDie,
+          unavailable("updateTeam"),
         );
         if (Option.isNone(row)) return yield* Effect.fail(teamNotFound(id));
         return toTeamRecord(row.value);
@@ -1043,81 +1073,71 @@ export const layerSql = Layer.effect(
     // Nested inside a caller's own transaction (`Organization`'s cascades) it
     // becomes a savepoint, so a records op is atomic on its own *and* composes.
     const removeTeam: TeamRecordsShape["removeTeam"] = (organizationId, id) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const children = yield* countChildrenQuery({ organizationId, id });
-            if (children.count > 0) return yield* Effect.fail(new TeamHasChildren({ id }));
-            const row = yield* deleteTeamQuery({ organizationId, id });
-            if (Option.isNone(row)) return yield* Effect.fail(teamNotFound(id));
-            yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${id}`;
-            yield* sql`DELETE FROM organization_team_closure WHERE "descendantId" = ${id} OR "ancestorId" = ${id}`;
-          }),
-        )
-        .pipe(
-          Effect.catchTags({
-            SqlError: Effect.die,
-            SchemaError: Effect.die,
-            NoSuchElementError: Effect.die,
-          }),
-        );
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const children = yield* countChildrenQuery({ organizationId, id });
+          if (children.count > 0) return yield* Effect.fail(new TeamHasChildren({ id }));
+          const row = yield* deleteTeamQuery({ organizationId, id });
+          if (Option.isNone(row)) return yield* Effect.fail(teamNotFound(id));
+          yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${id}`;
+          yield* sql`DELETE FROM organization_team_closure WHERE "descendantId" = ${id} OR "ancestorId" = ${id}`;
+        }),
+      ).pipe(
+        Effect.catchTags({
+          SqlError: StoreFailure.storeUnavailable("TeamRecords.removeTeam"),
+          SchemaError: Effect.die,
+          NoSuchElementError: Effect.die,
+        }),
+      );
 
     const removeAllTeamsForOrganization: TeamRecordsShape["removeAllTeamsForOrganization"] = (
       organizationId,
     ) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sql`
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          yield* sql`
               DELETE FROM organization_team_membership
               WHERE "teamId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
             `;
-            yield* sql`
+          yield* sql`
               DELETE FROM organization_team_closure
               WHERE "descendantId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
                  OR "ancestorId" IN (SELECT id FROM organization_team WHERE "organizationId" = ${organizationId})
             `;
-            yield* sql`DELETE FROM organization_team WHERE "organizationId" = ${organizationId}`;
-          }),
-        )
-        .pipe(Effect.orDie);
+          yield* sql`DELETE FROM organization_team WHERE "organizationId" = ${organizationId}`;
+        }),
+      ).pipe(unavailable("removeAllTeamsForOrganization"));
 
     const addTeamMember: TeamRecordsShape["addTeamMember"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+      const id = yield* mintId("create", crypto.randomUUIDv7);
       const now = yield* DateTime.now;
-      return yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const row = yield* insertTeamMembership({
-              id,
+      return yield* SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const row = yield* insertTeamMembership({
+            id,
+            teamId: input.teamId,
+            userId: input.userId,
+            role: JSON.stringify(input.role ?? DEFAULT_TEAM_ROLE),
+            createdAt: now,
+          });
+          yield* adjustMemberCount(input.teamId, 1);
+          return toTeamMembershipRecord(row);
+        }),
+      ).pipe(
+        StoreFailure.orConflict(
+          "TeamRecords.addTeamMember",
+          () =>
+            new TeamMembershipRecordAlreadyExists({
               teamId: input.teamId,
               userId: input.userId,
-              role: JSON.stringify(input.role ?? DEFAULT_TEAM_ROLE),
-              createdAt: now,
-            });
-            yield* adjustMemberCount(input.teamId, 1);
-            return toTeamMembershipRecord(row);
-          }),
-        )
-        .pipe(
-          Effect.catchTag("SqlError", (error) =>
-            error.reason._tag === "UniqueViolation"
-              ? Effect.fail(
-                  new TeamMembershipRecordAlreadyExists({
-                    teamId: input.teamId,
-                    userId: input.userId,
-                  }),
-                )
-              : Effect.die(error),
-          ),
-          Effect.catchTag("SchemaError", Effect.die),
-          Effect.catchTag("NoSuchElementError", Effect.die),
-        );
+            }),
+        ),
+      );
     });
 
     const updateTeamMemberRole: TeamRecordsShape["updateTeamMemberRole"] = (teamId, userId, role) =>
       updateTeamMemberRoleQuery({ teamId, userId, role: JSON.stringify(role) }).pipe(
-        Effect.orDie,
+        unavailable("updateTeamMemberRole"),
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.fail(teamMembershipNotFound(teamId, userId)),
@@ -1127,63 +1147,62 @@ export const layerSql = Layer.effect(
       );
 
     const removeTeamMember: TeamRecordsShape["removeTeamMember"] = (teamId, userId) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const row = yield* deleteTeamMembershipQuery({ teamId, userId });
-            if (Option.isNone(row)) {
-              return yield* Effect.fail(teamMembershipNotFound(teamId, userId));
-            }
-            yield* adjustMemberCount(teamId, -1);
-          }),
-        )
-        .pipe(Effect.catchTags({ SqlError: Effect.die, SchemaError: Effect.die }));
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const row = yield* deleteTeamMembershipQuery({ teamId, userId });
+          if (Option.isNone(row)) {
+            return yield* Effect.fail(teamMembershipNotFound(teamId, userId));
+          }
+          yield* adjustMemberCount(teamId, -1);
+        }),
+      ).pipe(
+        Effect.catchTags({
+          SqlError: StoreFailure.storeUnavailable("TeamRecords.removeTeamMember"),
+          SchemaError: Effect.die,
+        }),
+      );
 
     const removeUserFromOrganizationTeams: TeamRecordsShape["removeUserFromOrganizationTeams"] = (
       organizationId,
       userId,
     ) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const rows = yield* listOrganizationTeamIdsOfUserQuery({ organizationId, userId });
-            for (const { teamId } of rows) {
-              yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
-              yield* adjustMemberCount(teamId, -1);
-            }
-            return rows.map((row) => row.teamId);
-          }),
-        )
-        .pipe(Effect.orDie);
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const rows = yield* listOrganizationTeamIdsOfUserQuery({ organizationId, userId });
+          for (const { teamId } of rows) {
+            yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
+            yield* adjustMemberCount(teamId, -1);
+          }
+          return rows.map((row) => row.teamId);
+        }),
+      ).pipe(unavailable("rows"));
 
-    const removeUserFromAllTeams: TeamRecordsShape["removeUserFromAllTeams"] = (userId) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            for (const { teamId } of yield* listTeamIdsOfUserQuery({ userId })) {
-              yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
-              yield* adjustMemberCount(teamId, -1);
-            }
-          }),
-        )
-        .pipe(Effect.orDie);
+    const removeUserFromAllTeams: TeamRecordsShape["removeUserFromAllTeams"] = (grant, userId) =>
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          for (const { teamId } of yield* listTeamIdsOfUserQuery({ userId })) {
+            yield* sql`DELETE FROM organization_team_membership WHERE "teamId" = ${teamId} AND "userId" = ${userId}`;
+            yield* adjustMemberCount(teamId, -1);
+          }
+        }),
+      ).pipe(TenantScoped.liftOn(sql, grant), unavailable("removeUserFromAllTeams"));
 
     const findTeamMembership: TeamRecordsShape["findTeamMembership"] = (teamId, userId) =>
       findTeamMembershipQuery({ teamId, userId }).pipe(
         Effect.map(Option.map(toTeamMembershipRecord)),
-        Effect.orDie,
+        unavailable("findTeamMembership"),
       );
 
     const listTeamMembers: TeamRecordsShape["listTeamMembers"] = (teamId) =>
       listTeamMembersQuery(teamId).pipe(
         Effect.map((rows) => rows.map(toTeamMembershipRecord)),
-        Effect.orDie,
+        unavailable("listTeamMembers"),
       );
 
     const listTeamsByUser: TeamRecordsShape["listTeamsByUser"] = (organizationId, userId) =>
       listTeamsByUserQuery({ organizationId, userId }).pipe(
         Effect.map((rows) => rows.map(toTeamRecord)),
-        Effect.orDie,
+        unavailable("listTeamsByUser"),
       );
 
     return {

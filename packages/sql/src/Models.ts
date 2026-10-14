@@ -19,35 +19,27 @@
 // keeps only a nominal constructor over each, so a key rename on either side
 // breaks the bridge at compile time.
 
-import { Defects } from "@awthaq/ports";
+import { Defects, Ids } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export const UserId = Schema.String.pipe(Schema.brand("UserId"));
-export type UserId = typeof UserId.Type;
+// MA-008: one brand per id, declared at the ports stratum (plan 02) and re-exported here.
+export const UserId = Ids.UserId;
+export type UserId = Ids.UserId;
 
-export const AccountId = Schema.String.pipe(Schema.brand("AccountId"));
-export type AccountId = typeof AccountId.Type;
+export const AccountId = Ids.AccountId;
+export type AccountId = Ids.AccountId;
 
-export const SessionId = Schema.String.pipe(Schema.brand("SessionId"));
-export type SessionId = typeof SessionId.Type;
+export const SessionId = Ids.SessionId;
+export type SessionId = Ids.SessionId;
 
-export const VerificationTokenId = Schema.String.pipe(Schema.brand("VerificationTokenId"));
-export type VerificationTokenId = typeof VerificationTokenId.Type;
+export const VerificationTokenId = Ids.VerificationTokenId;
+export type VerificationTokenId = Ids.VerificationTokenId;
 
-/**
- * SOS-008/FAMS-002: the stored shape of `users.phone` — E.164 (`+` and 2-15
- * digits, no leading zero after the `+`). Declared here for the same reason
- * `UserId` is: the model's `phone` column and core's `Phone` identity share one
- * brand, and `@awthaq/core`'s `Phone.ts` owns the normalizer that mints it.
- */
-export const E164 = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^\+[1-9]\d{1,14}$/)),
-  Schema.brand("E164"),
-);
-export type E164 = typeof E164.Type;
+export const E164 = Ids.E164;
+export type E164 = Ids.E164;
 
 /** The SQL dialects this stratum implements (mysql is a named target, not yet wired — see `CoreMigrations.ts`). */
 export type Dialect = "pg" | "sqlite";
@@ -401,21 +393,15 @@ const sessionFields = {
  * `update`/`jsonUpdate`: a verification token's identity and hash are
  * fixed at issue.
  *
- * BEH-EA-122 (`@awthaq/oauth`): `payload` round-trips the opaque
- * OAuth-flow state (`codeVerifier`/`nonce`/`callbackURL`/`link`) `issue`'s
- * caller attached — JSON-encoded at rest (`Schema.fromJsonString(Schema.Unknown)`)
- * since its shape is never this stratum's to know, and built as a bare
- * select/insert-only `Model.Field` (like `valueHash` above) rather than
- * `Model.Sensitive`: it needs the same "no update, no JSON variant, ever"
- * treatment `valueHash`'s own comment explains, for the same reason — flow
- * state can carry secrets a leaked JSON response must never disclose. A
- * missing payload is stored as the encoded literal `null`, decoded back to
- * `undefined` by the caller (`Verification.layerSql`'s own `toTokenView`),
- * matching `layerMemory`'s omitted-payload case (`undefined` in, `undefined`
- * out). An *explicit* `payload: null` is indistinguishable from omission once
- * round-tripped through this column, so `Verification.layerMemory` normalizes
- * it to `undefined` at `issue` too (ESS-010): both layers return the same
- * `payload` for omitted, `null` and object.
+ * BEH-EA-122 (`@awthaq/oauth`): `payload` carries the opaque OAuth-flow state
+ * (`codeVerifier`/`nonce`/`callbackURL`/`link`) `issue`'s caller attached, as JSON TEXT: its shape
+ * is never this stratum's to know, and (plan 02) the domain (`Verification`) is the one codec, so
+ * the column is a plain string here, `"null"` when there is none. It is a bare select/insert-only
+ * `Model.Field` (like `valueHash` above) rather than `Model.Sensitive`: it needs the same "no
+ * update, no JSON variant, ever" treatment `valueHash`'s own comment explains, for the same
+ * reason: flow state can carry secrets a leaked JSON response must never disclose. An *explicit*
+ * `payload: null` is indistinguishable from omission once stored, which `Verification` normalizes
+ * at `issue` (ESS-010).
  */
 const verificationTokenFields = {
   id: Model.UuidV7Insert(VerificationTokenId),
@@ -448,14 +434,12 @@ const verificationTokenFields = {
     insert: Schema.Number.pipe(Schema.withConstructorDefault(Effect.succeed(0))),
   }),
   payload: Model.Field({
-    select: Schema.fromJsonString(Schema.Unknown),
-    insert: Schema.fromJsonString(Schema.Unknown).pipe(
-      Schema.withConstructorDefault(Effect.succeed(null)),
-    ),
+    select: Schema.String,
+    insert: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("null"))),
   }),
 };
 
-/** One `auth_audit_log` row as the database returns it (`occurredAt` per-dialect, payload opaque JSON text). */
+/** One `auth_audit_log` row as the database returns it (`occurredAt` per-dialect, payload the JSON text, opaque to the store). */
 const auditLogRow = <C extends Schema.Top>(occurredAt: C) =>
   Schema.Struct({
     id: Schema.String,
@@ -464,7 +448,7 @@ const auditLogRow = <C extends Schema.Top>(occurredAt: C) =>
     occurredAt,
     correlationId: Schema.NullOr(Schema.String),
     tenantId: Schema.NullOr(Schema.String),
-    payload: Schema.fromJsonString(Schema.Unknown),
+    payload: Schema.String,
   });
 
 // ---- per-dialect model sets -------------------------------------------------

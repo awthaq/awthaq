@@ -1,6 +1,6 @@
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-138 through BEH-EA-141.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, DataExport, Erasure, Slots, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, DataExport, Erasure, Persistence, Slots, Users } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -20,7 +20,7 @@ const owner = role({ name: "owner", permissions: [projectDelete], inherits: [edi
 // `provideMerge` also exposes `AuditLog` so tests can read the durable record back.
 // MA-005: a plugin layer built outside `Auth.make` (which provides one itself) needs a `SlotsRegistry`.
 const CoreLive = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Slots.layer),
   // CSG-001/CSG-005: the plugin contributes its erasure and export to the composition's registries.
   Layer.provideMerge(Erasure.registryLayer),
@@ -28,7 +28,11 @@ const CoreLive = AuthEvents.layer.pipe(
 );
 
 const layerFor = (catalog: ReadonlyArray<ReturnType<typeof role>>) =>
-  Roles.Roles.layer.pipe(Layer.provide(Roles.config(catalog)), Layer.provideMerge(CoreLive));
+  Roles.Roles.layer.pipe(
+    Layer.provide(Roles.Roles.records.memory),
+    Layer.provide(Roles.config(catalog)),
+    Layer.provideMerge(CoreLive),
+  );
 
 const TestLayer = layerFor([editor, owner]);
 
@@ -110,7 +114,10 @@ describe("Roles (SubjectResolver override)", () => {
       const userId = Users.UserId("33333333-3333-3333-3333-333333333333");
       const failure = yield* roles.assign(userId, "does-not-exist-in-catalog").pipe(Effect.flip);
       assert.strictEqual(failure._tag, "Roles/UnknownRole");
-      assert.strictEqual(failure.roleName, "does-not-exist-in-catalog");
+      assert.strictEqual(
+        failure._tag === "Roles/UnknownRole" ? failure.roleName : "",
+        "does-not-exist-in-catalog",
+      );
       assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
       assert.deepStrictEqual(yield* roles.listUnknownAssignments, []);
     }).pipe(Effect.provide(TestLayer)),

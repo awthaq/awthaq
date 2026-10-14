@@ -26,7 +26,7 @@
 // — the same standalone-export shape `KeyRing.rotateNow` already uses)
 // with a `jti` it extracted from `jwt.verify`/`verifyJWT`'s own claims.
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -39,12 +39,22 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 export interface RevocationStoreShape {
-  readonly revoke: (jti: string, expiresAt: DateTime.Utc) => Effect.Effect<void>;
-  readonly isRevoked: (jti: string) => Effect.Effect<boolean>;
+  readonly revoke: (
+    jti: string,
+    expiresAt: DateTime.Utc,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  readonly isRevoked: (jti: string) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
+  /**
+   * Retention (plan 10 item 6): deletes the rows whose `expiresAt` (the denied token's own `exp`)
+   * is not after `now`, which `isRevoked` already reads as absent; resolves to how many went.
+   */
+  readonly purgeExpired: (
+    now: DateTime.Utc,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
 }
 
 export class RevocationStore extends Context.Service<RevocationStore, RevocationStoreShape>()(
-  "awthaq/jwt/RevocationStore",
+  "awthaq/jwt/records/RevocationStore",
 ) {}
 
 // ---- layerMemory ------------------------------------------------------------
@@ -68,7 +78,16 @@ export const layerMemory = Layer.effect(
         return DateTime.toEpochMillis(entry.value) > DateTime.toEpochMillis(now);
       });
 
-    return { revoke, isRevoked };
+    const purgeExpired: RevocationStoreShape["purgeExpired"] = (now) =>
+      Ref.modify(state, (s) => {
+        const kept = HashMap.filter(
+          s,
+          (expiresAt) => DateTime.toEpochMillis(expiresAt) > DateTime.toEpochMillis(now),
+        );
+        return [HashMap.size(s) - HashMap.size(kept), kept] as const;
+      });
+
+    return { revoke, isRevoked, purgeExpired };
   }),
 );
 
@@ -105,17 +124,33 @@ export const layerSql = Layer.effect(
       execute: (jti) => sql`SELECT * FROM jwt_token_revocation WHERE jti = ${jti}`,
     });
 
+    const purgeQuery = SqlSchema.findAll({
+      Request: wire.dateTime,
+      Result: Schema.Struct({ jti: Schema.String }),
+      execute: (now) =>
+        sql`DELETE FROM jwt_token_revocation WHERE "expiresAt" <= ${now} RETURNING jti`,
+    });
+
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`RevocationStore.${operation}`);
+
     const revoke: RevocationStoreShape["revoke"] = (jti, expiresAt) =>
-      upsert({ jti, expiresAt }).pipe(Effect.asVoid, Effect.orDie);
+      upsert({ jti, expiresAt }).pipe(Effect.asVoid, unavailable("revoke"));
 
     const isRevoked: RevocationStoreShape["isRevoked"] = (jti) =>
       Effect.gen(function* () {
-        const row = yield* findQuery(jti).pipe(Effect.orDie);
+        const row = yield* findQuery(jti).pipe(unavailable("isRevoked"));
         if (Option.isNone(row)) return false;
         const now = yield* DateTime.now;
         return DateTime.toEpochMillis(row.value.expiresAt) > DateTime.toEpochMillis(now);
       });
 
-    return { revoke, isRevoked };
+    const purgeExpired: RevocationStoreShape["purgeExpired"] = (now) =>
+      purgeQuery(now).pipe(
+        Effect.map((rows) => rows.length),
+        unavailable("purgeExpired"),
+      );
+
+    return { revoke, isRevoked, purgeExpired };
   }),
 );

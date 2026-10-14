@@ -676,25 +676,42 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(a, b);
   });
 
+  const liveResetToken = Effect.fnUntraced(function* (
+    storage: "sqlite" | "memory",
+    name: string,
+    sessionName: string,
+    forName: string,
+  ) {
+    assert.equal(name, forName, "this step wires one user: the token's owner holds the session");
+    yield* configureApp({ storage });
+    const email = `${name}@example.com`;
+    const { cookie } = yield* signUpActor(name, email, STRONG_PASSWORD);
+    assert.ok(cookie !== undefined, "sign-up must have issued the session");
+    yield* setSession(sessionName, cookie);
+    yield* setNote(`resetSession:${name}`, sessionName);
+    assert.equal(yield* sessionIsLive(cookie), true, `session ${sessionName} must be live`);
+    yield* verifyLatestSignUp(email);
+    yield* request("/password/request-reset", { email });
+    // `requestReset`'s own mail dispatch is `Effect.forkDetach`ed
+    // (BEH-EA-064: response latency must not be an enumeration oracle)
+    // — never awaited by the HTTP response, so the mail read needs these
+    // scheduler turns first.
+    yield* setNote(`resetToken:${name}`, yield* latestResetToken(email));
+  });
+
+  // TIR-005: the reset unit is only atomic over a real transaction.
   Given(
     "a live password-reset token for {string} and an existing session {string} for {string}",
     function* (name: string, sessionName: string, forName: string) {
-      assert.equal(name, forName, "this step wires one user: the token's owner holds the session");
-      // TIR-005: the reset unit is only atomic over a real transaction.
-      yield* configureApp({ storage: "sqlite" });
-      const email = `${name}@example.com`;
-      const { cookie } = yield* signUpActor(name, email, STRONG_PASSWORD);
-      assert.ok(cookie !== undefined, "sign-up must have issued the session");
-      yield* setSession(sessionName, cookie);
-      yield* setNote(`resetSession:${name}`, sessionName);
-      assert.equal(yield* sessionIsLive(cookie), true, `session ${sessionName} must be live`);
-      yield* verifyLatestSignUp(email);
-      yield* request("/password/request-reset", { email });
-      // `requestReset`'s own mail dispatch is `Effect.forkDetach`ed
-      // (BEH-EA-064: response latency must not be an enumeration oracle)
-      // — never awaited by the HTTP response, so the mail read needs these
-      // scheduler turns first.
-      yield* setNote(`resetToken:${name}`, yield* latestResetToken(email));
+      yield* liveResetToken("sqlite", name, sessionName, forName);
+    },
+  );
+
+  // ADR-EA-039: `Verification.redeem` gives a failed reset's token back with no transaction at all.
+  Given(
+    "an in-memory composition with a live password-reset token for {string} and an existing session {string} for {string}",
+    function* (name: string, sessionName: string, forName: string) {
+      yield* liveResetToken("memory", name, sessionName, forName);
     },
   );
 

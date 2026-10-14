@@ -2,7 +2,7 @@
 // composes `ApiKey` with the `Jwt` it depends on and a malformed prefix is a boot defect. (The
 // real migrations are exercised by every `sql` suite in this package, which migrates with
 // `ApiKey.migrations` and then runs the whole lifecycle against the result.)
-import { Auth } from "@awthaq/core";
+import { Auth, RateLimits } from "@awthaq/core";
 import { Jwt } from "@awthaq/jwt";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -19,6 +19,27 @@ describe("ApiKey plugin", () => {
     assert.deepStrictEqual(entry?.tables, ["apikey_key", "apikey_client"]);
     assert.deepStrictEqual(entry?.dependsOn, ["jwt"]);
   });
+
+  it.effect(
+    "registers the three rules it declares, with the keys it enforces (the client rule keys on client_id)",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* RateLimits.RateLimitsRegistry;
+        const mine = (yield* registry.registered).filter((rule) => rule.plugin === "apikey");
+        assert.deepStrictEqual(
+          mine.map((rule) => [rule.name, rule.group, rule.endpoint, rule.key, rule.dimension]),
+          [
+            ["tokenByIp", "apikey.token", "token", "ip", "ip"],
+            ["tokenByClient", "apikey.token", "token", "client", "identity"],
+            ["resolveByIp", "apikey", "resolve", "ip", "ip"],
+          ],
+        );
+        assert.deepStrictEqual(
+          ApiKey.ApiKey.rateLimits.map((rule) => rule.name),
+          mine.map((rule) => rule.name),
+        );
+      }).pipe(Effect.provide(buildLayer({ store: "memory" }))),
+  );
 
   it("refuses to compose without the Jwt it mints service tokens through", () => {
     // @ts-expect-error a missing dependency is a compile-time error naming `jwt` (BEH-EA-009).

@@ -164,7 +164,11 @@ export interface CredentialResolverContribution {
   readonly claims: (credential: string) => boolean;
   readonly resolve: (
     credential: Redacted.Redacted<string>,
-  ) => Effect.Effect<Api.Principal, Api.Unauthenticated, HttpServerRequest.HttpServerRequest>;
+  ) => Effect.Effect<
+    Api.Principal,
+    Api.Unauthenticated | Api.StoreUnavailable,
+    HttpServerRequest.HttpServerRequest
+  >;
 }
 
 /** Two contributions on one carrier share an `id`: a composition mistake, surfaced at layer build. */
@@ -269,7 +273,22 @@ export const resolveClaimed = (carrier: CredentialCarrier, credential: Redacted.
     const contributions = yield* registry.value.resolvers(carrier);
     const claiming = contributions.find((contribution) => contribution.claims(raw));
     if (claiming === undefined) return Option.none<Api.Principal>();
-    return Option.some(yield* claiming.resolve(credential));
+    // MA-004 / plan 05: a contribution's store outage is the request's outage, exactly as the
+    // cookie scheme's is: later schemes of the same request fail with it before doing any work.
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const outage = requestOutages.get(request.source);
+    if (outage !== undefined) return yield* Effect.fail(outage);
+    return Option.some(
+      yield* claiming
+        .resolve(credential)
+        .pipe(
+          Effect.tapError((error) =>
+            Predicate.isTagged(error, "StoreUnavailable")
+              ? Effect.sync(() => requestOutages.set(request.source, error))
+              : Effect.void,
+          ),
+        ),
+    );
   });
 
 /**

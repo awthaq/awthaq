@@ -670,33 +670,8 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    // MLO-006: the atomic `UPDATE ... RETURNING` decides a concurrent race.
     it.effect(
-      "BEH-EA-062: two concurrent tryConsume calls for one live token yield exactly one row",
-      () =>
-        Effect.gen(function* () {
-          const verification = yield* Repositories.VerificationRepository;
-          const now = yield* DateTime.now;
-          yield* verification.upsertLive(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "verify-email:race",
-              valueHash: "hash-race",
-              expiresAt: DateTime.add(now, { minutes: 10 }),
-              consumedAt: null,
-            }),
-          );
-          const claim = verification.tryConsume({
-            identifier: "verify-email:race",
-            valueHash: "hash-race",
-            now,
-          });
-          const results = yield* Effect.all([claim, claim], { concurrency: "unbounded" });
-          assert.strictEqual(results.filter(Option.isSome).length, 1);
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "BEH-EA-122: VerificationToken.payload round-trips JSON-encoded, defaulting to null",
+      "BEH-EA-122: VerificationToken.payload stores the JSON text it is given, defaulting to the literal null",
       () =>
         Effect.gen(function* () {
           const verification = yield* Repositories.VerificationRepository;
@@ -707,10 +682,13 @@ export const contractCases = (
               valueHash: "hash-1",
               expiresAt: now,
               consumedAt: null,
-              payload: { codeVerifier: "abc", nonce: "xyz" },
+              payload: JSON.stringify({ codeVerifier: "abc", nonce: "xyz" }),
             }),
           );
-          assert.deepStrictEqual(withPayload.payload, { codeVerifier: "abc", nonce: "xyz" });
+          assert.strictEqual(
+            withPayload.payload,
+            JSON.stringify({ codeVerifier: "abc", nonce: "xyz" }),
+          );
 
           const withoutPayload = yield* verification.insert(
             yield* M.VerificationToken.insert.makeEffect({
@@ -720,148 +698,13 @@ export const contractCases = (
               consumedAt: null,
             }),
           );
-          assert.strictEqual(withoutPayload.payload, null);
+          assert.strictEqual(withoutPayload.payload, "null");
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect(
-      "ADR-EA-016: upsertLive replaces the current live row in place, leaving consumed history untouched",
-      () =>
-        Effect.gen(function* () {
-          const verification = yield* Repositories.VerificationRepository;
-          const now = yield* DateTime.now;
-          const consumedRow = yield* verification.insert(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "verify-email:user-3",
-              valueHash: "hash-old",
-              expiresAt: now,
-              consumedAt: null,
-            }),
-          );
-          yield* verification.update(
-            yield* M.VerificationToken.update.makeEffect({
-              id: consumedRow.id,
-              consumedAt: now,
-            }),
-          );
-          const staleLiveRow = yield* verification.insert(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "verify-email:user-3",
-              valueHash: "hash-stale",
-              expiresAt: now,
-              consumedAt: null,
-            }),
-          );
-
-          const fresh = yield* M.VerificationToken.insert.makeEffect({
-            identifier: "verify-email:user-3",
-            valueHash: "hash-fresh",
-            expiresAt: now,
-            consumedAt: null,
-          });
-          const replaced = yield* verification.upsertLive(fresh);
-
-          assert.strictEqual(replaced.valueHash, "hash-fresh");
-          const stillConsumed = yield* verification.findById(consumedRow.id);
-          assert.strictEqual(stillConsumed.valueHash, "hash-old");
-          const staleGone = yield* verification.findById(staleLiveRow.id).pipe(Effect.exit);
-          assert.strictEqual(staleGone._tag, "Failure");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "ADR-EA-016: two concurrent upsertLives for the same identifier never leave two live rows",
-      () =>
-        Effect.gen(function* () {
-          const verification = yield* Repositories.VerificationRepository;
-          const sql = yield* SqlClient.SqlClient;
-          const now = yield* DateTime.now;
-          const identifier = "verify-email:user-11";
-
-          yield* Effect.all(
-            [
-              M.VerificationToken.insert
-                .makeEffect({ identifier, valueHash: "hash-a", expiresAt: now, consumedAt: null })
-                .pipe(Effect.flatMap(verification.upsertLive)),
-              M.VerificationToken.insert
-                .makeEffect({ identifier, valueHash: "hash-b", expiresAt: now, consumedAt: null })
-                .pipe(Effect.flatMap(verification.upsertLive)),
-            ],
-            { concurrency: "unbounded" },
-          );
-
-          const rows =
-            yield* sql`SELECT COUNT(*) AS count FROM verification_tokens WHERE identifier = ${identifier} AND "consumedAt" IS NULL`;
-          assert.strictEqual(Number(rows[0]?.["count"]), 1);
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect("BEH-EA-058/062: tryConsume is the one atomic claim behind consumption", () =>
-      Effect.gen(function* () {
-        const verification = yield* Repositories.VerificationRepository;
-        const now = yield* DateTime.now;
-        yield* verification.insert(
-          yield* M.VerificationToken.insert.makeEffect({
-            identifier: "reset-password:user-4",
-            valueHash: "correct-hash",
-            expiresAt: DateTime.addDuration(now, Duration.minutes(10)),
-            consumedAt: null,
-          }),
-        );
-
-        const wrongHash = yield* verification.tryConsume({
-          identifier: "reset-password:user-4",
-          valueHash: "wrong-hash",
-          now,
-        });
-        assert.isTrue(Option.isNone(wrongHash));
-
-        const firstConsume = yield* verification.tryConsume({
-          identifier: "reset-password:user-4",
-          valueHash: "correct-hash",
-          now,
-        });
-        assert.isTrue(Option.isSome(firstConsume));
-
-        const replay = yield* verification.tryConsume({
-          identifier: "reset-password:user-4",
-          valueHash: "correct-hash",
-          now,
-        });
-        assert.isTrue(Option.isNone(replay));
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "ADR-EA-016: VerificationReservationsRepository.claim is exclusive while unexpired",
-      () =>
-        Effect.gen(function* () {
-          const reservations = yield* Repositories.VerificationReservationsRepository;
-          const now = yield* DateTime.now;
-
-          const first = yield* reservations.claim({
-            identifier: "promote:user-5",
-            expiresAt: DateTime.addDuration(now, Duration.minutes(1)),
-            now,
-          });
-          assert.isTrue(first);
-
-          const second = yield* reservations.claim({
-            identifier: "promote:user-5",
-            expiresAt: DateTime.addDuration(now, Duration.minutes(1)),
-            now,
-          });
-          assert.isFalse(second);
-
-          const later = DateTime.addDuration(now, Duration.minutes(2));
-          const third = yield* reservations.claim({
-            identifier: "promote:user-5",
-            expiresAt: DateTime.addDuration(later, Duration.minutes(1)),
-            now: later,
-          });
-          assert.isTrue(third);
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
+    // The verification repository cases (the atomic claim, the live-row replacement, the reservation
+    // claim and its boundary) are `StoreContract.verification`, which runs on every adapter (plan 02,
+    // ADR-EA-041).
 
     // ESR-009: the RETURNING-decoded session writes of RRS-003/ticket 15 —
     // a timestamp/nullable-timestamp round trip through each dialect's codec.
@@ -875,6 +718,8 @@ export const contractCases = (
             yield* M.User.insert.makeEffect({ email: "rotation@example.com", name: "R" }),
           );
           const now = yield* DateTime.now;
+          // Live for an hour: `reauthenticate` refuses a dead row (BEH-EA-319).
+          const expires = DateTime.addDuration(now, Duration.hours(1));
           const make = (hash: string) =>
             sessions.insert(
               M.Session.insert.make({
@@ -882,8 +727,8 @@ export const contractCases = (
                 secretHash: hash,
                 ipAddress: null,
                 userAgent: null,
-                absoluteExpiresAt: now,
-                idleExpiresAt: Model.Override(now),
+                absoluteExpiresAt: expires,
+                idleExpiresAt: Model.Override(expires),
                 actingAsType: null,
                 actingAsId: null,
                 familyId: Schema.decodeUnknownSync(Models.SessionId)("family-1"),
@@ -895,8 +740,22 @@ export const contractCases = (
           const old = yield* make("old");
           const fresh = yield* make("fresh");
 
+          // INV-EA-018: a foreign owner cannot tombstone the row; the owner can.
+          const intruder = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "rotation-intruder@example.com", name: "I" }),
+          );
+          const refused = yield* sessions
+            .tombstone({
+              id: old.id,
+              userId: intruder.id,
+              supersededBy: fresh.id,
+              supersededAt: now,
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(refused._tag, "NoSuchElementError");
           const tombstoned = yield* sessions.tombstone({
             id: old.id,
+            userId: user.id,
             supersededBy: fresh.id,
             supersededAt: now,
           });
@@ -904,16 +763,36 @@ export const contractCases = (
           assert.isNotNull(tombstoned.supersededAt);
           assert.strictEqual(tombstoned.reusedAt, null);
 
-          yield* sessions.markReused(old.id, now);
+          // RRS-003: the mark applies once; a second call finds nothing to flag.
+          const flagged = yield* sessions.markReusedOnce(old.id, now);
+          assert.strictEqual(Option.getOrUndefined(flagged)?.familyId, old.familyId);
+          assert.isTrue(Option.isNone(yield* sessions.markReusedOnce(old.id, now)));
+          // A live (non-tombstoned) row is never flagged.
+          assert.isTrue(Option.isNone(yield* sessions.markReusedOnce(fresh.id, now)));
           const reread = yield* sessions.findById(old.id);
           assert.isNotNull(reread.reusedAt);
 
           const later = DateTime.addDuration(now, Duration.minutes(5));
-          const reauthenticated = yield* sessions.reauthenticate(fresh.id, later);
+          const reauthenticated = yield* sessions.reauthenticate(fresh.id, user.id, later);
           assert.strictEqual(
             DateTime.toEpochMillis(reauthenticated.authenticatedAt),
             DateTime.toEpochMillis(later),
           );
+          // BEH-EA-319: the UPDATE's own WHERE refuses a foreign owner, a tombstoned row and an
+          // expired instant (the 'old' row is tombstoned; 'fresh' expires an hour out).
+          const other = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "rotation-other@example.com", name: "O" }),
+          );
+          const foreign = yield* sessions
+            .reauthenticate(fresh.id, other.id, later)
+            .pipe(Effect.flip);
+          assert.strictEqual(foreign._tag, "NoSuchElementError");
+          const dead = yield* sessions.reauthenticate(old.id, user.id, later).pipe(Effect.flip);
+          assert.strictEqual(dead._tag, "NoSuchElementError");
+          const past = yield* sessions
+            .reauthenticate(fresh.id, user.id, DateTime.addDuration(now, Duration.hours(2)))
+            .pipe(Effect.flip);
+          assert.strictEqual(past._tag, "NoSuchElementError");
 
           yield* sessions.revokeFamily(Schema.decodeUnknownSync(Models.SessionId)("family-1"));
           // The tombstoned row survives (its lineage is evidence); the live row is gone.
@@ -924,110 +803,8 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect("AuditLog.list filters by an occurredAt range and round-trips the payload", () =>
-      Effect.gen(function* () {
-        const auditLog = yield* Repositories.AuditLogRepository;
-        const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
-        const at = (minutes: number) => DateTime.addDuration(t0, Duration.minutes(minutes));
-        for (const { id, minutes } of [
-          { id: "a", minutes: 0 },
-          { id: "b", minutes: 10 },
-          { id: "c", minutes: 20 },
-        ]) {
-          yield* auditLog.insert({
-            id,
-            eventTag: "auth.test",
-            actorUserId: null,
-            occurredAt: at(minutes),
-            correlationId: null,
-            payload: { id },
-          });
-        }
-        const inRange = yield* auditLog.list({
-          eventTag: null,
-          actorUserId: null,
-          occurredAfter: at(5),
-          occurredBefore: at(15),
-        });
-        assert.deepStrictEqual(
-          inRange.map((row) => row.id),
-          ["b"],
-        );
-        assert.deepStrictEqual(inRange[0]?.payload, { id: "b" });
-        const all = yield* auditLog.list({
-          eventTag: "auth.test",
-          actorUserId: null,
-          occurredAfter: null,
-          occurredBefore: null,
-        });
-        assert.deepStrictEqual(
-          all.map((row) => row.id),
-          ["c", "b", "a"],
-        );
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
-    // ALF-010: retention deletes are one bounded statement each.
-    it.effect(
-      "AuditLog.deleteOccurredBefore removes only rows older than the cutoff for the given tags",
-      () =>
-        Effect.gen(function* () {
-          const auditLog = yield* Repositories.AuditLogRepository;
-          const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
-          const at = (days: number) => DateTime.addDuration(t0, Duration.days(days));
-          const rows = [
-            { id: "a", eventTag: "auth.one", days: 0 },
-            { id: "b", eventTag: "auth.two", days: 0 },
-            { id: "c", eventTag: "auth.one", days: 10 },
-            { id: "d", eventTag: "auth.three", days: 0 },
-          ];
-          for (const { id, eventTag, days } of rows) {
-            yield* auditLog.insert({
-              id,
-              eventTag,
-              actorUserId: null,
-              occurredAt: at(days),
-              correlationId: null,
-              payload: { id },
-            });
-          }
-          const remaining = auditLog
-            .list({ eventTag: null, actorUserId: null, occurredAfter: null, occurredBefore: null })
-            .pipe(Effect.map((all) => all.map((row) => row.id).sort()));
-
-          // only the listed tag, only before the cutoff: `a` goes; `c` is newer, `b`/`d` other tags
-          assert.strictEqual(
-            yield* auditLog.deleteOccurredBefore({
-              cutoff: at(5),
-              eventTags: ["auth.one"],
-              exceptTags: [],
-              limit: 100,
-            }),
-            1,
-          );
-          assert.deepStrictEqual(yield* remaining, ["b", "c", "d"]);
-
-          // every tag but `auth.three`, bounded by `limit`: `b` goes, `d` is excepted
-          assert.strictEqual(
-            yield* auditLog.deleteOccurredBefore({
-              cutoff: at(5),
-              eventTags: null,
-              exceptTags: ["auth.three"],
-              limit: 1,
-            }),
-            1,
-          );
-          assert.deepStrictEqual(yield* remaining, ["c", "d"]);
-          assert.strictEqual(
-            yield* auditLog.deleteOccurredBefore({
-              cutoff: at(5),
-              eventTags: null,
-              exceptTags: ["auth.three"],
-              limit: 100,
-            }),
-            0,
-          );
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
+    // The audit-log repository cases (the `occurredAt` range, the payload round trip, bounded
+    // retention deletes) are `StoreContract.auditLog`, which runs on every adapter (plan 02, ADR-EA-041).
 
     it.effect(
       "CSG-003: deleteExpiredBefore removes expired sessions, tokens and reservations, bounded by limit, and reports the count",
@@ -1259,22 +1036,35 @@ export const contractCases = (
       30_000,
     );
 
-    it.effect("GC-005: deleteOwned deletes only the owner's row, in one statement", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Repositories.SessionsRepository;
-        const owner = yield* makeUser("owner@example.com");
-        const other = yield* makeUser("not-owner@example.com");
-        const now = yield* DateTime.now;
-        const future = DateTime.addDuration(now, Duration.days(1));
-        const row = yield* insertLiveSession(owner.id, {
-          absoluteExpiresAt: future,
-          idleExpiresAt: future,
-        });
-        assert.isFalse(yield* sessions.deleteOwned(row.id, other.id));
-        assert.strictEqual((yield* sessions.findById(row.id)).id, row.id);
-        assert.isTrue(yield* sessions.deleteOwned(row.id, owner.id));
-        assert.isFalse(yield* sessions.deleteOwned(row.id, owner.id));
-      }).pipe(Effect.provide(RepositoriesLive)),
+    it.effect(
+      "TIR-008/GC-005: deleteReturning deletes once, and only the owner's row when asked",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Repositories.SessionsRepository;
+          const owner = yield* makeUser("owner@example.com");
+          const other = yield* makeUser("not-owner@example.com");
+          const now = yield* DateTime.now;
+          const future = DateTime.addDuration(now, Duration.days(1));
+          const row = yield* insertLiveSession(owner.id, {
+            absoluteExpiresAt: future,
+            idleExpiresAt: future,
+          });
+          assert.isTrue(Option.isNone(yield* sessions.deleteReturning(row.id, other.id)));
+          assert.strictEqual((yield* sessions.findById(row.id)).id, row.id);
+          assert.strictEqual(
+            Option.getOrUndefined(yield* sessions.deleteReturning(row.id, owner.id)),
+            owner.id,
+          );
+          assert.isTrue(Option.isNone(yield* sessions.deleteReturning(row.id, owner.id)));
+          const again = yield* insertLiveSession(owner.id, {
+            absoluteExpiresAt: future,
+            idleExpiresAt: future,
+          });
+          assert.strictEqual(
+            Option.getOrUndefined(yield* sessions.deleteReturning(again.id)),
+            owner.id,
+          );
+        }).pipe(Effect.provide(RepositoriesLive)),
     );
 
     // ---- DRS-001 (ADR-EA-018): the ambient tenant is stamped on every insert path ----
@@ -1325,18 +1115,18 @@ export const contractCases = (
           valueHash: "h",
           expiresAt: future,
           createdAt: now,
-          payload: null,
+          payload: "null",
           maxAttempts: null,
           attempts: 0,
         });
         yield* reservations.claim({ identifier: `signup:${label}`, expiresAt: future, now });
-        yield* auditLog.insert({
+        yield* auditLog.insertIfAbsent({
           id: `${label}-audit`,
           eventTag: "auth.test",
           actorUserId: null,
           occurredAt: now,
           correlationId: null,
-          payload: null,
+          payload: "null",
         });
         return {
           users: [user.tenantId, ...(Option.isSome(orphan) ? [orphan.value.tenantId] : [])],
@@ -1439,9 +1229,14 @@ export const contractCases = (
           idleExpiresAt: future,
         });
         const successor = Schema.decodeUnknownSync(Models.SessionId)("successor-1");
-        yield* sessions.tombstone({ id: row.id, supersededBy: successor, supersededAt: now });
+        yield* sessions.tombstone({
+          id: row.id,
+          userId: row.userId,
+          supersededBy: successor,
+          supersededAt: now,
+        });
         const again = yield* sessions
-          .tombstone({ id: row.id, supersededBy: successor, supersededAt: now })
+          .tombstone({ id: row.id, userId: row.userId, supersededBy: successor, supersededAt: now })
           .pipe(Effect.flip);
         assert.strictEqual(again._tag, "NoSuchElementError");
       }).pipe(Effect.provide(RepositoriesLive)),

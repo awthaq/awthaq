@@ -1,109 +1,64 @@
-// The shared domain-level composition for this package's tests: real in-memory `Users`, `Sessions`,
-// `Verification`, `AuthEvents` and `AuditLog`, the real `MagicLink` and `EmailOtp` plugins, and —
-// so the MFA divert can be proven end to end — the real `@awthaq/two-factor` plugin with both gates.
-import { RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  PasswordHasher,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import { SecondFactor, TwoFactor, TwoFactorStore } from "@awthaq/two-factor";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as ConfigProvider from "effect/ConfigProvider";
+// The shared domain-level composition for this package's tests: `Auth.make([MagicLink, EmailOtp, TwoFactor])`
+// through `TestAuth.layer` (plan 08): real in-memory `Users`, `Sessions`, `Verification`, `AuthEvents` and `AuditLog`,
+// the real `MagicLink` and `EmailOtp` plugins, and, so the MFA divert can be proven end to end, the real
+// `@awthaq/two-factor` plugin with both gates.
+import { Auth, Errors, Sessions } from "@awthaq/core";
+import { Mailer, RateLimiter } from "@awthaq/ports";
+import { SecondFactor, TwoFactor } from "@awthaq/two-factor";
+import { TestAuth } from "@awthaq/test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as EmailOtp from "../../src/EmailOtp.ts";
 import * as MagicLink from "../../src/MagicLink.ts";
-import { TestAuth } from "@awthaq/test";
 
-const TestHasher = PasswordHasher.layerArgon2id.pipe(
-  Layer.provide(
-    ConfigProvider.layer(
-      ConfigProvider.fromEnv({
-        env: { AUTH_ARGON2_MEMORY_KIB: "1024", AUTH_ARGON2_ITERATIONS: "1" },
-      }),
-    ),
-  ),
-  Layer.orDie,
-);
-
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("magic-link-test-csrf-secret-padded-to-thirty-two-bytes"),
-      allowedOrigins: [] as ReadonlyArray<string>,
+/** Fails `Sessions.issue` with the typed outage while the flag is set (ADR-EA-039: a link must survive it). */
+const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
+  Layer.effect(
+    Sessions.Sessions,
+    Effect.gen(function* () {
+      const real = yield* Sessions.Sessions;
+      return Sessions.Sessions.of({
+        ...real,
+        issue: (input) =>
+          Ref.get(outage).pipe(
+            Effect.flatMap((down) =>
+              down
+                ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
+                : real.issue(input),
+            ),
+          ),
+      });
     }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+  );
 
 /** A real limiter over the in-memory store (rate-limit tests need real budgets), or the permissive one. */
 export const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 
-/** `@awthaq/two-factor`, gates included, so the MFA divert is real. */
-const TwoFactorLive = TwoFactor.TwoFactor.layer.pipe(
-  Layer.provideMerge(TwoFactor.sessionGate),
-  Layer.provideMerge(TwoFactor.credentialResetGate),
-  Layer.provideMerge(SecondFactor.layer),
-  Layer.provideMerge(
-    Layer.mergeAll(TwoFactorStore.layerSecretsMemory, TwoFactorStore.layerRecoveryCodesMemory),
-  ),
-  Layer.provideMerge(EncryptionLive),
-);
+const built = Auth.make([MagicLink.MagicLink, EmailOtp.EmailOtp, TwoFactor.TwoFactor]);
 
 export const buildLayer = (options?: {
   readonly magicLink?: Partial<MagicLink.MagicLinkConfigShape>;
   readonly emailOtp?: Partial<EmailOtp.EmailOtpConfigShape>;
   readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
+  /** While set, `Sessions.issue` fails with the typed `StoreUnavailable`. */
+  readonly failSessionIssue?: Ref.Ref<boolean>;
 }) =>
-  Layer.mergeAll(MagicLink.MagicLink.layer, EmailOtp.EmailOtp.layer, TwoFactorLive).pipe(
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        TestHasher,
-        Mailer.layerMemory,
-        options?.limiter ?? RateLimiter.layerPermissive,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
-    ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(SqlTransaction.layerNoop),
-    Layer.provide(ClientAddress.layerDirect),
-    Layer.provideMerge(MagicLink.config(options?.magicLink ?? {})),
-    Layer.provideMerge(EmailOtp.config(options?.emailOtp ?? {})),
-  );
+  TestAuth.layer(built, {
+    // `@awthaq/two-factor`'s gates are always installed (so the MFA divert is real); the suite's limiter sits beneath
+    // them because `SecondFactor` spends its failure budget through it.
+    services: Layer.mergeAll(
+      Layer.mergeAll(TwoFactor.sessionGate, TwoFactor.credentialResetGate).pipe(
+        Layer.provideMerge(SecondFactor.layer),
+      ),
+      MagicLink.config(options?.magicLink ?? {}),
+      EmailOtp.config(options?.emailOtp ?? {}),
+    ).pipe(Layer.provideMerge(options?.limiter ?? RateLimiter.layerPermissive)),
+    ...(options?.failSessionIssue === undefined
+      ? {}
+      : { decorate: sessionsWithOutage(options.failSessionIssue) }),
+  });
 
 /** Lets the fibers the plugins fork (mail dispatch) run before a test reads their result. */
 export const letForkedFibersRun = Effect.gen(function* () {

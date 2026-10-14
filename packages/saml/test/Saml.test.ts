@@ -1,8 +1,9 @@
 // BEH-EA-238 through 245 (spec/behaviors/29-saml-sp.md), through the service: SP-initiated login, then the ACS
 // chain against signed responses the fixtures' IdP produces — and against every way of getting one wrong. The
 // invariant asserted throughout: every rejection is the SAME `SamlAssertionRejected`, and never a session.
-import { AuthEvents, Users } from "@awthaq/core";
-import { OrganizationRecords } from "@awthaq/organization";
+import { Auth, AuthEvents, RateLimits, Users } from "@awthaq/core";
+import { Organization } from "@awthaq/organization";
+import { OrganizationRecords } from "@awthaq/organization/records";
 import { RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -15,6 +16,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Saml from "../src/Saml.ts";
 import * as SamlConnections from "../src/SamlConnections.ts";
+import * as Sso from "../src/Sso.ts";
 import {
   ACS_URL,
   ALGORITHM,
@@ -38,6 +40,10 @@ import {
   startLogin,
   type Started,
 } from "./support.ts";
+import { TenantScoped } from "@awthaq/sql";
+
+/** The witness these tests present where a cross-organization caller would. */
+const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const acs = (samlResponse: string, cookieState: string | undefined, ip?: string) =>
   Effect.flatMap(Saml.Saml, (saml) => saml.acs({ samlResponse, cookieState, ip }));
@@ -502,7 +508,7 @@ describe("the chain refuses, uniformly", () => {
         const orgs = yield* OrganizationRecords.OrganizationRecords;
         const { connection, organizationId } = yield* seedConnection();
         const started = yield* startLogin(connection.id);
-        yield* orgs.setSuspended(organizationId, Option.some(yield* DateTime.now));
+        yield* orgs.setSuspended(grant, organizationId, Option.some(yield* DateTime.now));
         assert.strictEqual(
           yield* rejectedAs(idpResponse(started, connection.id), started.state),
           "SamlAssertionRejected",
@@ -697,6 +703,45 @@ describe("rate limits", () => {
           },
           MemoryLimiter,
         ),
+      ),
+    ),
+  );
+});
+
+describe("rate-limit rules are declared and registered (plan 06)", () => {
+  it("the manifest lists the SAML rules and the SSO rule that used to be enforced undeclared", () => {
+    const manifest = Auth.make([Organization.Organization, Saml.Saml, Sso.Sso]).manifest;
+    assert.deepStrictEqual(
+      manifest.rateLimits
+        .filter((rule) => rule.plugin === "saml" || rule.plugin === "sso")
+        .map((rule) => [rule.plugin, rule.group, rule.endpoint, rule.name, rule.key, rule.mode]),
+      [
+        ["saml", "saml", "login", "login", "ip", "attempts"],
+        ["saml", "saml", "acs", "acs", "ip", "attempts"],
+        ["saml", "saml", "slo", "slo", "ip", "attempts"],
+        ["saml", "saml.admin", "*", "admin", "user", "attempts"],
+        ["sso", "sso", "start", "start", "ip", "attempts"],
+      ],
+    );
+  });
+
+  it.effect("the registry records them, with the configured numbers", () =>
+    Effect.gen(function* () {
+      const registry = yield* RateLimits.RateLimitsRegistry;
+      const mine = (yield* registry.registered).filter((rule) => rule.plugin === "saml");
+      assert.deepStrictEqual(
+        mine.map((rule) => [rule.name, rule.limit]),
+        [
+          ["login", 7],
+          ["acs", 30],
+          ["slo", 30],
+          ["admin", 60],
+        ],
+      );
+    }).pipe(
+      // A partial `rateLimits` changes only the named endpoint; the others keep their defaults (D10).
+      Effect.provide(
+        SamlLive({ rateLimits: { login: { limit: 7, window: Duration.minutes(1) } } }),
       ),
     ),
   );

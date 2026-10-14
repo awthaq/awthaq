@@ -13,9 +13,7 @@
 import { Auth, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { AuthorizedSubject, SubjectApi } from "@awthaq/qadi";
-import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,7 +22,6 @@ import * as Redacted from "effect/Redacted";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { STRONG_PASSWORD } from "./shared/Harness.ts";
 import { makeOutcomes, type Outcomes } from "./shared/Outcomes.ts";
 
@@ -35,23 +32,17 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-const OptionalAuthenticationLive = Authentication.OptionalAuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
 const ReactServices = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests))),
   SubjectApi.SubjectHandlers.pipe(Layer.provide(AuthorizedSubject.AuthorizedSubjectLive)),
   NoBreachHttpClient,
-).pipe(Layer.provideMerge(OptionalAuthenticationLive), Layer.provide(NodeCrypto.layer));
+);
 
 /** Password + core's session/account groups + qadi's `GET /subject`, exactly what an app's `Providers` talks to. */
 export const reactTuple = Auth.make([Password.Password], {
   extraGroups: [SubjectApi.SubjectGroup],
 });
 
-const appLayer = TestAuth.layer(reactTuple, ReactServices);
+const appLayer = TestAuth.layer(reactTuple, { services: ReactServices });
 
 const makeApp = () => {
   const memoMap = Layer.makeMemoMapUnsafe();

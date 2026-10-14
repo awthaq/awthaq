@@ -11,11 +11,12 @@
 // the services read. A scenario that wants a non-default composition states so in a Given
 // (`configureApp`) before its first call.
 import {
-  Accounts,
+  Auth,
   AuditLog,
   AuthEvents,
   DataExport,
   Erasure,
+  Errors,
   Hooks,
   Migrations,
   RateLimits,
@@ -23,20 +24,11 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  Mailer,
-  PasswordHasher,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
+import { Encryption, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { Authentication, Csrf } from "@awthaq/server";
 import { SecondFactor, Totp, TwoFactor, TwoFactorConfig, TwoFactorStore } from "@awthaq/two-factor";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -53,35 +45,13 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
 import { mailedToken } from "./MailedToken.ts";
-import {
-  cheapArgon2id,
-  letForkedFibersRun,
-  makeNamedRegistry,
-  STRONG_PASSWORD,
-} from "./shared/Harness.ts";
-import { TestAuth } from "@awthaq/test";
+import { letForkedFibersRun, makeNamedRegistry, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
 /** The password every registered person signs up with. */
 export const PASSWORD = Redacted.make(STRONG_PASSWORD);
-
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
 
 const NoBreachHttpClient = Layer.succeed(
   HttpClient.HttpClient,
@@ -90,21 +60,25 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
+/** ADR-EA-039: while the flag is set, `Sessions.issue` fails with the typed outage, as a down session store would. */
+const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
+  Layer.effect(
+    Sessions.Sessions,
+    Effect.gen(function* () {
+      const real = yield* Sessions.Sessions;
+      return Sessions.Sessions.of({
+        ...real,
+        issue: (input) =>
+          Ref.get(outage).pipe(
+            Effect.flatMap((down) =>
+              down
+                ? Effect.fail(new Errors.StoreUnavailable({ operation: "Sessions.issue" }))
+                : real.issue(input),
+            ),
+          ),
+      });
+    }),
+  );
 
 /** A `PasswordHasher` over the cheap real one that counts every `hash`/`verify` it is asked for. */
 const countingHasher = (count: Ref.Ref<number>) =>
@@ -119,7 +93,7 @@ const countingHasher = (count: Ref.Ref<number>) =>
         needsRehash: real.needsRehash,
       });
     }),
-  ).pipe(Layer.provide(cheapArgon2id));
+  );
 
 export interface AppOptions {
   readonly config?: Partial<TwoFactorConfig.TwoFactorConfigShape>;
@@ -127,41 +101,36 @@ export interface AppOptions {
   readonly enforceRateLimits?: boolean;
 }
 
-const buildAppLayer = (options: AppOptions, hashes: Ref.Ref<number>) =>
-  Layer.mergeAll(
-    Password.Password.layer,
-    TwoFactor.TwoFactor.layer,
-    Erasure.layer,
-    DataExport.layer,
-  ).pipe(
-    Layer.provideMerge(TwoFactor.sessionGate),
-    Layer.provideMerge(TwoFactor.credentialResetGate),
-    Layer.provideMerge(SecondFactor.layer),
-    Layer.provideMerge(
-      Layer.mergeAll(TwoFactorStore.layerSecretsMemory, TwoFactorStore.layerRecoveryCodesMemory),
-    ),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        countingHasher(hashes),
-        Mailer.layerMemory,
+const built = Auth.make([Password.Password, TwoFactor.TwoFactor]);
+
+/**
+ * `Auth.make([Password, TwoFactor])` through `TestAuth.layer`: the real plugins, the real `Encryption`, argon2id at its
+ * smallest legal cost. The gates, the configuration and the limiter sit beneath the plugins (`sessionGate` reads the
+ * config when it is built, `SecondFactor` spends its failure budget through the limiter); the session outage and the
+ * counting hasher wrap the base (`decorate`), for the plugins and the steps alike.
+ */
+const buildAppLayer = (options: AppOptions, hashes: Ref.Ref<number>, outage: Ref.Ref<boolean>) =>
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Layer.mergeAll(TwoFactor.sessionGate, TwoFactor.credentialResetGate).pipe(
+        Layer.provideMerge(SecondFactor.layer),
+      ),
+      NoBreachHttpClient,
+      // The sign-in timing floor sleeps on the clock the scenario controls; it is Password's own concern
+      // (packages/password/test/Password.test.ts, TSS-006), not the second factor's.
+      Password.config({ signInTimingFloor: "off" }),
+    ).pipe(
+      // The secrets store's `MemoryEnvelopes` seam (a scenario plants envelopes), which a bundle does not provide.
+      Layer.provideMerge(TwoFactorStore.layerSecretsMemory),
+      Layer.provideMerge(TwoFactorConfig.config(options.config ?? {})),
+      Layer.provideMerge(
         options.enforceRateLimits === true
           ? RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))
           : RateLimiter.layerPermissive,
-      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+      ),
     ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(NoBreachHttpClient),
-    Layer.provide(SqlTransaction.layerNoop),
-    Layer.provide(ClientAddress.layerDirect),
-    Layer.provideMerge(TwoFactorConfig.config(options.config ?? {})),
-    // The sign-in timing floor sleeps on the clock the scenario controls; it is Password's own concern
-    // (packages/password/test/Password.test.ts, TSS-006), not the second factor's.
-    Layer.provideMerge(Password.config({ signInTimingFloor: "off" })),
-  );
+    decorate: Layer.mergeAll(sessionsWithOutage(outage), countingHasher(hashes)),
+  });
 
 /**
  * Runs `effect` once against a fresh composition, outside any World (a scenario of another feature that
@@ -174,7 +143,9 @@ export const inTwoFactorApp = <A, E>(
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const context = yield* Layer.build(buildAppLayer(options, Ref.makeUnsafe(0)));
+      const context = yield* Layer.build(
+        buildAppLayer(options, Ref.makeUnsafe(0), Ref.makeUnsafe(false)),
+      );
       return yield* Effect.provide(effect, context);
     }),
   );
@@ -185,6 +156,7 @@ export type TwoFactorServices =
   | TwoFactor.TwoFactor
   | SecondFactor.SecondFactor
   | TwoFactorStore.TwoFactorSecrets
+  | TwoFactorStore.MemoryEnvelopes
   | TwoFactorStore.TwoFactorRecoveryCodes
   | Encryption.Encryption
   | Users.Users
@@ -217,6 +189,8 @@ export interface WorldShape {
   readonly scope: Scope.Closeable;
   /** How many hash/verify calls the composition's `PasswordHasher` has served (REQ-EA-1065). */
   readonly hashes: Ref.Ref<number>;
+  /** While set, the composition's `Sessions.issue` fails with the typed `StoreUnavailable` (ADR-EA-039). */
+  readonly sessionOutage: Ref.Ref<boolean>;
   readonly people: NamedRegistry<Person>;
   /** Outcomes of direct service calls, by the name a step chose. */
   readonly exits: NamedRegistry<Exit.Exit<unknown, unknown>>;
@@ -243,6 +217,7 @@ export const WorldLive = Layer.effect(
       running: yield* Ref.make<Option.Option<Context.Context<TwoFactorServices>>>(Option.none()),
       scope,
       hashes: yield* Ref.make(0),
+      sessionOutage: yield* Ref.make(false),
       people: makeNamedRegistry<Person>("person"),
       exits: makeNamedRegistry<Exit.Exit<unknown, unknown>>("outcome"),
       strings: makeNamedRegistry<string>("text"),
@@ -278,7 +253,7 @@ const running = Effect.gen(function* () {
   const context = yield* Effect.promise(() =>
     Effect.runPromise(
       Layer.buildWithMemoMap(
-        buildAppLayer(options, world.hashes),
+        buildAppLayer(options, world.hashes, world.sessionOutage),
         Layer.makeMemoMapUnsafe(),
         world.scope,
       ),

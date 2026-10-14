@@ -13,18 +13,20 @@
 //   domain routes to exactly one, like `OrganizationConnectionStore.discover` does for OIDC), so home-realm
 //   discovery ("ada@acme.example" -> Acme's IdP) is one indexed lookup and a domain cannot be claimed twice.
 // - `saml_sp_key` — the service provider's own signing keys, per connection (BEH-EA-314): the certificate (public) and
-//   the private key SEALED by the `Encryption` port before it reaches this table (a database read discloses nothing that
-//   signs). Several rows are a rotation overlap: the newest signs, every unexpired certificate is published.
+//   the private key a `SealedColumn` (plan 05, ADR-EA-019 decision 6: sealed under `saml_sp_key:<id>:privateKey`, re-sealed
+//   on read; a database read discloses nothing that signs). Several rows are a rotation overlap: the newest signs, every unexpired certificate is published.
 // - `saml_session` — which local sessions a connection's sign-ins created, with the NameID and SessionIndex the IdP knows
 //   them by (BEH-EA-315): what a Single Logout request from the IdP has to find.
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { type Encryption } from "@awthaq/ports";
+import { Models as SqlModels, SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -93,19 +95,30 @@ export interface ConnectionRecord {
   readonly updatedAt: DateTime.Utc;
 }
 
-/** One SP signing key (BEH-EA-314). `privateKey` is the `Encryption` envelope, never the key. */
+/** One SP signing key (BEH-EA-314). `privateKey` is sealed: open it where the key signs, never before. */
 export interface SpKeyRecord {
   readonly id: string;
   readonly connectionId: string;
   readonly certificate: string;
-  readonly privateKey: string;
+  readonly privateKey: SealedColumn.Sealed<string>;
   readonly fingerprint: string;
   readonly notBefore: DateTime.Utc;
   readonly notAfter: DateTime.Utc;
   readonly createdAt: DateTime.Utc;
 }
 
-export type NewSpKey = Omit<SpKeyRecord, "createdAt">;
+/** A key to store: the records seal the PEM under the row's AAD. */
+export interface NewSpKey extends Omit<SpKeyRecord, "createdAt" | "privateKey"> {
+  readonly privateKey: Redacted.Redacted<string>;
+}
+
+/** The sealed `privateKey` column (the legacy AAD spelling still opens, then re-seals canonically). */
+export const privateKeyColumn = SealedColumn.column({
+  table: "saml_sp_key",
+  column: "privateKey",
+  key: "id",
+  legacyAad: [(id) => `saml-sp-key:${id}:privateKey`],
+});
 
 /** A local session a connection's sign-in created (BEH-EA-315). */
 export interface SamlSessionRecord {
@@ -167,41 +180,72 @@ export interface ConnectionPatch {
 }
 
 export interface SamlRecordsShape {
-  readonly create: (input: NewConnection) => Effect.Effect<ConnectionRecord, SamlDomainTaken>;
-  readonly findById: (id: string) => Effect.Effect<Option.Option<ConnectionRecord>>;
+  readonly create: (
+    input: NewConnection,
+  ) => Effect.Effect<ConnectionRecord, SamlDomainTaken | StoreFailure.StoreUnavailable>;
+  /**
+   * A connection by its own id: how a protocol message (an ACS response, a logout request, SP metadata) names it before
+   * any tenant is known, so the lookup presents a witness.
+   */
+  readonly findById: (
+    grant: TenantScoped.CrossTenant,
+    id: string,
+  ) => Effect.Effect<Option.Option<ConnectionRecord>, StoreFailure.StoreUnavailable>;
   /** Oldest first. */
   readonly listByOrganization: (
     organizationId: string,
-  ) => Effect.Effect<ReadonlyArray<ConnectionRecord>>;
-  /** The connection an email domain routes to, if any. */
-  readonly findByDomain: (domain: string) => Effect.Effect<Option.Option<ConnectionRecord>>;
+  ) => Effect.Effect<ReadonlyArray<ConnectionRecord>, StoreFailure.StoreUnavailable>;
+  /** The connection an email domain routes to, if any: home-realm discovery crosses organizations, so it presents a witness. */
+  readonly findByDomain: (
+    grant: TenantScoped.CrossTenant,
+    domain: string,
+  ) => Effect.Effect<Option.Option<ConnectionRecord>, StoreFailure.StoreUnavailable>;
   /** Fields left out are unchanged; `emailDomains`, when given, replaces the whole set. */
   readonly update: (
+    organizationId: string,
     id: string,
     patch: ConnectionPatch,
-  ) => Effect.Effect<ConnectionRecord, SamlRecordNotFound | SamlDomainTaken>;
+  ) => Effect.Effect<
+    ConnectionRecord,
+    SamlRecordNotFound | SamlDomainTaken | StoreFailure.StoreUnavailable
+  >;
   /** Removes the connection with its domains, SP keys and session rows. */
-  readonly remove: (id: string) => Effect.Effect<void, SamlRecordNotFound>;
+  readonly remove: (
+    organizationId: string,
+    id: string,
+  ) => Effect.Effect<void, SamlRecordNotFound | StoreFailure.StoreUnavailable>;
   // ---- SP signing keys (BEH-EA-314)
-  readonly saveSpKey: (key: NewSpKey) => Effect.Effect<SpKeyRecord>;
+  readonly saveSpKey: (key: NewSpKey) => Effect.Effect<SpKeyRecord, StoreFailure.StoreUnavailable>;
   /** Newest first. */
-  readonly listSpKeys: (connectionId: string) => Effect.Effect<ReadonlyArray<SpKeyRecord>>;
+  readonly listSpKeys: (
+    connectionId: string,
+  ) => Effect.Effect<ReadonlyArray<SpKeyRecord>, StoreFailure.StoreUnavailable>;
   // ---- sessions created by a connection's sign-ins (BEH-EA-315)
-  readonly saveSession: (session: NewSamlSession) => Effect.Effect<void>;
+  readonly saveSession: (
+    session: NewSamlSession,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** The sessions of one identity at one connection; with `sessionIndex`, only that one. */
   readonly findSessions: (input: {
     readonly connectionId: string;
     readonly nameId: string;
     readonly sessionIndex?: string | undefined;
-  }) => Effect.Effect<ReadonlyArray<SamlSessionRecord>>;
-  readonly findSession: (sessionId: string) => Effect.Effect<Option.Option<SamlSessionRecord>>;
-  readonly removeSession: (sessionId: string) => Effect.Effect<void>;
-  /** Removes rows created before `before` (a session that old is over whatever this says); returns how many. */
-  readonly pruneSessions: (before: DateTime.Utc) => Effect.Effect<number>;
+  }) => Effect.Effect<ReadonlyArray<SamlSessionRecord>, StoreFailure.StoreUnavailable>;
+  readonly findSession: (
+    sessionId: string,
+  ) => Effect.Effect<Option.Option<SamlSessionRecord>, StoreFailure.StoreUnavailable>;
+  readonly removeSession: (sessionId: string) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  /**
+   * Removes rows created before `before` (a session that old is over whatever this says); returns how many. A maintenance
+   * sweep over every organization, so it presents a witness.
+   */
+  readonly pruneSessions: (
+    grant: TenantScoped.CrossTenant,
+    before: DateTime.Utc,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
 }
 
 export class SamlRecords extends Context.Service<SamlRecords, SamlRecordsShape>()(
-  "awthaq/saml/SamlRecords",
+  "awthaq/saml/records/SamlRecords",
 ) {}
 
 const notFound = (id: string): SamlRecordNotFound => new SamlRecordNotFound({ id });
@@ -246,182 +290,243 @@ const applyPatch = (
 
 // ---- layerMemory ------------------------------------------------------------------------
 
+/** A key as the memory adapter keeps it: the private half is the envelope string, like a SQL row. */
+interface StoredSpKey extends Omit<SpKeyRecord, "privateKey"> {
+  readonly privateKey: string;
+}
+
 interface MemoryState {
   readonly connections: ReadonlyArray<ConnectionRecord>;
-  readonly keys: ReadonlyArray<SpKeyRecord>;
+  readonly keys: ReadonlyArray<StoredSpKey>;
   readonly sessions: ReadonlyArray<SamlSessionRecord>;
 }
 
-export const layerMemory = Layer.effect(
-  SamlRecords,
-  Effect.gen(function* () {
-    const state = yield* Ref.make<MemoryState>({ connections: [], keys: [], sessions: [] });
+/**
+ * A test seam of `layerMemory`: the stored envelope of the sealed `privateKey` column, and a way to overwrite it
+ * (`TestAuth.runSealedColumnTests` needs to look at, and plant, what is at rest; over SQL that is a statement).
+ */
+export class MemoryEnvelopes extends Context.Service<
+  MemoryEnvelopes,
+  {
+    readonly stored: (id: string) => Effect.Effect<string>;
+    readonly plant: (id: string, stored: string) => Effect.Effect<void>;
+  }
+>()("awthaq/saml/SamlRecords/MemoryEnvelopes") {}
 
-    /** The first domain in `domains` that another connection already holds. */
-    const takenDomain = (
-      rows: ReadonlyArray<ConnectionRecord>,
-      domains: ReadonlyArray<string>,
-      exceptId: string,
-    ) =>
-      domains.find((domain) =>
-        rows.some((row) => row.id !== exceptId && row.emailDomains.includes(domain)),
-      );
+// The explicit types on `layerMemory` and `layerSql` are the narrow exception the plugins document (TS2883):
+// declaration emit cannot name `Encryption` through the inferred requirement of the sealed-column codec.
+export const layerMemory: Layer.Layer<SamlRecords | MemoryEnvelopes, never, Encryption.Encryption> =
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const state = yield* Ref.make<MemoryState>({ connections: [], keys: [], sessions: [] });
 
-    const create: SamlRecordsShape["create"] = (input) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        const record: ConnectionRecord = {
-          id: input.id,
-          organizationId: input.organizationId,
-          name: input.name,
-          idpEntityId: input.idpEntityId,
-          ssoUrl: input.ssoUrl,
-          idpCertificates: input.idpCertificates,
-          emailDomains: input.emailDomains,
-          trustsEmail: input.trustsEmail,
-          authnRequestsSigned: input.authnRequestsSigned ?? false,
-          sloUrl: Option.fromNullishOr(input.sloUrl),
-          sloBinding: input.sloBinding ?? "redirect",
-          metadataUrl: Option.fromNullishOr(input.metadataUrl),
-          roleMapping: input.roleMapping ?? EMPTY_ROLE_MAPPING,
-          createdAt: now,
-          updatedAt: now,
-        };
-        const outcome = yield* Ref.modify(
-          state,
-          (s): readonly [Result.Result<ConnectionRecord, SamlDomainTaken>, MemoryState] => {
-            const taken = takenDomain(s.connections, input.emailDomains, input.id);
-            if (taken !== undefined)
-              return [Result.fail(new SamlDomainTaken({ domain: taken })), s] as const;
-            return [
-              Result.succeed(record),
-              { ...s, connections: [...s.connections, record] },
-            ] as const;
-          },
-        );
-        return yield* Effect.fromResult(outcome);
+      /** Persists a re-seal only while the row still holds the envelope that was read. */
+      const swap: SealedColumn.Swap = (rowKey, stored, fresh) =>
+        Ref.modify(state, (s) => {
+          const row = s.keys.find((candidate) => candidate.id === rowKey);
+          if (row === undefined || row.privateKey !== stored) return [false, s] as const;
+          return [
+            true,
+            {
+              ...s,
+              keys: s.keys.map((candidate) =>
+                candidate.id === rowKey ? { ...candidate, privateKey: fresh } : candidate,
+              ),
+            },
+          ] as const;
+        });
+      const privateKeys = yield* SealedColumn.codec(privateKeyColumn, swap);
+      const toKeyRecord = (row: StoredSpKey): SpKeyRecord => ({
+        ...row,
+        privateKey: privateKeys.sealed(row.id, row.privateKey),
       });
 
-    const update: SamlRecordsShape["update"] = (id, patch) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        const outcome = yield* Ref.modify(
-          state,
-          (
-            s,
-          ): readonly [
-            Result.Result<ConnectionRecord, SamlRecordNotFound | SamlDomainTaken>,
-            MemoryState,
-          ] => {
-            const existing = s.connections.find((row) => row.id === id);
-            if (existing === undefined) return [Result.fail(notFound(id)), s] as const;
-            const taken = takenDomain(s.connections, patch.emailDomains ?? [], id);
-            if (taken !== undefined)
-              return [Result.fail(new SamlDomainTaken({ domain: taken })), s] as const;
-            const updated = applyPatch(existing, patch, now);
-            return [
-              Result.succeed(updated),
-              { ...s, connections: s.connections.map((row) => (row.id === id ? updated : row)) },
-            ] as const;
-          },
+      /** The first domain in `domains` that another connection already holds. */
+      const takenDomain = (
+        rows: ReadonlyArray<ConnectionRecord>,
+        domains: ReadonlyArray<string>,
+        exceptId: string,
+      ) =>
+        domains.find((domain) =>
+          rows.some((row) => row.id !== exceptId && row.emailDomains.includes(domain)),
         );
-        return yield* Effect.fromResult(outcome);
-      });
 
-    return {
-      create,
-      findById: (id) =>
-        Ref.get(state).pipe(
-          Effect.map((s) => Option.fromNullishOr(s.connections.find((row) => row.id === id))),
-        ),
-      listByOrganization: (organizationId) =>
-        Ref.get(state).pipe(
-          Effect.map((s) =>
-            byCreation(s.connections.filter((row) => row.organizationId === organizationId)),
-          ),
-        ),
-      findByDomain: (domain) =>
-        Ref.get(state).pipe(
-          Effect.map((s) =>
-            Option.fromNullishOr(s.connections.find((row) => row.emailDomains.includes(domain))),
-          ),
-        ),
-      update,
-      remove: (id) =>
-        Effect.gen(function* () {
-          const removed = yield* Ref.modify(state, (s) =>
-            s.connections.some((row) => row.id === id)
-              ? ([
-                  true,
-                  {
-                    connections: s.connections.filter((row) => row.id !== id),
-                    keys: s.keys.filter((row) => row.connectionId !== id),
-                    sessions: s.sessions.filter((row) => row.connectionId !== id),
-                  },
-                ] as const)
-              : ([false, s] as const),
-          );
-          if (!removed) return yield* Effect.fail(notFound(id));
-        }),
-      saveSpKey: (key) =>
+      const create: SamlRecordsShape["create"] = (input) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
-          const record: SpKeyRecord = { ...key, createdAt: now };
-          yield* Ref.update(state, (s) => ({ ...s, keys: [...s.keys, record] }));
-          return record;
-        }),
-      listSpKeys: (connectionId) =>
-        Ref.get(state).pipe(
-          Effect.map((s) => newestFirst(s.keys.filter((row) => row.connectionId === connectionId))),
-        ),
-      saveSession: (session) =>
-        Effect.gen(function* () {
-          const now = yield* DateTime.now;
-          const record: SamlSessionRecord = {
-            sessionId: session.sessionId,
-            connectionId: session.connectionId,
-            nameId: session.nameId,
-            nameIdFormat: Option.fromNullishOr(session.nameIdFormat),
-            sessionIndex: Option.fromNullishOr(session.sessionIndex),
+          const record: ConnectionRecord = {
+            id: input.id,
+            organizationId: input.organizationId,
+            name: input.name,
+            idpEntityId: input.idpEntityId,
+            ssoUrl: input.ssoUrl,
+            idpCertificates: input.idpCertificates,
+            emailDomains: input.emailDomains,
+            trustsEmail: input.trustsEmail,
+            authnRequestsSigned: input.authnRequestsSigned ?? false,
+            sloUrl: Option.fromNullishOr(input.sloUrl),
+            sloBinding: input.sloBinding ?? "redirect",
+            metadataUrl: Option.fromNullishOr(input.metadataUrl),
+            roleMapping: input.roleMapping ?? EMPTY_ROLE_MAPPING,
             createdAt: now,
+            updatedAt: now,
           };
-          yield* Ref.update(state, (s) => ({
-            ...s,
-            sessions: [...s.sessions.filter((row) => row.sessionId !== session.sessionId), record],
-          }));
-        }),
-      findSessions: ({ connectionId, nameId, sessionIndex }) =>
-        Ref.get(state).pipe(
-          Effect.map((s) =>
-            s.sessions.filter(
-              (row) =>
-                row.connectionId === connectionId &&
-                row.nameId === nameId &&
-                (sessionIndex === undefined || Option.getOrNull(row.sessionIndex) === sessionIndex),
+          const outcome = yield* Ref.modify(
+            state,
+            (s): readonly [Result.Result<ConnectionRecord, SamlDomainTaken>, MemoryState] => {
+              const taken = takenDomain(s.connections, input.emailDomains, input.id);
+              if (taken !== undefined)
+                return [Result.fail(new SamlDomainTaken({ domain: taken })), s] as const;
+              return [
+                Result.succeed(record),
+                { ...s, connections: [...s.connections, record] },
+              ] as const;
+            },
+          );
+          return yield* Effect.fromResult(outcome);
+        });
+
+      const update: SamlRecordsShape["update"] = (organizationId, id, patch) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const outcome = yield* Ref.modify(
+            state,
+            (
+              s,
+            ): readonly [
+              Result.Result<ConnectionRecord, SamlRecordNotFound | SamlDomainTaken>,
+              MemoryState,
+            ] => {
+              const existing = s.connections.find(
+                (row) => row.id === id && row.organizationId === organizationId,
+              );
+              if (existing === undefined) return [Result.fail(notFound(id)), s] as const;
+              const taken = takenDomain(s.connections, patch.emailDomains ?? [], id);
+              if (taken !== undefined)
+                return [Result.fail(new SamlDomainTaken({ domain: taken })), s] as const;
+              const updated = applyPatch(existing, patch, now);
+              return [
+                Result.succeed(updated),
+                { ...s, connections: s.connections.map((row) => (row.id === id ? updated : row)) },
+              ] as const;
+            },
+          );
+          return yield* Effect.fromResult(outcome);
+        });
+
+      const records = {
+        create,
+        findById: (_grant, id) =>
+          Ref.get(state).pipe(
+            Effect.map((s) => Option.fromNullishOr(s.connections.find((row) => row.id === id))),
+          ),
+        listByOrganization: (organizationId) =>
+          Ref.get(state).pipe(
+            Effect.map((s) =>
+              byCreation(s.connections.filter((row) => row.organizationId === organizationId)),
             ),
           ),
-        ),
-      findSession: (sessionId) =>
-        Ref.get(state).pipe(
-          Effect.map((s) =>
-            Option.fromNullishOr(s.sessions.find((row) => row.sessionId === sessionId)),
+        findByDomain: (_grant, domain) =>
+          Ref.get(state).pipe(
+            Effect.map((s) =>
+              Option.fromNullishOr(s.connections.find((row) => row.emailDomains.includes(domain))),
+            ),
           ),
-        ),
-      removeSession: (sessionId) =>
-        Ref.update(state, (s) => ({
-          ...s,
-          sessions: s.sessions.filter((row) => row.sessionId !== sessionId),
-        })),
-      pruneSessions: (before) =>
-        Ref.modify(state, (s) => {
-          const kept = s.sessions.filter(
-            (row) => DateTime.toEpochMillis(row.createdAt) >= DateTime.toEpochMillis(before),
-          );
-          return [s.sessions.length - kept.length, { ...s, sessions: kept }] as const;
-        }),
-    } satisfies SamlRecordsShape;
-  }),
-);
+        update,
+        remove: (organizationId, id) =>
+          Effect.gen(function* () {
+            const removed = yield* Ref.modify(state, (s) =>
+              s.connections.some((row) => row.id === id && row.organizationId === organizationId)
+                ? ([
+                    true,
+                    {
+                      connections: s.connections.filter((row) => row.id !== id),
+                      keys: s.keys.filter((row) => row.connectionId !== id),
+                      sessions: s.sessions.filter((row) => row.connectionId !== id),
+                    },
+                  ] as const)
+                : ([false, s] as const),
+            );
+            if (!removed) return yield* Effect.fail(notFound(id));
+          }),
+        saveSpKey: (key) =>
+          Effect.gen(function* () {
+            const now = yield* DateTime.now;
+            const sealed = yield* privateKeys.seal(key.id, key.privateKey);
+            const record: StoredSpKey = { ...key, privateKey: sealed, createdAt: now };
+            yield* Ref.update(state, (s) => ({ ...s, keys: [...s.keys, record] }));
+            return toKeyRecord(record);
+          }),
+        listSpKeys: (connectionId) =>
+          Ref.get(state).pipe(
+            Effect.map((s) =>
+              newestFirst(s.keys.filter((row) => row.connectionId === connectionId)).map(
+                toKeyRecord,
+              ),
+            ),
+          ),
+        saveSession: (session) =>
+          Effect.gen(function* () {
+            const now = yield* DateTime.now;
+            const record: SamlSessionRecord = {
+              sessionId: session.sessionId,
+              connectionId: session.connectionId,
+              nameId: session.nameId,
+              nameIdFormat: Option.fromNullishOr(session.nameIdFormat),
+              sessionIndex: Option.fromNullishOr(session.sessionIndex),
+              createdAt: now,
+            };
+            yield* Ref.update(state, (s) => ({
+              ...s,
+              sessions: [
+                ...s.sessions.filter((row) => row.sessionId !== session.sessionId),
+                record,
+              ],
+            }));
+          }),
+        findSessions: ({ connectionId, nameId, sessionIndex }) =>
+          Ref.get(state).pipe(
+            Effect.map((s) =>
+              s.sessions.filter(
+                (row) =>
+                  row.connectionId === connectionId &&
+                  row.nameId === nameId &&
+                  (sessionIndex === undefined ||
+                    Option.getOrNull(row.sessionIndex) === sessionIndex),
+              ),
+            ),
+          ),
+        findSession: (sessionId) =>
+          Ref.get(state).pipe(
+            Effect.map((s) =>
+              Option.fromNullishOr(s.sessions.find((row) => row.sessionId === sessionId)),
+            ),
+          ),
+        removeSession: (sessionId) =>
+          Ref.update(state, (s) => ({
+            ...s,
+            sessions: s.sessions.filter((row) => row.sessionId !== sessionId),
+          })),
+        pruneSessions: (_grant, before) =>
+          Ref.modify(state, (s) => {
+            const kept = s.sessions.filter(
+              (row) => DateTime.toEpochMillis(row.createdAt) >= DateTime.toEpochMillis(before),
+            );
+            return [s.sessions.length - kept.length, { ...s, sessions: kept }] as const;
+          }),
+      } satisfies SamlRecordsShape;
+      const envelopes = MemoryEnvelopes.of({
+        stored: (id) =>
+          Effect.map(Ref.get(state), (s) => s.keys.find((row) => row.id === id)?.privateKey ?? ""),
+        plant: (id, stored) =>
+          Ref.update(state, (s) => ({
+            ...s,
+            keys: s.keys.map((row) => (row.id === id ? { ...row, privateKey: stored } : row)),
+          })),
+      });
+      return Context.make(SamlRecords, records).pipe(Context.add(MemoryEnvelopes, envelopes));
+    }),
+  );
 
 // ---- layerSql -----------------------------------------------------------------------------
 
@@ -488,10 +593,20 @@ const makeSessionRow = (wire: SqlModels.DialectWire) =>
     createdAt: wire.dateTime,
   });
 
-export const layerSql = Layer.effect(
+export const layerSql: Layer.Layer<
+  SamlRecords,
+  never,
+  SqlClient.SqlClient | Encryption.Encryption
+> = Layer.effect(
   SamlRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`SamlRecords.${operation}`);
+    const privateKeys = yield* SealedColumn.codec(
+      privateKeyColumn,
+      yield* SealedColumn.sqlSwap(privateKeyColumn),
+    );
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const dialect = yield* SqlModels.resolveDialect(sql);
     const wire = SqlModels.dialectFields(dialect);
@@ -613,7 +728,10 @@ export const layerSql = Layer.effect(
       execute: (sessionId) => sql`SELECT * FROM saml_session WHERE "sessionId" = ${sessionId}`,
     });
 
-    const toKey = (row: typeof KeyRow.Type): SpKeyRecord => ({ ...row });
+    const toKey = (row: typeof KeyRow.Type): SpKeyRecord => ({
+      ...row,
+      privateKey: privateKeys.sealed(row.id, row.privateKey),
+    });
     const toSession = (row: typeof SessionRow.Type): SamlSessionRecord => ({
       sessionId: row.sessionId,
       connectionId: row.connectionId,
@@ -631,7 +749,6 @@ export const layerSql = Layer.effect(
             rows.map((entry) => entry.domain),
           ),
         ),
-        Effect.orDie,
       );
 
     /** Inserts each domain; a unique-index violation names the domain that is taken. */
@@ -640,12 +757,12 @@ export const layerSql = Layer.effect(
         domains,
         (domain) =>
           sql`INSERT INTO saml_connection_domain (domain, "connectionId") VALUES (${domain}, ${connectionId})`.pipe(
-            Effect.catchTag("SqlError", (error) =>
-              // Postgres reports a duplicate key as a unique violation; SQLite reports a PRIMARY KEY clash as a
-              // generic constraint error (the domain IS the key), so both mean "taken".
+            // Postgres reports a duplicate key as a unique violation; SQLite reports a PRIMARY KEY clash as a
+            // generic constraint error (the domain IS the key), so both mean "taken".
+            Effect.mapError((error) =>
               error.reason._tag === "UniqueViolation" || error.reason._tag === "ConstraintError"
-                ? Effect.fail(new SamlDomainTaken({ domain }))
-                : Effect.die(error),
+                ? new SamlDomainTaken({ domain })
+                : error,
             ),
           ),
         { discard: true },
@@ -669,7 +786,7 @@ export const layerSql = Layer.effect(
           roleMapping: input.roleMapping ?? EMPTY_ROLE_MAPPING,
           createdAt: now,
           updatedAt: now,
-        }).pipe(Effect.orDie);
+        });
         // A taken domain leaves no half-created connection behind.
         yield* claimDomains(input.id, input.emailDomains).pipe(
           Effect.tapError(() =>
@@ -677,29 +794,32 @@ export const layerSql = Layer.effect(
               Effect.andThen(
                 sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${input.id}`,
               ),
-              Effect.orDie,
             ),
           ),
         );
         return toRecord(row, input.emailDomains);
-      });
+      }).pipe(unavailable("create"));
 
-    const update: SamlRecordsShape["update"] = (id, patch) =>
+    const update: SamlRecordsShape["update"] = (organizationId, id, patch) =>
       Effect.gen(function* () {
-        const current = yield* connectionById(id).pipe(Effect.orDie);
-        if (Option.isNone(current)) return yield* Effect.fail(notFound(id));
+        const current = yield* connectionById(id);
+        if (Option.isNone(current) || current.value.organizationId !== organizationId) {
+          return yield* Effect.fail(notFound(id));
+        }
         const now = yield* DateTime.now;
         if (patch.emailDomains !== undefined) {
-          const before = (yield* domainsOf(id).pipe(Effect.orDie)).map((entry) => entry.domain);
-          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`.pipe(
-            Effect.orDie,
-          );
+          const before = (yield* domainsOf(id)).map((entry) => entry.domain);
+          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`;
           yield* claimDomains(id, patch.emailDomains).pipe(
             // Put the previous set back if a new domain is taken.
             Effect.tapError(() =>
               sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`.pipe(
-                Effect.andThen(claimDomains(id, before).pipe(Effect.orDie)),
-                Effect.orDie,
+                Effect.andThen(
+                  claimDomains(id, before).pipe(
+                    // The previous set was held a moment ago: a clash now is a bug, not a domain outcome.
+                    Effect.catchTag("SamlDomainTaken", Effect.die),
+                  ),
+                ),
               ),
             ),
           );
@@ -718,91 +838,100 @@ export const layerSql = Layer.effect(
           metadataUrl: Option.getOrNull(merged.metadataUrl),
           roleMapping: merged.roleMapping,
           updatedAt: now,
-        }).pipe(Effect.orDie);
+        });
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
         return yield* withDomains(row.value);
-      });
+      }).pipe(unavailable("update"));
 
     return {
       create,
-      findById: (id) =>
+      findById: (grant, id) =>
         connectionById(id).pipe(
-          Effect.orDie,
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.succeedNone,
               onSome: (row) => Effect.map(withDomains(row), Option.some),
             }),
           ),
+          TenantScoped.liftOn(sql, grant),
+          unavailable("findById"),
         ),
       listByOrganization: (organizationId) =>
         connectionsOf(organizationId).pipe(
-          Effect.orDie,
           Effect.flatMap((rows) => Effect.forEach(rows, withDomains)),
+          unavailable("listByOrganization"),
         ),
-      findByDomain: (domain) =>
+      findByDomain: (grant, domain) =>
         connectionByDomain(domain).pipe(
-          Effect.orDie,
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.succeedNone,
               onSome: (row) => Effect.map(withDomains(row), Option.some),
             }),
           ),
+          TenantScoped.liftOn(sql, grant),
+          unavailable("findByDomain"),
         ),
       update,
-      remove: (id) =>
+      remove: (organizationId, id) =>
         Effect.gen(function* () {
           const removed =
-            yield* sql`DELETE FROM saml_connection WHERE id = ${id} RETURNING id`.pipe(
-              Effect.orDie,
-            );
+            yield* sql`DELETE FROM saml_connection WHERE id = ${id} AND "organizationId" = ${organizationId} RETURNING id`;
           if (removed.length === 0) return yield* Effect.fail(notFound(id));
-          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`.pipe(
-            Effect.orDie,
-          );
-          yield* sql`DELETE FROM saml_sp_key WHERE "connectionId" = ${id}`.pipe(Effect.orDie);
-          yield* sql`DELETE FROM saml_session WHERE "connectionId" = ${id}`.pipe(Effect.orDie);
-        }),
+          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`;
+          yield* sql`DELETE FROM saml_sp_key WHERE "connectionId" = ${id}`;
+          yield* sql`DELETE FROM saml_session WHERE "connectionId" = ${id}`;
+        }).pipe(unavailable("remove")),
       saveSpKey: (key) =>
-        DateTime.now.pipe(
-          Effect.flatMap((now) => insertKey({ ...key, createdAt: now })),
-          Effect.map(toKey),
-          Effect.orDie,
-        ),
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const sealed = yield* privateKeys.seal(key.id, key.privateKey);
+          const saved = yield* insertKey({ ...key, privateKey: sealed, createdAt: now });
+          return toKey(saved);
+        }).pipe(unavailable("saveSpKey")),
       listSpKeys: (connectionId) =>
         keysOf(connectionId).pipe(
           Effect.map((rows) => rows.map(toKey)),
-          Effect.orDie,
+          unavailable("listSpKeys"),
         ),
       saveSession: (session) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
-          yield* sql`DELETE FROM saml_session WHERE "sessionId" = ${session.sessionId}`.pipe(
-            Effect.orDie,
-          );
+          yield* sql`DELETE FROM saml_session WHERE "sessionId" = ${session.sessionId}`;
           yield* sql`
             INSERT INTO saml_session ("sessionId", "connectionId", "nameId", "nameIdFormat", "sessionIndex", "createdAt")
             VALUES (${session.sessionId}, ${session.connectionId}, ${session.nameId}, ${session.nameIdFormat ?? null},
-              ${session.sessionIndex ?? null}, ${wireDate(now)})`.pipe(Effect.orDie);
-        }),
+              ${session.sessionIndex ?? null}, ${wireDate(now)})`;
+        }).pipe(unavailable("saveSession")),
       findSessions: ({ connectionId, nameId, sessionIndex }) =>
         sessionsOf({ connectionId, nameId, sessionIndex: sessionIndex ?? null }).pipe(
           Effect.map((rows) => rows.map(toSession)),
-          Effect.orDie,
+          unavailable("findSessions"),
         ),
       findSession: (sessionId) =>
-        sessionById(sessionId).pipe(Effect.map(Option.map(toSession)), Effect.orDie),
+        sessionById(sessionId).pipe(Effect.map(Option.map(toSession)), unavailable("findSession")),
       removeSession: (sessionId) =>
         sql`DELETE FROM saml_session WHERE "sessionId" = ${sessionId}`.pipe(
           Effect.asVoid,
-          Effect.orDie,
+          unavailable("removeSession"),
         ),
-      pruneSessions: (before) =>
+      pruneSessions: (grant, before) =>
         sql`DELETE FROM saml_session WHERE "createdAt" < ${wireDate(before)} RETURNING "sessionId"`.pipe(
           Effect.map((rows) => rows.length),
-          Effect.orDie,
+          TenantScoped.liftOn(sql, grant),
+          unavailable("pruneSessions"),
         ),
     } satisfies SamlRecordsShape;
   }),
 );
+
+/**
+ * Plan 08 (BEH-EA-T4): the plugin's record store as two matched layers, `Saml.records`. `layerMemory` also
+ * provides `MemoryEnvelopes`, a test seam that is not a store; a bundle provides record stores only, so it is
+ * projected away (a suite that plants envelopes uses `layerMemory` directly).
+ */
+const memoryStore = Layer.effect(SamlRecords, Effect.service(SamlRecords)).pipe(
+  Layer.provide(layerMemory),
+);
+
+export const records = { memory: memoryStore, sql: layerSql };

@@ -4,13 +4,8 @@
 // writes them typed, and the client encodes only what the composition lets a client write.
 import { Api } from "@awthaq/api";
 import { Auth, AuthPlugin, UserFields, Users } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, layer } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -45,28 +40,10 @@ class Billing extends AuthPlugin.Service<Billing, Record<string, never>>()("bill
 
 const built = Auth.make([Billing]);
 
-const CSRF_SECRET = "test-auth-user-fields-csrf-secret-padded-to-32-bytes";
-// The router runs under `it.effect`'s TestClock, which starts at 0 (`<iat>.<random>.<hmac>`).
-const CSRF_COOKIE = (() => {
-  const signed = `0.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
-})();
+// The router runs under `it.effect`'s TestClock, which starts at 0, so the token is minted at `iat` 0.
+const CSRF_COOKIE = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret, { issuedAt: 0 });
 
-const TestLayer = TestAuth.layer(
-  built,
-  Layer.mergeAll(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-    Csrf.CsrfProtectionLive.pipe(
-      Layer.provide(
-        Layer.succeed(Csrf.CsrfConfig, {
-          secret: Redacted.make(CSRF_SECRET),
-          allowedOrigins: [] as ReadonlyArray<string>,
-        }),
-      ),
-      Layer.provide(NodeCrypto.layer),
-    ),
-  ),
-);
+const TestLayer = TestAuth.layer(built);
 
 const dispatch = (request: Request) =>
   Effect.gen(function* () {

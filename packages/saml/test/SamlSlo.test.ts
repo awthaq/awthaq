@@ -3,7 +3,7 @@
 // changes nothing (no session ended, no state consumed by a message that failed), and a valid message ends exactly the sessions
 // it names, at the connection it came from, with reason `federatedLogout`.
 import { Api } from "@awthaq/api";
-import { AuditLog, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Retention, Sessions, Users } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
 import * as Layer from "effect/Layer";
 import { assert, describe, it } from "@effect/vitest";
@@ -266,6 +266,37 @@ describe("an IdP-initiated LogoutRequest over the Redirect binding", () => {
         // The row the connection kept for it is gone.
         const records = yield* SamlRecords.SamlRecords;
         assert.isTrue(Option.isNone(yield* records.findSession(sessionId)));
+      }).pipe(Effect.provide(SamlLive())),
+  );
+
+  it.effect(
+    "session records age out only when the host runs Retention.sweep; a sign-in no longer prunes (plan 10 item 6)",
+    () =>
+      Effect.gen(function* () {
+        const records = yield* SamlRecords.SamlRecords;
+        // A record 100 days old (the default `sessionRecordRetention` is 90), planted before the sign-in.
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(NOW) - Duration.toMillis(Duration.days(100)),
+        );
+        yield* records.saveSession({ sessionId: "old", connectionId: "c", nameId: "ada" });
+        yield* atNow;
+        const { connection } = yield* seedConnection({ sloUrl: IDP_SLO });
+        yield* records.saveSession({
+          sessionId: "fresh",
+          connectionId: connection.id,
+          nameId: "ada",
+        });
+        // A sign-in leaves the old row alone...
+        yield* signIn(connection.id);
+        assert.isTrue(Option.isSome(yield* records.findSession("old")));
+        // ...and the sweep's contribution removes exactly the rows past the window.
+        const report = yield* Retention.sweep;
+        assert.deepStrictEqual(
+          report.plugins.find((entry) => entry.id === "saml.sessions"),
+          { id: "saml.sessions", deleted: 1, failed: false },
+        );
+        assert.isTrue(Option.isNone(yield* records.findSession("old")));
+        assert.isTrue(Option.isSome(yield* records.findSession("fresh")));
       }).pipe(Effect.provide(SamlLive())),
   );
 

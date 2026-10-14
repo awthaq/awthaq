@@ -33,6 +33,8 @@ import {
   RateLimits,
   SessionCookie,
   Sessions,
+  SignIn,
+  SignUp,
   Tenant,
   Users,
   Verification,
@@ -697,37 +699,48 @@ export interface OAuthShape {
   >;
 }
 
+// ---- rate limits ------------------------------------------------------------------------------------
+
+/**
+ * OAP-008/MNA-003, BEH-EA-105/107/111: the three unauthenticated endpoints, throttled per source IP and
+ * declared once. The static `rateLimits` listing is derived from this table at the default numbers
+ * (`OAuthConfig.rateLimits` tunes them per request, EP-007) and the layer registers it with
+ * `RateLimits.budget`. `authorize` is looser (a real user opening the sign-in page repeatedly is normal)
+ * but still bounds the Verification-row and crypto amplification an anonymous caller could otherwise
+ * generate; `callback` is tighter because each admitted call may cost a provider round trip (ticket 13:
+ * 20 a minute per IP is loose enough for a real user's own retries after a transient provider hiccup);
+ * `token` is the native exchange-code redemption. An unresolved IP shares one bucket, never unthrottled.
+ */
+const rules = {
+  callback: RateLimits.rule({
+    group: "oauth",
+    endpoint: "callback",
+    key: RateLimits.Key.ip,
+    ...defaultRateLimits.callback,
+  }),
+  authorize: RateLimits.rule({
+    group: "oauth",
+    endpoint: "authorize",
+    key: RateLimits.Key.ip,
+    ...defaultRateLimits.authorize,
+  }),
+  token: RateLimits.rule({
+    group: "oauth.exchange",
+    endpoint: "token",
+    key: RateLimits.Key.ip,
+    ...defaultRateLimits.token,
+  }),
+};
+
 export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
   apiVersion: 1,
   contract: OAuthApi.OAuthApi,
-  // PV-241: the default throttles (`OAuthConfig.rateLimits` tunes them); mirrors the layer's registrations.
-  rateLimits: [
-    {
-      group: "oauth",
-      endpoint: "callback",
-      name: "callback",
-      dimension: "ip",
-      ...defaultRateLimits.callback,
-    },
-    {
-      group: "oauth",
-      endpoint: "authorize",
-      name: "authorize",
-      dimension: "ip",
-      ...defaultRateLimits.authorize,
-    },
-    {
-      group: "oauth.exchange",
-      endpoint: "token",
-      name: "token",
-      dimension: "ip",
-      ...defaultRateLimits.token,
-    },
-  ],
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it at the default numbers.
+  rateLimitRules: rules,
   // BEH-EA-125: an OAuth account is an ordinary `accounts` row (extended
   // with `issuer`, per BEH-EA-125) — this plugin owns no table of its own,
   // the same reasoning `@awthaq/password`'s own `tables: []` documents.
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(OAuth, {
     ports: [
@@ -740,7 +753,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
-      const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
       // EP-007 (ADR-EA-018 Decision 8): the per-request policy — trusted origins, auto-link list,
@@ -810,76 +822,19 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // userinfo); `httpClient` stays plain for the single-use code exchange.
       const readClient = ProviderHttp.retrying(httpClient, config_.retry);
       const jwksCaches = yield* IdToken.makeJwksCaches;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const encryption = yield* Encryption.Encryption;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
-      // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
-      // future `TwoFactor` plugin taps, consulted at the sign-in-completing
-      // path of `callback` only (never `flow.link`, which issues no new
-      // session).
-      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
-      const afterSignIn = yield* Hooks.AfterSignIn;
-      // NAM-002: the sign-in veto every sign-in-completing flow consults, and
-      // the sign-up veto/observer for the first-login user creation below.
-      const beforeSignIn = yield* Hooks.BeforeSignIn;
-      const beforeSignUp = yield* Hooks.BeforeSignUp;
-      const afterSignUp = yield* Hooks.AfterSignUp;
+      // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement, consulted at
+      // the sign-in-completing path of `callback` only (never `flow.link`, which issues no new session).
+      const completion = yield* SignIn.make;
+      // NAM-002: the sign-up veto/observer for the first-login user creation below.
+      const creation = yield* SignUp.make;
 
-      /**
-       * Ticket 13: 20 callback attempts per minute per source IP — loose
-       * enough not to trip a real user's own retries after a transient
-       * provider hiccup, tight enough to bound repeated token-exchange
-       * calls (the expensive step — a real network round trip to the
-       * provider) against one origin. `undefined` IP (no
-       * `HttpServerRequest.remoteAddress`) shares one bucket, never
-       * unthrottled.
-       */
-      const {
-        authorize: AUTHORIZE_RATE_LIMIT,
-        callback: CALLBACK_RATE_LIMIT,
-        token: TOKEN_RATE_LIMIT,
-      } = config_.rateLimits;
-      // Only registered above for introspection; enforcement reads the budget in force (EP-007).
-      // The explicit return-type annotation below is a narrow, necessary
-      // exception, not a style choice: passing `OAuth` (this class) into
-      // anything typed `AuthPlugin.Any` (which itself requires a `layer`
-      // field) from within `OAuth`'s own `static readonly layer`
-      // initializer is a real TS circularity — see `@awthaq/password`'s
-      // `Password.ts` for the identical problem and the same fix, first
-      // hit there (ticket 12).
-      const registerRateLimitRules: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =
-        rateLimitsRegistry
-          .register(OAuth, {
-            group: "oauth",
-            endpoint: "callback",
-            key: "ip",
-            limit: CALLBACK_RATE_LIMIT.limit,
-            window: CALLBACK_RATE_LIMIT.window,
-          })
-          // OAP-008: `authorize` is throttled too, on its own looser rule.
-          .pipe(
-            Effect.andThen(
-              rateLimitsRegistry.register(OAuth, {
-                group: "oauth",
-                endpoint: "authorize",
-                key: "ip",
-                limit: AUTHORIZE_RATE_LIMIT.limit,
-                window: AUTHORIZE_RATE_LIMIT.window,
-              }),
-            ),
-            // MNA-003: the exchange redemption is anonymous too.
-            Effect.andThen(
-              rateLimitsRegistry.register(OAuth, {
-                group: "oauth.exchange",
-                endpoint: "token",
-                key: "ip",
-                limit: TOKEN_RATE_LIMIT.limit,
-                window: TOKEN_RATE_LIMIT.window,
-              }),
-            ),
-          );
-      yield* registerRateLimitRules.pipe(Effect.orDie);
+      // The table above is registered (introspectable) and spent through one budget. The numbers in force
+      // come from the configuration of the operation (EP-007), so a tenant's `OAuth.config(...)` provided
+      // in the calling fiber tunes the limits; the registry records the built value.
+      const limits = yield* RateLimits.budget(OAuth, {
+        tune: Effect.map(configNow, (current) => current.rateLimits),
+      });
 
       // BEH-EA-127/NAM-004: resolved by the shared `OAuthProviders` registry
       // — boot-mode providers while this layer builds (a mismatched or
@@ -903,20 +858,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       const authorize: OAuthShape["authorize"] = Effect.fnUntraced(function* (providerId, input) {
         const config = yield* configNow;
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        yield* RateLimits.enforce({
-          key: `oauth:authorize:${input.ip ?? "unknown"}`,
-          limit: config.rateLimits.authorize.limit,
-          window: config.rateLimits.authorize.window,
-          meta: { group: "oauth", endpoint: "authorize", rule: "authorize", dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("authorize", { ip: input.ip });
         const provider = yield* providers.get(providerId);
         const nativeChallenge = input.native?.codeChallenge;
         const resolved = resolveCallbackURL(input.callbackURL, {
@@ -989,20 +931,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       const callbackFlow: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
         const config = yield* configNow;
-        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        yield* RateLimits.enforce({
-          key: `oauth:callback:${input.ip ?? "unknown"}`,
-          limit: config.rateLimits.callback.limit,
-          window: config.rateLimits.callback.window,
-          meta: { group: "oauth", endpoint: "callback", rule: "callback", dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("callback", { ip: input.ip });
         const provider = yield* providers.get(providerId);
         // BEH-EA-122: the correlation cookie and the returned `state` must
         // agree before the (single-use) Verification entry is even
@@ -1020,6 +949,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         if (Option.isNone(decoded)) return yield* CallbackFailure.callbackFailed("state-malformed");
         if (!cookieMatches) return yield* CallbackFailure.callbackFailed("state-cookie-mismatch");
         const { identifier, value } = decoded.value;
+        // ADR-EA-039: burn-first on purpose. The flow state is single-use and network I/O follows
+        // (token exchange, JWKS, userinfo), which must never run inside a write transaction.
         const consumed = yield* verification
           .consume(identifier, value)
           .pipe(
@@ -1171,9 +1102,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           // silently leaving a stale (possibly already-expired) access
           // token as this account's only stored credential.
           onSome: (account) =>
-            accounts
-              .updateProviderTokens(account.id, toProviderTokenSet(tokens, exchangedAt))
-              .pipe(Effect.as(account.userId), Effect.orDie),
+            accounts.updateProviderTokens(account.id, toProviderTokenSet(tokens, exchangedAt)).pipe(
+              Effect.as(account.userId),
+              // The row was read a moment ago: a vanished account is an invariant, an outage flows (ADR-EA-028).
+              Effect.catchTag("AccountNotFound", Effect.die),
+            ),
           onNone: () =>
             Effect.gen(function* () {
               if (flow.link !== undefined) {
@@ -1190,7 +1123,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     Effect.catchTag("AccountAlreadyLinked", () =>
                       CallbackFailure.callbackFailed("account-already-linked"),
                     ),
-                    Effect.orDie,
                   );
                 return userId;
               }
@@ -1229,116 +1161,84 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     tokens: toProviderTokenSet(tokens, exchangedAt),
                     ...issuerField(provider.issuer),
                   })
-                  .pipe(Effect.orDie);
+                  .pipe(
+                    // A concurrent callback linked this identity between the lookup and here.
+                    Effect.catchTag("AccountAlreadyLinked", () =>
+                      CallbackFailure.callbackFailed("account-already-linked"),
+                    ),
+                  );
                 return existing.value.id;
               }
 
-              // BEH-EA-113-adjacent silent sign-up (research/05-oauth-oidc.md
-              // Q55): the ecosystem norm for a first-time, non-conflicting
-              // OAuth sign-in — no separate "confirm sign-up" step in v1.
-              // Shipping-gap map (.scratch/shipping-gaps), ticket 16: `create`
-              // and `link` now commit together via `SqlTransaction` — the
-              // clearest atomicity gap this codebase had (a failure between
-              // the two previously left a real, unlinked, orphaned `User`
-              // row with no way back in). `Effect.orDie` on the whole
-              // transaction, not just `link`'s own failure — a `SqlError`
-              // rolling back the transaction is a defect here the same way
-              // every other `.pipe(Effect.orDie)` in this codebase already
-              // treats an unexpected persistence failure.
+              // BEH-EA-113-adjacent silent sign-up (research/05-oauth-oidc.md Q55): the ecosystem norm
+              // for a first-time, non-conflicting OAuth sign-in, with no separate "confirm sign-up"
+              // step in v1. ADR-EA-038: creation via OAuth is still a sign-up, so `SignUp` vets it
+              // (`BeforeSignUp`, whose `strategy` is the provider id) before anything is written, then
+              // creates, verifies and links in one unit and announces after it commits. The session
+              // follows below through `SignIn`, like every other flow.
               const name = profile.name ?? profile.email ?? profile.subject;
-              // NAM-002/SCP-008: creation via OAuth is still a sign-up, so the
-              // same `BeforeSignUp` veto guards it (its `strategy` is the
-              // provider id), before anything is written.
-              const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
-                beforeSignUp.run({
-                  ...(profile.email === undefined ? {} : { email: profile.email }),
-                  name,
-                  strategy: providerId,
-                }),
-              );
-              const created = yield* sqlTransaction
-                .withTransaction(
-                  Effect.gen(function* () {
-                    // FAMS-002: a profile with no email creates an Anonymous
-                    // user (upgradeable through `Users.promoteIdentity`) — the
-                    // synthetic `${providerId}:${subject}` placeholder email
-                    // this used to fabricate is gone.
-                    const user = yield* users
-                      .create({
-                        identity:
-                          vetoedSignUp.email === undefined
-                            ? { _tag: "Anonymous" }
-                            : { _tag: "Email", email: vetoedSignUp.email },
-                        name: vetoedSignUp.name,
-                        // NAM-009: an http(s) avatar only — see `OAuthProfile.image`.
-                        ...(profile.image !== undefined && isImageUrl(profile.image)
-                          ? { image: profile.image }
-                          : {}),
-                      })
-                      .pipe(
-                        Effect.catchTag("Users/EmailAlreadyExists", () =>
-                          // A concurrent sign-up claimed the address between
-                          // our lookup and this insert: report whatever the
-                          // winner has, or nothing if it isn't visible yet.
-                          (profile.email === undefined
-                            ? Effect.succeed(Option.none())
-                            : users.findByEmail(profile.email)
-                          ).pipe(
-                            Effect.flatMap((winner) =>
-                              Option.isSome(winner)
-                                ? conflictingProviders(
-                                    winner.value.id,
-                                    profile.emailVerified === true,
-                                  )
-                                : Effect.succeed([]),
-                            ),
-                            Effect.flatMap(
-                              (providers) => new OAuthApi.AccountExists({ providers }),
-                            ),
-                          ),
-                        ),
-                        // FAMS-002: no phone identity is created here.
-                        Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
-                      );
-                    // AOMS-007: a *trusted* provider's `email_verified` claim
-                    // is proof enough to mark the new local user verified, in
-                    // the same transaction. Deliberately not for an untrusted
-                    // provider — that claim must not flip local state TMS-007's
-                    // auto-link gate later relies on — and never on the
-                    // auto-link/explicit-link paths, whose local account keeps
-                    // its own verification state.
-                    if (
-                      profile.email !== undefined &&
-                      profile.emailVerified === true &&
-                      trustedProvidersOf(config).includes(providerId)
-                    ) {
-                      yield* users.verifyEmail(user.id).pipe(Effect.orDie);
-                    }
-                    yield* accounts
-                      .link({
-                        userId: user.id,
-                        providerId,
-                        subject: profile.subject,
-                        tokens: toProviderTokenSet(tokens, exchangedAt),
-                        ...issuerField(provider.issuer),
-                      })
-                      .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
-                    return user;
-                  }),
-                )
-                // Only the transaction's own `SqlError` dies here — a
-                // rolled-back commit is an unexpected persistence failure,
-                // the same posture every other `Effect.orDie` in this
-                // codebase already takes. `OAuthApi.AccountExists` (from
-                // `EmailAlreadyExists` above) is a real, expected outcome
-                // and must still reach the caller as itself.
-                .pipe(Effect.catchTag("SqlError", Effect.die));
-              yield* events.publish({ _tag: "auth.user.created", userId: created.id });
-              yield* afterSignUp.run({
-                userId: created.id,
-                ...(vetoedSignUp.email === undefined ? {} : { email: vetoedSignUp.email }),
+              const vetted = yield* creation.vet({
+                // FAMS-002: a profile with no email creates an Anonymous user (upgradeable through
+                // `Users.promoteIdentity`).
+                identity:
+                  profile.email === undefined
+                    ? { _tag: "Anonymous" }
+                    : { _tag: "Email", email: profile.email },
+                name,
                 strategy: providerId,
               });
+              const created = yield* creation
+                .create(vetted, {
+                  // AOMS-007: a *trusted* provider's `email_verified` claim is proof enough to mark the
+                  // new local user verified, in the same unit. Deliberately not for an untrusted
+                  // provider (that claim must not flip local state TMS-007's auto-link gate later relies
+                  // on) and never on the auto-link/explicit-link paths.
+                  verified:
+                    profile.email !== undefined &&
+                    profile.emailVerified === true &&
+                    trustedProvidersOf(config).includes(providerId),
+                  // NAM-009: an http(s) avatar only, see `OAuthProfile.image`.
+                  ...(profile.image !== undefined && isImageUrl(profile.image)
+                    ? { image: profile.image }
+                    : {}),
+                  link: {
+                    providerId,
+                    subject: profile.subject,
+                    tokens: toProviderTokenSet(tokens, exchangedAt),
+                    ...issuerField(provider.issuer),
+                  },
+                })
+                .pipe(
+                  Effect.catchTag(
+                    "SignUp/IdentityTaken",
+                    Effect.fnUntraced(function* (taken) {
+                      if (taken.kind === "Account") {
+                        // A concurrent callback linked this identity to another user first.
+                        return yield* CallbackFailure.callbackFailed("account-already-linked");
+                      }
+                      // FAMS-002: no phone identity is created here.
+                      if (taken.kind === "Phone") {
+                        return yield* Defects.invariantViolation(
+                          "OAuthSignUpConflict",
+                          taken.message,
+                        );
+                      }
+                      // A concurrent sign-up claimed the address between our lookup and this insert:
+                      // report whatever the winner has, or nothing if it isn't visible yet.
+                      const winner =
+                        profile.email === undefined
+                          ? Option.none()
+                          : yield* users.findByEmail(profile.email);
+                      const providers = Option.isSome(winner)
+                        ? yield* conflictingProviders(
+                            winner.value.id,
+                            profile.emailVerified === true,
+                          )
+                        : [];
+                      return yield* new OAuthApi.AccountExists({ providers });
+                    }),
+                  ),
+                );
               return created.id;
             }),
         });
@@ -1349,50 +1249,20 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           return { callbackURL: flow.callbackURL, session: undefined };
         }
 
-        // SCP-001/BAM-005: THE shared sign-in gate — the provider proved the
-        // identity; a suspended user still gets no session.
-        const signedInUser = yield* users
-          .findById(targetUserId)
-          .pipe(Effect.orDie, Effect.tap(Users.assertCanSignIn));
-        // NAM-002: the sign-in veto, before the MFA divert point below.
-        const signedInEmail = Users.emailOf(signedInUser);
-        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-          beforeSignIn.run({
-            userId: targetUserId,
-            ...(Option.isSome(signedInEmail) ? { email: signedInEmail.value } : {}),
-            strategy: providerId,
-          }),
-        );
-
-        // BCR-004/THS-002: same canonical MFA attachment point
-        // `@awthaq/password`'s own `signIn` consults, right before this
-        // flow's own `sessions.issue`.
-        const point = yield* beforeSessionIssue.run({
-          userId: targetUserId,
-          strategy: providerId,
-          amr: ["fed"],
-        });
-        if (point._tag === "Diverted") {
-          return yield* Effect.fail(point.value);
-        }
-        // CSD-003: the callback request is the browser's own, so its
-        // address and user agent are what the device list should show.
-        const issued = yield* sessions
-          .issue({
-            userId: targetUserId,
-            request: {
-              ...(input.ip !== undefined ? { ip: input.ip } : {}),
-              ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
-            },
-            amr: ["fed"],
-          })
-          .pipe(Effect.orDie);
-        yield* events.publish({
-          _tag: "auth.user.signedIn",
-          userId: targetUserId,
-          strategy: providerId,
-        });
-        yield* afterSignIn.run({ userId: targetUserId, strategy: providerId });
+        // ADR-EA-038: the provider proved the identity, so core's sign-in takes over (gate, veto,
+        // MFA divert, session, announcement). CSD-003: the callback request is the browser's own,
+        // so its address and user agent are what the device list should show. An erasure can run
+        // between the proof and here: the one opaque callback failure, not a server error.
+        const issued = yield* completion
+          .complete(
+            { userId: targetUserId, strategy: providerId, amr: ["fed"] },
+            { ip: input.ip, userAgent: input.userAgent },
+          )
+          .pipe(
+            Effect.catchTag("SignIn/UserGone", () =>
+              CallbackFailure.callbackFailed("account-missing"),
+            ),
+          );
         if (flow.native !== true) return { callbackURL: flow.callbackURL, session: issued };
 
         // MNA-003 (ticket 17): a native app can only receive the deep-link URL, so
@@ -1461,20 +1331,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         );
 
       const exchange: OAuthShape["exchange"] = Effect.fnUntraced(function* (input) {
-        const config = yield* configNow;
-        yield* RateLimits.enforce({
-          key: `oauth:token:${input.ip ?? "unknown"}`,
-          limit: config.rateLimits.token.limit,
-          window: config.rateLimits.token.window,
-          meta: { group: "oauth.exchange", endpoint: "token", rule: "token", dimension: "ip" },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("token", { ip: input.ip });
         const decoded = decodeState(input.code);
         // The prefix is checked BEFORE `consume`: consuming is destructive, and
         // this endpoint must never burn (or redeem) a `Verification` value issued
@@ -1483,6 +1340,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           return yield* CallbackFailure.callbackFailed("exchange-malformed");
         }
         const { identifier, value } = decoded.value;
+        // ADR-EA-039: burn-first on purpose. A wrong verifier is one guess gone; nothing follows to roll back.
         const consumed = yield* verification
           .consume(identifier, value)
           .pipe(

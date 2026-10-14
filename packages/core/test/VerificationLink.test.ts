@@ -8,17 +8,20 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";
 import * as VerificationLink from "../src/VerificationLink.ts";
 
-const TestLayer = Verification.layerMemory.pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+const TestLayer = Verification.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(NodeCrypto.layer),
+  );
 
 describe("VerificationLink.encode/decode", () => {
   const value = Redacted.make("secret-half");

@@ -20,6 +20,7 @@
 // per simulated process.
 import { Migrations } from "@awthaq/core";
 import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -29,6 +30,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -37,7 +39,8 @@ import * as JwtConfig from "../src/JwtConfig.ts";
 import * as Jwt from "../src/Jwt.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
+import { SigningKeyRecordsLive } from "./support.ts";
 
 const TestConfig = JwtConfig.config({ issuer: "https://issuer.test" });
 
@@ -77,7 +80,7 @@ const SqlBase = SigningKeyRecords.layerSql.pipe(
 // The store plus its transaction port, built once so every KeyRing in a test
 // shares one database.
 const SqlRecords = SqlTransaction.layerSql.pipe(Layer.provideMerge(SqlBase));
-const MemoryRecords = Layer.mergeAll(SigningKeyRecords.layerMemory, SqlTransaction.layerNoop);
+const MemoryRecords = Layer.mergeAll(SigningKeyRecordsLive, SqlTransaction.layerNoop);
 
 const kty = (jwk: SigningKeyRecords.Jwk): unknown => jwk["kty"];
 const privateField = (jwk: SigningKeyRecords.Jwk): unknown => jwk["d"];
@@ -345,41 +348,139 @@ suite("layerSql", SqlRecords);
 
 // KRS-001 (+SMS-001-secrets-management-specialist): the private JWK is an
 // `Encryption` envelope bound to its own row, never JWK JSON.
-describe("layerSql private key at rest (KRS-001)", () => {
-  const TestLayer = KeyRing.KeyRing.layer.pipe(
-    Layer.provideMerge(SqlRecords),
-    Layer.provideMerge(TestConfig),
-    Layer.provideMerge(NodeCrypto.layer),
+// KRS-001 and plan 05: the private JWK is a sealed column. That the stored value is an envelope bound to its
+// row, opens to what was written and re-seals after an encryption-key rotation is the substrate's suite
+// (`runSealedColumnTests`, below); what stays here is the ring's own behaviour on top of it.
+const vitestFramework: TestAuth.TestFramework = {
+  describe: (name, body) => describe(name, body),
+  it: (name, body) => it(name, body),
+  fail: (message) => assert.fail(message),
+};
+
+const sampleJwk = { kty: "OKP", crv: "Ed25519", d: "private-scalar", x: "public-point" };
+
+const writeKey = (kid: string, value: Record<string, unknown>) =>
+  Effect.flatMap(SigningKeyRecords.SigningKeyRecords, (records) =>
+    Effect.asVoid(
+      records.create({
+        kid,
+        alg: "EdDSA",
+        publicKeyJwk: { kty: "OKP", x: "public-point" },
+        privateKeyJwk: Option.some(Redacted.make(value)),
+        // Rotated at once, so two rows never compete for the single current slot.
+        rotated: {
+          rotatedAt: DateTime.makeUnsafe(0),
+          retiresAt: DateTime.makeUnsafe(4_000_000_000_000),
+        },
+      }),
+    ),
+  );
+const readKey = (kid: string) =>
+  Effect.flatMap(SigningKeyRecords.SigningKeyRecords, (records) =>
+    Effect.map(records.listVerifiable(DateTime.makeUnsafe(1)), (rows) =>
+      Option.getOrThrow(
+        Option.flatMap(
+          Option.fromNullishOr(rows.find((row) => row.kid === kid)),
+          (row) => row.privateKeyJwk,
+        ),
+      ),
+    ),
   );
 
-  it.effect("never stores the private JWK in plaintext", () =>
-    Effect.gen(function* () {
-      yield* KeyRing.current;
-      const sql = yield* SqlClient.SqlClient;
-      const rows = yield* sql<{ readonly privateKeyJwk: string | null }>`
-        SELECT "privateKeyJwk" FROM jwt_signing_key`;
-      assert.strictEqual(rows.length, 1);
-      const stored = rows[0]?.privateKeyJwk;
-      assert.isString(stored);
-      assert.notInclude(stored, '"d"');
-      const envelope = JSON.parse(Buffer.from(stored ?? "", "base64url").toString("utf8"));
-      assert.deepEqual(Object.keys(envelope).sort(), ["ciphertext", "iv", "kid", "v"]);
-    }).pipe(Effect.provide(TestLayer)),
-  );
+TestAuth.runSealedColumnTests<
+  Record<string, unknown>,
+  SigningKeyRecords.SigningKeyRecords | SigningKeyRecords.MemoryEnvelopes
+>(vitestFramework, {
+  column: SigningKeyRecords.privateKeyJwkColumn,
+  sample: sampleJwk,
+  adapters: [
+    {
+      name: "layerMemory",
+      layer: SigningKeyRecords.layerMemory,
+      raw: (kid) => Effect.flatMap(SigningKeyRecords.MemoryEnvelopes, (rows) => rows.stored(kid)),
+      plant: (kid, stored) =>
+        Effect.flatMap(SigningKeyRecords.MemoryEnvelopes, (rows) => rows.plant(kid, stored)),
+    },
+  ],
+  write: writeKey,
+  read: readKey,
+});
 
-  it.effect("a privateKeyJwk ciphertext copied onto another kid's row fails to decrypt", () =>
+TestAuth.runSealedColumnTests<
+  Record<string, unknown>,
+  SigningKeyRecords.SigningKeyRecords | SqlClient.SqlClient
+>(vitestFramework, {
+  column: SigningKeyRecords.privateKeyJwkColumn,
+  sample: sampleJwk,
+  adapters: [
+    {
+      name: "layerSql",
+      layer: SigningKeyRecords.layerSql.pipe(
+        Layer.provideMerge(SqlLive),
+        Layer.provideMerge(Migrated),
+      ),
+      raw: (kid) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const rows = yield* sql<{
+            readonly value: string;
+          }>`SELECT "privateKeyJwk" AS value FROM jwt_signing_key WHERE kid = ${kid}`;
+          return rows[0]?.value ?? "";
+        }),
+      plant: (kid, stored) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`UPDATE jwt_signing_key SET "privateKeyJwk" = ${stored} WHERE kid = ${kid}`;
+        }),
+    },
+  ],
+  write: writeKey,
+  read: readKey,
+});
+
+describe("a signing key sealed under a retired encryption key (plan 05)", () => {
+  // Before the substrate a rotated AWTHAQ_ENCRYPTION_KEY_ID left every signing key on the retired kid
+  // forever, so the old key could never be dropped. Now the key re-seals when the ring next reads it.
+  it.effect("is re-sealed to the current encryption key the next time it is read", () =>
     Effect.gen(function* () {
-      const original = yield* KeyRing.current;
-      yield* KeyRing.rotateNow();
-      const sql = yield* SqlClient.SqlClient;
-      const records = yield* SigningKeyRecords.SigningKeyRecords;
-      const [donor] = yield* sql<{ readonly privateKeyJwk: string }>`
-        SELECT "privateKeyJwk" FROM jwt_signing_key WHERE kid = ${original.kid}`;
-      yield* sql`UPDATE jwt_signing_key SET "privateKeyJwk" = ${donor?.privateKeyJwk ?? ""}
-        WHERE kid <> ${original.kid}`;
-      const exit = yield* Effect.exit(records.findCurrent());
-      assert.isTrue(Exit.isFailure(exit));
-    }).pipe(Effect.provide(TestLayer)),
+      let current = "k1";
+      const material = (kid: string): KeyProvider.KeyMaterial => ({
+        kid,
+        key: Redacted.make(new Uint8Array(32).fill(kid === "k1" ? 11 : 22)),
+      });
+      const provider = KeyProvider.KeyProvider.of({
+        currentKey: Effect.sync(() => material(current)),
+        getKey: (kid) =>
+          kid === "k1" || kid === "k2"
+            ? Effect.succeed(material(kid))
+            : Effect.fail(new KeyProvider.UnknownKeyId({ kid })),
+      });
+      const rotating = Encryption.layer.pipe(
+        Layer.provide(Layer.succeed(KeyProvider.KeyProvider, provider)),
+        Layer.provide(NodeCrypto.layer),
+      );
+      const kidAtRest = Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{
+          readonly value: string;
+        }>`SELECT "privateKeyJwk" AS value FROM jwt_signing_key`;
+        return JSON.parse(Buffer.from(rows[0]?.value ?? "", "base64url").toString("utf8")).kid;
+      });
+      const layer = SigningKeyRecords.layerSql.pipe(
+        Layer.provide(rotating),
+        Layer.provideMerge(SqlLive),
+        Layer.provideMerge(Migrated),
+      );
+      yield* Effect.gen(function* () {
+        const records = yield* SigningKeyRecords.SigningKeyRecords;
+        yield* writeKey("retired-kid", sampleJwk);
+        assert.strictEqual(yield* kidAtRest, "k1");
+        current = "k2";
+        yield* (yield* readKey("retired-kid")).open;
+        assert.strictEqual(yield* kidAtRest, "k2");
+        assert.isDefined(records);
+      }).pipe(Effect.provide(layer));
+    }),
   );
 });
 

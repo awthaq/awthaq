@@ -17,6 +17,12 @@
       "bun": "./src/index.ts",
       "import": "./lib/index.js",
       "default": "./lib/index.js"
+    },
+    "./records": {
+      "types": "./lib/records.d.ts",
+      "bun": "./src/records.ts",
+      "import": "./lib/records.js",
+      "default": "./lib/records.js"
     }
   },
   "scripts": {
@@ -34,7 +40,6 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@awthaq/server": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",

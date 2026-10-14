@@ -9,11 +9,15 @@
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
       "@awthaq/api": ["../../packages/api/src/index.ts"],
-      "@awthaq/core": ["../../packages/core/src/index.ts"]
+      "@awthaq/core": ["../../packages/core/src/index.ts"],
+      "@awthaq/ports": ["../../packages/ports/src/index.ts"],
+      "@awthaq/sql": ["../../packages/sql/src/index.ts"]
     }
   },
   "references": [
     { "path": "../../packages/api/tsconfig.src.json" },
-    { "path": "../../packages/core/tsconfig.src.json" }
+    { "path": "../../packages/core/tsconfig.src.json" },
+    { "path": "../../packages/ports/tsconfig.src.json" },
+    { "path": "../../packages/sql/tsconfig.src.json" }
   ]
 }

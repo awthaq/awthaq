@@ -16,7 +16,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Jwt from "../src/Jwt.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const SqlLive = TestSql.layer("jwt_RevocationStore");
 
@@ -64,6 +64,20 @@ const suite = (
           yield* TestClock.adjust(Duration.minutes(6));
           assert.isFalse(yield* store.isRevoked("jti-c"));
         }).pipe(Effect.provide(StoreLayer)),
+    );
+
+    it.effect("purgeExpired deletes only the rows past their expiresAt and reports how many", () =>
+      Effect.gen(function* () {
+        const store = yield* RevocationStore.RevocationStore;
+        const now = yield* DateTime.now;
+        yield* store.revoke("short", DateTime.addDuration(now, Duration.minutes(5)));
+        yield* store.revoke("long", DateTime.addDuration(now, Duration.hours(2)));
+
+        yield* TestClock.adjust(Duration.hours(1));
+        assert.strictEqual(yield* store.purgeExpired(yield* DateTime.now), 1);
+        assert.strictEqual(yield* store.purgeExpired(yield* DateTime.now), 0);
+        assert.isTrue(yield* store.isRevoked("long"));
+      }).pipe(Effect.provide(StoreLayer)),
     );
 
     it.effect("revoke is idempotent — revoking the same jti twice keeps it revoked", () =>

@@ -5,7 +5,7 @@
 // layer): a real in-memory `Accounts`, a fake `HttpClient` only for the
 // provider's own token endpoint — the same shape `OAuth.test.ts` already
 // establishes for the provider transport.
-import { Accounts, Users } from "@awthaq/core";
+import { Accounts, Persistence, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
@@ -39,7 +39,7 @@ const acme = (): OAuthProvider.OAuthProviderConfig =>
 
 const buildLayer = (httpRoutes: FakeRoutes, config?: Partial<OAuth.OAuthConfigInput>) =>
   OAuthTokenAccess.layer.pipe(
-    Layer.provideMerge(Accounts.layerMemory),
+    Layer.provideMerge(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provide(fakeHttpClient(httpRoutes)),
     Layer.provide(

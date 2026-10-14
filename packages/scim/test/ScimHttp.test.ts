@@ -2,43 +2,32 @@
 // authentication, content types, the RFC 7644 wire shapes and error bodies, and the
 // discovery documents — through `HttpRouter.toWebHandler`, the way a directory
 // service's HTTP client would reach the plugin.
-import { AuthHttp } from "@awthaq/server";
 import { Errors, Sessions, Users } from "@awthaq/core";
-import { Organization, OrganizationRecords } from "@awthaq/organization";
+import { Organization } from "@awthaq/organization";
+import { OrganizationRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import { TestAuth } from "@awthaq/test";
 import * as Scim from "../src/Scim.ts";
 import * as ScimApi from "../src/ScimApi.ts";
 import * as ScimConnections from "../src/ScimConnections.ts";
 import * as ScimRecords from "../src/ScimRecords.ts";
 import { ScimLive, seedConnection } from "./support.ts";
+import { TenantScoped } from "@awthaq/sql";
+
+/** The witness these tests present where a cross-organization caller would. */
+const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const ORIGIN = "http://localhost:3000";
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
 const buildApp = (
   scimConfig: Partial<Scim.ScimConfigShape> = {},
-  users: typeof Users.layerMemory = Users.layerMemory,
+  users?: Layer.Layer<Users.Users, never, Users.Users>,
 ) => {
-  const Live = ScimLive(scimConfig, {}, users);
-  const AppLayer = AuthHttp.routes(ScimApi.ScimApi).pipe(
-    Layer.provide(Live),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
+  const app = TestAuth.app(ScimLive(scimConfig, {}, users));
   /** Runs `effect` against the very same service instances the web handler uses. */
   const inside = <A, E>(
     effect: Effect.Effect<
@@ -52,17 +41,8 @@ const buildApp = (
       | Users.Users
       | Sessions.Sessions
     >,
-  ) =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(Live, memoMap, scope);
-          return yield* effect.pipe(Effect.provide(context));
-        }),
-      ),
-    );
-  return { handler, inside };
+  ) => app.run(effect);
+  return { handler: app.handler, inside };
 };
 
 const call = (
@@ -187,6 +167,7 @@ describe("SCIM over HTTP: what the token is checked against (BEH-EA-246)", () =>
                 const orgs = yield* OrganizationRecords.OrganizationRecords;
                 const now = yield* DateTime.now;
                 yield* orgs.setSuspended(
+                  grant,
                   seeded.organizationId,
                   suspended ? Option.some(now) : Option.none(),
                 );
@@ -368,8 +349,8 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
   );
 });
 
-/** The real in-memory `Users`, except that reading by email reports an outage. */
-const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
+/** The composition's `Users`, except that reading by email reports an outage (`TestAuth.layer`'s `decorate`). */
+const UsersDownOnLookup = Layer.effect(
   Users.Users,
   Effect.gen(function* () {
     const real = yield* Users.Users;
@@ -379,7 +360,7 @@ const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
         Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findByEmail" })),
     });
   }),
-).pipe(Layer.provide(Users.layerMemory));
+);
 
 describe("SCIM over HTTP: a store outage (ADR-EA-028)", () => {
   it.effect("is a 503 with the RFC 7644 error body and none of the internal error's detail", () =>

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-07 |
-> | Revision | 1.2 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) <br> 1.5 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.6 (2026-10-13): BEH-EA-053 names the ownership rule for `supersedes`; RRS-003's reuse is published once; THS-003's union and TIR-008's revoke are one atomic step in both layers (plan 02 phase 0) <br> 1.7 (2026-10-13): One implementation over `SessionStore`: the supersede is one store primitive (BEH-EA-053), a rotation is a compare-and-swap that never rotates a tombstone and whose loser re-checks liveness (BEH-EA-052), the listing is bounded on every adapter (BEH-EA-054), session writes capture the causal token (plan 02 phase 6) |
 
 ---
 
@@ -67,7 +67,7 @@ REQUIREMENT: A session's absolute expiry MUST be fixed at issuance and MUST
 
 `archive/PRD.md` §13 names both deadlines as reading from `SessionConfig` together: "absolute plus idle expiry." Without the absolute ceiling, a session touched frequently enough — by a legitimate but forgotten background tab, or by an attacker automating activity — could remain valid indefinitely, which is precisely what an absolute expiry exists to rule out regardless of how the idle window behaves.
 
-**As shipped (CSG-003, ADR-EA-033):** expiry is a read-time rejection; the row stays until `Retention.sweep` (opt-in) physically deletes it. `Sessions.purgeExpired(before)` removes every session whose absolute or idle expiry is before the cutoff, tombstoned refresh-rotation rows included, in bounded batches in both layers; the sweep passes `now - sessionGrace` (default 7 days), so reuse detection (BEH-EA-053) outlives the session's own life by the grace. `packages/core/test/Retention.test.ts` proves a live session and one still inside the grace survive.
+**As shipped (CSG-003, ADR-EA-031):** expiry is a read-time rejection; the row stays until `Retention.sweep` (opt-in) physically deletes it. `Sessions.purgeExpired(before)` removes every session whose absolute or idle expiry is before the cutoff, tombstoned refresh-rotation rows included, in bounded batches in both layers; the sweep passes `now - sessionGrace` (default 7 days), so reuse detection (BEH-EA-053) outlives the session's own life by the grace. `packages/core/test/Retention.test.ts` proves a live session and one still inside the grace survive.
 
 ## BEH-EA-052: Idle-window refresh is throttled to at most one write per `touchEvery`
 
@@ -92,14 +92,18 @@ REQUIREMENT: Every sign-in and every privilege-changing operation
              extending or re-validating an existing session row. The
              superseded row MUST be tombstoned (RRS-003: `supersededBy`/
              `supersededAt` set, never deleted) in the same atomic unit as
-             the successor's insertion — one SQL transaction in `layerSql`,
-             one `Ref.modify` in `layerMemory` — so no failure or interruption
+             the successor's insertion — one `SessionStore.insert` primitive
+             (one `Ref.modify`; one SQL transaction) — so no failure or interruption
              can leave a tombstoned session without its successor.
 ```
 
 **As shipped for an email change (REQ-EA-686):** a password change (an authenticated request) rotates the caller's own session and revokes the others. An email change is confirmed by a mailed token (`POST /change-email/confirm`, public: the link may be opened in another browser), so the confirming request carries no session to rotate; the confirmation therefore ends **every** session of the account in the same transaction as the address change (`Sessions.revokeAll(userId, "emailChanged")`, which publishes `auth.session.revoked` with reason `emailChanged`), and the owner signs in afresh under the new address. No replacement session is minted: minting one for an unauthenticated confirmer would hand a session to whoever holds the link.
 
 `archive/design/usage-examples-v4.md` §5.3 states this directly: "A new session is issued at every sign-in and after password or email change; the old row is deleted." (Revised by RRS-003/ESR-002: the old row is now tombstoned, atomically with the new row's insertion, so a later presentation of the superseded token is detectable as reuse.) `better-auth/01-core-domain/01-entities-and-invariants.md` §2.3 documents the same rule for a related case — promoting a previously-unverified user on proof of mailbox ownership strips every pre-existing session and account, and a fresh session is minted only afterward by the caller, never by reusing whatever session happened to exist before the proof resolved.
+
+**Ownership and atomicity of the supersede (plan 02 phase 0, INV-EA-018).** `supersedes` names a session the issuing user owns: a foreign user's session, a session already tombstoned and an absent one are all "no ancestor", so the new session founds a fresh family, nothing is tombstoned and no `auth.session.superseded` is published. The event describes the tombstoned row (`userId` is that row's user). Reuse detection is **once-only** (RRS-003): the check that the presented row is tombstoned and not yet flagged, the `reusedAt` mark and the family revocation are one atomic step (one `Ref.modify`; one transaction whose first statement is a conditional `UPDATE ... RETURNING`), so of any number of concurrent presentations exactly one publishes `auth.session.reuse` and the family `auth.session.revoked`. A revocation is one `DELETE ... RETURNING` (TIR-008), so of two concurrent revokes of one session exactly one publishes and the other fails `SessionNotFound`; `reauthenticate`'s union into `amr` is a compare-and-swap in `layerSql` (a lost step-up is retried against the new value), so concurrent step-ups both land (THS-003).
+
+**One implementation over a store port (plan 02, ADR-EA-041, ADR-EA-014).** `Sessions` is written once, over `SessionStore` (a `Ref` adapter in `@awthaq/ports`, a SQL adapter over `@awthaq/sql`'s repository; a KV backend is an implementation of the same nine primitives), whose atomicity is part of its contract and is proven on every adapter by `StoreContract.sessions` (the `Ref`, SQLite, WAL-file and Postgres adapters, concurrency included). Three rules the twins used to disagree on are now one. **Rotation is a compare-and-swap that requires a live row** (BEH-EA-052): the swap applies only if the stored hash still equals the one read and the row is not tombstoned, so a tombstone is never rotated; the call that loses the swap re-applies liveness to the row it finds (absent or tombstoned is `SessionNotFound`, expired is `SessionExpired`, otherwise it authenticates that row and reports `rotated: none`), instead of authenticating whatever is there. **The listing is bounded** (BEH-EA-054): both adapters answer at most `LIST_LIMIT` rows and the service logs a warning when more exist, so a memory composition no longer lists without bound. **A store may drop a row only once it is past its absolute expiry** (TMS-004, the memory adapter's size bound): a pruned row is `SessionNotFound` with no `auth.session.expired`, the one visible difference. The SQL adapter's session writes (insert, revoke, family revocation, bulk removal) capture the replica causal token (ADR-EA-024), so a fiber that revokes and then lists eventually is held to the primary instead of seeing the revoked session on a lagging replica; the concurrent-session cap is exact on a serializing adapter and may sit one over for a moment on Postgres' READ COMMITTED, the next insert evicting back (SMS-003).
 
 ## BEH-EA-054: Sessions expose a device list, per-device revocation, and revoke-others
 
@@ -202,3 +206,51 @@ REQUIREMENT: How a session was authenticated MUST reach an authorization
 ```
 
 The mapping (NIST SP 800-63B): knowledge (`pwd`) and possession (`hwk`, `swk`, `otp`, `sms`, `email`) are different classes; a key method with user verification (`user`) is a multi-factor authenticator; `mfa` states multiple factors outright; `fed` counts for nothing (a federated sign-in is as strong as the identity provider says, which awthaq cannot see). aal3 needs a hardware-bound key with user verification (`hwk` + `user`). A passkey session records `hwk` for a device-bound credential and `swk` for a synced one, plus `user` when the authenticator verified the user (HSK-005), so a policy can require `amr contains "hwk"`. A password plus SMS reaches aal2 nominally but `Assurance.satisfies` ignores a restricted factor unless the caller opts in. A policy states `hasAttribute("aal", oneOf("aal2", "aal3"))` instead of enumerating method combinations.
+
+## BEH-EA-319: `reauthenticate` advances only a live session the caller owns
+
+> **See:** [BEH-EA-051](07-sessions.md#beh-ea-051-a-session-carries-independent-absolute-and-idle-expiries-idle-refresh-never-extends-the-absolute-deadline), [BEH-EA-053](07-sessions.md#beh-ea-053-a-new-session-is-issued--never-reused--at-sign-in-and-at-privilege-change-the-superseded-row-is-tombstoned-atomically-with-the-new-rows-insertion)
+
+```ts
+yield* sessions.reauthenticate(userId, sessionId, ["pwd"])
+// fails Sessions/NotFound for an absent, foreign, tombstoned or expired session
+```
+
+```text
+REQUIREMENT: `Sessions.reauthenticate(userId, id, amr?)` MUST set
+             `authenticatedAt` (and union `amr`) only on a session that is
+             owned by `userId` and live: not tombstoned (BEH-EA-053) and past
+             neither the absolute nor the idle expiry (BEH-EA-051) -- the
+             same rule as `findOwned`. For an absent, foreign, tombstoned or
+             expired session it MUST fail `SessionNotFound` and MUST leave
+             the row unchanged. The check and the write MUST be one atomic
+             step in each layer (the SQL `UPDATE`'s own `WHERE` carries the
+             owner and liveness predicates).
+```
+
+A dead or foreign session is "absent", the answer `findOwned` and `isLive` already give, and not `SessionExpired`: that error answers a *presented credential* and carries a cookie-clearing meaning `reauthenticate` has no use for. The tombstoned row of a rotated session is kept for reuse detection (BEH-EA-053), so it must never receive a fresh `authenticatedAt`. `POST /password/reauthenticate` and `POST /passkey/reauthenticate/verify` turn `SessionNotFound` into `Unauthenticated` (401): the session the middleware verified ended between that check and the write (the password path holds a full hash verification in between), which is "no longer authenticated", not an invariant violation.
+
+## BEH-EA-320: `requireFresh` is the one gate for "this session proved a credential recently"
+
+> **See:** [BEH-EA-319](07-sessions.md#beh-ea-319-reauthenticate-advances-only-a-live-session-the-caller-owns), [BEH-EA-255](17-passkey.md), [BEH-EA-263](31-two-factor.md), [BEH-EA-165](21-qadi-resolvers-obligations.md)
+
+```ts
+yield* sessions.requireFresh(userId, sessionId, Duration.minutes(5))
+// SessionListItem, or fails Sessions/Stale { maxAgeSeconds, reason: "notLive" | "stale" }
+```
+
+```text
+REQUIREMENT: `Sessions.requireFresh(userId, id, maxAge)` MUST succeed with
+             the session only when it is live and owned by `userId`
+             (`findOwned`'s rule) and its `authenticatedAt` is no older than
+             `maxAge` (a session exactly `maxAge` old is still fresh);
+             otherwise it MUST fail `SessionStale` carrying `maxAgeSeconds`
+             and a `reason`: `notLive` (absent, foreign, tombstoned or
+             expired) or `stale`. Both layers MUST share one implementation
+             built on `findOwned`. Every step-up gate (passkey enrolment,
+             two-factor enable/disable/regenerate, the qadi `reauth`
+             obligation, password email change) MUST use it rather than
+             compare `authenticatedAt` itself.
+```
+
+The rule lives in the session store; the *wire contract* stays per plugin. Each caller maps `SessionStale` to its own error, so a client keeps decoding what it already decoded: `PasskeyReauthRequired`, `TwoFactorReauthRequired`, `PasswordReauthRequired` or `Api.ReauthRequired` (all HTTP 403, all carrying `maxAgeSeconds`). `reason` is for logs and step-up UX ("your session ended" versus "confirm your password"); a caller never branches an authorization decision on it. A session that is not live fails closed the same as a stale one: there is no live session left to have proven anything recently.

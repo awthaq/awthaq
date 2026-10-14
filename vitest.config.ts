@@ -25,6 +25,10 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "html", "lcov"],
       include: ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx"],
+      // `TestSql` is Postgres test infrastructure: its dialect branches (the per-suite schema reset, the regclass
+      // codec, the plpgsql failure trigger) only execute under `AWTHAQ_POSTGRES_URL` (`pnpm test:pg`). It lived in
+      // `packages/sql/test/support`, outside this include, until plan 08 moved it into `@awthaq/test`'s `src`.
+      exclude: ["packages/test/src/TestSql.ts"],
       // DoD gate 6 (spec/process/definitions-of-done.md): a shortfall fails the run, it
       // is not merely reported (MM-004). The workspace-wide floor sits about two points
       // under what `pnpm coverage` measured when it was set, so it catches a real

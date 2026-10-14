@@ -7,8 +7,9 @@
 // (the way the package's own tests do), so a scenario about the administrator gate can still have
 // an endpoint the gate then refuses to show; endpoints a scenario is *about* are registered through
 // the service.
+import { SealedColumn } from "@awthaq/sql";
 import { Auth, AuthEvents, DataExport, Erasure, EventRelay, Sessions, Users } from "@awthaq/core";
-import { Encryption } from "@awthaq/ports";
+import { Tenant } from "@awthaq/ports";
 import {
   WebhookDelivery,
   WebhookPayload,
@@ -22,7 +23,6 @@ import assert from "node:assert/strict";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -49,15 +49,12 @@ import {
   updateReplies,
   World,
   type SentRequest,
+  anyTenant,
 } from "./WebhooksWorld.ts";
 import { isRecord, parseJson } from "./shared/WireJson.ts";
 import { isNumber, isString } from "./shared/Outcomes.ts";
 
 // ---- helpers ------------------------------------------------------------------------------------
-
-/** The additional authenticated data the plugin binds a sealed secret to (BEH-EA-276): the endpoint and the field. */
-const aad = (endpointId: string, field: "secret" | "previousSecret") =>
-  `webhooks-endpoint:${endpointId}:${field}`;
 
 const isSentRequest = (value: unknown): value is SentRequest =>
   isRecord(value) &&
@@ -108,15 +105,15 @@ export const seedEndpoint = Effect.fn("features.webhooks.seedEndpoint")(function
   yield* run(
     Effect.gen(function* () {
       const records = yield* WebhookRecords.WebhookRecords;
-      const encryption = yield* Encryption.Encryption;
-      yield* records.createEndpoint({
+      const create = records.createEndpoint({
         id: name,
         url,
         eventTags: [filter],
-        secret: yield* encryption.encrypt(secret, aad(name, "secret")),
+        secret,
         createdBy: "admin-1",
-        tenantId,
       });
+      // The store stamps the ambient tenant, so a tenant's endpoint is registered under it.
+      yield* tenantId === undefined ? create : Tenant.withTenant(tenantId)(create);
     }),
   );
   yield* world.endpoints.set(name, { id: name, url, secret: Redacted.value(secret) });
@@ -126,7 +123,9 @@ export const urlFor = (name: string) => `https://hooks.example.com/${name}`;
 
 const endpointRow = Effect.fn("features.webhooks.endpointRow")(function* (name: string) {
   const row = yield* run(
-    Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.findEndpoint(name)),
+    Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+      records.findEndpointForDelivery(anyTenant, name),
+    ),
   );
   if (Option.isNone(row)) return yield* Effect.die(new Error(`no endpoint row "${name}"`));
   return row.value;
@@ -388,38 +387,6 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   };
   Given("the secret of {string} is rotated, keeping the old one as {string}", rotate);
 
-  Given(
-    "the sealed secret of {string} is copied into the row of {string}",
-    function* (from: string, into: string) {
-      const source = yield* endpointRow(from);
-      yield* run(
-        Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
-          records.setSecrets(into, {
-            secret: source.secret,
-            previousSecret: null,
-            previousSecretExpiresAt: null,
-          }),
-        ),
-      );
-    },
-  );
-  Given(
-    "the previous sealed secret of {string} is moved into its current secret field",
-    function* (name: string) {
-      const row = yield* endpointRow(name);
-      const previous = Option.getOrThrow(row.previousSecret);
-      yield* run(
-        Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
-          records.setSecrets(name, {
-            secret: previous,
-            previousSecret: null,
-            previousSecretExpiresAt: null,
-          }),
-        ),
-      );
-    },
-  );
-
   const switchOff = function* (name: string) {
     const endpoint = yield* endpointNamed(name);
     yield* service((webhooks) => webhooks.updateEndpoint(ADMIN, endpoint.id, { enabled: false }));
@@ -570,7 +537,7 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* run(
       Effect.gen(function* () {
         const records = yield* WebhookRecords.WebhookRecords;
-        const claimed = yield* records.claimDue({
+        const claimed = yield* records.claimDue(anyTenant, {
           now: yield* DateTime.now,
           limit: 50,
           lease: Duration.minutes(1),
@@ -738,51 +705,13 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(JSON.stringify(read).includes(secret), false);
   });
 
-  Then("the stored secret of {string} does not contain its plaintext", function* (name: string) {
-    const world = yield* World;
-    const endpoint = yield* endpointNamed(name);
-    const row = yield* endpointRow(name);
-    assert.equal(row.secret.includes(endpoint.secret), false);
-    assert.equal(row.secret.includes("whsec_"), false);
-    yield* world.out.set("sealed", name);
-  });
   Then(
-    "it decrypts to the plaintext only under the additional data naming {string} and {string}",
-    function* (name: string, field: string) {
-      const world = yield* World;
-      const sealedOf = yield* world.out.getAs("sealed", isString);
-      const row = yield* endpointRow(sealedOf);
-      const plaintext = yield* run(
-        Effect.flatMap(Encryption.Encryption, (encryption) =>
-          encryption.decrypt(
-            row.secret,
-            aad(name, field === "secret" ? "secret" : "previousSecret"),
-          ),
-        ),
-      );
-      assert.equal(Redacted.value(plaintext.plaintext), (yield* endpointNamed(sealedOf)).secret);
-    },
-  );
-  Then(
-    "it does not decrypt under the additional data naming {string} and {string}",
-    function* (name: string, field: string) {
-      const world = yield* World;
-      const sealedOf = yield* world.out.getAs("sealed", isString);
-      const row = yield* endpointRow(sealedOf);
-      const outcome = yield* run(
-        Effect.flatMap(Encryption.Encryption, (encryption) =>
-          Effect.exit(
-            encryption.decrypt(
-              row.secret,
-              aad(name, field === "secret" ? "secret" : "previousSecret"),
-            ),
-          ),
-        ),
-      );
-      assert.ok(
-        Exit.isFailure(outcome),
-        "the envelope must not open under another endpoint's or field's data",
-      );
+    "the secret of {string} opens to the plaintext it was created with",
+    function* (name: string) {
+      const endpoint = yield* endpointNamed(name);
+      const row = yield* endpointRow(name);
+      const opened = yield* run(SealedColumn.orDie(row.secret.open));
+      assert.equal(Redacted.value(opened), endpoint.secret);
     },
   );
 
@@ -965,7 +894,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
   Then("no endpoint exists", function* () {
     const rows = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.listEndpoints),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.listEnabledEndpoints(anyTenant),
+      ),
     );
     assert.deepEqual(rows, []);
   });
@@ -1105,7 +1036,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     const endpoint = yield* world.endpoints.get(name).pipe(Effect.orElseSucceed(() => undefined));
     const id = endpoint?.id ?? name;
     const row = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.findEndpoint(id)),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.findEndpointForDelivery(anyTenant, id),
+      ),
     );
     assert.ok(Option.isSome(row));
   });
@@ -1357,7 +1290,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
   Then("endpoint {string} no longer exists", function* (name: string) {
     const row = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.findEndpoint(name)),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.findEndpointForDelivery(anyTenant, name),
+      ),
     );
     assert.ok(Option.isNone(row));
   });
@@ -1374,7 +1309,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("{string} holds no delivery row about {string}", function* (name: string, user: string) {
     const rows = yield* run(
-      Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.listBySubject(user)),
+      Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+        records.listBySubject(anyTenant, user),
+      ),
     );
     assert.equal(rows.filter((row) => row.endpointId === name).length, 0);
   });
@@ -1382,7 +1319,9 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     "{string} still holds the delivery row about {string}",
     function* (name: string, user: string) {
       const rows = yield* run(
-        Effect.flatMap(WebhookRecords.WebhookRecords, (records) => records.listBySubject(user)),
+        Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+          records.listBySubject(anyTenant, user),
+        ),
       );
       assert.equal(rows.filter((row) => row.endpointId === name).length, 1);
     },

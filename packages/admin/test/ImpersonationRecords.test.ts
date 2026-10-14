@@ -9,6 +9,8 @@
 // genuine end-to-end proof that this plugin's own declared migrations
 // produce a working schema.
 import { AuditChain, Migrations, Tenant, Users } from "@awthaq/core";
+import { TenantScope, TenantScoped } from "@awthaq/sql";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -20,7 +22,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const ChainLive = AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer));
 
@@ -41,6 +43,9 @@ const SqlLayer = ImpersonationRecords.layerSql.pipe(
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
+
+/** The maintenance witness the suite presents (the same shape `Admin` mints). */
+const grant = TenantScoped.crossTenant("test: maintenance over every tenant");
 
 const adminId = Users.UserId("admin-1");
 const targetId = Users.UserId("target-1");
@@ -204,7 +209,7 @@ const suite = (
         yield* records.endEpisode("already-ended", "self");
 
         yield* TestClock.adjust(Duration.hours(1));
-        const closed = yield* records.closeExpired(yield* DateTime.now);
+        const closed = yield* records.closeExpired(grant, yield* DateTime.now);
         assert.deepStrictEqual(
           closed.map((row) => row.sessionId),
           ["short"],
@@ -215,7 +220,7 @@ const suite = (
           Option.some(DateTime.addDuration(start, Duration.minutes(10))),
         );
 
-        const again = yield* records.closeExpired(yield* DateTime.now);
+        const again = yield* records.closeExpired(grant, yield* DateTime.now);
         assert.strictEqual(again.length, 0);
 
         const short = yield* records.findBySessionId("short");
@@ -232,7 +237,7 @@ const suite = (
     it.effect("ALF-005: verifyChain is clean across create, end, close-expired and list", () =>
       Effect.gen(function* () {
         const records = yield* ImpersonationRecords.ImpersonationRecords;
-        assert.isTrue(Option.isNone(yield* records.verifyChain));
+        assert.isTrue(Option.isNone(yield* records.verifyChain(grant)));
         const start = yield* DateTime.now;
         yield* records.create({
           adminUserId: adminId,
@@ -250,8 +255,8 @@ const suite = (
         });
         yield* records.endEpisode("s-self", "self");
         yield* TestClock.adjust(Duration.minutes(2));
-        yield* records.closeExpired(yield* DateTime.now);
-        assert.isTrue(Option.isNone(yield* records.verifyChain));
+        yield* records.closeExpired(grant, yield* DateTime.now);
+        assert.isTrue(Option.isNone(yield* records.verifyChain(grant)));
       }).pipe(Effect.provide(layer)),
     );
 
@@ -272,40 +277,27 @@ const suite = (
     );
 
     it.effect(
-      "IDS-002: list, findBySessionId and endEpisode only see the ambient tenant's episodes",
+      "IDS-002: a witness reaches another tenant's episode; without one it is not found",
       () =>
         Effect.gen(function* () {
           const records = yield* ImpersonationRecords.ImpersonationRecords;
           yield* seed(records, "s-a").pipe(Tenant.withTenant("org-a"));
-          yield* TestClock.adjust(Duration.millis(1));
-          yield* seed(records, "s-b").pipe(Tenant.withTenant("org-b"));
-          yield* TestClock.adjust(Duration.millis(1));
-          yield* seed(records, "s-plain");
-
-          const sessionsOf = (tenant: string | undefined) =>
-            (tenant === undefined
-              ? records.list()
-              : records.list().pipe(Tenant.withTenant(tenant))
-            ).pipe(Effect.map((page) => page.items.map((row) => row.sessionId)));
-          assert.deepStrictEqual(yield* sessionsOf("org-a"), ["s-a"]);
-          assert.deepStrictEqual(yield* sessionsOf("org-b"), ["s-b"]);
-          assert.deepStrictEqual(yield* sessionsOf(undefined), ["s-plain"]);
-
-          // Another tenant's episode is not found, so it cannot be probed or ended from there.
-          assert.isTrue(
-            Option.isNone(yield* records.findBySessionId("s-a").pipe(Tenant.withTenant("org-b"))),
+          const plain = yield* records.findBySessionId("s-a").pipe(Tenant.withTenant("org-b"));
+          assert.isTrue(Option.isNone(plain));
+          const witnessed = yield* records
+            .findBySessionId("s-a", grant)
+            .pipe(Tenant.withTenant("org-b"));
+          assert.isTrue(Option.isSome(witnessed));
+          const listed = yield* records.list({}, grant).pipe(Tenant.withTenant("org-b"));
+          assert.deepStrictEqual(
+            listed.items.map((row) => row.sessionId),
+            ["s-a"],
           );
-          const crossEnd = yield* records
-            .endEpisode("s-a", "forcedByAdmin")
-            .pipe(Tenant.withTenant("org-b"), Effect.flip);
-          assert.strictEqual(crossEnd._tag, "ImpersonationRecordNotFound");
-          assert.isTrue(Option.isNone(yield* records.findBySessionId("s-a")));
-          // The owning tenant can, and the tenant-blind path (maintenance) still closes expired ones.
           const ended = yield* records
-            .endEpisode("s-a", "forcedByAdmin")
-            .pipe(Tenant.withTenant("org-a"));
+            .endEpisode("s-a", "forcedByAdmin", grant)
+            .pipe(Tenant.withTenant("org-b"));
           assert.deepStrictEqual(ended.endedBy, Option.some("forcedByAdmin"));
-          assert.isTrue(Option.isNone(yield* records.verifyChain));
+          assert.isTrue(Option.isNone(yield* records.verifyChain(grant)));
         }).pipe(Effect.provide(layer)),
     );
 
@@ -326,10 +318,10 @@ const suite = (
         }
         yield* TestClock.adjust(Duration.minutes(2));
         const closed = yield* records
-          .closeExpired(yield* DateTime.now)
+          .closeExpired(grant, yield* DateTime.now)
           .pipe(Tenant.withTenant("org-a"));
         assert.strictEqual(closed.length, 2);
-        assert.isTrue(Option.isNone(yield* records.verifyChain));
+        assert.isTrue(Option.isNone(yield* records.verifyChain(grant)));
       }).pipe(Effect.provide(layer)),
     );
   });
@@ -397,7 +389,7 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
           Effect.flip,
         );
       assert.include(rejection(failure), "append-only");
-      assert.isTrue(Option.isNone(yield* records.verifyChain));
+      assert.isTrue(Option.isNone(yield* records.verifyChain(grant)));
     }).pipe(Effect.provide(SqlLayer)),
   );
 
@@ -443,7 +435,7 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const { records, second } = yield* seedTwo;
-        assert.isTrue(Option.isNone(yield* records.verifyChain));
+        assert.isTrue(Option.isNone(yield* records.verifyChain(grant)));
 
         yield* dropTrigger("admin_impersonation_immutable", {
           name: "admin_impersonation_guard",
@@ -451,7 +443,7 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
         });
         yield* sql`UPDATE admin_impersonation SET reason = 'forged' WHERE id = ${second.id}`;
 
-        const broken = yield* records.verifyChain;
+        const broken = yield* records.verifyChain(grant);
         assert.isTrue(Option.isSome(broken));
         if (Option.isSome(broken)) {
           assert.strictEqual(broken.value.episodeId, second.id);
@@ -472,7 +464,7 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
         table: "admin_impersonation",
       });
       yield* sql`DELETE FROM admin_impersonation WHERE id = ${second.id}`;
-      const missing = yield* records.verifyChain;
+      const missing = yield* records.verifyChain(grant);
       assert.isTrue(Option.isSome(missing));
       if (Option.isSome(missing)) {
         assert.strictEqual(missing.value.episodeId, second.id);
@@ -484,7 +476,7 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
         table: "admin_impersonation_chain",
       });
       yield* sql`UPDATE admin_impersonation_chain SET payload = 'forged' WHERE "episodeId" = ${first.id} AND kind = 'started'`;
-      const ledger = yield* records.verifyChain;
+      const ledger = yield* records.verifyChain(grant);
       assert.isTrue(Option.isSome(ledger));
       if (Option.isSome(ledger)) {
         assert.strictEqual(ledger.value.reason, "chain-broken");
@@ -500,7 +492,7 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
       const { records } = yield* seedTwo;
       yield* sql`INSERT INTO admin_impersonation (id, "adminUserId", "targetUserId", "sessionId", reason, "startedAt", "expiresAt", "endedAt", "endedBy")
         VALUES ('smuggled', 'a', 'b', 'session-x', 'r', '1970-01-01T00:00:00.000Z', NULL, NULL, NULL)`;
-      const broken = yield* records.verifyChain;
+      const broken = yield* records.verifyChain(grant);
       assert.isTrue(Option.isSome(broken));
       if (Option.isSome(broken)) {
         assert.strictEqual(broken.value.episodeId, "smuggled");
@@ -510,3 +502,127 @@ describe("ALF-005 tamper evidence (layerSql)", () => {
     }).pipe(Effect.provide(SqlLayer)),
   );
 });
+
+// Plan 05: the tenant-isolation conformance suite, over both adapters. It replaces the store-level
+// tenant cases ("list, findBySessionId and endEpisode only see the ambient tenant's episodes").
+let isolationCounter = 0;
+const isolationCase: TestAuth.TableCase<
+  ImpersonationRecords.ImpersonationRecordsShape,
+  string,
+  ImpersonationRecords.ImpersonationRecords
+> = {
+  table: "admin_impersonation",
+  insert: Effect.gen(function* () {
+    const records = yield* ImpersonationRecords.ImpersonationRecords;
+    isolationCounter += 1;
+    return (yield* seed(records, `isolation-${isolationCounter}`)).sessionId;
+  }),
+  methods: {
+    create: { insert: true },
+    findBySessionId: {
+      scoped: {
+        run: (sessionId) =>
+          Effect.flatMap(ImpersonationRecords.ImpersonationRecords, (records) =>
+            Effect.map(records.findBySessionId(sessionId), Option.isSome),
+          ),
+      },
+    },
+    endEpisode: {
+      scoped: {
+        run: (sessionId) =>
+          Effect.flatMap(ImpersonationRecords.ImpersonationRecords, (records) =>
+            records.endEpisode(sessionId, "self").pipe(
+              Effect.as(true),
+              Effect.catchTag("ImpersonationRecordNotFound", () => Effect.succeed(false)),
+            ),
+          ),
+      },
+    },
+    list: {
+      scoped: {
+        run: (sessionId) =>
+          Effect.flatMap(ImpersonationRecords.ImpersonationRecords, (records) =>
+            Effect.map(records.list(), (page) =>
+              page.items.some((row) => row.sessionId === sessionId),
+            ),
+          ),
+      },
+    },
+    closeExpired: {
+      crossTenant: {
+        run: (sessionId) =>
+          Effect.flatMap(ImpersonationRecords.ImpersonationRecords, (records) =>
+            Effect.flatMap(DateTime.now, (now) =>
+              Effect.map(
+                records.closeExpired(grant, DateTime.addDuration(now, Duration.days(2))),
+                (closed) => closed.some((row) => row.sessionId === sessionId),
+              ),
+            ),
+          ),
+      },
+    },
+    verifyChain: {
+      crossTenant: {
+        run: () =>
+          Effect.flatMap(ImpersonationRecords.ImpersonationRecords, (records) =>
+            Effect.map(records.verifyChain(grant), Option.isNone),
+          ),
+      },
+    },
+  },
+};
+
+const jestFramework: TestAuth.TestFramework = {
+  describe,
+  it: (name, body) => it(name, body),
+  fail: (message) => assert.fail(message),
+};
+
+TestAuth.runTenantIsolationTests(jestFramework, {
+  plugin: Admin.Admin,
+  covers: ["admin_impersonation"],
+  adapters: [
+    { name: "layerMemory", layer: MemoryLayer },
+    { name: "layerSql", layer: SqlLayer },
+  ],
+  cases: [isolationCase],
+  rls: { layer: SqlLayer },
+});
+
+// Plan 05: a cross-tenant maintenance read inside a request's RLS transaction is lifted by its
+// witness. Without `TenantScoped.lift`, the policy confines `verifyChain` to the request's tenant
+// while the ledger spans every tenant, and an intact chain reports `row-missing`. Postgres only.
+describe.skipIf(process.env["AWTHAQ_POSTGRES_URL"] === undefined)(
+  "verifyChain under RLS (real Postgres)",
+  () => {
+    const probeRole = "awthaq_rls_probe";
+    it.effect("an intact chain stays intact inside TenantScope.withTenant with RLS on", () =>
+      Effect.acquireUseRelease(
+        Effect.gen(function* () {
+          const records = yield* ImpersonationRecords.ImpersonationRecords;
+          yield* seed(records, "rls-a").pipe(Tenant.withTenant("org-a"));
+          yield* seed(records, "rls-b").pipe(Tenant.withTenant("org-b"));
+          yield* TestSql.prepareRlsProbe(probeRole);
+          yield* TenantScope.enableRls({
+            plugins: Object.entries(Admin.Admin.tenancy).map(([table, declaration]) => ({
+              plugin: "admin",
+              table,
+              tenancy: declaration.tenancy,
+            })),
+          });
+        }),
+        () =>
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const records = yield* ImpersonationRecords.ImpersonationRecords;
+            const broken = yield* Effect.andThen(
+              sql.unsafe(`SET LOCAL ROLE ${probeRole}`),
+              records.verifyChain(grant),
+            ).pipe(TenantScope.withTenant("org-a"));
+            assert.isTrue(Option.isNone(broken));
+          }),
+        () => Effect.orDie(TenantScope.disableRls),
+      ).pipe(Effect.provide(SqlLayer)),
+    );
+  },
+);

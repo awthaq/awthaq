@@ -26,7 +26,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { Users } from "@awthaq/core";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 
 type UserId = Users.UserId;
 
@@ -35,18 +35,23 @@ const HANDLE_BYTES = 32;
 
 export interface PasskeyUserHandlesShape {
   /** The user's one stable handle (base64url of its raw bytes) — minted on first use, the same value ever after, even under concurrent first calls. */
-  readonly getOrCreate: (userId: UserId) => Effect.Effect<string>;
+  readonly getOrCreate: (userId: UserId) => Effect.Effect<string, StoreFailure.StoreUnavailable>;
   /** GDPR erasure (`Passkey.passkeyErasure`): forgets the user's handle. Idempotent. */
-  readonly deleteByUser: (userId: UserId) => Effect.Effect<void>;
+  readonly deleteByUser: (userId: UserId) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class PasskeyUserHandles extends Context.Service<
   PasskeyUserHandles,
   PasskeyUserHandlesShape
->()("awthaq/passkey/PasskeyUserHandles") {}
+>()("awthaq/passkey/records/PasskeyUserHandles") {}
 
-const randomHandle = (crypto: Crypto.Crypto): Effect.Effect<string> =>
-  crypto.randomBytes(HANDLE_BYTES).pipe(Effect.map(Encoding.encodeBase64Url), Effect.orDie);
+const randomHandle = (crypto: Crypto.Crypto) =>
+  crypto
+    .randomBytes(HANDLE_BYTES)
+    .pipe(
+      Effect.map(Encoding.encodeBase64Url),
+      Effect.catch(StoreFailure.storeUnavailable("PasskeyUserHandles.getOrCreate")),
+    );
 
 // ---- layerMemory ----------------------------------------------------------
 
@@ -82,6 +87,8 @@ export const layerSql: Layer.Layer<PasskeyUserHandles, never, SqlClient.SqlClien
     PasskeyUserHandles,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      const unavailable = (operation: string) =>
+        StoreFailure.orStoreUnavailable(`PasskeyUserHandles.${operation}`);
       // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
       const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
       const crypto = yield* Crypto.Crypto;
@@ -113,16 +120,16 @@ export const layerSql: Layer.Layer<PasskeyUserHandles, never, SqlClient.SqlClien
           // ON CONFLICT DO NOTHING then SELECT: whichever concurrent insert
           // won is the row every caller (including the losers) reads back.
           yield* insertIfAbsent({ userId, webauthnUserId: candidate, createdAt: now }).pipe(
-            Effect.orDie,
+            unavailable("getOrCreate"),
           );
-          const row = yield* findByUser(userId).pipe(Effect.orDie);
+          const row = yield* findByUser(userId).pipe(unavailable("getOrCreate"));
           return row.webauthnUserId;
         },
       );
 
       const deleteByUser: PasskeyUserHandlesShape["deleteByUser"] = (userId) =>
         sql`DELETE FROM passkey_user_handle WHERE "userId" = ${userId}`.pipe(
-          Effect.orDie,
+          unavailable("deleteByUser"),
           Effect.asVoid,
         );
 

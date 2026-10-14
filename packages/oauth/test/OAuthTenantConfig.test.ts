@@ -2,13 +2,9 @@
 // default callback, auto-link list, timeouts, rate-limit budgets) is read per operation, so one
 // composition serves tenants with different `OAuth.config(...)`. With no override the build-time
 // configuration applies exactly as before.
-import { Accounts, RateLimits, Sessions, Tenant, Users, Verification } from "@awthaq/core";
-import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Tenant } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -18,28 +14,6 @@ import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import { fakeHttpClient } from "./FakeProvider.ts";
 import { TestAuth } from "@awthaq/test";
-
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const acme = OAuthProvider.oauth2({
   id: "acme",
@@ -61,23 +35,15 @@ const baseConfig = {
 };
 
 const buildLayer = (config: Partial<OAuth.OAuthConfigInput> = {}) =>
-  OAuth.OAuth.layer.pipe(
-    Layer.provide(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(RateLimiter.layerPermissive),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(EncryptionLive),
-    Layer.provide(
+  TestAuth.layer(Auth.make([OAuth.OAuth]), {
+    services: Layer.mergeAll(
       fakeHttpClient({
         "/token": { access_token: "at-1" },
         "/userinfo": { id: "tenant-user-1" },
       }),
+      OAuth.config({ ...baseConfig, ...config }),
     ),
-    Layer.provide(OAuth.config({ ...baseConfig, ...config })),
-  );
+  });
 
 /** The application's own map: tenant id -> that tenant's `OAuth.config(...)`. */
 class TenantConfig extends LayerMap.Service<TenantConfig>()("test/OAuthTenantConfig", {

@@ -12,16 +12,16 @@
 // A host that needs full validation (libphonenumber-js) does it before calling
 // `Users`; this is the floor, not a replacement.
 
-import { Models as SqlModels } from "@awthaq/sql";
+import { Ids } from "@awthaq/ports";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 /** A well-formed E.164 number: `+`, then 2-15 digits, no leading zero. */
-export type E164 = SqlModels.E164;
-export const E164 = SqlModels.E164;
+export type E164 = Ids.E164;
+export const E164 = Ids.E164;
 
 // The brand is minted by decoding (the shape check *is* the schema), never asserted.
-const decode = Schema.decodeUnknownOption(SqlModels.E164);
+const decode = Schema.decodeUnknownOption(Ids.E164);
 
 export interface NormalizeOptions {
   /**

@@ -44,6 +44,8 @@ import {
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
+  DataExport,
+  Erasure,
   Migrations,
   RateLimits,
   SecretHash,
@@ -59,6 +61,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Headers from "effect/unstable/http/Headers";
@@ -186,14 +189,16 @@ export interface ApiKeyShape {
     },
   ) => Effect.Effect<
     CreatedApiKey,
-    ApiKeyApi.ApiKeyScopeNotGrantable | ApiKeyApi.ApiKeyLifetimeInvalid
+    ApiKeyApi.ApiKeyScopeNotGrantable | ApiKeyApi.ApiKeyLifetimeInvalid | Api.StoreUnavailable
   >;
-  readonly list: (ownerId: Users.UserId) => Effect.Effect<ReadonlyArray<ApiKeyView>>;
+  readonly list: (
+    ownerId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<ApiKeyView>, Api.StoreUnavailable>;
   /** Immediate. An unknown key and someone else's key are the same `ApiKeyNotFound`. */
   readonly revoke: (
     ownerId: Users.UserId,
     keyId: string,
-  ) => Effect.Effect<void, ApiKeyApi.ApiKeyNotFound>;
+  ) => Effect.Effect<void, ApiKeyApi.ApiKeyNotFound | Api.StoreUnavailable>;
   /** ADR-EA-022: mints a successor and lets the old key live on for `gracePeriod`. */
   readonly rotate: (
     ownerId: Users.UserId,
@@ -202,26 +207,33 @@ export interface ApiKeyShape {
       readonly gracePeriod?: Duration.Duration | undefined;
       readonly expiresIn?: Duration.Duration | undefined;
     },
-  ) => Effect.Effect<CreatedApiKey, ApiKeyApi.ApiKeyNotFound | ApiKeyApi.ApiKeyLifetimeInvalid>;
+  ) => Effect.Effect<
+    CreatedApiKey,
+    ApiKeyApi.ApiKeyNotFound | ApiKeyApi.ApiKeyLifetimeInvalid | Api.StoreUnavailable
+  >;
   /**
    * The per-request resolution: `None` for anything that is not a live key (malformed,
-   * unknown id, wrong secret, revoked, expired), indistinguishably. Does the same hash and
-   * constant-time compare work whether or not the id exists.
+   * unknown id, wrong secret, revoked, expired, or owned by a user who is suspended or gone),
+   * indistinguishably. Does the same hash and constant-time compare work whether or not the id
+   * exists; the owner is looked up only after the secret matched. An outage reading the owner
+   * is `StoreUnavailable` (503), never a silent `None`.
    */
   readonly resolve: (
     presented: Redacted.Redacted<string>,
-  ) => Effect.Effect<Option.Option<Api.ApiKeyPrincipal>>;
+  ) => Effect.Effect<Option.Option<Api.ApiKeyPrincipal>, Api.StoreUnavailable>;
 
   readonly registerClient: (
     ownerId: Users.UserId,
     input: { readonly name: string; readonly scopes: ReadonlyArray<string> },
-  ) => Effect.Effect<CreatedClient, ApiKeyApi.ApiKeyScopeNotGrantable>;
-  readonly listClients: (ownerId: Users.UserId) => Effect.Effect<ReadonlyArray<ApiKeyClientView>>;
+  ) => Effect.Effect<CreatedClient, ApiKeyApi.ApiKeyScopeNotGrantable | Api.StoreUnavailable>;
+  readonly listClients: (
+    ownerId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<ApiKeyClientView>, Api.StoreUnavailable>;
   /** Blocks new tokens at once; tokens already minted live until their expiry. */
   readonly revokeClient: (
     ownerId: Users.UserId,
     clientId: string,
-  ) => Effect.Effect<void, ApiKeyApi.ApiKeyClientNotFound>;
+  ) => Effect.Effect<void, ApiKeyApi.ApiKeyClientNotFound | Api.StoreUnavailable>;
   /** ADR-EA-022: a new secret; the old one keeps working for `gracePeriod`. At most two secrets are ever valid. */
   readonly rotateClientSecret: (
     ownerId: Users.UserId,
@@ -229,7 +241,7 @@ export interface ApiKeyShape {
     options?: { readonly gracePeriod?: Duration.Duration | undefined },
   ) => Effect.Effect<
     { readonly clientId: string; readonly clientSecret: Redacted.Redacted<string> },
-    ApiKeyApi.ApiKeyClientNotFound | ApiKeyApi.ApiKeyLifetimeInvalid
+    ApiKeyApi.ApiKeyClientNotFound | ApiKeyApi.ApiKeyLifetimeInvalid | Api.StoreUnavailable
   >;
   /**
    * RFC 6749 §4.4: verifies the client and mints its token. `requestedScope`
@@ -240,7 +252,10 @@ export interface ApiKeyShape {
     readonly clientId: string;
     readonly clientSecret: Redacted.Redacted<string>;
     readonly requestedScope?: ReadonlyArray<string> | undefined;
-  }) => Effect.Effect<IssuedServiceToken, ApiKeyApi.InvalidClient | ApiKeyApi.InvalidScope>;
+  }) => Effect.Effect<
+    IssuedServiceToken,
+    ApiKeyApi.InvalidClient | ApiKeyApi.InvalidScope | Api.StoreUnavailable
+  >;
 }
 
 // ---- helpers --------------------------------------------------------------------
@@ -528,24 +543,9 @@ export const ApiKeyHandlers = Layer.mergeAll(
     "apikey.token",
     Effect.fnUntraced(function* (handlers) {
       const apiKey = yield* ApiKey;
-      const settings = yield* ApiKeyConfig;
       const clientAddress = yield* ClientAddress.ClientAddress;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const events = yield* AuthEvents.AuthEvents;
-      const enforce = (key: string, rule: string, dimension: "ip" | "custom", limit: RateLimit) =>
-        RateLimits.enforce({
-          key,
-          limit: limit.limit,
-          window: limit.window,
-          meta: { group: "apikey.token", endpoint: "token", rule, dimension },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // The budget `ApiKey.layer`'s `make` opened (BEH-EA-107): the token endpoint spends it by name.
+      const limits = yield* RateLimits.budgetOf(ApiKey);
       return handlers.handleAll({
         token: Effect.fnUntraced(function* ({
           payload,
@@ -555,12 +555,7 @@ export const ApiKeyHandlers = Layer.mergeAll(
           request: HttpServerRequest.HttpServerRequest;
         }) {
           const address = yield* clientAddress.resolve(request);
-          yield* enforce(
-            `apikey:token:ip:${Option.getOrElse(address, () => "unknown")}`,
-            "token-ip",
-            "ip",
-            settings.tokenRateLimit.ip,
-          );
+          yield* limits.spend("tokenByIp", { ip: Option.getOrUndefined(address) });
           if (payload.grant_type !== "client_credentials") {
             return yield* new ApiKeyApi.UnsupportedGrantType();
           }
@@ -575,12 +570,7 @@ export const ApiKeyHandlers = Layer.mergeAll(
               : undefined;
           if (credentials === undefined) return yield* new ApiKeyApi.InvalidRequest();
           // Per client id: bounds secret guessing against one client from many addresses.
-          yield* enforce(
-            `apikey:token:client:${credentials.clientId}`,
-            "token-client",
-            "custom",
-            settings.tokenRateLimit.client,
-          );
+          yield* limits.spend("tokenByClient", { clientId: credentials.clientId });
           const requestedScope =
             payload.scope === undefined
               ? undefined
@@ -615,22 +605,13 @@ const CredentialContributionsLive = Layer.unwrap(
     const jwt = yield* Jwt.Jwt;
     const settings = yield* ApiKeyConfig;
     const clientAddress = yield* ClientAddress.ClientAddress;
-    const limiter = yield* RateLimiter.RateLimiter;
-    const events = yield* AuthEvents.AuthEvents;
+    const limits = yield* RateLimits.budgetOf(ApiKey);
     const registry = yield* Authentication.CredentialResolvers;
 
     const throttle = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const address = yield* clientAddress.resolve(request);
-      yield* RateLimits.enforce({
-        key: `apikey:resolve:ip:${Option.getOrElse(address, () => "unknown")}`,
-        limit: settings.resolveRateLimit.limit,
-        window: settings.resolveRateLimit.window,
-        meta: { group: "apikey", endpoint: "resolve", rule: "resolve-ip", dimension: "ip" },
-      }).pipe(
-        Effect.provideService(RateLimiter.RateLimiter, limiter),
-        Effect.provideService(AuthEvents.AuthEvents, events),
-      );
+      yield* limits.spend("resolveByIp", { ip: Option.getOrUndefined(address) });
     });
 
     const keys = Authentication.contribute("apiKey", {
@@ -678,7 +659,10 @@ const CredentialContributionsLive = Layer.unwrap(
                   )
                 : Effect.fail(new Api.Unauthenticated()),
             ),
-            Effect.mapError(() => new Api.Unauthenticated()),
+            // A token that does not verify is `Unauthenticated`; a store outage while reading the key ring is not.
+            Effect.mapError((error) =>
+              Predicate.isTagged(error, "StoreUnavailable") ? error : new Api.Unauthenticated(),
+            ),
           ),
     });
 
@@ -688,35 +672,104 @@ const CredentialContributionsLive = Layer.unwrap(
   }),
 );
 
+/**
+ * ADR-EA-031's one cascade: erasing a user deletes every key and client they own. Without this a
+ * deleted user's keys kept authenticating until they expired. Part of `ApiKey.layer`, which
+ * therefore requires `Erasure.ErasureRegistry`.
+ */
+export const apiKeyErasure = Erasure.contribute({
+  id: "apikey",
+  make: Effect.gen(function* () {
+    const records = yield* ApiKeyRecords.ApiKeyRecords;
+    const clients = yield* ApiKeyClientRecords.ApiKeyClientRecords;
+    return (subject: Erasure.ErasureSubject) =>
+      records
+        .deleteByOwner(subject.userId)
+        .pipe(Effect.andThen(clients.deleteByOwner(subject.userId)));
+  }),
+});
+
+/** CSG-005: the data-subject export lists keys and clients by name, prefix and scopes, never a secret or hash. */
+export const apiKeyExport = DataExport.contribute({
+  id: "apikey",
+  make: Effect.gen(function* () {
+    const records = yield* ApiKeyRecords.ApiKeyRecords;
+    const clients = yield* ApiKeyClientRecords.ApiKeyClientRecords;
+    return (subject: DataExport.DataExportSubject) =>
+      Effect.all({
+        keys: records.listByOwner(subject.userId),
+        clients: clients.listByOwner(subject.userId),
+      }).pipe(
+        Effect.map(({ keys, clients: ownClients }) => ({
+          keys: keys.map((key) => ({
+            id: key.id,
+            name: key.name,
+            start: key.start,
+            scopes: [...key.scopes],
+            createdAt: DateTime.formatIso(key.createdAt),
+            expiresAt: Option.getOrNull(Option.map(key.expiresAt, DateTime.formatIso)),
+            revokedAt: Option.getOrNull(Option.map(key.revokedAt, DateTime.formatIso)),
+            lastUsedAt: Option.getOrNull(Option.map(key.lastUsedAt, DateTime.formatIso)),
+          })),
+          clients: ownClients.map((client) => ({
+            clientId: client.clientId,
+            name: client.name,
+            scopes: [...client.scopes],
+            createdAt: DateTime.formatIso(client.createdAt),
+            revokedAt: Option.getOrNull(Option.map(client.revokedAt, DateTime.formatIso)),
+          })),
+        })),
+      );
+  }),
+});
+
+// ---- rate limits ----------------------------------------------------------------------
+
+/**
+ * BEH-EA-105/107/111: the rules that guard a request path, declared once. The token handler spends the
+ * first two, the credential contribution the third (`RateLimits.budgetOf(ApiKey)`); the numbers are
+ * `ApiKeyConfig`'s, applied through `tune` when `ApiKey.layer` opens the budget. The per-client rule keys
+ * on `client_id` only after the credentials parsed: bounding secret guessing against one client from many
+ * addresses. `resolve` is a credential resolver, not an endpoint (D12), so its endpoint is the label.
+ */
+const rules = {
+  tokenByIp: RateLimits.rule({
+    group: "apikey.token",
+    endpoint: "token",
+    key: RateLimits.Key.ip,
+    ...defaultConfig.tokenRateLimit.ip,
+  }),
+  tokenByClient: RateLimits.rule({
+    group: "apikey.token",
+    endpoint: "token",
+    key: RateLimits.Key.client,
+    ...defaultConfig.tokenRateLimit.client,
+  }),
+  resolveByIp: RateLimits.rule({
+    group: "apikey",
+    endpoint: "resolve",
+    key: RateLimits.Key.ip,
+    ...defaultConfig.resolveRateLimit,
+  }),
+};
+
 export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", {
   apiVersion: 1,
   contract: ApiKeyApi.ApiKeyApi,
-  // PV-241: the default budgets (`ApiKeyConfig.tokenRateLimit`/`resolveRateLimit` tune them), named as `RateLimits.enforce` reports them.
-  rateLimits: [
-    {
-      group: "apikey.token",
-      endpoint: "token",
-      name: "token-ip",
-      dimension: "ip",
-      ...defaultConfig.tokenRateLimit.ip,
-    },
-    {
-      group: "apikey.token",
-      endpoint: "token",
-      name: "token-client",
-      dimension: "custom",
-      ...defaultConfig.tokenRateLimit.client,
-    },
-    {
-      group: "apikey",
-      endpoint: "resolve",
-      name: "resolve-ip",
-      dimension: "ip",
-      ...defaultConfig.resolveRateLimit,
-    },
-  ],
-  tables: ["apikey_key", "apikey_client"],
+  // PV-241: the typed rule table at the default numbers (`ApiKeyConfig.tokenRateLimit`/`resolveRateLimit` tune it at build).
+  rateLimitRules: rules,
+  tables: {
+    apikey_key: AuthPlugin.Table.global(
+      "owned by a user; the identity directory is global, ADR-EA-018 d4",
+    ),
+    apikey_client: AuthPlugin.Table.global("service clients are deployment-wide"),
+  },
   migrations: apiKeyMigrations,
+  // Plan 08 (BEH-EA-T4): the key and client stores, memory and SQL, matched.
+  records: {
+    memory: Layer.mergeAll(ApiKeyRecords.layerMemory, ApiKeyClientRecords.layerMemory),
+    sql: Layer.mergeAll(ApiKeyRecords.layerSql, ApiKeyClientRecords.layerSql),
+  },
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
   config: [
     ConfigDescriptor.make(ApiKeyConfig, {
@@ -741,6 +794,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
       // PV-241: the token endpoint and the credential contributions throttle by address.
       ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
       handlers: ApiKeyHandlers,
+      contributes: Layer.mergeAll(apiKeyErasure, apiKeyExport),
       make: Effect.gen(function* () {
         const records = yield* ApiKeyRecords.ApiKeyRecords;
         const clients = yield* ApiKeyClientRecords.ApiKeyClientRecords;
@@ -748,7 +802,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
         const crypto = yield* Crypto.Crypto;
         const events = yield* AuthEvents.AuthEvents;
         const jwt = yield* Jwt.Jwt;
-        const rateLimits = yield* RateLimits.RateLimitsRegistry;
+        const users = yield* Users.Users;
 
         if (!/^[A-Za-z0-9_-]+$/.test(settings.prefix)) {
           return yield* Defects.invalidConfiguration(
@@ -757,42 +811,14 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           );
         }
 
-        // Only the rules that guard a request path are registered here; both are enforced by
-        // the token handler and the credential contribution through `RateLimits.enforce`.
-        // The explicit type is the same narrow exception `OAuth.ts`/`Password.ts` document:
-        // passing this class to `register` (an `AuthPlugin.Any`, which requires `layer`) from
-        // inside its own `static layer` initializer is a real TS circularity.
-        const registerRateLimitRules: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =
-          rateLimits
-            .register(ApiKey, {
-              group: "apikey.token",
-              endpoint: "token",
-              key: "ip",
-              limit: settings.tokenRateLimit.ip.limit,
-              window: settings.tokenRateLimit.ip.window,
-            })
-            .pipe(
-              // PV-241: the per-client budget is enforced by the token handler, so it is listed too.
-              Effect.andThen(
-                rateLimits.register(ApiKey, {
-                  group: "apikey.token",
-                  endpoint: "token",
-                  key: (input) => `apikey:token:client:${String(input)}`,
-                  limit: settings.tokenRateLimit.client.limit,
-                  window: settings.tokenRateLimit.client.window,
-                }),
-              ),
-              Effect.andThen(
-                rateLimits.register(ApiKey, {
-                  group: "apikey",
-                  endpoint: "resolve",
-                  key: "ip",
-                  limit: settings.resolveRateLimit.limit,
-                  window: settings.resolveRateLimit.window,
-                }),
-              ),
-            );
-        yield* registerRateLimitRules.pipe(Effect.orDie);
+        // Opens the budget the token handler and the credential contribution spend (`budgetOf`).
+        yield* RateLimits.budget(ApiKey, {
+          tune: Effect.succeed({
+            tokenByIp: settings.tokenRateLimit.ip,
+            tokenByClient: settings.tokenRateLimit.client,
+            resolveByIp: settings.resolveRateLimit,
+          }),
+        });
 
         const randomHex = (bytes: number) =>
           crypto.randomBytes(bytes).pipe(Effect.map(Hmac.toHex), Effect.orDie);
@@ -926,6 +952,20 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           },
         );
 
+        /**
+         * A key or client is only as good as its owner: a suspended owner (BEH-EA-046) or one who
+         * is gone (erased, or an orphan row) authenticates nothing. The same shared gate sign-in uses.
+         */
+        const ownerMayAuthenticate = (ownerId: Users.UserId) =>
+          users.findById(ownerId).pipe(
+            Effect.flatMap(Users.assertCanSignIn),
+            Effect.as(true),
+            Effect.catchTags({
+              UserNotFound: () => Effect.succeed(false),
+              UserSuspended: () => Effect.succeed(false),
+            }),
+          );
+
         const resolve: ApiKeyShape["resolve"] = Effect.fnUntraced(function* (presented) {
           const parsed = parseKey(Redacted.value(presented), settings.prefix);
           // A string that is not shaped like a key costs nothing and says nothing.
@@ -943,6 +983,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           const record = found.value;
           const now = yield* DateTime.now;
           if (!isLive(record, now)) return Option.none();
+          if (!(yield* ownerMayAuthenticate(record.ownerId))) return Option.none();
           const stale = Option.match(record.lastUsedAt, {
             onNone: () => true,
             onSome: (usedAt) =>
@@ -1063,6 +1104,9 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
             );
             const secretOk = matchesCurrent || (matchesPrevious && previousStillValid);
             if (!secretOk || Option.isSome(client.revokedAt)) {
+              return yield* new ApiKeyApi.InvalidClient();
+            }
+            if (!(yield* ownerMayAuthenticate(client.ownerId))) {
               return yield* new ApiKeyApi.InvalidClient();
             }
             const requested = input.requestedScope;

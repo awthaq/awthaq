@@ -10,12 +10,19 @@
 // configured: a tap or a subscriber must be in the graph before the first hook run (BEH-EA-024
 // freezes a point at its first read), so configuration after that is a defect in the scenario,
 // and fails loudly.
-import { Auth, AuditLog, AuthEvents, Hooks, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  Auth,
+  AuditLog,
+  AuthEvents,
+  Erasure,
+  Hooks,
+  RateLimits,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { Mailer, RateLimiter } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { createHmac, randomBytes } from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -32,7 +39,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CsrfConfigForTests } from "./CsrfTestSupport.ts";
+import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CsrfConfigForTests } from "./shared/Csrf.ts";
 
 /** One captured log line: its level, and everything it carried (message parts and annotations), JSON-rendered so a step can search it. */
 export interface LogRecord {
@@ -61,15 +68,6 @@ const makeLogCapture = () => {
   ]);
   return { records: Ref.get(records), layer };
 };
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  Layer.provide(NodeCrypto.layer),
-);
 
 /** BEH-EA-119: a corpus nothing ever matches (and `breachCheck` is off below anyway) — the app never reaches the network. */
 const NoBreachHttpClient = Layer.succeed(
@@ -111,17 +109,14 @@ export const emptySpec: AppSpec = {
 };
 
 const appLayer = (spec: AppSpec) =>
-  TestAuth.layer(
-    Auth.make([Password.Password]),
-    Layer.mergeAll(
-      AuthenticationLive,
-      CsrfProtectionLive,
+  TestAuth.layer(Auth.make([Password.Password]), {
+    services: Layer.mergeAll(
       NoBreachHttpClient,
       Password.config(spec.passwordConfig),
       ...(spec.rateLimiter === undefined ? [] : [spec.rateLimiter]),
       ...spec.contributions,
     ),
-  );
+  });
 
 /**
  * What a step may `yield*` inside the built app. Spelled out from the package entry points
@@ -130,6 +125,7 @@ const appLayer = (spec: AppSpec) =>
  */
 export type AppServices =
   | HookPoints
+  | Erasure.AccountErasure
   | AuditLog.AuditLog
   | AuthEvents.AuthEvents
   | Mailer.Mailer
@@ -223,7 +219,7 @@ export const makeHost = Effect.gen(function* () {
 
 /**
  * A JSON POST carrying a double-submit CSRF pair minted at the *current clock reading*.
- * `CsrfTestSupport`'s fixed token is stamped with the real time at module load, which is what
+ * `shared/Csrf.ts`'s fixed token is stamped with the real time at module load, which is what
  * the other Worlds' real-clock handlers accept; a scenario here runs under `TestClock` (time
  * starts at the epoch), where that token's `iat` lies in the future and `CsrfProtection`
  * refuses it. Same construction (`<iat>.<random>.<hmac(iat.random)>`, HMAC-SHA256 over the

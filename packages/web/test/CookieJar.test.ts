@@ -15,7 +15,15 @@
 // a `Response` — the type system already makes that misuse impossible to
 // even attempt, a stronger guarantee than a runtime assertion could give.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Hooks,
+  Persistence,
+  SessionCookie,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -228,10 +236,13 @@ describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
   const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
     Layer.provideMerge(FileSystem.layerNoop({})),
   );
-  const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
+  const CoreLive = Layer.mergeAll(
+    Users.layer.pipe(Layer.provide(Persistence.memory)),
+    Sessions.layer.pipe(Layer.provide(Persistence.memory)),
+  ).pipe(
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Hooks.HooksLive),
   );
   const AppLayer = AuthHttp.routes(LoginApi, {}).pipe(

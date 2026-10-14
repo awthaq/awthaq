@@ -41,7 +41,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
-import { ClientAddress, Mailer, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -56,7 +56,6 @@ import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as EmailOtpApi from "./EmailOtpApi.ts";
-import * as RateLimitRules from "./RateLimitRules.ts";
 
 // ---- config -----------------------------------------------------------------------------------------
 
@@ -90,47 +89,40 @@ export const config = (partial: Partial<EmailOtpConfigShape>) =>
 
 // ---- rate limits ------------------------------------------------------------------------------------
 
+// BEH-EA-105/107/111: declared once; the static `rateLimits` listing is derived from this table and the
+// layer registers it with `RateLimits.budget`. Keys read only the small, secret-free input an endpoint
+// names (`{ ip }`, `{ email }`), never the code.
+const minutes15 = Duration.minutes(15);
+
 const rules = {
-  requestByIp: RateLimitRules.rule({
+  requestByIp: RateLimits.rule({
     group: "emailOtp",
-    name: "requestByIp",
     endpoint: "request",
-    dimension: "ip",
-    input: RateLimitRules.IpInput,
-    keyOf: RateLimitRules.ipKey("email-otp:request"),
+    key: RateLimits.Key.ip,
     limit: 30,
-    window: RateLimitRules.minutes15,
+    window: minutes15,
   }),
-  requestByEmail: RateLimitRules.rule({
+  requestByEmail: RateLimits.rule({
     group: "emailOtp",
-    name: "requestByEmail",
     endpoint: "request",
-    dimension: "identity",
-    input: RateLimitRules.EmailInput,
-    keyOf: RateLimitRules.emailKey("email-otp:request"),
+    key: RateLimits.Key.email,
     limit: 5,
-    window: RateLimitRules.minutes15,
+    window: minutes15,
   }),
-  verifyByIp: RateLimitRules.rule({
+  verifyByIp: RateLimits.rule({
     group: "emailOtp",
-    name: "verifyByIp",
     endpoint: "verify",
-    dimension: "ip",
-    input: RateLimitRules.IpInput,
-    keyOf: RateLimitRules.ipKey("email-otp:verify"),
+    key: RateLimits.Key.ip,
     limit: 30,
-    window: RateLimitRules.minutes15,
+    window: minutes15,
   }),
   // The layer above the per-code budget: bounds guesses at one address across many codes.
-  verifyByEmail: RateLimitRules.rule({
+  verifyByEmail: RateLimits.rule({
     group: "emailOtp",
-    name: "verifyByEmail",
     endpoint: "verify",
-    dimension: "identity",
-    input: RateLimitRules.EmailInput,
-    keyOf: RateLimitRules.emailKey("email-otp:verify"),
+    key: RateLimits.Key.email,
     limit: 10,
-    window: RateLimitRules.minutes15,
+    window: minutes15,
   }),
 };
 
@@ -229,59 +221,38 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
 export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("emailOtp", {
   apiVersion: 1,
   contract: EmailOtpApi.EmailOtpApi,
-  // PV-241: declared from the rule table the layer registers.
-  rateLimits: AuthPlugin.declareRateLimits(["emailOtp"], Object.values(rules)),
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
   // BEH-EA-274: no table — the codes are `Verification` rows (`verification_tokens`, core's).
-  tables: [],
+  tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(EmailOtp, {
-    ports: [ClientAddress.ClientAddress, Mailer.Mailer, RateLimiter.RateLimiter],
+    ports: [
+      ClientAddress.ClientAddress,
+      Mailer.Mailer,
+      RateLimiter.RateLimiter,
+      SqlTransaction.SqlTransaction,
+    ],
     handlers: EmailOtpHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
       const mailer = yield* Mailer.Mailer;
-      const limiter = yield* RateLimiter.RateLimiter;
-      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
       const settings = yield* EmailOtpConfig;
       const channel = yield* Channel.make;
       const mailDispatcher = yield* MailDispatch.make;
 
-      yield* Effect.all(
-        // The callback's return type is annotated to break the inference cycle through `EmailOtp.layer`
-        // (its own initializer names `EmailOtp`) — the narrow exception `Password`/`Passkey` document too.
-        RateLimitRules.registryEntries(rules).map(
-          (entry): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-            rateLimitsRegistry.register(EmailOtp, entry),
-        ),
-      ).pipe(Effect.orDie);
-
-      const rateLimit = <I>(
-        rule: RateLimitRules.Rule<I>,
-        input: I,
-      ): Effect.Effect<void, Api.RateLimited> =>
-        RateLimits.enforce({
-          key: rule.keyOf(input),
-          limit: rule.limit,
-          window: rule.window,
-          meta: RateLimitRules.metaOf(rule),
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+      // RBS-006: the table above feeds both the registry and the enforcement calls. EOTS-007: a breach
+      // is published, logged and counted, and answers `Api.RateLimited`.
+      const limits = yield* RateLimits.budget(EmailOtp);
 
       const decodePayload = Schema.decodeUnknownOption(CodePayload);
       const wellFormedCode = (code: string): boolean =>
         code.length === settings.digits && /^[0-9]+$/.test(code);
 
       const requestCode: EmailOtpShape["requestCode"] = Effect.fnUntraced(function* (input) {
-        yield* rateLimit(rules.requestByIp, { ip: input.ip });
-        yield* rateLimit(rules.requestByEmail, { email: input.email });
+        yield* limits.spend(["requestByIp", "requestByEmail"], input);
         yield* mailDispatcher.dispatch(
           { template: "email-otp" },
           Effect.gen(function* () {
@@ -313,8 +284,7 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
       });
 
       const verify: EmailOtpShape["verify"] = Effect.fnUntraced(function* (input, context) {
-        yield* rateLimit(rules.verifyByIp, { ip: input.ip });
-        yield* rateLimit(rules.verifyByEmail, { email: input.email });
+        yield* limits.spend(["verifyByIp", "verifyByEmail"], input);
         const email = Channel.normalizeEmail(input.email);
         const refused = Effect.gen(function* () {
           yield* events.publish({
@@ -328,25 +298,31 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
         const presented = Redacted.value(input.code).trim();
         // A value that cannot be a code is refused without touching the store (and spends nothing of any code's budget).
         if (!wellFormedCode(presented)) return yield* refused;
-        const consumed = yield* verification
-          .consume(identifierOf(email), Redacted.make(presented))
-          .pipe(Effect.catchTag("Verification/TokenConsumed", () => refused));
-        return yield* channel
-          .complete({
-            strategy: "emailOtp",
-            amr: ["otp", "email"],
-            email: Option.some(
-              Option.match(decodePayload(consumed.payload), {
-                onNone: () => email,
-                onSome: (payload) => payload.email,
+        // ADR-EA-039: redeemed, not merely consumed (see `MagicLink.verify`). A rolled-back
+        // completion also leaves the code's spent-attempt count unchanged: a hit spends no attempt.
+        return yield* verification
+          .redeem({
+            identifier: identifierOf(email),
+            value: Redacted.make(presented),
+            use: (consumed) =>
+              channel.complete({
+                strategy: "emailOtp",
+                amr: ["otp", "email"],
+                email: Option.some(
+                  Option.match(decodePayload(consumed.payload), {
+                    onNone: () => email,
+                    onSome: (payload) => payload.email,
+                  }),
+                ),
+                userId: consumed.userId,
+                allowSignUp: settings.allowSignUp,
+                ip: input.ip,
+                userAgent: context?.userAgent,
               }),
-            ),
-            userId: consumed.userId,
-            allowSignUp: settings.allowSignUp,
-            ip: input.ip,
-            userAgent: context?.userAgent,
+            onFailure: Verification.commitUnlessUnavailable,
           })
           .pipe(
+            Effect.catchTag("Verification/TokenConsumed", () => refused),
             Effect.catchTag("MagicLink/ChannelInvalid", (invalid) =>
               Channel.logInvalid("emailOtp", invalid).pipe(Effect.andThen(refused)),
             ),

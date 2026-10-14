@@ -24,11 +24,14 @@
 //
 // See spec/overview.md for the full package map.
 
+export * as AccountStore from "./AccountStore.ts";
+export * as AuditLogStore from "./AuditLogStore.ts";
 export * as ClientAddress from "./ClientAddress.ts";
 export * as Defects from "./Defects.ts";
 export * as Encryption from "./Encryption.ts";
 export * as Hmac from "./Hmac.ts";
 export * as HostResolver from "./HostResolver.ts";
+export * as Ids from "./Ids.ts";
 export * as KeyProvider from "./KeyProvider.ts";
 export * as LegacySessionBridge from "./LegacySessionBridge.ts";
 export * as Mailer from "./Mailer.ts";
@@ -36,11 +39,16 @@ export * as OutboundUrl from "./OutboundUrl.ts";
 export * as PinnedHttp from "./PinnedHttp.ts";
 export * as PasswordHasher from "./PasswordHasher.ts";
 export * as PasswordHasherWorkerPool from "./PasswordHasherWorkerPool.ts";
+export * as PruneExpired from "./PruneExpired.ts";
 export * as RateLimiter from "./RateLimiter.ts";
 export * as RefreshingCache from "./RefreshingCache.ts";
+export * as SessionStore from "./SessionStore.ts";
 export * as SmsSender from "./SmsSender.ts";
 export * as SqlTransaction from "./SqlTransaction.ts";
+export * as Store from "./Store.ts";
 export * as Tenant from "./Tenant.ts";
+export * as UserStore from "./UserStore.ts";
+export * as VerificationStore from "./VerificationStore.ts";
 export * as WebAuthn from "./WebAuthn.ts";
 export * as WebCrypto from "./WebCrypto.ts";
 export * as XmlSignature from "./XmlSignature.ts";

@@ -4,14 +4,15 @@
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
 import { Encryption, Tenant } from "@awthaq/ports";
 import {
-  ConnectionRecords,
   Organization,
+  OrganizationActor,
   OrganizationConnections,
-  OrganizationRecords,
+  OrganizationMembers,
 } from "@awthaq/organization";
+import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
 import { AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
-import { Models, Repositories, TenantScope } from "@awthaq/sql";
+import { Models, Repositories, TenantScope, TenantScoped } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
 import { makeResourceId, makeSubjectId, RelationshipResolver } from "@qadi/core";
 import assert from "node:assert/strict";
@@ -38,6 +39,11 @@ import {
   World,
   type GatewayVariant,
 } from "./TenancyWorld.ts";
+
+/** A platform administrator's suspension of an organization reads and writes across organizations. */
+const platformGrant = TenantScoped.crossTenant(
+  "feature step: platform suspension of an organization",
+);
 
 /** Reads a top-level property of a decoded JSON body without asserting its shape. */
 const field = (body: unknown, key: string): unknown =>
@@ -223,7 +229,7 @@ const storeConnection = Effect.fn("features.tenancy.storeConnection")(function* 
   const view = yield* Effect.provide(
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
-      return yield* store.create({
+      return yield* store.create(OrganizationActor.application("bdd"), {
         organizationId: organizationName,
         kind: "oauth2",
         name: "Acme OAuth",
@@ -291,11 +297,12 @@ const authorize = Effect.fn("features.tenancy.authorize")(function* (providerId:
 
 const addMemberTo = (organizationId: string, userId: string) =>
   Effect.gen(function* () {
-    const plugin = yield* Organization.Organization;
-    return yield* plugin.addMember({
+    const members = yield* OrganizationMembers.OrganizationMembers;
+    return yield* members.add(OrganizationActor.application("bdd"), {
       organizationId,
       userId: Users.UserId(userId),
       role: ["member"],
+      bound: OrganizationActor.Bound.Unbounded(),
     });
   });
 
@@ -792,7 +799,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* organization(
       Effect.gen(function* () {
         const records = yield* OrganizationRecords.OrganizationRecords;
-        return yield* records.setSuspended(id, Option.some(yield* DateTime.now));
+        return yield* records.setSuspended(platformGrant, id, Option.some(yield* DateTime.now));
       }),
     );
   });
@@ -990,7 +997,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       ).pipe(Effect.orDie);
       assert.ok(Option.isSome(row), "the connection row must exist");
       const envelope = Option.getOrThrowWith(
-        row.value.clientSecret,
+        row.value.secretRevision,
         () => new Error("the secret was not stored"),
       );
       assert.ok(Encryption.looksLikeEnvelope(envelope));
@@ -1095,6 +1102,28 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
   When("{string} suspends the organization {string}", function* (admin: string, name: string) {
     const { suspensions } = yield* World;
     yield* suspensions.set("first", yield* suspend(admin, name));
+  });
+
+  When(
+    "{string} tries to suspend the organization {string} with the reason {string}",
+    function* (adminName: string, name: string, reason: string) {
+      const admin = yield* callerNamed(adminName);
+      const id = yield* organizationNamed(name);
+      const { outcomes } = yield* World;
+      const tag = yield* organization(
+        outcomeTag(
+          Effect.flatMap(AdminTenants.AdminTenants, (tenants) =>
+            tenants.suspendOrganization(admin, id, { reason }),
+          ),
+        ),
+      );
+      yield* outcomes.set("suspension", tag);
+    },
+  );
+
+  Then("the suspension is refused with {string}", function* (tag: string) {
+    const { outcomes } = yield* World;
+    assert.equal(yield* outcomes.get("suspension"), tag);
   });
 
   Given(

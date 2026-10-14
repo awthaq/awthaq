@@ -31,7 +31,12 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as DataExportRegistry from "./DataExportRegistry.ts";
 import * as ErasureRegistry from "./ErasureRegistry.ts";
+import * as RetentionRegistry from "./RetentionRegistry.ts";
 import * as HookPoint from "./HookPoint.ts";
+import * as ContinuationRegistry from "./SignInContinuationRegistry.ts";
+
+// The registry class is named here so any file that merely infers `HooksLive`'s type can name it (TS2883).
+export { SignInContinuationRegistry } from "./SignInContinuationRegistry.ts";
 
 // BEH-EA-090: veto — a plugin may reject a sign-up outright (e.g. an
 // Auth0-Rule-style email-domain allow-list or subscription gate). Consulted on
@@ -97,13 +102,35 @@ export class TwoFactorRequired extends Schema.TaggedError<TwoFactorRequired>()(
   { userId: Schema.String, challengeId: Schema.String },
   { httpApiStatus: 401 },
 ) {}
+// ADR-EA-038: work a first factor owes once its session exists, named by `kind` and carrying
+// a JSON `payload` the owning plugin decodes (SAML: the Single Logout record and role mapping).
+// `SignIn.continuation` is the typed front door; this is only the wire shape a divert carries.
+export const Continuation = Schema.Struct({ kind: Schema.String, payload: Schema.Json });
+export type Continuation = typeof Continuation.Type;
+
+/**
+ * ADR-EA-038: the first factor's context a divert must hand back, verbatim, to `SignIn.resume`,
+ * so the session it finally mints is the session the first factor would have minted. Any divert
+ * tap that later completes the sign-in itself (`@awthaq/two-factor` is the one that ships) stores
+ * it with its challenge and returns it to `SignIn.resume`.
+ */
+export const Handoff = Schema.Struct({
+  /** The ambient tenant when the first factor cleared (DRS-001); re-applied when the session is minted. */
+  tenantId: Schema.optionalKey(Schema.String),
+  /** Work the first factor owes once the session exists (SAML: Single Logout record, role mapping). */
+  continuation: Schema.optionalKey(Continuation),
+});
+export type Handoff = typeof Handoff.Type;
+
 // THS-001/AOMS-003: `amr` is how the first factor authenticated (RFC 8176 values, e.g. `["pwd"]`), so
 // a second-factor tap can record `[...amr, "otp", "mfa"]` on the session it mints once the second
-// factor passes, without guessing the first factor from the strategy name.
+// factor passes, without guessing the first factor from the strategy name. ADR-EA-038: required, and
+// it is the very value `SignIn.issue` records on the session, so the two cannot disagree.
 const SessionIssueContext = Schema.Struct({
   userId: Schema.String,
   strategy: Schema.String,
-  amr: Schema.optionalKey(Schema.Array(Schema.String)),
+  amr: Schema.Array(Schema.String),
+  handoff: Schema.optionalKey(Handoff),
 });
 const SessionIssueDiverted = Schema.Union([TwoFactorRequired]);
 export class BeforeSessionIssue extends HookPoint.divert<BeforeSessionIssue>()(
@@ -183,4 +210,8 @@ export const HooksLive = Layer.mergeAll(
   // erasure to it (`Erasure.contribute`), so erasure is not something a host opts into.
   ErasureRegistry.registryLayer,
   DataExportRegistry.registryLayer,
+  // Plan 10 item 6: each plugin's table-expiry rule registers here, so `Retention.sweep` reaches it.
+  RetentionRegistry.registryLayer,
+  // ADR-EA-038: a first factor's sign-in continuations (SAML's Single Logout record) register here.
+  ContinuationRegistry.registryLayer,
 );

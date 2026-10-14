@@ -19,7 +19,7 @@
 // Only SHA-256 hashes of the device and user codes are stored (`UserCode.hash*`), never a code.
 
 import { Sessions, Users } from "@awthaq/core";
-import { Models as SqlModels } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -54,11 +54,20 @@ export interface DeviceGrantRecord {
 
 export interface DeviceGrantRecordsShape {
   /** `false` when the user-code hash is already taken by a live row: the caller draws another code. */
-  readonly insert: (record: DeviceGrantRecord) => Effect.Effect<boolean>;
-  readonly findByDeviceHash: (hash: string) => Effect.Effect<Option.Option<DeviceGrantRecord>>;
-  readonly findByUserHash: (hash: string) => Effect.Effect<Option.Option<DeviceGrantRecord>>;
+  readonly insert: (
+    record: DeviceGrantRecord,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
+  readonly findByDeviceHash: (
+    hash: string,
+  ) => Effect.Effect<Option.Option<DeviceGrantRecord>, StoreFailure.StoreUnavailable>;
+  readonly findByUserHash: (
+    hash: string,
+  ) => Effect.Effect<Option.Option<DeviceGrantRecord>, StoreFailure.StoreUnavailable>;
   /** Compare-and-swap: sets `userId` only while `status = pending` and no user has claimed the row. */
-  readonly claim: (id: string, userId: Users.UserId) => Effect.Effect<boolean>;
+  readonly claim: (
+    id: string,
+    userId: Users.UserId,
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /** Compare-and-swap: `pending` -> `status`, only for the user who claimed the row and only before `expiresAt`. */
   readonly decide: (input: {
     readonly id: string;
@@ -66,15 +75,21 @@ export interface DeviceGrantRecordsShape {
     readonly status: "approved" | "denied";
     readonly amr: ReadonlyArray<Sessions.AuthMethod>;
     readonly now: DateTime.Utc;
-  }) => Effect.Effect<boolean>;
+  }) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /**
    * Records `now` as the row's last poll. Deliberately not a compare-and-swap: the interval check is a read
    * of `lastPolledAt` (design constraint 4), and two polls that arrive together both pass it and race at the
    * redemption claim (`consume`), where exactly one wins and the other is answered `invalid_grant`.
    */
-  readonly touchPoll: (id: string, now: DateTime.Utc) => Effect.Effect<void>;
+  readonly touchPoll: (
+    id: string,
+    now: DateTime.Utc,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** RFC 8628 §3.5: adds `seconds` to the row's interval (atomically, so concurrent `slow_down`s each count). */
-  readonly raiseInterval: (id: string, seconds: number) => Effect.Effect<void>;
+  readonly raiseInterval: (
+    id: string,
+    seconds: number,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /**
    * The redemption claim: deletes the row only while it is `approved` for `userId` and hands it back to exactly
    * one caller. Of two concurrent redemptions one gets `Some`, the other `None`.
@@ -82,20 +97,26 @@ export interface DeviceGrantRecordsShape {
   readonly consume: (
     id: string,
     userId: Users.UserId,
-  ) => Effect.Effect<Option.Option<DeviceGrantRecord>>;
+  ) => Effect.Effect<Option.Option<DeviceGrantRecord>, StoreFailure.StoreUnavailable>;
   /** Unconditional delete of one row (garbage collection on discovery). */
-  readonly remove: (id: string) => Effect.Effect<void>;
+  readonly remove: (id: string) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
   /** Retention: deletes every row whose `expiresAt` is before `before`; resolves to how many went. */
-  readonly purgeExpired: (before: DateTime.Utc) => Effect.Effect<number>;
+  readonly purgeExpired: (
+    before: DateTime.Utc,
+  ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
   /** Erasure and export: the rows the user claimed or decided. */
-  readonly listByUser: (userId: Users.UserId) => Effect.Effect<ReadonlyArray<DeviceGrantRecord>>;
-  readonly deleteByUser: (userId: Users.UserId) => Effect.Effect<void>;
+  readonly listByUser: (
+    userId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<DeviceGrantRecord>, StoreFailure.StoreUnavailable>;
+  readonly deleteByUser: (
+    userId: Users.UserId,
+  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
 }
 
 export class DeviceGrantRecords extends Context.Service<
   DeviceGrantRecords,
   DeviceGrantRecordsShape
->()("awthaq/device-authorization/DeviceGrantRecords") {}
+>()("awthaq/device-authorization/records/DeviceGrantRecords") {}
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -222,6 +243,8 @@ export const layerSql = Layer.effect(
   DeviceGrantRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`DeviceGrantRecords.${operation}`);
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
 
@@ -363,31 +386,38 @@ export const layerSql = Layer.effect(
           createdAt: record.createdAt,
           expiresAt: record.expiresAt,
           lastPolledAt: Option.getOrNull(record.lastPolledAt),
-        }).pipe(Effect.map(Option.isSome), Effect.orDie),
+        }).pipe(Effect.map(Option.isSome), unavailable("amr")),
       findByDeviceHash: (hash) =>
-        findByDeviceQuery(hash).pipe(Effect.map(Option.map(toRecord)), Effect.orDie),
+        findByDeviceQuery(hash).pipe(
+          Effect.map(Option.map(toRecord)),
+          unavailable("findByDeviceHash"),
+        ),
       findByUserHash: (hash) =>
-        findByUserQuery(hash).pipe(Effect.map(Option.map(toRecord)), Effect.orDie),
+        findByUserQuery(hash).pipe(Effect.map(Option.map(toRecord)), unavailable("findByUserHash")),
       claim: (id, userId) =>
-        claimQuery({ id, userId }).pipe(Effect.map(Option.isSome), Effect.orDie),
+        claimQuery({ id, userId }).pipe(Effect.map(Option.isSome), unavailable("claim")),
       decide: ({ id, userId, status, amr, now }) =>
-        decideQuery({ id, userId, status, amr, now }).pipe(Effect.map(Option.isSome), Effect.orDie),
-      touchPoll: (id, now) => touchQuery({ id, now }).pipe(Effect.orDie),
-      raiseInterval: (id, seconds) => raiseQuery({ id, seconds }).pipe(Effect.orDie),
+        decideQuery({ id, userId, status, amr, now }).pipe(
+          Effect.map(Option.isSome),
+          unavailable("decide"),
+        ),
+      touchPoll: (id, now) => touchQuery({ id, now }).pipe(unavailable("touchPoll")),
+      raiseInterval: (id, seconds) =>
+        raiseQuery({ id, seconds }).pipe(unavailable("raiseInterval")),
       consume: (id, userId) =>
-        consumeQuery({ id, userId }).pipe(Effect.map(Option.map(toRecord)), Effect.orDie),
-      remove: (id) => removeQuery(id).pipe(Effect.orDie),
+        consumeQuery({ id, userId }).pipe(Effect.map(Option.map(toRecord)), unavailable("consume")),
+      remove: (id) => removeQuery(id).pipe(unavailable("remove")),
       purgeExpired: (before) =>
         purgeQuery(before).pipe(
           Effect.map((rows) => rows.length),
-          Effect.orDie,
+          unavailable("purgeExpired"),
         ),
       listByUser: (userId) =>
         listByUserQuery(userId).pipe(
           Effect.map((rows) => rows.map(toRecord)),
-          Effect.orDie,
+          unavailable("listByUser"),
         ),
-      deleteByUser: (userId) => deleteByUserQuery(userId).pipe(Effect.orDie),
+      deleteByUser: (userId) => deleteByUserQuery(userId).pipe(unavailable("deleteByUser")),
     });
   }),
 );

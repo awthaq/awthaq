@@ -17,6 +17,7 @@ import type * as Types from "effect/Types";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import { TenantScope, type TenantScoped } from "@awthaq/sql";
 import * as AuthPlugin from "./AuthPlugin.ts";
 import * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
@@ -97,6 +98,19 @@ export class UndeclaredTableDependency extends Data.TaggedError("UndeclaredTable
 }> {}
 
 /**
+ * Plan 05 (ADR-EA-018 decision 10, BEH-EA-328): a plugin's `tables` declaration is malformed: an
+ * identifier that is not a plain SQL identifier, a Derived table whose parent is not one of its own
+ * plugin's tables, a `dependsOn` plugin's, or a core table, a Derived table beneath a Global one, or a
+ * Derived chain that loops. Found at link time, never per request.
+ */
+export class TenancyDeclarationInvalid extends Data.TaggedError("Auth/TenancyDeclarationInvalid")<{
+  readonly pluginId: string;
+  readonly table: string;
+  readonly cause: "Identifier" | "UnknownParent" | "GlobalParent" | "Cycle";
+  readonly message: string;
+}> {}
+
+/**
  * A loop invariant `linkPlugins`/`findCycle` rely on (e.g. "a queue drained
  * one non-undefined element at a time never returns undefined while
  * non-empty") did not hold. Reachable only if one of those invariants is
@@ -157,6 +171,15 @@ type PluginDeps<X extends AuthPlugin.Any> = Extract<
 >;
 
 /**
+ * ADR-EA-040: the exposed domain services a plugin's layer requires: keyed
+ * `awthaq/plugin/<id>/<name>`, as opposed to a plugin's own service (`awthaq/plugin/<id>`).
+ */
+type ExposedDeps<X extends AuthPlugin.Any> = Extract<
+  Layer.Services<X["layer"]>,
+  { readonly key: `awthaq/plugin/${string}/${string}` }
+>;
+
+/**
  * `PluginDeps` extracts the *service instance* type (`Ping`, what `yield*
  * Ping` requires — `Context.ServiceClass` makes the class itself
  * `Effect<Shape, never, Self>`, so `RIn` carries `Self`, not `typeof Ping`),
@@ -164,7 +187,30 @@ type PluginDeps<X extends AuthPlugin.Any> = Extract<
  * (BEH-EA-002: `` `awthaq/plugin/${id}` ``) still names the id, in the
  * string itself.
  */
-type IdOf<Dep> = Dep extends { readonly key: `awthaq/plugin/${infer Id}` } ? Id : never;
+type IdOf<Dep> = Dep extends { readonly key: `awthaq/plugin/${infer Rest}` }
+  ? // ADR-EA-040: an exposed service (`awthaq/plugin/<id>/<name>`) belongs to the plugin `<id>`.
+    Rest extends `${infer Id}/${string}`
+    ? Id
+    : Rest
+  : never;
+
+/** ADR-EA-040: a plugin's own services among a requirement union (an exposed service is not a `dependsOn` entry). */
+type OwnDeps<X extends AuthPlugin.Any> = Exclude<PluginDeps<X>, ExposedDeps<X>>;
+
+/**
+ * ADR-EA-040: the first `[exposerId, requiringPluginId]` where a plugin's layer requires a service
+ * the exposer provides but does not list the exposer in `dependsOn` (which is what puts the
+ * exposer's own service in `RIn`), or `never`.
+ */
+type ExposerNotDependedOn<P extends ReadonlyArray<AuthPlugin.Any>> = P[number] extends infer Plugin
+  ? Plugin extends AuthPlugin.Any
+    ? Exclude<IdOf<ExposedDeps<Plugin>>, IdOf<OwnDeps<Plugin>>> extends infer Exposer
+      ? [Exposer] extends [never]
+        ? never
+        : readonly [Exposer, Plugin["id"]]
+      : never
+    : never
+  : never;
 
 /** BEH-EA-011: the first `[missingDepId, requiringPluginId]` pair not present in the tuple, or `never`. */
 type MissingDep<
@@ -226,18 +272,27 @@ type PortProvidedByPlugin<P extends ReadonlyArray<AuthPlugin.Any>> = P[number] e
     : never
   : never;
 
-/** The one problem `Validate<P>` reports for `P`, in a fixed order (duplicate id, missing dependency, order, port), or `never`. */
+/** The one problem `Validate<P>` reports for `P`, in a fixed order (duplicate id, missing dependency, order, exposed service without `dependsOn`, port), or `never`. */
 type FirstProblem<P extends ReadonlyArray<AuthPlugin.Any>> = [DuplicateId<P>] extends [never]
   ? [MissingDep<P>] extends [never]
     ? [OutOfOrderDep<P>] extends [never]
-      ? [PortProvidedByPlugin<P>] extends [never]
-        ? never
-        : PortProvidedByPlugin<P> extends readonly [
-              infer Port extends string,
+      ? [ExposerNotDependedOn<P>] extends [never]
+        ? [PortProvidedByPlugin<P>] extends [never]
+          ? never
+          : PortProvidedByPlugin<P> extends readonly [
+                infer Port extends string,
+                infer By extends string,
+              ]
+            ? {
+                readonly awthaq: `plugin "${By}" provides port "${Port}" — a plugin may only require ports, never provide them`;
+              }
+            : never
+        : ExposerNotDependedOn<P> extends readonly [
+              infer Exposer extends string,
               infer By extends string,
             ]
           ? {
-              readonly awthaq: `plugin "${By}" provides port "${Port}" — a plugin may only require ports, never provide them`;
+              readonly awthaq: `plugin "${By}" requires a service exposed by "${Exposer}" — add ${Exposer} to dependsOn`;
             }
           : never
       : OutOfOrderDep<P> extends readonly [infer Dep extends string, infer By extends string]
@@ -272,6 +327,8 @@ export interface ManifestPlugin {
   readonly id: string;
   readonly apiVersion: 1;
   readonly tables: ReadonlyArray<string>;
+  /** Plan 05: each table's declared tenancy, by name (`awthaq plugin list` prints it). */
+  readonly tenancy: Readonly<Record<string, TenantScoped.TableDeclaration>>;
   readonly dependsOn: ReadonlyArray<string>;
   /** BEH-EA-203: the contract groups this plugin owns, so `routes` can name the owning plugin of an endpoint. */
   readonly groups: ReadonlyArray<string>;
@@ -279,6 +336,12 @@ export interface ManifestPlugin {
 
 /** PV-241/BEH-EA-202: one port a plugin's layer requires (`AuthPlugin.layer`'s `ports`), by service key, declared statically. */
 export interface ManifestPort {
+  readonly plugin: string;
+  readonly key: string;
+}
+
+/** ADR-EA-040: one namespaced domain service a plugin exposes beside its own service, by service key, declared statically. */
+export interface ManifestExposed {
   readonly plugin: string;
   readonly key: string;
 }
@@ -319,6 +382,8 @@ export interface Manifest {
   readonly rateLimits: ReadonlyArray<ManifestRateLimit>;
   /** PV-241/BEH-EA-202: every plugin's declared required ports, in link order and each plugin's own declaration order — static, no Layer evaluated. */
   readonly ports: ReadonlyArray<ManifestPort>;
+  /** ADR-EA-040: every plugin's exposed domain services, in link order and each plugin's own declaration order — static, no Layer evaluated. */
+  readonly exposes: ReadonlyArray<ManifestExposed>;
   /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
   readonly config: ReadonlyArray<ManifestConfig>;
   /** SAM-004: every plugin-declared user field the linker adds a column for, in link order. */
@@ -376,10 +441,10 @@ export type UserFieldsOf<P extends ReadonlyArray<AuthPlugin.Any>> = Types.UnionT
 type CoreGroups = GroupsOf<{ readonly contract: typeof AuthCore.AuthCoreApi }>;
 
 /** MW-002: every group of the one served `api`: core's, the host's `extraGroups`, then each plugin's. */
-type AllGroups<P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint> =
-  | CoreGroups
-  | Extra
-  | GroupsOf<P[number]>;
+export type AllGroups<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint,
+> = CoreGroups | Extra | GroupsOf<P[number]>;
 
 /**
  * `Layer.provideMerge(self, that)`'s own type, restated so `FoldLayer` can
@@ -447,6 +512,12 @@ export interface Built<
 > {
   readonly api: HttpApi.HttpApi<"auth", AllGroups<P, Extra>>;
   /**
+   * Plan 08: the plugin tuple as given to `make`. It lets a harness (or a host) read each plugin's static
+   * `records` and `hookPoints` without depending on any plugin package; the type is `P`, so
+   * `AuthPlugin.RecordsOut<P[number]>` is exact.
+   */
+  readonly plugins: P;
+  /**
    * AR-003: `api` minus the admin-tier groups (`AuthPlugin.isAdminTier`) — what a host
    * serves on its public listener when it firewalls the admin surface separately.
    * Handlers still come from the one composed `layer`; serving fewer groups needs no more.
@@ -471,6 +542,11 @@ export interface Built<
    */
   readonly migrations: Migrations;
   readonly manifest: Manifest;
+  /**
+   * Plan 05: every plugin table with its declared tenancy, in plugin order. Pass it to
+   * `TenantScope.enableRls({ plugins: auth.tenancy })` to cover the plugin tables.
+   */
+  readonly tenancy: ReadonlyArray<TenantScope.DeclaredTable>;
   /**
    * SAM-004 (BEH-EA-040/048): every plugin-declared user field of this composition, keyed `<plugin id>_<field>`
    * with the field's own schema. Pass it to `UserFields.layer` (so `Users` validates and gates writes) and to
@@ -559,6 +635,97 @@ const checkTableDependencies = (plugins: ReadonlyArray<AuthPlugin.Any>): void =>
         table,
         message: `awthaq: plugin "${plugin.id}" reads table "${table}" owned by plugin "${owner.id}" but does not list it in dependsOn`,
       });
+    }
+  }
+};
+
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const coreTables: ReadonlyArray<string> = [
+  ...TenantScope.partitionedTables,
+  ...TenantScope.directoryTables,
+];
+
+/** Plan 05: every plugin table's declaration, in plugin order. */
+const declaredTenancy = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+): ReadonlyArray<TenantScope.DeclaredTable> =>
+  order.flatMap((plugin) =>
+    Object.entries(plugin.tenancy ?? {}).map(([table, declaration]) => ({
+      plugin: plugin.id,
+      table,
+      tenancy: declaration.tenancy,
+    })),
+  );
+
+/** BEH-EA-328: refuses a malformed tenancy declaration. */
+const checkTenancy = (order: ReadonlyArray<AuthPlugin.Any>): void => {
+  const declared = declaredTenancy(order);
+  const invalid = (
+    entry: TenantScope.DeclaredTable,
+    cause: TenancyDeclarationInvalid["cause"],
+    detail: string,
+  ) =>
+    new TenancyDeclarationInvalid({
+      pluginId: entry.plugin,
+      table: entry.table,
+      cause,
+      message: `awthaq: plugin "${entry.plugin}" table "${entry.table}": ${detail}`,
+    });
+  const identifiersOf = (entry: TenantScope.DeclaredTable): ReadonlyArray<string> => {
+    const tenancy = entry.tenancy;
+    switch (tenancy._tag) {
+      case "Partitioned":
+      case "Keyed":
+        return [entry.table, tenancy.column];
+      case "Derived":
+        return [entry.table, tenancy.parent, tenancy.via, tenancy.parentKey];
+      case "Global":
+        // Never reaches DDL (RLS skips Global tables), so a plugin id with a dot is not refused.
+        return [];
+    }
+  };
+  for (const entry of declared) {
+    const bad = identifiersOf(entry).find((name) => !IDENTIFIER.test(name));
+    if (bad !== undefined) {
+      throw invalid(entry, "Identifier", `"${bad}" is not a plain SQL identifier`);
+    }
+  }
+  for (const entry of declared) {
+    const tenancy = entry.tenancy;
+    if (tenancy._tag !== "Derived") continue;
+    const plugin = order.find((candidate) => candidate.id === entry.plugin);
+    const visible = new Set<string>([
+      entry.plugin,
+      ...(plugin?.dependsOn ?? []).map((dep) => dep.id),
+    ]);
+    const parent = declared.find(
+      (candidate) => candidate.table === tenancy.parent && visible.has(candidate.plugin),
+    );
+    if (parent === undefined) {
+      if (coreTables.includes(tenancy.parent)) continue;
+      throw invalid(
+        entry,
+        "UnknownParent",
+        `its parent "${tenancy.parent}" is not a table of this plugin, of a plugin in its dependsOn, or a core table`,
+      );
+    }
+    if (parent.tenancy._tag === "Global") {
+      throw invalid(entry, "GlobalParent", `its parent "${tenancy.parent}" is declared Global`);
+    }
+  }
+  for (const entry of declared) {
+    const seen = new Set<string>([entry.table]);
+    let current = entry.tenancy;
+    while (current._tag === "Derived") {
+      const parentName = current.parent;
+      if (seen.has(parentName)) {
+        throw invalid(entry, "Cycle", `its Derived chain loops back through "${parentName}"`);
+      }
+      seen.add(parentName);
+      const next = declared.find((candidate) => candidate.table === parentName);
+      if (next === undefined) break;
+      current = next.tenancy;
     }
   }
 };
@@ -669,11 +836,15 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
     id: plugin.id,
     apiVersion: plugin.apiVersion,
     tables: plugin.tables,
+    tenancy: plugin.tenancy ?? {},
     dependsOn: plugin.dependsOn.map((dep) => dep.id),
     groups: Object.values(plugin.contract.groups).map((group) => group.identifier),
   })),
   hooks: buildHooks(order),
   ports: order.flatMap((plugin) => (plugin.ports ?? []).map((key) => ({ plugin: plugin.id, key }))),
+  exposes: order.flatMap((plugin) =>
+    (plugin.exposes ?? []).map((key) => ({ plugin: plugin.id, key })),
+  ),
   rateLimits: order.flatMap((plugin) =>
     (plugin.rateLimits ?? []).map((rule) => ({ plugin: plugin.id, ...rule })),
   ),
@@ -891,14 +1062,17 @@ export function make(
 ) {
   const order = linkPlugins(plugins);
   checkTableDependencies(order);
+  checkTenancy(order);
   const extraGroups = options?.extraGroups ?? [];
   return {
+    plugins,
     api: composeApi(order, extraGroups),
     publicApi: composeTier(order, extraGroups, false),
     adminApi: composeTier(order, extraGroups, true),
     layer: composeLayer(order),
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),
+    tenancy: declaredTenancy(order),
     userFields: composeUserFields(order),
     userFieldsLayer: UserFields.layer(composeUserFields(order)),
   };

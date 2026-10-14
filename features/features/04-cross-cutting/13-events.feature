@@ -94,6 +94,12 @@ Feature: Events
       When an event is published to "AuthEvents"
       Then the event's tag is one of the registry's declared tags
 
+    @REQ-EA-1275
+    Scenario: Every registered event declares who acted and which of its fields are personal data
+      Given the event registry declares "auth.user.created", "auth.user.signedIn", "auth.token.replay", and "auth.session.issued"
+      When the registry's declarations are read for every declared tag
+      Then every tag has an actor rule the sample event satisfies and personal-data fields the event carries
+
     @REQ-EA-269
     Scenario: A subscriber filtering or handling by tag can rely on that tag's declared payload shape
       Given a subscriber handling events tagged "auth.user.signedIn"
@@ -163,3 +169,19 @@ Feature: Events
       When an operator queries logs for "auth.event.observer.error"
       Then only subscriber-failure entries are returned
       And genuine "auth.token.replay" security events are not conflated with subscriber failures
+
+  # BEH-EA-321 — spec/behaviors/13-events.md; see also ADR-EA-037
+  @BEH-EA-321
+  Rule: A live subscriber never observes a state-change event whose unit of work rolled back; an attempt event is recorded and delivered whether or not its unit commits
+
+    @REQ-EA-1278
+    Scenario: A unit of work that rolls back tells no subscriber about its state change but still reports the attempt
+      Given a subscriber "watcher" handling "auth.user.created" and "auth.user.signInFailed"
+      When a unit of work publishes "auth.user.created" and "auth.user.signInFailed" and then rolls back
+      Then "watcher" was handed only "auth.user.signInFailed"
+
+    @REQ-EA-1279
+    Scenario: A unit of work that commits delivers both events
+      Given a subscriber "watcher" handling "auth.user.created" and "auth.user.signInFailed"
+      When a unit of work publishes "auth.user.created" and "auth.user.signInFailed" and then commits
+      Then "watcher" was handed "auth.user.created" and "auth.user.signInFailed" exactly once each

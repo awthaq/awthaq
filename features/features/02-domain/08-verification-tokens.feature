@@ -54,6 +54,12 @@ Feature: Verification Tokens
       Then the token is not left marked consumed
       And the transaction rolls back both the consumption and the state change together
 
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
+    @REQ-EA-1282
+    Scenario: The deferred-miss protocol is not part of the interface
+      When a caller tries to defer a miss, record one, or settle a redeem some other way
+      Then the interface rejects each by the type
+
   # BEH-EA-059 — spec/behaviors/08-verification-tokens.md; see also INV-EA-010
   @BEH-EA-059
   Rule: Replaying an already-consumed or unknown token publishes auth.token.replay
@@ -92,8 +98,8 @@ Feature: Verification Tokens
       When it is consumed for the first time
       Then no "auth.token.replay" event is published
 
-    # PV-220: the replayed consume fails inside the endpoint's SqlTransaction, so the row is
-    # recorded after that transaction has rolled back, not inline within it.
+    # ADR-EA-037/039: a replay is an attempt event, recorded after the endpoint's transaction ends
+    # whether or not it rolled back; `Verification.redeem` commits a miss and the row still lands.
     @REQ-EA-688
     Scenario: A replay through a transactional endpoint leaves a durable audit row
       Given a VerificationToken that has already been consumed

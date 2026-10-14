@@ -212,6 +212,18 @@ Feature: Email OTP
       Then it fails with "UserSuspended"
       And no session was issued
 
+    # ADR-EA-039: the code is redeemed, so an outage while completing gives it back, attempt budget untouched.
+    @REQ-EA-1285
+    Scenario: An outage while completing the sign-in leaves the code usable
+      Given a user "outage@example.com"
+      And a mailed code for "outage@example.com"
+      And the session store is down
+      When the code is presented for "outage@example.com"
+      Then it fails with "StoreUnavailable"
+      When the session store is back
+      And the code is presented for "outage@example.com"
+      Then a session is issued for "outage@example.com" recorded as "otp" and "email"
+
   # BEH-EA-274 — spec/behaviors/33-email-otp.md; see also ADR-EA-021
   @BEH-EA-274
   Rule: The code is a Verification row with no table of its own, and SMS is a later restricted plugin over it

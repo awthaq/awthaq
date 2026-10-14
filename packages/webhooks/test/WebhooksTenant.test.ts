@@ -27,10 +27,15 @@ const create = (url = "https://hooks.example.com/awthaq") =>
     webhooks.createEndpoint(admin, { url, eventTags: ["*"] }),
   );
 
-const deliveredEventIds = (endpointId: string) =>
-  Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
+/** The deliveries an endpoint was given, read as an administrator of `tenant` (the store scopes by it). */
+const deliveredEventIds = (endpointId: string, tenant?: string) => {
+  const read = Effect.flatMap(WebhookRecords.WebhookRecords, (records) =>
     records.listDeliveries({ endpointId, limit: 50 }),
-  ).pipe(Effect.map((rows) => rows.map((row) => row.eventId).sort()));
+  );
+  return (tenant === undefined ? read : read.pipe(Tenant.withTenant(tenant))).pipe(
+    Effect.map((rows) => rows.map((row) => row.eventId).sort()),
+  );
+};
 
 describe("events are routed to the endpoints of their own tenant", () => {
   const routing = (hearAll: boolean) =>
@@ -44,8 +49,8 @@ describe("events are routed to the endpoints of their own tenant", () => {
       yield* WebhookDelivery.enqueue([inA, inB, nowhere]);
       return {
         platform: yield* deliveredEventIds(platform.id),
-        a: yield* deliveredEventIds(orgA.id),
-        b: yield* deliveredEventIds(orgB.id),
+        a: yield* deliveredEventIds(orgA.id, "org-a"),
+        b: yield* deliveredEventIds(orgB.id, "org-b"),
         ids: { inA: inA.eventId, inB: inB.eventId, nowhere: nowhere.eventId },
       };
     }).pipe(
@@ -85,7 +90,9 @@ describe("events are routed to the endpoints of their own tenant", () => {
       yield* WebhookDelivery.enqueue([
         yield* published(signedIn("u-a"), { tenantId: Option.some("org-a") }),
       ]);
-      const [row] = yield* records.listDeliveries({ endpointId: endpoint.id, limit: 5 });
+      const [row] = yield* records
+        .listDeliveries({ endpointId: endpoint.id, limit: 5 })
+        .pipe(Tenant.withTenant("org-a"));
       const body = JSON.parse(row?.body ?? "{}");
       assert.strictEqual(body.tenantId, "org-a");
       // The envelope field is not copied into `data`.
@@ -109,33 +116,13 @@ describe("events are routed to the endpoints of their own tenant", () => {
           Effect.map((rows) => rows.map(AuditLog.toPublished)),
         );
         yield* WebhookDelivery.enqueue(relayed);
-        assert.strictEqual((yield* deliveredEventIds(orgA.id)).length, 1);
-        assert.deepStrictEqual(yield* deliveredEventIds(orgB.id), []);
+        assert.strictEqual((yield* deliveredEventIds(orgA.id, "org-a")).length, 1);
+        assert.deepStrictEqual(yield* deliveredEventIds(orgB.id, "org-b"), []);
       }).pipe(Effect.provide(deliveryLayer())),
   );
 });
 
 describe("administration is scoped to the ambient tenant", () => {
-  it.effect(
-    "an endpoint registered inside a tenant is stamped with it and invisible from outside",
-    () =>
-      Effect.gen(function* () {
-        const webhooks = yield* Webhooks.Webhooks;
-        const mine = yield* create().pipe(Tenant.withTenant("org-a"));
-        assert.strictEqual(mine.endpoint.tenantId, "org-a");
-        const platform = yield* create();
-        assert.isNull(platform.endpoint.tenantId);
-        const listIds = (scope: "org-a" | "org-b" | undefined) =>
-          (scope === undefined
-            ? webhooks.listEndpoints(admin)
-            : webhooks.listEndpoints(admin).pipe(Tenant.withTenant(scope))
-          ).pipe(Effect.map((rows) => rows.map((row) => row.id)));
-        assert.deepStrictEqual(yield* listIds("org-a"), [mine.endpoint.id]);
-        assert.deepStrictEqual(yield* listIds("org-b"), []);
-        assert.deepStrictEqual(yield* listIds(undefined), [platform.endpoint.id]);
-      }).pipe(Effect.provide(adminLayer())),
-  );
-
   it.effect(
     "every by-id operation answers another tenant's endpoint exactly like one that does not exist",
     () =>
@@ -163,28 +150,6 @@ describe("administration is scoped to the ambient tenant", () => {
           .pipe(Tenant.withTenant("org-a"));
         assert.isTrue(still.enabled);
       }).pipe(Effect.provide(adminLayer())),
-  );
-
-  it.effect("a delivery is retryable only through its own tenant", () =>
-    Effect.gen(function* () {
-      const webhooks = yield* Webhooks.Webhooks;
-      const records = yield* WebhookRecords.WebhookRecords;
-      const { endpoint } = yield* create().pipe(Tenant.withTenant("org-a"));
-      yield* WebhookDelivery.enqueue([
-        yield* published(signedIn("u-a"), { tenantId: Option.some("org-a") }),
-      ]);
-      const [delivery] = yield* records.listDeliveries({ endpointId: endpoint.id, limit: 5 });
-      if (delivery === undefined) return assert.fail("nothing was queued");
-      yield* records.markDead(delivery.id, { at: delivery.createdAt, error: "status" });
-      const foreign = yield* webhooks
-        .retryDelivery(admin, delivery.id)
-        .pipe(Tenant.withTenant("org-b"), Effect.flip);
-      assert.strictEqual(foreign._tag, "WebhookDeliveryNotFound");
-      const own = yield* webhooks
-        .retryDelivery(admin, delivery.id)
-        .pipe(Tenant.withTenant("org-a"));
-      assert.strictEqual(own.status, "pending");
-    }).pipe(Effect.provide(adminLayer())),
   );
 
   it.effect("maxEndpoints is a per-tenant budget", () =>

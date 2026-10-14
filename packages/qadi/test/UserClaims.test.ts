@@ -3,12 +3,13 @@
 // claim through the resolver.
 import {
   AuditLog,
+  Auth,
+  AuthEvents,
   DataExport,
   Erasure,
-  AuthEvents,
-  Auth,
   Hooks,
   Migrations,
+  Persistence,
   Users,
 } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
@@ -31,10 +32,10 @@ import * as Option from "effect/Option";
 import * as AttributeResolvers from "../src/AttributeResolvers.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import * as UserClaims from "../src/UserClaims.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const CoreLive = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   // CSG-001: the plugin contributes its erasure to the composition's registry.
   Layer.provideMerge(Erasure.registryLayer),
   Layer.provideMerge(DataExport.registryLayer),
@@ -43,17 +44,17 @@ const CoreLive = AuthEvents.layer.pipe(
 const withResolver = <E, R>(store: Layer.Layer<UserClaims.UserClaims, E, R>) =>
   UserClaims.UserClaimsAttributes.pipe(Layer.provideMerge(store));
 
-const MemoryLayer = withResolver(UserClaims.UserClaims.layer).pipe(Layer.provideMerge(CoreLive));
+const MemoryLayer = withResolver(
+  UserClaims.UserClaims.layer.pipe(Layer.provide(UserClaims.UserClaims.records.memory)),
+).pipe(Layer.provideMerge(CoreLive));
 
 const SqlLive = TestSql.layer("qadi_UserClaims");
 const Migrated = Layer.effectDiscard(Migrations.run(UserClaims.UserClaims.migrations)).pipe(
   Layer.provide(SqlLive),
 );
-const SqlLayer = withResolver(UserClaims.UserClaims.layerSql).pipe(
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
+const SqlLayer = withResolver(
+  UserClaims.UserClaims.layer.pipe(Layer.provide(UserClaims.UserClaims.records.sql)),
+).pipe(Layer.provideMerge(CoreLive), Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 
 const alice = Users.UserId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
 const admin = Users.UserId("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
@@ -241,6 +242,7 @@ describe("UserClaims composition", () => {
         }).pipe(
           Effect.provide(
             UserClaims.UserClaims.layer.pipe(
+              Layer.provide(UserClaims.UserClaims.records.memory),
               Layer.provideMerge(
                 Hooks.AfterUserAttributesChanged.tap((input) =>
                   Effect.sync(() => {
@@ -255,5 +257,23 @@ describe("UserClaims composition", () => {
         );
         assert.deepStrictEqual(announced, [["claims"]]);
       }),
+  );
+});
+
+// Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
+describe("UserClaims over records.sql: a store outage", () => {
+  it.effect("set fails with StoreUnavailable naming the operation", () =>
+    Effect.gen(function* () {
+      yield* TestSql.injectFailure({
+        name: "claims_fail_insert",
+        table: "claims_user",
+        event: "INSERT",
+      });
+      const claims = yield* UserClaims.UserClaims;
+      const failure = yield* claims
+        .set(Users.UserId("outage-user"), { plan: "pro" })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(SqlLayer)),
   );
 });

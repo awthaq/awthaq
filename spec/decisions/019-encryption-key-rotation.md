@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-019 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-10-13 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (KRS-002, ACS-008, SMS-005; wayfinder ticket 22) |
+> | Change History | 1.0 (2026-09-29): Initial release (KRS-002, ACS-008, SMS-005; wayfinder ticket 22) <br> 1.1 (2026-10-13): Decision 6: one sealed-column interface for plugin columns, lazy re-seal, typed Unreadable, sweep (plan 05) |
 
 ---
 
@@ -25,6 +25,17 @@
 3. **Lazy re-encryption.** `Encryption.decrypt` succeeds with `{ plaintext, staleKid }`. `staleKid` is `Some(kid)` when the envelope was written under a key other than `currentKey`, or in the legacy v1 format; callers re-`encrypt` and persist on the next successful read (the `PasswordHasher.needsRehash` convention). Batch re-encryption of rows that are never read again is an operational job on the consumer side and out of scope here.
 4. **Envelope v2 binds `v` and `kid` into the GCM additional data** (`awthaq-enc:v2:<len(kid)>:<kid>:<aad>`), so rewriting either field fails authentication even when the substituted key would otherwise decrypt. v1 envelopes remain decryptable and are always reported stale, so they upgrade to v2 through decision 3.
 5. **Key-byte hygiene.** `Encryption.layer` imports one non-extractable `CryptoKey` per (kid, usage) instead of unwrapping the raw bytes on every call, and zeroes the transient copy passed to WebCrypto. JavaScript cannot guarantee zeroization and `Redacted` only prevents accidental logging, so production deployments that must not hold raw key bytes in-process implement `KeyProvider` over a KMS/HSM.
+6. **One sealed-column interface (plan 05).** A plugin declares an encrypted table column once (`@awthaq/sql` `SealedColumn.column`) and its records hand out `Sealed<A>` values whose `open` effect is the only place a plaintext appears. The AAD is `<table>:<rowKey>:<column>` (matching core's `<entity>:<id>:<field>` shape); envelopes sealed under an older spelling are listed in `legacyAad` and still open, then re-seal to the canonical AAD. Decision 3 now ships for plugin columns: when `staleKid` is set or a legacy AAD was used, `open` writes the fresh envelope back by compare-and-swap on the stored value (a concurrent writer always wins; a lost or failed swap is logged with ids only and never fails the read; `SealedColumnConfig.resealOnRead: false` opts out). A value that does not open is the typed `SealedColumn/Unreadable` (`DecryptionFailed`, `UnknownKeyId` or `Malformed`), never `null` and never a defect, and each call site chooses exactly one treatment: `SealedColumn.orDie` (fail closed, for a signing key or a TOTP secret) or `SealedColumn.option` (degrade one value with a warning). `SealedColumn.sweep` is the operator's batch job that re-seals every stale or legacy value of a column; it narrows decision 3's "batch is out of scope": the library ships the job, and running it stays operational. Core's own columns keep their formats and null-and-warn policy and run on the same primitive (`SealedColumn.reveal`).
+
+| Plugin column | Canonical AAD | Legacy AAD | Unreadable treatment |
+|---|---|---|---|
+| `webhooks_endpoint.secret` | `webhooks_endpoint:<id>:secret` | `webhooks-endpoint:<id>:secret` | `option`: the attempt fails as `secret` |
+| `webhooks_endpoint.previousSecret` | `webhooks_endpoint:<id>:previousSecret` | `webhooks-endpoint:<id>:previousSecret` | `option`: dropped |
+| `webhooks_endpoint.headers` | `webhooks_endpoint:<id>:headers` | `webhooks-endpoint:<id>:headers` | `option`: no custom headers |
+| `organization_oauth_connection.clientSecret` | `organization_oauth_connection:<id>:clientSecret` | `organization-oauth-connection:<id>:clientSecret` | `option`: the connection is dropped alone |
+| `saml_sp_key.privateKey` | `saml_sp_key:<id>:privateKey` | `saml-sp-key:<id>:privateKey` | `orDie` |
+| `jwt_signing_key.privateKeyJwk` | `jwt_signing_key:<kid>:privateKeyJwk` | none (already canonical) | `orDie` |
+| `two_factor_secret.secret` | `two_factor_secret:<userId>:secret` | `two_factor_secret:<userId>` | `orDie` |
 
 ## Consequences
 

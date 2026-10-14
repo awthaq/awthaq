@@ -19,7 +19,7 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 
 const PrimaryLive = TestSql.layer("organization_DecisionReads_primary");
 const ReplicaLive = TestSql.layer("organization_DecisionReads_replica");

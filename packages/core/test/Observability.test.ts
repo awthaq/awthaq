@@ -9,6 +9,7 @@ import * as Metric from "effect/Metric";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
+import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as HookPoint from "../src/HookPoint.ts";
@@ -39,11 +40,13 @@ const recordingTracer = () => {
 const attributeValues = (spans: ReadonlyArray<Tracer.Span>): ReadonlyArray<string> =>
   spans.flatMap((span) => [...span.attributes.values()].map((value) => String(value)));
 
-const Live = Sessions.layerMemory.pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+const Live = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(NodeCrypto.layer),
+  );
 
 describe("Observability (ticket 27)", () => {
   it.effect(
@@ -127,7 +130,7 @@ describe("Observability (ticket 27)", () => {
       }).pipe(
         Effect.provide(
           AuthEvents.layer.pipe(
-            Layer.provideMerge(AuditLog.layerMemory),
+            Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
             Layer.provideMerge(tracer.layer),
           ),
         ),

@@ -14,6 +14,7 @@ import * as JwtCodec from "../src/JwtCodec.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
 /** A fake KMS: generates its own local keypair (so the test can sign for real) but exposes only the `JwtCodec.Signer` boundary — the plugin never touches its private half. */
 const makeFakeRemoteSigner = () =>
@@ -105,7 +106,7 @@ describe("remote signing", () => {
             // still part of `layerFromStore`'s own *declared* R (Effect's
             // R is the static union across every branch, not just the one
             // actually taken), so both still need providing here.
-            Layer.provideMerge(SigningKeyRecords.layerMemory),
+            Layer.provideMerge(SigningKeyRecordsLive),
             Layer.provideMerge(SqlTransaction.layerNoop),
             Layer.provideMerge(JwtConfig.config({ issuer: "https://issuer.test" })),
             Layer.provideMerge(NodeCrypto.layer),

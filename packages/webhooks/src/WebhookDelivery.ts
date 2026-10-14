@@ -25,7 +25,8 @@
 // to lapse and the delivery is sent again, with the same `webhook-id`. Receivers deduplicate on it.
 
 import { type AuditLog, EventRelay } from "@awthaq/core";
-import { Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { type StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -52,15 +53,29 @@ export const deliveries = Metric.counter("awthaq_webhook_deliveries_total", {
   incremental: true,
 });
 
+/**
+ * The relay and the worker serve every tenant's endpoints and run with no ambient tenant (BEH-EA-309:
+ * `tenantRoutes` decides who hears what), so they present one witness for the whole module.
+ */
+const relay = TenantScoped.crossTenant("webhooks relay: tenantRoutes decides delivery");
+
 // ---- enqueue: the EventTransport ---------------------------------------------------------------
 
 /** Turns a relayed batch into queued deliveries. Requires the records, `Crypto` (ids) and the plugin config. */
-export const enqueue = (events: ReadonlyArray<Parameters<typeof WebhookPayload.toBody>[0]>) =>
+// The explicit types on `enqueue` and `drainDue` are the narrow exception the plugins document
+// (TS2883): declaration emit cannot name `StoreUnavailable` through the records' inferred error.
+export const enqueue = (
+  events: ReadonlyArray<Parameters<typeof WebhookPayload.toBody>[0]>,
+): Effect.Effect<
+  number,
+  StoreFailure.StoreUnavailable,
+  WebhookRecords.WebhookRecords | Crypto.Crypto
+> =>
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
     const crypto = yield* Crypto.Crypto;
     const settings = yield* WebhooksConfig.WebhooksConfig;
-    const endpoints = (yield* records.listEndpoints).filter((row) => Option.isNone(row.disabledAt));
+    const endpoints = yield* records.listEnabledEndpoints(relay);
     if (endpoints.length === 0 || events.length === 0) return 0;
     const now = yield* DateTime.now;
     const rows: Array<WebhookRecords.NewDelivery> = [];
@@ -141,19 +156,22 @@ const failureClass = (error: unknown): string => {
   return error instanceof WebhookTransport.WebhookTransportError ? error.failure : "connect";
 };
 
-/** Sends one claimed delivery and records what happened. Never fails: every problem is an outcome. */
+/**
+ * Sends one claimed delivery and records what happened. Every problem with the delivery is an outcome; the
+ * only failure is the store's own outage (`StoreUnavailable`), which `attemptCounted` logs and retries.
+ */
+
 export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
-    const encryption = yield* Encryption.Encryption;
     const limiter = yield* RateLimiter.RateLimiter;
     const transport = yield* WebhookTransport.WebhookTransport;
     const settings = yield* WebhooksConfig.WebhooksConfig;
     const now = yield* DateTime.now;
 
-    const endpointOpt = yield* records.findEndpoint(delivery.endpointId);
+    const endpointOpt = yield* records.findEndpointForDelivery(relay, delivery.endpointId);
     if (Option.isNone(endpointOpt)) {
-      yield* records.markDead(delivery.id, { at: now, error: "endpointGone" });
+      yield* records.markDead(relay, delivery.id, { at: now, error: "endpointGone" });
       return "dead" satisfies Outcome;
     }
     const endpoint = endpointOpt.value;
@@ -172,7 +190,11 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
         ),
       );
     if (Option.isSome(budget)) {
-      yield* records.defer(delivery.id, DateTime.addDuration(now, Duration.millis(budget.value)));
+      yield* records.defer(
+        relay,
+        delivery.id,
+        DateTime.addDuration(now, Duration.millis(budget.value)),
+      );
       return "deferred" satisfies Outcome;
     }
 
@@ -181,26 +203,24 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
         const made = delivery.attempts + 1;
         // BEH-EA-310: a test ping is one attempt, and a receiver that is down is not evidence against the endpoint.
         if (delivery.eventTag === WebhookPayload.TEST_EVENT_TAG) {
-          yield* records.markDead(delivery.id, { at: now, ...info });
+          yield* records.markDead(relay, delivery.id, { at: now, ...info });
           return "dead" satisfies Outcome;
         }
         if (made >= settings.maxAttempts) {
-          yield* records.markDead(delivery.id, { at: now, ...info });
-          const consecutive = yield* records.bumpDead(endpoint.id);
+          yield* records.markDead(relay, delivery.id, { at: now, ...info });
+          const consecutive = yield* records.bumpDead(relay, endpoint.id);
           if (
             settings.disableAfterConsecutiveDead > 0 &&
             consecutive >= settings.disableAfterConsecutiveDead
           ) {
-            yield* records
-              .setDisabled(endpoint.id, { at: now, reason: "failing" })
-              .pipe(Effect.ignore);
+            yield* records.disableFailing(relay, endpoint.id, now);
             yield* Effect.logWarning(
               `awthaq/webhooks: endpoint ${endpoint.id} disabled after ${consecutive} consecutive dead-lettered deliveries`,
             );
           }
           return "dead" satisfies Outcome;
         }
-        yield* records.reschedule(delivery.id, {
+        yield* records.reschedule(relay, delivery.id, {
           at: now,
           nextAttemptAt: DateTime.addDuration(now, WebhooksConfig.retryDelay(settings, made)),
           ...info,
@@ -219,10 +239,10 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
       : Result.map(yield* HostResolver.pin(endpoint.url), Option.some);
     if (Result.isFailure(pin)) return yield* failed({ error: "blocked" });
 
-    const secrets = yield* WebhookSecrets.open(encryption, endpoint, now);
+    const secrets = yield* WebhookSecrets.open(endpoint, now);
     if (Option.isNone(secrets)) return yield* failed({ error: "secret" });
     // BEH-EA-313: the endpoint's custom headers, opened like the secret (a value that does not open fails as `secret`).
-    const custom = yield* WebhookSecrets.openHeaders(encryption, endpoint);
+    const custom = yield* WebhookSecrets.openHeaders(endpoint);
     if (Option.isNone(custom)) return yield* failed({ error: "secret" });
 
     const timestamp = Math.floor(DateTime.toEpochMillis(now) / 1000);
@@ -255,8 +275,8 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
     if (sent._tag === "failed") return yield* failed({ error: sent.error });
     const status = sent.status;
     if (status >= 200 && status < 300) {
-      yield* records.markSucceeded(delivery.id, { at: now, statusCode: status });
-      yield* records.clearDead(endpoint.id);
+      yield* records.markSucceeded(relay, delivery.id, { at: now, statusCode: status });
+      yield* records.clearDead(relay, endpoint.id);
       return "succeeded" satisfies Outcome;
     }
     return yield* failed({ statusCode: status, error: "status" });
@@ -279,11 +299,19 @@ const attemptCounted = (delivery: WebhookRecords.DeliveryRecord) =>
  * Claims what is due and attempts it, `concurrency` at a time. Resolves to how many deliveries were
  * attempted (0 when nothing is due) — what a test steps and what the loop uses to decide whether to sleep.
  */
-export const drainDue = Effect.gen(function* () {
+export const drainDue: Effect.Effect<
+  number,
+  StoreFailure.StoreUnavailable,
+  | Crypto.Crypto
+  | HostResolver.HostResolver
+  | RateLimiter.RateLimiter
+  | WebhookRecords.WebhookRecords
+  | WebhookTransport.WebhookTransport
+> = Effect.gen(function* () {
   const records = yield* WebhookRecords.WebhookRecords;
   const settings = yield* WebhooksConfig.WebhooksConfig;
   const now = yield* DateTime.now;
-  const claimed = yield* records.claimDue({
+  const claimed = yield* records.claimDue(relay, {
     now,
     limit: settings.batchSize,
     lease: settings.lease,
@@ -295,13 +323,19 @@ export const drainDue = Effect.gen(function* () {
   return claimed.length;
 });
 
+/** Deletes finished rows that completed more than `deliveryRetention` before `now`. */
+export const pruneAt = (now: DateTime.Utc) =>
+  Effect.gen(function* () {
+    const records = yield* WebhookRecords.WebhookRecords;
+    const settings = yield* WebhooksConfig.WebhooksConfig;
+    return yield* records.pruneFinished(
+      relay,
+      DateTime.subtractDuration(now, settings.deliveryRetention),
+    );
+  });
+
 /** Deletes finished rows older than `deliveryRetention`. */
-export const pruneOnce = Effect.gen(function* () {
-  const records = yield* WebhookRecords.WebhookRecords;
-  const settings = yield* WebhooksConfig.WebhooksConfig;
-  const now = yield* DateTime.now;
-  return yield* records.pruneFinished(DateTime.subtractDuration(now, settings.deliveryRetention));
-});
+export const pruneOnce = Effect.flatMap(DateTime.now, pruneAt);
 
 /**
  * Opt-in: a scoped background fiber draining due deliveries, sleeping `pollInterval` when idle, plus an

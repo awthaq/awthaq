@@ -3,36 +3,14 @@
 // before the credential is rewritten and the sessions revoked — so mailbox possession alone
 // cannot downgrade an account a second factor protects. `@awthaq/two-factor`'s
 // `credentialResetGate` is the real tap; here a stand-in tap pins the seam itself.
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  HookPoint,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { HookPoint, Hooks } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
-import { tokenOf } from "./harness.ts";
-
-const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
-  ),
-);
+import { letForkedFibersRun, makeTestLayer, tokenOf } from "./harness.ts";
 
 /** What the stand-in tap saw, so a test can assert the veto ran with (or without) a code. */
 const seen = Ref.makeUnsafe<ReadonlyArray<{ readonly userId: string; readonly code?: string }>>([]);
@@ -40,71 +18,25 @@ const seen = Ref.makeUnsafe<ReadonlyArray<{ readonly userId: string; readonly co
 /** A stand-in for `TwoFactor.credentialResetGate`: the reset of `guarded@example.com`'s account needs the code "123456". */
 const guardedUserId = Ref.makeUnsafe<string | undefined>(undefined);
 
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(
-    Hooks.BeforeCredentialReset.tap((input) =>
-      Effect.gen(function* () {
-        const code =
-          input.secondFactorCode === undefined ? undefined : Redacted.value(input.secondFactorCode);
-        yield* Ref.update(seen, (all) => [
-          ...all,
-          { userId: input.userId, ...(code === undefined ? {} : { code }) },
-        ]);
-        const guarded = yield* Ref.get(guardedUserId);
-        if (guarded === input.userId && code === undefined) {
-          return yield* Effect.fail(new HookPoint.HookAbort({ code: "TWO_FACTOR_REQUIRED" }));
-        }
-        if (guarded === input.userId && code !== "123456") {
-          return yield* Effect.fail(new HookPoint.HookAbort({ code: "SECOND_FACTOR_INVALID" }));
-        }
-        return input;
-      }),
-    ),
-  ),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-const PortsLive = Layer.mergeAll(
-  PasswordHasher.layerArgon2id,
-  Mailer.layerMemory,
-  RateLimiter.layerPermissive,
-).pipe(Layer.provideMerge(NodeCrypto.layer));
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("password-credential-reset-test-csrf-secret-padded-32"),
-      allowedOrigins: [] as ReadonlyArray<string>,
+const TestLayer = makeTestLayer({
+  taps: Hooks.BeforeCredentialReset.tap((input) =>
+    Effect.gen(function* () {
+      const code =
+        input.secondFactorCode === undefined ? undefined : Redacted.value(input.secondFactorCode);
+      yield* Ref.update(seen, (all) => [
+        ...all,
+        { userId: input.userId, ...(code === undefined ? {} : { code }) },
+      ]);
+      const guarded = yield* Ref.get(guardedUserId);
+      if (guarded === input.userId && code === undefined) {
+        return yield* Effect.fail(new HookPoint.HookAbort({ code: "TWO_FACTOR_REQUIRED" }));
+      }
+      if (guarded === input.userId && code !== "123456") {
+        return yield* Effect.fail(new HookPoint.HookAbort({ code: "SECOND_FACTOR_INVALID" }));
+      }
+      return input;
     }),
   ),
-  Layer.provide(NodeCrypto.layer),
-);
-
-const TestLayer = Password.Password.layer.pipe(
-  Layer.provideMerge(AuthenticationLive),
-  Layer.provide(CsrfProtectionLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(PortsLive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provide(NoBreachHttpClient),
-  Layer.provide(SqlTransaction.layerNoop),
-  Layer.provide(ClientAddress.layerDirect),
-);
-
-const letForkedFibersRun = Effect.gen(function* () {
-  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
 });
 
 const oldPassword = Redacted.make("correct horse battery staple");

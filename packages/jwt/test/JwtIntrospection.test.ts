@@ -3,7 +3,8 @@
 // alongside `Jwt` at build time, and is plain `introspect` otherwise.
 // JR-005: an impersonation session's JWT carries an RFC 8693 `act.sub`.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Auth, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import { SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -14,32 +15,37 @@ import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
-import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
+import { SigningKeyRecordsLive } from "./support.ts";
 
-const SessionsLive = Sessions.layerMemory.pipe(
-  Layer.provide(AuthEvents.layer),
-  Layer.provide(AuditLog.layerMemory),
-  Layer.provide(NodeCrypto.layer),
-);
+// Hand-wired on purpose: the second test below is about a composition WITHOUT `Sessions` beside `Jwt`
+// (`introspectComposed` reads `Sessions` only when it was composed at build time), which `TestAuth.layer`
+// never builds (its base always provides one); that wiring is under test (plan 08 exemption).
+const SessionsLive = Sessions.layer
+  .pipe(Layer.provide(Persistence.memory))
+  .pipe(
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provide(NodeCrypto.layer),
+  );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
 const jwtBase = Jwt.Jwt.layer.pipe(
+  Layer.provide(Hooks.HooksLive),
   Layer.provide(KeyRing.KeyRing.layer),
-  Layer.provide(SigningKeyRecords.layerMemory),
+  Layer.provide(SigningKeyRecordsLive),
   Layer.provide(SqlTransaction.layerNoop),
   Layer.provide(RevocationStore.layerMemory),
   Layer.provide(NodeCrypto.layer),
   Layer.provide(JwtConfig.config({ issuer: "https://issuer.test" })),
 );
 
-// `Sessions` is visible to `Jwt` (it is merged into the layer `Jwt` is built from).
-const WithSessions = jwtBase.pipe(
-  Layer.provide(AuthenticationLive),
-  Layer.provideMerge(SessionsLive),
-);
+// `Sessions` is visible to `Jwt`: the composition every host builds, through `TestAuth.layer`.
+const WithSessions = TestAuth.layer(Auth.make([Jwt.Jwt]), {
+  services: JwtConfig.config({ issuer: "https://issuer.test" }),
+});
 
 // `Sessions` exists (the mint endpoint's authentication needs one), but only
 // inside `AuthenticationLive`'s own scope: `Jwt` itself cannot see it.

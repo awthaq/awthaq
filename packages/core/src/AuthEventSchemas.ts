@@ -20,33 +20,61 @@
 //
 // PII posture (ESA-005, ADR-EA-029): payloads carry identifiers, never contact
 // details or free text about a person. A subscriber that needs an email joins
-// through the record store, which the erasure cascade owns. The two exceptions
-// are declared in `PII_FIELDS` so erasure can scrub them: the impersonation
-// justification text.
+// through the record store, which the erasure cascade owns. The exceptions are
+// declared with the event (`defineEvent`'s `pii`), so erasure can scrub them and
+// the webhooks payload never sends them: the impersonation justification text.
+//
+// Every event is declared with `defineEvent(tag, fields, { actor, pii })`
+// (internal/eventDefinition.ts): its shape, who acted (the audit row's actor
+// column) and which fields hold free text about a person, checked against the
+// event's own fields. `registry([...])` refuses a member without that declaration.
 
 import type * as DateTime from "effect/DateTime";
 import type * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { Actor, defineEvent, registry } from "./internal/eventDefinition.ts";
 
 const UserIdSchema = Schema.String.pipe(Schema.brand("UserId"));
 const SessionIdSchema = Schema.String.pipe(Schema.brand("SessionId"));
 const RoleNames = Schema.Array(Schema.String);
 
 /** BEH-EA-059: published whenever `Verification.consume` fails — expired, unknown, or already-consumed alike (the same uniform-response reasoning as `TokenConsumed` itself). */
-export const TokenReplayEvent = Schema.TaggedStruct("auth.token.replay", {
-  identifier: Schema.String,
-});
+export const TokenReplayEvent = defineEvent(
+  "auth.token.replay",
+  {
+    identifier: Schema.String,
+  },
+  {
+    actor: Actor.none,
+    pii: [],
+    attempt: true,
+  },
+);
 export type TokenReplayEvent = typeof TokenReplayEvent.Type;
 
-/** Published by `@awthaq/password`'s `signUp` and `@awthaq/oauth`'s first-login creation. */
-export const UserCreatedEvent = Schema.TaggedStruct("auth.user.created", { userId: UserIdSchema });
+/** Published by core's `SignUp` once a user-creating unit commits (password, OAuth, SAML, magic link, email OTP, SCIM). */
+export const UserCreatedEvent = defineEvent(
+  "auth.user.created",
+  { userId: UserIdSchema },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type UserCreatedEvent = typeof UserCreatedEvent.Type;
 
-/** Published by `@awthaq/password`/`oauth`/`passkey` once a sign-in has completed. */
-export const UserSignedInEvent = Schema.TaggedStruct("auth.user.signedIn", {
-  userId: UserIdSchema,
-  strategy: Schema.String,
-});
+/** Published by core's `SignIn` once a sign-in has completed (including a sign-up's first session). */
+export const UserSignedInEvent = defineEvent(
+  "auth.user.signedIn",
+  {
+    userId: UserIdSchema,
+    strategy: Schema.String,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type UserSignedInEvent = typeof UserSignedInEvent.Type;
 
 /**
@@ -76,39 +104,75 @@ export type SignInFailureReason = typeof SignInFailureReason.Type;
  * identifier — computed identically for an existing and a nonexistent account,
  * so it is no oracle either.
  */
-export const UserSignInFailedEvent = Schema.TaggedStruct("auth.user.signInFailed", {
-  strategy: Schema.String,
-  reason: SignInFailureReason,
-  /** The address the attempt came from (not `ip`, which is the envelope's own request-context field). */
-  clientIp: Schema.optionalKey(Schema.String),
-  identifierDigest: Schema.optionalKey(Schema.String),
-});
+export const UserSignInFailedEvent = defineEvent(
+  "auth.user.signInFailed",
+  {
+    strategy: Schema.String,
+    reason: SignInFailureReason,
+    /** The address the attempt came from (not `ip`, which is the envelope's own request-context field). */
+    clientIp: Schema.optionalKey(Schema.String),
+    identifierDigest: Schema.optionalKey(Schema.String),
+  },
+  {
+    actor: Actor.none,
+    pii: [],
+    attempt: true,
+  },
+);
 export type UserSignInFailedEvent = typeof UserSignInFailedEvent.Type;
 
 /** ARF-006: published by `@awthaq/password`'s `verifyEmail` after the flag flips — the hook for owner notification / SIEM export. */
-export const UserEmailVerifiedEvent = Schema.TaggedStruct("auth.user.emailVerified", {
-  userId: UserIdSchema,
-});
+export const UserEmailVerifiedEvent = defineEvent(
+  "auth.user.emailVerified",
+  {
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type UserEmailVerifiedEvent = typeof UserEmailVerifiedEvent.Type;
 
 /**
  * BAM-009/BAM-005: published by `@awthaq/password`'s change-email confirmation after the address
  * was replaced and marked verified. No address, old or new (ADR-EA-029): identifiers only.
  */
-export const UserEmailChangedEvent = Schema.TaggedStruct("auth.user.emailChanged", {
-  userId: UserIdSchema,
-});
+export const UserEmailChangedEvent = defineEvent(
+  "auth.user.emailChanged",
+  {
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type UserEmailChangedEvent = typeof UserEmailChangedEvent.Type;
 
 /**
- * SCP-006: published once a user's deletion has committed (`@awthaq/server`'s
- * account deletion). Deliberately no email: the row is being erased (ESA-005),
- * and the audit rows that outlive it are pseudonymized, not deleted.
+ * SCP-006: published once a user's erasure has committed (`Erasure.AccountErasure`, the only
+ * path). Deliberately no email: the row is being erased (ESA-005), and the audit rows that
+ * outlive it are pseudonymized, not deleted. `deletedBy` names the initiator kind; the
+ * initiator's own ids ride along (identifiers only, ADR-EA-029): `adminUserId` for "admin",
+ * `connectionId`/`organizationId` for "directory". Rows written before these fields existed
+ * decode unchanged (all optional).
  */
-export const UserDeletedEvent = Schema.TaggedStruct("auth.user.deleted", {
-  userId: UserIdSchema,
-  deletedBy: Schema.Literals(["self", "admin"]),
-});
+export const UserDeletedEvent = defineEvent(
+  "auth.user.deleted",
+  {
+    userId: UserIdSchema,
+    deletedBy: Schema.Literals(["self", "admin", "directory"]),
+    adminUserId: Schema.optionalKey(UserIdSchema),
+    connectionId: Schema.optionalKey(Schema.String),
+    organizationId: Schema.optionalKey(Schema.String),
+  },
+  {
+    // receipt: the erased id stays the actor, whoever initiated (ADR-EA-029 §4).
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type UserDeletedEvent = typeof UserDeletedEvent.Type;
 
 /**
@@ -117,10 +181,17 @@ export type UserDeletedEvent = typeof UserDeletedEvent.Type;
  * event payload. `requestedBy` is the account holder (`"self"`) or an administrator acting
  * for them (`"admin"`).
  */
-export const UserDataExportedEvent = Schema.TaggedStruct("auth.user.dataExported", {
-  userId: UserIdSchema,
-  requestedBy: Schema.Literals(["self", "admin"]),
-});
+export const UserDataExportedEvent = defineEvent(
+  "auth.user.dataExported",
+  {
+    userId: UserIdSchema,
+    requestedBy: Schema.Literals(["self", "admin"]),
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type UserDataExportedEvent = typeof UserDataExportedEvent.Type;
 
 /**
@@ -129,11 +200,18 @@ export type UserDataExportedEvent = typeof UserDataExportedEvent.Type;
  * reuse, the standard signal a token family has been compromised. Every
  * still-live row sharing `familyId` is revoked in the same call.
  */
-export const SessionReuseEvent = Schema.TaggedStruct("auth.session.reuse", {
-  sessionId: SessionIdSchema,
-  familyId: Schema.String,
-  userId: UserIdSchema,
-});
+export const SessionReuseEvent = defineEvent(
+  "auth.session.reuse",
+  {
+    sessionId: SessionIdSchema,
+    familyId: Schema.String,
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type SessionReuseEvent = typeof SessionReuseEvent.Type;
 
 /**
@@ -142,33 +220,54 @@ export type SessionReuseEvent = typeof SessionReuseEvent.Type;
  * impersonation, a legacy-session bridge, a `supersedes` rotation — emits
  * exactly one, with no plugin having to remember to.
  */
-export const SessionIssuedEvent = Schema.TaggedStruct("auth.session.issued", {
-  sessionId: SessionIdSchema,
-  userId: UserIdSchema,
-  /** RRS-003: the rotation family this session belongs to (its own id for a fresh family). */
-  familyId: Schema.String,
-  /** BEH-EA-209: present only for an impersonation session. */
-  actingAs: Schema.optionalKey(Schema.Struct({ type: Schema.String, id: Schema.String })),
-});
+export const SessionIssuedEvent = defineEvent(
+  "auth.session.issued",
+  {
+    sessionId: SessionIdSchema,
+    userId: UserIdSchema,
+    /** RRS-003: the rotation family this session belongs to (its own id for a fresh family). */
+    familyId: Schema.String,
+    /** BEH-EA-209: present only for an impersonation session. */
+    actingAs: Schema.optionalKey(Schema.Struct({ type: Schema.String, id: Schema.String })),
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type SessionIssuedEvent = typeof SessionIssuedEvent.Type;
 
 /** RRS-008: published by `Sessions.verify` on the winning in-place secret rotation only (the concurrent loser reports `rotated: none` and publishes nothing), and by a grace-window recovery rotation (RRS-005). */
-export const SessionRotatedEvent = Schema.TaggedStruct("auth.session.rotated", {
-  sessionId: SessionIdSchema,
-  familyId: Schema.String,
-  userId: UserIdSchema,
-  /** RRS-005: set when the rotation was triggered by the *previous* secret inside `SessionConfig.rotationGrace` — a client that missed the last delivery recovering, worth a detector's attention if frequent. */
-  viaGrace: Schema.optional(Schema.Boolean),
-});
+export const SessionRotatedEvent = defineEvent(
+  "auth.session.rotated",
+  {
+    sessionId: SessionIdSchema,
+    familyId: Schema.String,
+    userId: UserIdSchema,
+    /** RRS-005: set when the rotation was triggered by the *previous* secret inside `SessionConfig.rotationGrace` — a client that missed the last delivery recovering, worth a detector's attention if frequent. */
+    viaGrace: Schema.optional(Schema.Boolean),
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type SessionRotatedEvent = typeof SessionRotatedEvent.Type;
 
 /** RRS-008: published by `Sessions.issue` when it tombstones the row named by `supersedes`. */
-export const SessionSupersededEvent = Schema.TaggedStruct("auth.session.superseded", {
-  sessionId: SessionIdSchema,
-  supersededBy: SessionIdSchema,
-  familyId: Schema.String,
-  userId: UserIdSchema,
-});
+export const SessionSupersededEvent = defineEvent(
+  "auth.session.superseded",
+  {
+    sessionId: SessionIdSchema,
+    supersededBy: SessionIdSchema,
+    familyId: Schema.String,
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type SessionSupersededEvent = typeof SessionSupersededEvent.Type;
 
 /** TIR-008/ESA-006: why a session ended — supplied by the caller of every `Sessions` revocation primitive. */
@@ -200,12 +299,19 @@ export type SessionRevocationReason = typeof SessionRevocationReason.Type;
  * the password plugin's bulk revocations. `sessionId` is the ended row for
  * `scope: "one"` and `null` for a bulk scope, which has no single row to name.
  */
-export const SessionRevokedEvent = Schema.TaggedStruct("auth.session.revoked", {
-  userId: UserIdSchema,
-  sessionId: Schema.NullOr(SessionIdSchema),
-  scope: Schema.Literals(["one", "others", "all", "family"]),
-  reason: SessionRevocationReason,
-});
+export const SessionRevokedEvent = defineEvent(
+  "auth.session.revoked",
+  {
+    userId: UserIdSchema,
+    sessionId: Schema.NullOr(SessionIdSchema),
+    scope: Schema.Literals(["one", "others", "all", "family"]),
+    reason: SessionRevocationReason,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type SessionRevokedEvent = typeof SessionRevokedEvent.Type;
 
 /**
@@ -214,17 +320,31 @@ export type SessionRevokedEvent = typeof SessionRevokedEvent.Type;
  * is no background reaper (CSG-003), so an expiry is only observed when the
  * expired credential is presented, and each such presentation publishes one.
  */
-export const SessionExpiredEvent = Schema.TaggedStruct("auth.session.expired", {
-  sessionId: SessionIdSchema,
-  userId: UserIdSchema,
-  kind: Schema.Literals(["absolute", "idle"]),
-});
+export const SessionExpiredEvent = defineEvent(
+  "auth.session.expired",
+  {
+    sessionId: SessionIdSchema,
+    userId: UserIdSchema,
+    kind: Schema.Literals(["absolute", "idle"]),
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type SessionExpiredEvent = typeof SessionExpiredEvent.Type;
 
 /** ALF-004: published by `@awthaq/password`'s `changePassword`, after the new hash is persisted. */
-export const PasswordChangedEvent = Schema.TaggedStruct("auth.password.changed", {
-  userId: UserIdSchema,
-});
+export const PasswordChangedEvent = defineEvent(
+  "auth.password.changed",
+  {
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type PasswordChangedEvent = typeof PasswordChangedEvent.Type;
 
 /**
@@ -233,15 +353,29 @@ export type PasswordChangedEvent = typeof PasswordChangedEvent.Type;
  * notification. Published from inside the detached mail branch, so it never
  * reintroduces the enumeration side channel (the response path is unchanged).
  */
-export const PasswordResetRequestedEvent = Schema.TaggedStruct("auth.password.resetRequested", {
-  userId: UserIdSchema,
-});
+export const PasswordResetRequestedEvent = defineEvent(
+  "auth.password.resetRequested",
+  {
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type PasswordResetRequestedEvent = typeof PasswordResetRequestedEvent.Type;
 
 /** ALF-004: published by `@awthaq/password`'s `confirmReset`, once the transaction (consume + rehash + revoke) has committed. */
-export const PasswordResetCompletedEvent = Schema.TaggedStruct("auth.password.resetCompleted", {
-  userId: UserIdSchema,
-});
+export const PasswordResetCompletedEvent = defineEvent(
+  "auth.password.resetCompleted",
+  {
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type PasswordResetCompletedEvent = typeof PasswordResetCompletedEvent.Type;
 
 /**
@@ -251,18 +385,25 @@ export type PasswordResetCompletedEvent = typeof PasswordResetCompletedEvent.Typ
  * language, so the session still issues and this event is the whole
  * response to the anomaly, not a request-level failure.
  */
-export const PasskeyCounterAnomalyEvent = Schema.TaggedStruct("auth.passkey.counterAnomaly", {
-  userId: UserIdSchema,
-  credentialId: Schema.String,
-});
+export const PasskeyCounterAnomalyEvent = defineEvent(
+  "auth.passkey.counterAnomaly",
+  {
+    userId: UserIdSchema,
+    credentialId: Schema.String,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type PasskeyCounterAnomalyEvent = typeof PasskeyCounterAnomalyEvent.Type;
 
 /**
  * Published by `@awthaq/admin`'s `impersonate`, on success (BEH-EA-218).
  * `reason` is the BEH-EA-218 justification — free text an admin typed, so it
- * is declared PII (`PII_FIELDS`) and scrubbed when the target/admin is erased.
+ * is declared personal data (`pii`) and scrubbed when the target/admin is erased.
  */
-export const AdminImpersonationStartedEvent = Schema.TaggedStruct(
+export const AdminImpersonationStartedEvent = defineEvent(
   "auth.admin.impersonationStarted",
   {
     adminUserId: UserIdSchema,
@@ -270,17 +411,25 @@ export const AdminImpersonationStartedEvent = Schema.TaggedStruct(
     reason: Schema.String,
     sessionId: SessionIdSchema,
   },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: ["reason"],
+  },
 );
 export type AdminImpersonationStartedEvent = typeof AdminImpersonationStartedEvent.Type;
 
 /** Published by `@awthaq/admin`'s `stopImpersonating`/`forceStop` (BEH-EA-218). IDS-006: names both parties, so a SIEM need not join `ImpersonationRecords`. */
-export const AdminImpersonationStoppedEvent = Schema.TaggedStruct(
+export const AdminImpersonationStoppedEvent = defineEvent(
   "auth.admin.impersonationStopped",
   {
     sessionId: SessionIdSchema,
     adminUserId: UserIdSchema,
     targetUserId: UserIdSchema,
     endedBy: Schema.Literals(["self", "forcedByAdmin", "expired"]),
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
   },
 );
 export type AdminImpersonationStoppedEvent = typeof AdminImpersonationStoppedEvent.Type;
@@ -294,12 +443,20 @@ export type AdminImpersonationStoppedEvent = typeof AdminImpersonationStoppedEve
  * refused, and the attempted `targetUserId`/`sessionId` are carried when the
  * call named one.
  */
-export const AdminImpersonationDeniedEvent = Schema.TaggedStruct("auth.admin.impersonationDenied", {
-  adminUserId: UserIdSchema,
-  operation: Schema.Literals(["impersonate", "forceStop", "list"]),
-  targetUserId: Schema.optionalKey(UserIdSchema),
-  sessionId: Schema.optionalKey(SessionIdSchema),
-});
+export const AdminImpersonationDeniedEvent = defineEvent(
+  "auth.admin.impersonationDenied",
+  {
+    adminUserId: UserIdSchema,
+    operation: Schema.Literals(["impersonate", "forceStop", "list"]),
+    targetUserId: Schema.optionalKey(UserIdSchema),
+    sessionId: Schema.optionalKey(SessionIdSchema),
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+    attempt: true,
+  },
+);
 export type AdminImpersonationDeniedEvent = typeof AdminImpersonationDeniedEvent.Type;
 
 /**
@@ -309,17 +466,32 @@ export type AdminImpersonationDeniedEvent = typeof AdminImpersonationDeniedEvent
  * `auth.admin.impersonationDenied` is for impersonation. `action` names the
  * endpoint (`"listUsers"`, `"updateUser"`, ...).
  */
-export const AdminActionDeniedEvent = Schema.TaggedStruct("auth.admin.actionDenied", {
-  adminUserId: UserIdSchema,
-  action: Schema.String,
-});
+export const AdminActionDeniedEvent = defineEvent(
+  "auth.admin.actionDenied",
+  {
+    adminUserId: UserIdSchema,
+    action: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+    attempt: true,
+  },
+);
 export type AdminActionDeniedEvent = typeof AdminActionDeniedEvent.Type;
 
 /** BAM-005: published by `@awthaq/admin`'s `updateUser`, after the profile change is persisted. */
-export const AdminUserUpdatedEvent = Schema.TaggedStruct("auth.admin.userUpdated", {
-  adminUserId: UserIdSchema,
-  userId: UserIdSchema,
-});
+export const AdminUserUpdatedEvent = defineEvent(
+  "auth.admin.userUpdated",
+  {
+    adminUserId: UserIdSchema,
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type AdminUserUpdatedEvent = typeof AdminUserUpdatedEvent.Type;
 
 /**
@@ -327,31 +499,54 @@ export type AdminUserUpdatedEvent = typeof AdminUserUpdatedEvent.Type;
  * `sessionId` is the one revoked session, or `null` when every non-impersonation
  * session of `userId` was revoked in one call.
  */
-export const AdminSessionRevokedEvent = Schema.TaggedStruct("auth.admin.sessionRevoked", {
-  adminUserId: UserIdSchema,
-  userId: UserIdSchema,
-  sessionId: Schema.NullOr(SessionIdSchema),
-});
+export const AdminSessionRevokedEvent = defineEvent(
+  "auth.admin.sessionRevoked",
+  {
+    adminUserId: UserIdSchema,
+    userId: UserIdSchema,
+    sessionId: Schema.NullOr(SessionIdSchema),
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type AdminSessionRevokedEvent = typeof AdminSessionRevokedEvent.Type;
 
 /**
  * BAM-005/SCP-001: published by `@awthaq/admin`'s `banUser`, after `Users.setStatus("suspended")`
  * and `Sessions.revokeAll(userId, "suspended")` both completed. `reason`/`until` are the
- * operator's note and the optional expiry (ISO instant), `null` when not given.
+ * operator's note and the optional expiry (ISO instant), `null` when not given. The note is
+ * free text about the banned person, so it is declared `pii`: erasure blanks it and a webhook
+ * body omits it.
  */
-export const AdminUserBannedEvent = Schema.TaggedStruct("auth.admin.userBanned", {
-  adminUserId: UserIdSchema,
-  userId: UserIdSchema,
-  reason: Schema.NullOr(Schema.String),
-  until: Schema.NullOr(Schema.String),
-});
+export const AdminUserBannedEvent = defineEvent(
+  "auth.admin.userBanned",
+  {
+    adminUserId: UserIdSchema,
+    userId: UserIdSchema,
+    reason: Schema.NullOr(Schema.String),
+    until: Schema.NullOr(Schema.String),
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: ["reason"],
+  },
+);
 export type AdminUserBannedEvent = typeof AdminUserBannedEvent.Type;
 
 /** BAM-005: published by `@awthaq/admin`'s `unbanUser`, after `Users.setStatus("active")`. */
-export const AdminUserUnbannedEvent = Schema.TaggedStruct("auth.admin.userUnbanned", {
-  adminUserId: UserIdSchema,
-  userId: UserIdSchema,
-});
+export const AdminUserUnbannedEvent = defineEvent(
+  "auth.admin.userUnbanned",
+  {
+    adminUserId: UserIdSchema,
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type AdminUserUnbannedEvent = typeof AdminUserUnbannedEvent.Type;
 
 /**
@@ -359,10 +554,17 @@ export type AdminUserUnbannedEvent = typeof AdminUserUnbannedEvent.Type;
  * committed. The erasure itself is announced by `auth.user.deleted` (`deletedBy: "admin"`); this
  * one names *which administrator* did it.
  */
-export const AdminUserDeletedEvent = Schema.TaggedStruct("auth.admin.userDeleted", {
-  adminUserId: UserIdSchema,
-  userId: UserIdSchema,
-});
+export const AdminUserDeletedEvent = defineEvent(
+  "auth.admin.userDeleted",
+  {
+    adminUserId: UserIdSchema,
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type AdminUserDeletedEvent = typeof AdminUserDeletedEvent.Type;
 
 /**
@@ -370,11 +572,15 @@ export type AdminUserDeletedEvent = typeof AdminUserDeletedEvent.Type;
  * address went out. The address is not changed yet: its owner completes the change from the mail.
  * No address in the payload (ADR-EA-029).
  */
-export const AdminUserEmailChangeRequestedEvent = Schema.TaggedStruct(
+export const AdminUserEmailChangeRequestedEvent = defineEvent(
   "auth.admin.userEmailChangeRequested",
   {
     adminUserId: UserIdSchema,
     userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
   },
 );
 export type AdminUserEmailChangeRequestedEvent = typeof AdminUserEmailChangeRequestedEvent.Type;
@@ -383,33 +589,48 @@ export type AdminUserEmailChangeRequestedEvent = typeof AdminUserEmailChangeRequ
  * BAM-005: published by `AdminAccounts.setUserPassword` after the credential hash was replaced and
  * every session of the user was revoked (reason `admin`).
  */
-export const AdminUserPasswordSetEvent = Schema.TaggedStruct("auth.admin.userPasswordSet", {
-  adminUserId: UserIdSchema,
-  userId: UserIdSchema,
-});
+export const AdminUserPasswordSetEvent = defineEvent(
+  "auth.admin.userPasswordSet",
+  {
+    adminUserId: UserIdSchema,
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type AdminUserPasswordSetEvent = typeof AdminUserPasswordSetEvent.Type;
 
 /**
  * EP-003 (ADR-EA-018): published by `@awthaq/admin`'s `AdminTenants.suspendOrganization`,
  * after the organization is marked suspended. `reason` is the operator's note, `null`
- * when none was given.
+ * when none was given; operators write free text there, so it is declared `pii`.
  */
-export const AdminOrganizationSuspendedEvent = Schema.TaggedStruct(
+export const AdminOrganizationSuspendedEvent = defineEvent(
   "auth.admin.organizationSuspended",
   {
     adminUserId: UserIdSchema,
     organizationId: Schema.String,
     reason: Schema.NullOr(Schema.String),
   },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: ["reason"],
+  },
 );
 export type AdminOrganizationSuspendedEvent = typeof AdminOrganizationSuspendedEvent.Type;
 
 /** EP-003: published by `AdminTenants.unsuspendOrganization`, after the suspension is lifted. */
-export const AdminOrganizationUnsuspendedEvent = Schema.TaggedStruct(
+export const AdminOrganizationUnsuspendedEvent = defineEvent(
   "auth.admin.organizationUnsuspended",
   {
     adminUserId: UserIdSchema,
     organizationId: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
   },
 );
 export type AdminOrganizationUnsuspendedEvent = typeof AdminOrganizationUnsuspendedEvent.Type;
@@ -419,44 +640,84 @@ export type AdminOrganizationUnsuspendedEvent = typeof AdminOrganizationUnsuspen
  * user (a repeat `POST` that converges on an existing one publishes nothing). `connectionId`
  * names the SCIM connection, `organizationId` its organization.
  */
-export const ScimUserProvisionedEvent = Schema.TaggedStruct("auth.scim.userProvisioned", {
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-  userId: UserIdSchema,
-});
+export const ScimUserProvisionedEvent = defineEvent(
+  "auth.scim.userProvisioned",
+  {
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+  },
+  {
+    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type ScimUserProvisionedEvent = typeof ScimUserProvisionedEvent.Type;
 
 /** CWM-002: published after a SCIM `active: false` (or `DELETE`, by default) suspended the user and revoked every session. */
-export const ScimUserDeactivatedEvent = Schema.TaggedStruct("auth.scim.userDeactivated", {
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-  userId: UserIdSchema,
-});
+export const ScimUserDeactivatedEvent = defineEvent(
+  "auth.scim.userDeactivated",
+  {
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+  },
+  {
+    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type ScimUserDeactivatedEvent = typeof ScimUserDeactivatedEvent.Type;
 
 /** CWM-002: published after a SCIM `active: true` lifted a suspension that same connection made. */
-export const ScimUserReactivatedEvent = Schema.TaggedStruct("auth.scim.userReactivated", {
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-  userId: UserIdSchema,
-});
+export const ScimUserReactivatedEvent = defineEvent(
+  "auth.scim.userReactivated",
+  {
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+  },
+  {
+    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type ScimUserReactivatedEvent = typeof ScimUserReactivatedEvent.Type;
 
 /** CWM-002: published after a SCIM `DELETE` configured to erase removed the user. */
-export const ScimUserDeletedEvent = Schema.TaggedStruct("auth.scim.userDeleted", {
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-  userId: UserIdSchema,
-});
+export const ScimUserDeletedEvent = defineEvent(
+  "auth.scim.userDeleted",
+  {
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+  },
+  {
+    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type ScimUserDeletedEvent = typeof ScimUserDeletedEvent.Type;
 
 /** CWM-002: published when a SCIM connection creates, updates or deletes a group (an organization team). */
-export const ScimGroupChangedEvent = Schema.TaggedStruct("auth.scim.groupChanged", {
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-  teamId: Schema.String,
-  change: Schema.Literals(["created", "updated", "deleted"]),
-});
+export const ScimGroupChangedEvent = defineEvent(
+  "auth.scim.groupChanged",
+  {
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    change: Schema.Literals(["created", "updated", "deleted"]),
+  },
+  {
+    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type ScimGroupChangedEvent = typeof ScimGroupChangedEvent.Type;
 
 /**
@@ -464,79 +725,150 @@ export type ScimGroupChangedEvent = typeof ScimGroupChangedEvent.Type;
  * (identifiers only: the administrator, the endpoint, and for an update the names of the fields
  * changed, never their values, so a URL or a description never enters the audit trail).
  */
-export const WebhookEndpointCreatedEvent = Schema.TaggedStruct("auth.webhooks.endpointCreated", {
-  adminUserId: UserIdSchema,
-  endpointId: Schema.String,
-});
+export const WebhookEndpointCreatedEvent = defineEvent(
+  "auth.webhooks.endpointCreated",
+  {
+    adminUserId: UserIdSchema,
+    endpointId: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type WebhookEndpointCreatedEvent = typeof WebhookEndpointCreatedEvent.Type;
 
-export const WebhookEndpointUpdatedEvent = Schema.TaggedStruct("auth.webhooks.endpointUpdated", {
-  adminUserId: UserIdSchema,
-  endpointId: Schema.String,
-  fields: Schema.Array(Schema.String),
-});
+export const WebhookEndpointUpdatedEvent = defineEvent(
+  "auth.webhooks.endpointUpdated",
+  {
+    adminUserId: UserIdSchema,
+    endpointId: Schema.String,
+    fields: Schema.Array(Schema.String),
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type WebhookEndpointUpdatedEvent = typeof WebhookEndpointUpdatedEvent.Type;
 
-export const WebhookSecretRotatedEvent = Schema.TaggedStruct("auth.webhooks.secretRotated", {
-  adminUserId: UserIdSchema,
-  endpointId: Schema.String,
-});
+export const WebhookSecretRotatedEvent = defineEvent(
+  "auth.webhooks.secretRotated",
+  {
+    adminUserId: UserIdSchema,
+    endpointId: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type WebhookSecretRotatedEvent = typeof WebhookSecretRotatedEvent.Type;
 
-export const WebhookEndpointDeletedEvent = Schema.TaggedStruct("auth.webhooks.endpointDeleted", {
-  adminUserId: UserIdSchema,
-  endpointId: Schema.String,
-});
+export const WebhookEndpointDeletedEvent = defineEvent(
+  "auth.webhooks.endpointDeleted",
+  {
+    adminUserId: UserIdSchema,
+    endpointId: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type WebhookEndpointDeletedEvent = typeof WebhookEndpointDeletedEvent.Type;
 
 /** A test ping was queued for an endpoint (`@awthaq/webhooks`): the administrator caused an outbound call. */
-export const WebhookTestQueuedEvent = Schema.TaggedStruct("auth.webhooks.testQueued", {
-  adminUserId: UserIdSchema,
-  endpointId: Schema.String,
-});
+export const WebhookTestQueuedEvent = defineEvent(
+  "auth.webhooks.testQueued",
+  {
+    adminUserId: UserIdSchema,
+    endpointId: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type WebhookTestQueuedEvent = typeof WebhookTestQueuedEvent.Type;
 
 /**
  * `@awthaq/saml`'s administrative operations, after each SUCCESSFUL mutation (identifiers only: the administrator, the
  * connection and its organization, and for an update the NAMES of the fields changed, never their values).
  */
-export const SamlConnectionCreatedEvent = Schema.TaggedStruct("auth.saml.connectionCreated", {
-  adminUserId: UserIdSchema,
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-});
+export const SamlConnectionCreatedEvent = defineEvent(
+  "auth.saml.connectionCreated",
+  {
+    adminUserId: UserIdSchema,
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type SamlConnectionCreatedEvent = typeof SamlConnectionCreatedEvent.Type;
 
-export const SamlConnectionUpdatedEvent = Schema.TaggedStruct("auth.saml.connectionUpdated", {
-  adminUserId: UserIdSchema,
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-  fields: Schema.Array(Schema.String),
-});
+export const SamlConnectionUpdatedEvent = defineEvent(
+  "auth.saml.connectionUpdated",
+  {
+    adminUserId: UserIdSchema,
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+    fields: Schema.Array(Schema.String),
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type SamlConnectionUpdatedEvent = typeof SamlConnectionUpdatedEvent.Type;
 
-export const SamlConnectionDeletedEvent = Schema.TaggedStruct("auth.saml.connectionDeleted", {
-  adminUserId: UserIdSchema,
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-});
+export const SamlConnectionDeletedEvent = defineEvent(
+  "auth.saml.connectionDeleted",
+  {
+    adminUserId: UserIdSchema,
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type SamlConnectionDeletedEvent = typeof SamlConnectionDeletedEvent.Type;
 
 /** A new SP signing key was generated or imported for a connection (its private half is sealed at rest and never published). */
-export const SamlSigningKeyRotatedEvent = Schema.TaggedStruct("auth.saml.signingKeyRotated", {
-  adminUserId: UserIdSchema,
-  connectionId: Schema.String,
-  organizationId: Schema.String,
-});
+export const SamlSigningKeyRotatedEvent = defineEvent(
+  "auth.saml.signingKeyRotated",
+  {
+    adminUserId: UserIdSchema,
+    connectionId: Schema.String,
+    organizationId: Schema.String,
+  },
+  {
+    actor: Actor.field("adminUserId"),
+    pii: [],
+  },
+);
 export type SamlSigningKeyRotatedEvent = typeof SamlSigningKeyRotatedEvent.Type;
 
 /**
  * `@awthaq/saml`: a Single Logout message was refused (`strategy` is `saml:<organizationId>:<connectionId>` once the
  * connection is known, `saml` before). The reason is logged, never published or answered (no validation oracle).
  */
-export const SamlLogoutRejectedEvent = Schema.TaggedStruct("auth.saml.logoutRejected", {
-  strategy: Schema.String,
-});
+export const SamlLogoutRejectedEvent = defineEvent(
+  "auth.saml.logoutRejected",
+  {
+    strategy: Schema.String,
+  },
+  {
+    // `@awthaq/saml`: a logout message that named no verified user.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type SamlLogoutRejectedEvent = typeof SamlLogoutRejectedEvent.Type;
 
 /**
@@ -545,81 +877,162 @@ export type SamlLogoutRejectedEvent = typeof SamlLogoutRejectedEvent.Type;
  * promoted; `forced` that the grant went past an existing administrator. Carries the
  * user id and the role, never the address.
  */
-export const AdminSeededEvent = Schema.TaggedStruct("auth.admin.seeded", {
-  targetUserId: UserIdSchema,
-  outcome: Schema.Literals(["created", "promoted"]),
-  forced: Schema.Boolean,
-  role: Schema.String,
-  via: Schema.Literal("cli"),
-});
+export const AdminSeededEvent = defineEvent(
+  "auth.admin.seeded",
+  {
+    targetUserId: UserIdSchema,
+    outcome: Schema.Literals(["created", "promoted"]),
+    forced: Schema.Boolean,
+    role: Schema.String,
+    via: Schema.Literal("cli"),
+  },
+  {
+    // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type AdminSeededEvent = typeof AdminSeededEvent.Type;
 
 /** ECS-006: `awthaq seed admin` refused because an administrator already exists (and `--force` was not given). No address: the refusal names a reason, not a person. */
-export const AdminSeedRefusedEvent = Schema.TaggedStruct("auth.admin.seedRefused", {
-  reason: Schema.Literal("adminExists"),
-});
+export const AdminSeedRefusedEvent = defineEvent(
+  "auth.admin.seedRefused",
+  {
+    reason: Schema.Literal("adminExists"),
+  },
+  {
+    // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type AdminSeedRefusedEvent = typeof AdminSeedRefusedEvent.Type;
 
 /** ECS-002: one `awthaq import --yes` run finished — every source row was imported, skipped or failed. */
-export const ImportCompletedEvent = Schema.TaggedStruct("auth.import.completed", {
-  source: Schema.String,
-  runId: Schema.String,
-  imported: Schema.Number,
-  skipped: Schema.Number,
-  failed: Schema.Number,
-  unmapped: Schema.Number,
-});
+export const ImportCompletedEvent = defineEvent(
+  "auth.import.completed",
+  {
+    source: Schema.String,
+    runId: Schema.String,
+    imported: Schema.Number,
+    skipped: Schema.Number,
+    failed: Schema.Number,
+    unmapped: Schema.Number,
+  },
+  {
+    // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type ImportCompletedEvent = typeof ImportCompletedEvent.Type;
 
 /** ECS-002: one `awthaq import --yes` run stopped on a failed batch (counts are those reached so far). */
-export const ImportFailedEvent = Schema.TaggedStruct("auth.import.failed", {
-  source: Schema.String,
-  runId: Schema.String,
-  imported: Schema.Number,
-  skipped: Schema.Number,
-  failed: Schema.Number,
-  unmapped: Schema.Number,
-});
+export const ImportFailedEvent = defineEvent(
+  "auth.import.failed",
+  {
+    source: Schema.String,
+    runId: Schema.String,
+    imported: Schema.Number,
+    skipped: Schema.Number,
+    failed: Schema.Number,
+    unmapped: Schema.Number,
+  },
+  {
+    // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
+    actor: Actor.none,
+    pii: [],
+  },
+);
 export type ImportFailedEvent = typeof ImportFailedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `create`. */
-export const OrganizationCreatedEvent = Schema.TaggedStruct("auth.organization.created", {
-  organizationId: Schema.String,
-  creatorUserId: UserIdSchema,
-});
+export const OrganizationCreatedEvent = defineEvent(
+  "auth.organization.created",
+  {
+    organizationId: Schema.String,
+    creatorUserId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationCreatedEvent = typeof OrganizationCreatedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `update`. */
-export const OrganizationUpdatedEvent = Schema.TaggedStruct("auth.organization.updated", {
-  organizationId: Schema.String,
-});
+export const OrganizationUpdatedEvent = defineEvent(
+  "auth.organization.updated",
+  {
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationUpdatedEvent = typeof OrganizationUpdatedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `delete`. */
-export const OrganizationDeletedEvent = Schema.TaggedStruct("auth.organization.deleted", {
-  organizationId: Schema.String,
-});
+export const OrganizationDeletedEvent = defineEvent(
+  "auth.organization.deleted",
+  {
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationDeletedEvent = typeof OrganizationDeletedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `create` (the creator's own membership) and `addMember`. */
-export const OrganizationMemberAddedEvent = Schema.TaggedStruct("auth.organization.memberAdded", {
-  organizationId: Schema.String,
-  userId: UserIdSchema,
-  role: RoleNames,
-});
+export const OrganizationMemberAddedEvent = defineEvent(
+  "auth.organization.memberAdded",
+  {
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+    role: RoleNames,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationMemberAddedEvent = typeof OrganizationMemberAddedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `removeMember`/`leave`. */
-export const OrganizationMemberRemovedEvent = Schema.TaggedStruct(
+export const OrganizationMemberRemovedEvent = defineEvent(
   "auth.organization.memberRemoved",
-  { organizationId: Schema.String, userId: UserIdSchema },
+  {
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
 );
 export type OrganizationMemberRemovedEvent = typeof OrganizationMemberRemovedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `updateMemberRole`. */
-export const OrganizationMemberRoleUpdatedEvent = Schema.TaggedStruct(
+export const OrganizationMemberRoleUpdatedEvent = defineEvent(
   "auth.organization.memberRoleUpdated",
-  { organizationId: Schema.String, userId: UserIdSchema, role: RoleNames },
+  {
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+    role: RoleNames,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
 );
 export type OrganizationMemberRoleUpdatedEvent = typeof OrganizationMemberRoleUpdatedEvent.Type;
 
@@ -629,107 +1042,286 @@ export type OrganizationMemberRoleUpdatedEvent = typeof OrganizationMemberRoleUp
  * it resolves `invitationId` through the invitation record store, which the
  * erasure cascade owns.
  */
-export const OrganizationInvitationCreatedEvent = Schema.TaggedStruct(
+export const OrganizationInvitationCreatedEvent = defineEvent(
   "auth.organization.invitationCreated",
-  { invitationId: Schema.String, organizationId: Schema.String },
+  {
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
 );
 export type OrganizationInvitationCreatedEvent = typeof OrganizationInvitationCreatedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `accept`. */
-export const OrganizationInvitationAcceptedEvent = Schema.TaggedStruct(
+export const OrganizationInvitationAcceptedEvent = defineEvent(
   "auth.organization.invitationAccepted",
-  { invitationId: Schema.String, organizationId: Schema.String, userId: UserIdSchema },
+  {
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    userId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
 );
 export type OrganizationInvitationAcceptedEvent = typeof OrganizationInvitationAcceptedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `reject`. */
-export const OrganizationInvitationRejectedEvent = Schema.TaggedStruct(
+export const OrganizationInvitationRejectedEvent = defineEvent(
   "auth.organization.invitationRejected",
-  { invitationId: Schema.String, organizationId: Schema.String },
+  {
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
 );
 export type OrganizationInvitationRejectedEvent = typeof OrganizationInvitationRejectedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `cancel`. */
-export const OrganizationInvitationCanceledEvent = Schema.TaggedStruct(
+export const OrganizationInvitationCanceledEvent = defineEvent(
   "auth.organization.invitationCanceled",
-  { invitationId: Schema.String, organizationId: Schema.String },
+  {
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
 );
 export type OrganizationInvitationCanceledEvent = typeof OrganizationInvitationCanceledEvent.Type;
 
+/**
+ * Published by `@awthaq/organization`'s invitation module when a pending invitation is found past its expiry
+ * (an acceptance attempt after `expiresAt`); the invitation becomes `expired`. Identifiers only.
+ */
+export const OrganizationInvitationExpiredEvent = defineEvent(
+  "auth.organization.invitationExpired",
+  {
+    invitationId: Schema.String,
+    organizationId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
+export type OrganizationInvitationExpiredEvent = typeof OrganizationInvitationExpiredEvent.Type;
+
 /** Published by `@awthaq/organization`'s `createRole`. */
-export const OrganizationRoleCreatedEvent = Schema.TaggedStruct("auth.organization.roleCreated", {
-  organizationId: Schema.String,
-  role: Schema.String,
-});
+export const OrganizationRoleCreatedEvent = defineEvent(
+  "auth.organization.roleCreated",
+  {
+    organizationId: Schema.String,
+    role: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationRoleCreatedEvent = typeof OrganizationRoleCreatedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `updateRole`. */
-export const OrganizationRoleUpdatedEvent = Schema.TaggedStruct("auth.organization.roleUpdated", {
-  organizationId: Schema.String,
-  role: Schema.String,
-});
+export const OrganizationRoleUpdatedEvent = defineEvent(
+  "auth.organization.roleUpdated",
+  {
+    organizationId: Schema.String,
+    role: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationRoleUpdatedEvent = typeof OrganizationRoleUpdatedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `deleteRole`. */
-export const OrganizationRoleDeletedEvent = Schema.TaggedStruct("auth.organization.roleDeleted", {
-  organizationId: Schema.String,
-  role: Schema.String,
-});
+export const OrganizationRoleDeletedEvent = defineEvent(
+  "auth.organization.roleDeleted",
+  {
+    organizationId: Schema.String,
+    role: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationRoleDeletedEvent = typeof OrganizationRoleDeletedEvent.Type;
 
+/**
+ * `@awthaq/organization`'s per-organization OIDC/OAuth2 connection store, after each SUCCESSFUL mutation
+ * (identifiers only; for an update the NAMES of the fields changed, never their values). `actorUserId` is the
+ * user who acted when the actor names one (a member, a platform administrator); a directory or application
+ * actor leaves it absent, so the audit row names no user.
+ */
+export const OrganizationConnectionCreatedEvent = defineEvent(
+  "auth.organization.connectionCreated",
+  {
+    organizationId: Schema.String,
+    connectionId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
+export type OrganizationConnectionCreatedEvent = typeof OrganizationConnectionCreatedEvent.Type;
+
+export const OrganizationConnectionUpdatedEvent = defineEvent(
+  "auth.organization.connectionUpdated",
+  {
+    organizationId: Schema.String,
+    connectionId: Schema.String,
+    fields: Schema.Array(Schema.String),
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
+export type OrganizationConnectionUpdatedEvent = typeof OrganizationConnectionUpdatedEvent.Type;
+
+export const OrganizationConnectionDeletedEvent = defineEvent(
+  "auth.organization.connectionDeleted",
+  {
+    organizationId: Schema.String,
+    connectionId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
+export type OrganizationConnectionDeletedEvent = typeof OrganizationConnectionDeletedEvent.Type;
+
 /** Published by `@awthaq/organization`'s `createTeam`. */
-export const OrganizationTeamCreatedEvent = Schema.TaggedStruct("auth.organization.teamCreated", {
-  organizationId: Schema.String,
-  teamId: Schema.String,
-});
+export const OrganizationTeamCreatedEvent = defineEvent(
+  "auth.organization.teamCreated",
+  {
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationTeamCreatedEvent = typeof OrganizationTeamCreatedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `updateTeam`. */
-export const OrganizationTeamUpdatedEvent = Schema.TaggedStruct("auth.organization.teamUpdated", {
-  organizationId: Schema.String,
-  teamId: Schema.String,
-});
+export const OrganizationTeamUpdatedEvent = defineEvent(
+  "auth.organization.teamUpdated",
+  {
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationTeamUpdatedEvent = typeof OrganizationTeamUpdatedEvent.Type;
 
 /** OHS-001: published by `@awthaq/organization`'s `moveTeam`; `parentId` is `null` when the team became a root. */
-export const OrganizationTeamMovedEvent = Schema.TaggedStruct("auth.organization.teamMoved", {
-  organizationId: Schema.String,
-  teamId: Schema.String,
-  parentId: Schema.NullOr(Schema.String),
-});
+export const OrganizationTeamMovedEvent = defineEvent(
+  "auth.organization.teamMoved",
+  {
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    parentId: Schema.NullOr(Schema.String),
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationTeamMovedEvent = typeof OrganizationTeamMovedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `removeTeam`. */
-export const OrganizationTeamDeletedEvent = Schema.TaggedStruct("auth.organization.teamDeleted", {
-  organizationId: Schema.String,
-  teamId: Schema.String,
-});
+export const OrganizationTeamDeletedEvent = defineEvent(
+  "auth.organization.teamDeleted",
+  {
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type OrganizationTeamDeletedEvent = typeof OrganizationTeamDeletedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `addTeamMember` (and `acceptInvitation` for a team-targeted invitation). */
-export const OrganizationTeamMemberAddedEvent = Schema.TaggedStruct(
+export const OrganizationTeamMemberAddedEvent = defineEvent(
   "auth.organization.teamMemberAdded",
-  { organizationId: Schema.String, teamId: Schema.String, userId: UserIdSchema },
+  {
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    userId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
 );
 export type OrganizationTeamMemberAddedEvent = typeof OrganizationTeamMemberAddedEvent.Type;
 
 /** OHS-004: published by `@awthaq/organization`'s `updateTeamMemberRole`. */
-export const OrganizationTeamMemberRoleUpdatedEvent = Schema.TaggedStruct(
+export const OrganizationTeamMemberRoleUpdatedEvent = defineEvent(
   "auth.organization.teamMemberRoleUpdated",
   {
     organizationId: Schema.String,
     teamId: Schema.String,
     userId: UserIdSchema,
     role: RoleNames,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
   },
 );
 export type OrganizationTeamMemberRoleUpdatedEvent =
   typeof OrganizationTeamMemberRoleUpdatedEvent.Type;
 
 /** Published by `@awthaq/organization`'s `removeTeamMember`. */
-export const OrganizationTeamMemberRemovedEvent = Schema.TaggedStruct(
+export const OrganizationTeamMemberRemovedEvent = defineEvent(
   "auth.organization.teamMemberRemoved",
-  { organizationId: Schema.String, teamId: Schema.String, userId: UserIdSchema },
+  {
+    organizationId: Schema.String,
+    teamId: Schema.String,
+    userId: UserIdSchema,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
 );
 export type OrganizationTeamMemberRemovedEvent = typeof OrganizationTeamMemberRemovedEvent.Type;
 
@@ -740,7 +1332,7 @@ export type OrganizationTeamMemberRemovedEvent = typeof OrganizationTeamMemberRe
  * `reason` says why: the caller is not a member (`notMember`, answered to the
  * caller as a 404) or is a member without the statement (`missingStatement`).
  */
-export const OrganizationPermissionDeniedEvent = Schema.TaggedStruct(
+export const OrganizationPermissionDeniedEvent = defineEvent(
   "auth.organization.permissionDenied",
   {
     organizationId: Schema.String,
@@ -748,6 +1340,11 @@ export const OrganizationPermissionDeniedEvent = Schema.TaggedStruct(
     resource: Schema.String,
     action: Schema.String,
     reason: Schema.Literals(["notMember", "missingStatement"]),
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+    attempt: true,
   },
 );
 export type OrganizationPermissionDeniedEvent = typeof OrganizationPermissionDeniedEvent.Type;
@@ -760,13 +1357,22 @@ export type OrganizationPermissionDeniedEvent = typeof OrganizationPermissionDen
  * `anonymous`, ...); `reason` is qadi's denial sentence (it names attributes,
  * never their values).
  */
-export const AuthorizationDeniedEvent = Schema.TaggedStruct("auth.authz.denied", {
-  subjectId: Schema.String,
-  evaluationId: Schema.String,
-  policyTag: Schema.String,
-  action: Schema.optional(Schema.String),
-  reason: Schema.String,
-});
+export const AuthorizationDeniedEvent = defineEvent(
+  "auth.authz.denied",
+  {
+    subjectId: Schema.String,
+    evaluationId: Schema.String,
+    policyTag: Schema.String,
+    action: Schema.optional(Schema.String),
+    reason: Schema.String,
+  },
+  {
+    // qadi's own subject id: only a `user:` subject names an awthaq user.
+    actor: Actor.prefixed("subjectId", "user:"),
+    pii: [],
+    attempt: true,
+  },
+);
 export type AuthorizationDeniedEvent = typeof AuthorizationDeniedEvent.Type;
 
 /**
@@ -776,11 +1382,19 @@ export type AuthorizationDeniedEvent = typeof AuthorizationDeniedEvent.Type;
  * changed; `actorUserId` the operator who changed them, when the caller said —
  * `Roles` is a trusted primitive, so an application-driven change has none.
  */
-export const RolesAssignedEvent = Schema.TaggedStruct("auth.roles.assigned", {
-  userId: UserIdSchema,
-  roleName: Schema.String,
-  actorUserId: Schema.optional(UserIdSchema),
-});
+export const RolesAssignedEvent = defineEvent(
+  "auth.roles.assigned",
+  {
+    userId: UserIdSchema,
+    roleName: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    // The actor is who *changed* the roles, not whose roles changed.
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type RolesAssignedEvent = typeof RolesAssignedEvent.Type;
 
 /**
@@ -788,34 +1402,58 @@ export type RolesAssignedEvent = typeof RolesAssignedEvent.Type;
  * claim keys that changed — never their values, which may be sensitive and must not enter the
  * audit trail; `actorUserId` is who made the change, when known.
  */
-export const UserClaimsUpdatedEvent = Schema.TaggedStruct("auth.user.claimsUpdated", {
-  userId: UserIdSchema,
-  keys: Schema.Array(Schema.String),
-  actorUserId: Schema.optional(UserIdSchema),
-});
+export const UserClaimsUpdatedEvent = defineEvent(
+  "auth.user.claimsUpdated",
+  {
+    userId: UserIdSchema,
+    keys: Schema.Array(Schema.String),
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    // The actor is who *changed* the claims, not whose claims changed.
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type UserClaimsUpdatedEvent = typeof UserClaimsUpdatedEvent.Type;
 
 /** Published by `@awthaq/roles`' `revoke` (see `RolesAssignedEvent`). */
-export const RolesRevokedEvent = Schema.TaggedStruct("auth.roles.revoked", {
-  userId: UserIdSchema,
-  roleName: Schema.String,
-  actorUserId: Schema.optional(UserIdSchema),
-});
+export const RolesRevokedEvent = defineEvent(
+  "auth.roles.revoked",
+  {
+    userId: UserIdSchema,
+    roleName: Schema.String,
+    actorUserId: Schema.optional(UserIdSchema),
+  },
+  {
+    // The actor is who *changed* the roles, not whose roles changed.
+    actor: Actor.field("actorUserId"),
+    pii: [],
+  },
+);
 export type RolesRevokedEvent = typeof RolesRevokedEvent.Type;
 
 /**
- * EOTS-007: published by `RateLimits.enforce` on every rate-limit breach.
+ * EOTS-007: published by a rate-limit budget (`RateLimits.budget`: `spend` or `guard`) on every rate-limit breach.
  * Deliberately carries no bucket key, email or IP (BEH-EA-108): it names the
  * rule that fired, so a defender can see which throttle is being hit and how
  * often without the event stream itself becoming an identifier oracle.
  */
-export const RateLimitExceededEvent = Schema.TaggedStruct("auth.rateLimit.exceeded", {
-  group: Schema.String,
-  endpoint: Schema.String,
-  rule: Schema.String,
-  dimension: Schema.Literals(["identity", "ip", "principal", "custom"]),
-  retryAfterMillis: Schema.Number,
-});
+export const RateLimitExceededEvent = defineEvent(
+  "auth.rateLimit.exceeded",
+  {
+    group: Schema.String,
+    endpoint: Schema.String,
+    rule: Schema.String,
+    dimension: Schema.Literals(["identity", "ip", "principal", "custom"]),
+    retryAfterMillis: Schema.Number,
+  },
+  {
+    actor: Actor.none,
+    pii: [],
+    attempt: true,
+  },
+);
 export type RateLimitExceededEvent = typeof RateLimitExceededEvent.Type;
 
 /**
@@ -826,10 +1464,17 @@ export type RateLimitExceededEvent = typeof RateLimitExceededEvent.Type;
  * template and, when known, the user it concerned, never the recipient
  * address or any token (EOTS-010).
  */
-export const MailFailedEvent = Schema.TaggedStruct("auth.mail.failed", {
-  template: Schema.String,
-  userId: Schema.optionalKey(UserIdSchema),
-});
+export const MailFailedEvent = defineEvent(
+  "auth.mail.failed",
+  {
+    template: Schema.String,
+    userId: Schema.optionalKey(UserIdSchema),
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type MailFailedEvent = typeof MailFailedEvent.Type;
 
 /**
@@ -838,42 +1483,81 @@ export type MailFailedEvent = typeof MailFailedEvent.Type;
  * are the public ids (never a secret or a hash). `rotated` names the predecessor
  * (`keyId`) and its successor.
  */
-export const ApiKeyCreatedEvent = Schema.TaggedStruct("auth.apiKey.created", {
-  userId: UserIdSchema,
-  keyId: Schema.String,
-});
+export const ApiKeyCreatedEvent = defineEvent(
+  "auth.apiKey.created",
+  {
+    userId: UserIdSchema,
+    keyId: Schema.String,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type ApiKeyCreatedEvent = typeof ApiKeyCreatedEvent.Type;
 
-export const ApiKeyRevokedEvent = Schema.TaggedStruct("auth.apiKey.revoked", {
-  userId: UserIdSchema,
-  keyId: Schema.String,
-});
+export const ApiKeyRevokedEvent = defineEvent(
+  "auth.apiKey.revoked",
+  {
+    userId: UserIdSchema,
+    keyId: Schema.String,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type ApiKeyRevokedEvent = typeof ApiKeyRevokedEvent.Type;
 
-export const ApiKeyRotatedEvent = Schema.TaggedStruct("auth.apiKey.rotated", {
-  userId: UserIdSchema,
-  keyId: Schema.String,
-  successorKeyId: Schema.String,
-});
+export const ApiKeyRotatedEvent = defineEvent(
+  "auth.apiKey.rotated",
+  {
+    userId: UserIdSchema,
+    keyId: Schema.String,
+    successorKeyId: Schema.String,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type ApiKeyRotatedEvent = typeof ApiKeyRotatedEvent.Type;
 
-export const ApiKeyClientRegisteredEvent = Schema.TaggedStruct("auth.apiKey.clientRegistered", {
-  userId: UserIdSchema,
-  clientId: Schema.String,
-});
+export const ApiKeyClientRegisteredEvent = defineEvent(
+  "auth.apiKey.clientRegistered",
+  {
+    userId: UserIdSchema,
+    clientId: Schema.String,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type ApiKeyClientRegisteredEvent = typeof ApiKeyClientRegisteredEvent.Type;
 
-export const ApiKeyClientRevokedEvent = Schema.TaggedStruct("auth.apiKey.clientRevoked", {
-  userId: UserIdSchema,
-  clientId: Schema.String,
-});
+export const ApiKeyClientRevokedEvent = defineEvent(
+  "auth.apiKey.clientRevoked",
+  {
+    userId: UserIdSchema,
+    clientId: Schema.String,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type ApiKeyClientRevokedEvent = typeof ApiKeyClientRevokedEvent.Type;
 
-export const ApiKeyClientSecretRotatedEvent = Schema.TaggedStruct(
+export const ApiKeyClientSecretRotatedEvent = defineEvent(
   "auth.apiKey.clientSecretRotated",
   {
     userId: UserIdSchema,
     clientId: Schema.String,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
   },
 );
 export type ApiKeyClientSecretRotatedEvent = typeof ApiKeyClientSecretRotatedEvent.Type;
@@ -897,55 +1581,100 @@ export const TwoFactorPurpose = Schema.Literals([
 export type TwoFactorPurpose = typeof TwoFactorPurpose.Type;
 
 /** Published when a pending secret is confirmed with a first valid code — the factor is now active. */
-export const TwoFactorEnabledEvent = Schema.TaggedStruct("auth.twoFactor.enabled", {
-  userId: UserIdSchema,
-});
+export const TwoFactorEnabledEvent = defineEvent(
+  "auth.twoFactor.enabled",
+  {
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type TwoFactorEnabledEvent = typeof TwoFactorEnabledEvent.Type;
 
 /** Published when the factor is removed (secret and recovery codes deleted). */
-export const TwoFactorDisabledEvent = Schema.TaggedStruct("auth.twoFactor.disabled", {
-  userId: UserIdSchema,
-});
+export const TwoFactorDisabledEvent = defineEvent(
+  "auth.twoFactor.disabled",
+  {
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type TwoFactorDisabledEvent = typeof TwoFactorDisabledEvent.Type;
 
 /** Published on every successful presentation of a second factor, with the method used. */
-export const TwoFactorVerifiedEvent = Schema.TaggedStruct("auth.twoFactor.verified", {
-  userId: UserIdSchema,
-  method: TwoFactorMethod,
-  purpose: TwoFactorPurpose,
-});
+export const TwoFactorVerifiedEvent = defineEvent(
+  "auth.twoFactor.verified",
+  {
+    userId: UserIdSchema,
+    method: TwoFactorMethod,
+    purpose: TwoFactorPurpose,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
 export type TwoFactorVerifiedEvent = typeof TwoFactorVerifiedEvent.Type;
 
 /** Published on every failed presentation (wrong code, replayed step, unknown recovery code). */
-export const TwoFactorChallengeFailedEvent = Schema.TaggedStruct("auth.twoFactor.challengeFailed", {
-  userId: UserIdSchema,
-  method: TwoFactorMethod,
-  purpose: TwoFactorPurpose,
-});
+export const TwoFactorChallengeFailedEvent = defineEvent(
+  "auth.twoFactor.challengeFailed",
+  {
+    userId: UserIdSchema,
+    method: TwoFactorMethod,
+    purpose: TwoFactorPurpose,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+    attempt: true,
+  },
+);
 export type TwoFactorChallengeFailedEvent = typeof TwoFactorChallengeFailedEvent.Type;
 
 /** Published when a recovery code is spent; `remaining` is what is left, for a low-supply warning. */
-export const TwoFactorRecoveryCodeUsedEvent = Schema.TaggedStruct(
+export const TwoFactorRecoveryCodeUsedEvent = defineEvent(
   "auth.twoFactor.recoveryCodeUsed",
   {
     userId: UserIdSchema,
     remaining: Schema.Number,
   },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
 );
 export type TwoFactorRecoveryCodeUsedEvent = typeof TwoFactorRecoveryCodeUsedEvent.Type;
 
 /** Published when the recovery codes are replaced by a fresh set (the old set is invalid). */
-export const TwoFactorRecoveryCodesRegeneratedEvent = Schema.TaggedStruct(
+export const TwoFactorRecoveryCodesRegeneratedEvent = defineEvent(
   "auth.twoFactor.recoveryCodesRegenerated",
   { userId: UserIdSchema },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
 );
 export type TwoFactorRecoveryCodesRegeneratedEvent =
   typeof TwoFactorRecoveryCodesRegeneratedEvent.Type;
 
 /** BCR-006: the shared per-account failure budget was exhausted; the second factor is locked for the window. */
-export const TwoFactorLockedEvent = Schema.TaggedStruct("auth.twoFactor.locked", {
-  userId: UserIdSchema,
-});
+export const TwoFactorLockedEvent = defineEvent(
+  "auth.twoFactor.locked",
+  {
+    userId: UserIdSchema,
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+    attempt: true,
+  },
+);
 export type TwoFactorLockedEvent = typeof TwoFactorLockedEvent.Type;
 
 /**
@@ -955,20 +1684,28 @@ export type TwoFactorLockedEvent = typeof TwoFactorLockedEvent.Type;
  * grant later becomes is announced by the ordinary `auth.session.issued` / `auth.user.signedIn`
  * (strategy `deviceAuthorization`).
  */
-export const DeviceAuthorizationApprovedEvent = Schema.TaggedStruct(
+export const DeviceAuthorizationApprovedEvent = defineEvent(
   "auth.deviceAuthorization.approved",
   { userId: UserIdSchema, clientId: Schema.String },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
 );
 export type DeviceAuthorizationApprovedEvent = typeof DeviceAuthorizationApprovedEvent.Type;
 
-export const DeviceAuthorizationDeniedEvent = Schema.TaggedStruct(
+export const DeviceAuthorizationDeniedEvent = defineEvent(
   "auth.deviceAuthorization.denied",
   { userId: UserIdSchema, clientId: Schema.String },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+    attempt: true,
+  },
 );
 export type DeviceAuthorizationDeniedEvent = typeof DeviceAuthorizationDeniedEvent.Type;
 
-/** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries. */
-export const AuthEventSchema = Schema.Union([
+const Registry = registry([
   TokenReplayEvent,
   UserCreatedEvent,
   UserSignedInEvent,
@@ -1011,6 +1748,9 @@ export const AuthEventSchema = Schema.Union([
   WebhookEndpointDeletedEvent,
   WebhookTestQueuedEvent,
   SamlConnectionCreatedEvent,
+  OrganizationConnectionCreatedEvent,
+  OrganizationConnectionUpdatedEvent,
+  OrganizationConnectionDeletedEvent,
   SamlConnectionUpdatedEvent,
   SamlConnectionDeletedEvent,
   SamlSigningKeyRotatedEvent,
@@ -1029,6 +1769,7 @@ export const AuthEventSchema = Schema.Union([
   OrganizationInvitationAcceptedEvent,
   OrganizationInvitationRejectedEvent,
   OrganizationInvitationCanceledEvent,
+  OrganizationInvitationExpiredEvent,
   OrganizationRoleCreatedEvent,
   OrganizationRoleUpdatedEvent,
   OrganizationRoleDeletedEvent,
@@ -1062,6 +1803,19 @@ export const AuthEventSchema = Schema.Union([
   DeviceAuthorizationApprovedEvent,
   DeviceAuthorizationDeniedEvent,
 ]);
+
+/** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries. */
+export const AuthEventSchema = Registry.schema;
+/** Every tag the library can publish. */
+export const eventTags = Registry.tags;
+/** True for a string that is a registered tag (narrows it to `AuthEventTag`). */
+export const isEventTag = Registry.isTag;
+/** Who acted, as the raw id the audit row's actor column records (`Option.none()` when no user acted). */
+export const actorOf = Registry.actorOf;
+/** ADR-EA-029: the fields of `tag` that hold free text about a person. */
+export const piiFieldsOf = Registry.piiFieldsOf;
+/** ADR-EA-037: true for an attempt event, which is recorded and delivered whether or not its unit of work commits. */
+export const isAttemptEvent = Registry.isAttempt;
 
 export type AuthEvent = typeof AuthEventSchema.Type;
 
@@ -1117,13 +1871,3 @@ export const decodeEvent = Schema.decodeUnknownEffect(AuthEventSchema);
 /** The event alone, without its envelope (decoding keeps only the declared fields) — what tests and relays compare. Throws on a value that is not an `AuthEvent`. */
 export const payloadOf = Schema.decodeUnknownSync(AuthEventSchema);
 export const encodeEvent = Schema.encodeEffect(AuthEventSchema);
-
-/**
- * ESA-005/ADR-EA-029: the payload fields that hold free text about a person,
- * per tag, scrubbed (set to `""`) when the person is erased. Everything else
- * an event carries is an identifier the erasure pass rewrites to a pseudonym.
- * A new event that carries free text must be listed here.
- */
-export const PII_FIELDS: Readonly<Record<string, ReadonlyArray<string>>> = {
-  "auth.admin.impersonationStarted": ["reason"],
-};

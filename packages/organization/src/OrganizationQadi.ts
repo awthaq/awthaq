@@ -34,12 +34,22 @@
 // `"organizationCount"`/`"ownedOrganizationCount"`, the subject's total
 // organization footprint across every org they belong to, not scoped to
 // any one of them.
-import { Organization as OrganizationService } from "./Organization.ts";
+import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
-import * as OrganizationRecords from "./OrganizationRecords.ts";
+import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
+
+/** The qadi team-member relation asks whether a team exists in any organization (RZS-005). */
+const teamExistenceGrant = TenantScoped.crossTenant(
+  "organization qadi: existence-only team lookup for the team-member relation (RZS-005)",
+);
+/** A subject's own organization counts, whichever organizations they belong to. */
+const ownMembershipsGrant = TenantScoped.crossTenant(
+  "organization qadi: a subject's own memberships across organizations, keyed by their identity",
+);
 import { Users } from "@awthaq/core";
+import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -168,9 +178,9 @@ const parseRelation = (relation: string): ParsedRelation | undefined => {
 export const relationships = Layer.effect(
   RelationshipResolver,
   Effect.gen(function* () {
-    const organization = yield* OrganizationService;
+    const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const members = yield* MembershipRecords.MembershipRecords;
-    const orgs = yield* OrganizationRecords.OrganizationRecords;
+    const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const teams = yield* TeamRecords.TeamRecords;
     const lookup = yield* ResourceOrganizationLookup;
 
@@ -186,8 +196,8 @@ export const relationships = Layer.effect(
           // EP-003 (ADR-EA-018): a suspended organization confers nothing —
           // membership answers must not open a door the plugin's own gating shut.
           const isSuspended = (organizationId: string) =>
-            orgs
-              .findById(organizationId)
+            directory
+              .find(organizationId)
               .pipe(
                 Effect.map(
                   (found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt),
@@ -195,7 +205,7 @@ export const relationships = Layer.effect(
               );
 
           if (parsed._tag === "team") {
-            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
+            const team = yield* teams.findTeamByIdAnyOrg(teamExistenceGrant, resourceId);
             if (Option.isSome(team) && (yield* isSuspended(team.value.organizationId))) {
               return "Unrelated" as const;
             }
@@ -205,7 +215,7 @@ export const relationships = Layer.effect(
           }
 
           if (parsed._tag === "team-role") {
-            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
+            const team = yield* teams.findTeamByIdAnyOrg(teamExistenceGrant, resourceId);
             if (Option.isNone(team)) return "Unknown" as const;
             if (yield* isSuspended(team.value.organizationId)) return "Unrelated" as const;
             const ancestors = yield* teams.getAncestors(team.value.organizationId, resourceId);
@@ -247,8 +257,8 @@ export const relationships = Layer.effect(
           // A subject that is simply not in an organization is a genuine
           // negative; an id naming no organization at all is malformed.
           const notRelated = () =>
-            orgs
-              .findById(organizationId)
+            directory
+              .find(organizationId)
               .pipe(
                 Effect.map((found) =>
                   Option.isSome(found) ? ("Unrelated" as const) : ("Unknown" as const),
@@ -256,7 +266,7 @@ export const relationships = Layer.effect(
               );
 
           if (parsed._tag === "permission") {
-            const attrs = yield* organization.attributesFor(organizationId, userId);
+            const attrs = yield* authority.attributesFor(organizationId, userId);
             if (Option.isNone(attrs)) return yield* notRelated();
             return PermissionEngine.hasPermission(
               attrs.value.permissions,
@@ -274,6 +284,10 @@ export const relationships = Layer.effect(
             ? ("Related" as const)
             : ("Unrelated" as const);
         }).pipe(
+          // A store outage fails closed as the resolver's own typed error (the policy engine denies).
+          Effect.catchTag("StoreUnavailable", (cause) =>
+            Effect.fail(new RelationshipResolveError({ relation, resourceId, cause })),
+          ),
           Effect.catchDefect((cause) =>
             Effect.fail(new RelationshipResolveError({ relation, resourceId, cause })),
           ),
@@ -319,7 +333,7 @@ export const attributes = Layer.effect(
         const userId = userIdFromSubject(subjectId);
         if (userId === undefined) return Effect.succeed(undefined);
 
-        return members.listByUser(userId).pipe(
+        return members.listByUser(ownMembershipsGrant, userId).pipe(
           Effect.map((memberships): unknown => {
             switch (attribute) {
               case "organizationCount":
@@ -330,6 +344,9 @@ export const attributes = Layer.effect(
                 return undefined;
             }
           }),
+          Effect.catchTag("StoreUnavailable", (cause) =>
+            Effect.fail(new AttributeResolveError({ attribute, cause })),
+          ),
           Effect.catchDefect((cause) =>
             Effect.fail(new AttributeResolveError({ attribute, cause })),
           ),

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-02 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-329, `AuthPlugin.layer`'s `exposes` option and `Validate<P>`'s `ExposerNotDependedOn` problem (ADR-EA-040, architecture plan 04) |
 
 ---
 
@@ -175,6 +175,32 @@ REQUIREMENT: `Auth.make` MUST run Kahn's algorithm over the composed
 ```
 
 `archive/design/plugins-as-layers.md` §7 is explicit that these two facts are "not representable in types": a cycle in `dependsOn` would require a circular import of class values (nearly impossible to write by accident, but not impossible to type away), and migration order is a total order over the dependency graph that the type system has no need to compute since no code path depends on its result at compile time. `research/09-plugin-architecture.md` Q22 treats this as the correct division of labor — Kahn's algorithm belongs to the linker precisely so that the type system, per the tRPC `TS2589` lesson, never attempts open-ended graph reasoning of its own.
+
+## BEH-EA-329: A plugin may expose namespaced domain services, and a dependent that requires one must list the exposer in `dependsOn`
+
+```ts
+static readonly layer = AuthPlugin.layer(Organization, {
+  exposes: { services: OrganizationSystem.services, layer: OrganizationSystem.layer },
+  make: makeAuthorized,
+})
+```
+
+```text
+REQUIREMENT: A plugin MAY expose domain services beside its own service through
+             `AuthPlugin.layer`'s `exposes` option. Each exposed service's key
+             MUST be `awthaq/plugin/<id>/<name>`, and `services` MUST list
+             exactly the services the exposing layer provides; either mismatch
+             MUST fail to type-check where `AuthPlugin.layer` is called. The
+             services join the plugin layer's `ROut` (and leave its `RIn`), so
+             `Auth.make`'s fold discharges a dependent's requirement on them.
+             A plugin whose layer requires an exposed service without listing
+             the exposer in `dependsOn` MUST be refused by `Validate<P>`, with
+             a message naming both plugins. The manifest MUST list the exposed
+             keys (`Manifest.exposes`, `awthaq plugin list --graph`) without
+             building a layer. A plugin MUST still never provide a port.
+```
+
+Exposure exists so that trusted callers (another plugin, a job) reach a plugin's invariants, hooks, events and transactions through an interface of their own instead of writing its records ([ADR-EA-040](../decisions/040-plugin-exposes-domain-services.md)). The namespace rule is what keeps two plugins from ever exposing one tag; the `dependsOn` rule is what keeps the dependency visible to the topological sort and to `plugin list --graph`, since a requirement on `awthaq/plugin/<id>/<name>` alone would otherwise be satisfied by whichever plugin happened to appear earlier in the tuple.
 
 _Previous: [BEH-EA-008](01-plugin-contract.md#beh-ea-008-dependson-declares-both-ordering-and-a-typed-requirement-in-one-static-array)_
 _Next: [BEH-EA-017](03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value)_

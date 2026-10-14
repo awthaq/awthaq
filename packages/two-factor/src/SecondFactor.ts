@@ -20,11 +20,21 @@
 //   TOTP, recovery codes and every challenge within fifteen minutes lock the second factor, checked
 //   *before* a code is evaluated (a locked account gets no free guess), spent only by failures, and
 //   not reset by success — so interleaving right and wrong codes cannot stretch the budget.
-// - **The challenge** (`Challenge.ts`) is a `Verification` row; `consumeChallenge` spends it, and the
+// - **The challenge** (`Challenge.ts`) is a `Verification` row; `redeemChallenge` spends it, and the
 //   `FactorProof` this service mints is the only witness `Challenge.verified` accepts.
 
-import { AuthEvents, Errors, Sessions, Users, Verification, VerificationLink } from "@awthaq/core";
-import { Defects, Encryption, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import {
+  AuthEvents,
+  Errors,
+  Hooks,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+  VerificationLink,
+} from "@awthaq/core";
+import { Defects, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { SealedColumn } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -70,13 +80,15 @@ export interface SecondFactorStatus {
 
 export interface SecondFactorShape {
   /** Whether the user has a *confirmed* second factor (a pending, unconfirmed secret does not count). */
-  readonly isEnrolled: (userId: Users.UserId) => Effect.Effect<boolean>;
-  readonly status: (userId: Users.UserId) => Effect.Effect<SecondFactorStatus>;
+  readonly isEnrolled: (userId: Users.UserId) => Effect.Effect<boolean, Errors.StoreUnavailable>;
+  readonly status: (
+    userId: Users.UserId,
+  ) => Effect.Effect<SecondFactorStatus, Errors.StoreUnavailable>;
   /** Stores a fresh pending secret (replacing an earlier unconfirmed one) and returns it once. */
   readonly beginEnrolment: (
     userId: Users.UserId,
     accountName: string,
-  ) => Effect.Effect<EnrolmentSecret, TwoFactorAlreadyEnabled>;
+  ) => Effect.Effect<EnrolmentSecret, TwoFactorAlreadyEnabled | Errors.StoreUnavailable>;
   /**
    * Confirms the pending secret with its first valid code, activates the factor and mints the
    * recovery codes (returned, formatted for display, once). A wrong code spends the failure budget.
@@ -86,52 +98,89 @@ export interface SecondFactorShape {
     code: Redacted.Redacted<string>,
   ) => Effect.Effect<
     ReadonlyArray<string>,
-    InvalidTwoFactorCode | TwoFactorNotEnabled | TwoFactorAlreadyEnabled | SecondFactorLocked
+    | InvalidTwoFactorCode
+    | TwoFactorNotEnabled
+    | TwoFactorAlreadyEnabled
+    | SecondFactorLocked
+    | Errors.StoreUnavailable
   >;
   /** A TOTP code, checked against the confirmed secret and spent (its step can never verify again). */
   readonly verifyTotp: (
     userId: Users.UserId,
     code: Redacted.Redacted<string>,
     purpose: Purpose,
-  ) => Effect.Effect<FactorProof, InvalidTwoFactorCode | SecondFactorLocked>;
+  ) => Effect.Effect<
+    FactorProof,
+    InvalidTwoFactorCode | SecondFactorLocked | Errors.StoreUnavailable
+  >;
   /** A recovery code, checked against every unused hash and spent. */
   readonly verifyRecoveryCode: (
     userId: Users.UserId,
     code: Redacted.Redacted<string>,
     purpose: Purpose,
-  ) => Effect.Effect<FactorProof, InvalidTwoFactorCode | SecondFactorLocked>;
+  ) => Effect.Effect<
+    FactorProof,
+    InvalidTwoFactorCode | SecondFactorLocked | Errors.StoreUnavailable
+  >;
   /** Either: a code shaped like a TOTP is checked as one, anything else as a recovery code. For the endpoints that accept both. */
   readonly check: (
     userId: Users.UserId,
     code: Redacted.Redacted<string>,
     purpose: Purpose,
-  ) => Effect.Effect<FactorProof, InvalidTwoFactorCode | SecondFactorLocked>;
+  ) => Effect.Effect<
+    FactorProof,
+    InvalidTwoFactorCode | SecondFactorLocked | Errors.StoreUnavailable
+  >;
   /** BCR-002: replaces the whole recovery-code set in one transaction; the caller has already verified the user. */
-  readonly regenerateRecoveryCodes: (userId: Users.UserId) => Effect.Effect<ReadonlyArray<string>>;
+  readonly regenerateRecoveryCodes: (
+    userId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<string>, Errors.StoreUnavailable>;
   /** Removes the secret and every recovery code. The caller has already verified the user. */
-  readonly disable: (userId: Users.UserId) => Effect.Effect<void>;
+  readonly disable: (userId: Users.UserId) => Effect.Effect<void, Errors.StoreUnavailable>;
   /** Mints the challenge a divert hands the client (superseding any live one for the account). */
   readonly issueChallenge: (input: {
     readonly userId: Users.UserId;
     readonly strategy: string;
     readonly amr: ReadonlyArray<Sessions.AuthMethod>;
     readonly attempt: number;
+    /** ADR-EA-038: the divert's handoff, stored with the challenge and returned on `redeemChallenge`. */
+    readonly handoff?: Hooks.Handoff | undefined;
   }) => Effect.Effect<TwoFactorChallengeId, Errors.StoreUnavailable>;
-  /** Spends a challenge. Every failure — malformed, unknown, expired, replayed, foreign — is the one `InvalidTwoFactorCode`. */
-  readonly consumeChallenge: (
+  /**
+   * BEH-EA-262, ADR-EA-020, ADR-EA-039: spends the challenge and runs `use` with it in one
+   * transaction. A refusal (a wrong code with its re-issued challenge, a lockout, a suspension)
+   * commits, so the challenge stays spent and what the refusal wrote stands; an outage or a defect
+   * gives the challenge back, so the person retries the code instead of restarting from the first
+   * factor. Every failure to claim — malformed, unknown, expired, replayed, foreign — is the one
+   * `InvalidTwoFactorCode`.
+   */
+  readonly redeemChallenge: <A, E extends { readonly _tag: string }, R>(
     challengeId: Redacted.Redacted<string>,
-  ) => Effect.Effect<ConsumedChallenge, InvalidTwoFactorCode | Errors.StoreUnavailable>;
+    use: (challenge: ConsumedChallenge) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, InvalidTwoFactorCode | E | Errors.StoreUnavailable, R>;
 }
 
 export class SecondFactor extends Context.Service<SecondFactor, SecondFactorShape>()(
   "awthaq/two-factor/SecondFactor",
 ) {}
 
-/** AAD binding a secret's envelope to its owner (ADR-EA-020). */
-const secretAad = (userId: Users.UserId): string => `two_factor_secret:${userId}`;
-
-/** BCR-006: the shared per-account failure bucket. */
-export const failureKey = (userId: string): string => `two_factor:fail:${userId}`;
+/**
+ * BCR-006 (ADR-EA-020): the shared per-account failure budget, declared beside the code that charges
+ * it. One bucket across every method and challenge. `TwoFactor`'s rule table lists it (so the registry,
+ * `awthaq routes` and the docs show it) and `layer` below derives its bucket key from it; the
+ * enforcement itself stays here because it needs the read half (`RateLimiter.check`) and charges
+ * failures only, with its own `SecondFactorLocked` and `auth.twoFactor.*` events (not
+ * `auth.rateLimit.exceeded`). The numbers are the configured `failureLimit`/`failureWindow`.
+ */
+const failureDefaults = TwoFactorConfig.defaultValue();
+export const failureRule = RateLimits.failureRule({
+  group: "two_factor",
+  endpoint: "verify",
+  key: RateLimits.Key.user,
+  limit: failureDefaults.failureLimit,
+  window: failureDefaults.failureWindow,
+  bucket: "two_factor.failures",
+});
 
 // The brand's one constructor — module-private, so a `FactorProof` only ever comes out of `check*` below.
 const proofOf = Brand.nominal<FactorProof>();
@@ -141,7 +190,6 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const secrets = yield* TwoFactorSecrets;
     const codes = yield* TwoFactorRecoveryCodes;
-    const encryption = yield* Encryption.Encryption;
     const hasher = yield* PasswordHasher.PasswordHasher;
     const verification = yield* Verification.Verification;
     const crypto = yield* Crypto.Crypto;
@@ -152,7 +200,7 @@ export const layer = Layer.effect(
     // ---- the failure budget (BCR-006) ------------------------------------------------------
 
     const budget = {
-      key: (userId: Users.UserId) => failureKey(userId),
+      key: (userId: Users.UserId) => RateLimits.bucketKey(failureRule, { userId }),
       limit: config.failureLimit,
       window: config.failureWindow,
     };
@@ -197,27 +245,14 @@ export const layer = Layer.effect(
 
     // ---- the secret ---------------------------------------------------------------------------
 
-    /** Decrypts the stored secret (re-encrypting it under the current key when it was written under a retired one). */
+    /**
+     * Opens the stored secret (the substrate re-seals it under the current key, and the canonical AAD, by
+     * compare-and-swap when it was written under a retired one). A secret that does not open, or is not
+     * base32, is a deployment fault, not a wrong code: fail closed as a defect (`SealedColumn.orDie`).
+     */
     const readSecret = Effect.fnUntraced(function* (record: SecretRecord) {
-      const decrypted = yield* encryption.decrypt(record.envelope, secretAad(record.userId)).pipe(
-        Effect.catchTags({
-          DecryptionFailed: () =>
-            Defects.invariantViolation(
-              "TwoFactorSecretUnreadable",
-              "awthaq: a stored two-factor secret failed authentication (wrong key or a moved row)",
-            ),
-          UnknownKeyId: () =>
-            Defects.invariantViolation(
-              "TwoFactorSecretUnreadable",
-              "awthaq: a stored two-factor secret was written under a key the KeyProvider no longer knows",
-            ),
-        }),
-      );
-      if (Option.isSome(decrypted.staleKid)) {
-        const fresh = yield* encryption.encrypt(decrypted.plaintext, secretAad(record.userId));
-        yield* secrets.reencrypt(record.userId, record.envelope, fresh);
-      }
-      return yield* Option.match(Totp.base32Decode(Redacted.value(decrypted.plaintext)), {
+      const opened = yield* SealedColumn.orDie(record.secret.open);
+      return yield* Option.match(Totp.base32Decode(Redacted.value(opened)), {
         onNone: () =>
           Defects.invariantViolation(
             "TwoFactorSecretUnreadable",
@@ -279,9 +314,8 @@ export const layer = Layer.effect(
         // 160 bits (RFC 4226 §4 R6: at least 128, 160 recommended).
         const bytes = yield* crypto.randomBytes(20).pipe(Effect.orDie);
         const secret = Totp.base32Encode(bytes);
-        const envelope = yield* encryption.encrypt(Redacted.make(secret), secretAad(userId));
         // False = a confirmed row appeared meanwhile: still "already enabled", nothing was written.
-        if (!(yield* secrets.upsertPending(userId, envelope))) {
+        if (!(yield* secrets.upsertPending(userId, Redacted.make(secret)))) {
           return yield* Effect.fail(new TwoFactorAlreadyEnabled());
         }
         return {
@@ -403,7 +437,12 @@ export const layer = Layer.effect(
           identifier: VerificationLink.identifierOf(CHALLENGE_PURPOSE, input.userId),
           ttl: config.challengeTtl,
           userId: input.userId,
-          payload: { strategy: input.strategy, amr: input.amr, attempt: input.attempt },
+          payload: {
+            strategy: input.strategy,
+            amr: input.amr,
+            attempt: input.attempt,
+            ...(input.handoff === undefined ? {} : { handoff: input.handoff }),
+          },
         });
         return TwoFactorChallengeId(
           Redacted.value(
@@ -419,26 +458,35 @@ export const layer = Layer.effect(
 
     const decodePayload = Schema.decodeUnknownOption(ChallengePayload);
 
-    const consumeChallenge: SecondFactorShape["consumeChallenge"] = Effect.fnUntraced(
-      function* (challengeId) {
+    const redeemChallenge: SecondFactorShape["redeemChallenge"] = (challengeId, use) =>
+      Effect.gen(function* () {
         const invalid = new InvalidTwoFactorCode({});
         const decoded = VerificationLink.decode(Redacted.value(challengeId), CHALLENGE_PURPOSE);
         if (Option.isNone(decoded)) return yield* Effect.fail(invalid);
         // The identifier is derived from the claimed user, so a challenge cannot be spent as another's.
-        const consumed = yield* verification
-          .consume(decoded.value.identifier, decoded.value.value)
+        return yield* verification
+          .redeem({
+            identifier: decoded.value.identifier,
+            value: decoded.value.value,
+            use: (token) =>
+              Effect.gen(function* () {
+                const payload = decodePayload(token.payload);
+                // A row that is no challenge of ours is spent, as before (the refusal commits).
+                if (Option.isNone(payload) || Option.isNone(token.userId)) {
+                  return yield* Effect.fail(invalid);
+                }
+                return yield* use({
+                  userId: token.userId.value,
+                  strategy: payload.value.strategy,
+                  amr: payload.value.amr.filter(Sessions.isAuthMethod),
+                  attempt: payload.value.attempt,
+                  handoff: payload.value.handoff,
+                });
+              }),
+            onFailure: Verification.commitUnlessUnavailable,
+          })
           .pipe(Effect.catchTag("Verification/TokenConsumed", () => Effect.fail(invalid)));
-        const payload = decodePayload(consumed.payload);
-        if (Option.isNone(payload) || Option.isNone(consumed.userId))
-          return yield* Effect.fail(invalid);
-        return {
-          userId: consumed.userId.value,
-          strategy: payload.value.strategy,
-          amr: payload.value.amr.filter(Sessions.isAuthMethod),
-          attempt: payload.value.attempt,
-        };
-      },
-    );
+      });
 
     return SecondFactor.of({
       isEnrolled,
@@ -451,7 +499,7 @@ export const layer = Layer.effect(
       regenerateRecoveryCodes,
       disable,
       issueChallenge,
-      consumeChallenge,
+      redeemChallenge,
     });
   }),
 );

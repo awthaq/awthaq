@@ -10,8 +10,8 @@
 // - Signed like Standard Webhooks (`webhook-id`/`-timestamp`/`-signature`, HMAC-SHA256 over
 //   `id.timestamp.body`), so a receiver that verifies svix/Clerk webhooks verifies these. Each attempt is
 //   re-stamped, the id is the event id (idempotency key), and a rotation sends both signatures for a grace window.
-// - One secret per endpoint, generated here, shown once, stored only as an `Encryption` envelope whose AAD
-//   binds it to its endpoint and field.
+// - One secret per endpoint, generated here, shown once, stored only as an `Encryption` envelope (a
+//   `SealedColumn`, ADR-EA-019 decision 6) whose AAD binds it to its endpoint and column.
 // - Endpoint URLs are an SSRF surface: https only, no credentials, no private/loopback/link-local/reserved
 //   address or internal name, and the name must *resolve* to public addresses only — checked when registered and
 //   again on every attempt. Redirects are never followed and response bodies are never read or stored.
@@ -32,10 +32,12 @@ import {
   Erasure,
   Migrations,
   RateLimits,
+  Retention,
   Tenant,
   Users,
 } from "@awthaq/core";
-import { Defects, Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { Defects, type Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import { makeSubject } from "@qadi/core";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -49,7 +51,6 @@ import * as WebhookDelivery from "./WebhookDelivery.ts";
 import * as WebhookHeaders from "./WebhookHeaders.ts";
 import * as WebhookPayload from "./WebhookPayload.ts";
 import * as WebhookRecords from "./WebhookRecords.ts";
-import * as WebhookSecrets from "./WebhookSecrets.ts";
 import * as WebhookSignature from "./WebhookSignature.ts";
 import * as WebhooksApi from "./WebhooksApi.ts";
 import * as WebhooksConfig from "./WebhooksConfig.ts";
@@ -68,40 +69,52 @@ export interface WebhooksShape {
     input: WebhooksApi.CreateEndpointPayload,
   ) => Effect.Effect<
     WebhooksApi.EndpointWithSecretDto,
-    Gate | WebhooksApi.InvalidWebhookEndpoint | WebhooksApi.WebhookEndpointLimitReached
+    | Gate
+    | Api.StoreUnavailable
+    | WebhooksApi.InvalidWebhookEndpoint
+    | WebhooksApi.WebhookEndpointLimitReached
   >;
   readonly listEndpoints: (
     caller: Api.UserPrincipal,
-  ) => Effect.Effect<ReadonlyArray<WebhooksApi.EndpointDto>, Gate>;
+  ) => Effect.Effect<ReadonlyArray<WebhooksApi.EndpointDto>, Gate | Api.StoreUnavailable>;
   readonly getEndpoint: (
     caller: Api.UserPrincipal,
     endpointId: string,
-  ) => Effect.Effect<WebhooksApi.EndpointDto, Gate | WebhooksApi.WebhookEndpointNotFound>;
+  ) => Effect.Effect<
+    WebhooksApi.EndpointDto,
+    Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound
+  >;
   readonly updateEndpoint: (
     caller: Api.UserPrincipal,
     endpointId: string,
     input: WebhooksApi.UpdateEndpointPayload,
   ) => Effect.Effect<
     WebhooksApi.EndpointDto,
-    Gate | WebhooksApi.WebhookEndpointNotFound | WebhooksApi.InvalidWebhookEndpoint
+    | Gate
+    | Api.StoreUnavailable
+    | WebhooksApi.WebhookEndpointNotFound
+    | WebhooksApi.InvalidWebhookEndpoint
   >;
   /** Removes the endpoint and its delivery log. */
   readonly deleteEndpoint: (
     caller: Api.UserPrincipal,
     endpointId: string,
-  ) => Effect.Effect<void, Gate | WebhooksApi.WebhookEndpointNotFound>;
+  ) => Effect.Effect<void, Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound>;
   /** New secret now; the old one keeps signing alongside it for `secretGrace`. */
   readonly rotateSecret: (
     caller: Api.UserPrincipal,
     endpointId: string,
-  ) => Effect.Effect<WebhooksApi.EndpointWithSecretDto, Gate | WebhooksApi.WebhookEndpointNotFound>;
+  ) => Effect.Effect<
+    WebhooksApi.EndpointWithSecretDto,
+    Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound
+  >;
   readonly listDeliveries: (
     caller: Api.UserPrincipal,
     endpointId: string,
     query: WebhooksApi.ListDeliveriesQuery,
   ) => Effect.Effect<
     ReadonlyArray<WebhooksApi.DeliveryDto>,
-    Gate | WebhooksApi.WebhookEndpointNotFound
+    Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound
   >;
   /** Sends a dead-lettered delivery again (attempts reset). */
   readonly retryDelivery: (
@@ -109,7 +122,10 @@ export interface WebhooksShape {
     deliveryId: string,
   ) => Effect.Effect<
     WebhooksApi.DeliveryDto,
-    Gate | WebhooksApi.WebhookDeliveryNotFound | WebhooksApi.WebhookDeliveryNotRetryable
+    | Gate
+    | Api.StoreUnavailable
+    | WebhooksApi.WebhookDeliveryNotFound
+    | WebhooksApi.WebhookDeliveryNotRetryable
   >;
   /**
    * BEH-EA-310: queues a signed synthetic `webhook.test` event for the endpoint and returns its (pending) delivery
@@ -120,7 +136,10 @@ export interface WebhooksShape {
     endpointId: string,
   ) => Effect.Effect<
     WebhooksApi.DeliveryDto,
-    Gate | WebhooksApi.WebhookEndpointNotFound | WebhooksApi.InvalidWebhookEndpoint
+    | Gate
+    | Api.StoreUnavailable
+    | WebhooksApi.WebhookEndpointNotFound
+    | WebhooksApi.InvalidWebhookEndpoint
   >;
 }
 
@@ -285,12 +304,37 @@ const webhooksMigrations: Migrations.Migrations = [
 
 // ---- erasure and export ------------------------------------------------------------------------
 
+const erasureWitness = TenantScoped.crossTenant(
+  "webhooks erasure: a subject's deliveries in every tenant",
+);
+const exportWitness = TenantScoped.crossTenant(
+  "webhooks export: a subject's deliveries in every tenant",
+);
+
 /** ADR-EA-031: the delivery rows about an erased user go with them (the delivery of `auth.user.deleted` itself is queued afterwards and is the consumer's cue to erase). */
 export const webhooksErasure = Erasure.contribute({
   id: "webhooks",
   make: Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
-    return (subject: Erasure.ErasureSubject) => records.deleteBySubject(subject.userId);
+    return (subject: Erasure.ErasureSubject) =>
+      records.deleteBySubject(erasureWitness, subject.userId);
+  }),
+});
+
+/**
+ * Plan 10 item 6: finished deliveries older than `deliveryRetention` leave with the sweep. The opt-in worker
+ * keeps its own hourly prune (deliveries churn faster than a daily sweep); both are the same idempotent delete.
+ */
+export const webhooksRetention = Retention.contribute({
+  id: "webhooks.deliveries",
+  make: Effect.gen(function* () {
+    const records = yield* WebhookRecords.WebhookRecords;
+    const settings = yield* WebhooksConfig.WebhooksConfig;
+    return (now: DateTime.Utc) =>
+      WebhookDelivery.pruneAt(now).pipe(
+        Effect.provideService(WebhookRecords.WebhookRecords, records),
+        Effect.provideService(WebhooksConfig.WebhooksConfig, settings),
+      );
   }),
 });
 
@@ -300,7 +344,7 @@ export const webhooksExport = DataExport.contribute({
   make: Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
     return (subject: DataExport.DataExportSubject) =>
-      records.listBySubject(subject.userId).pipe(
+      records.listBySubject(exportWitness, subject.userId).pipe(
         Effect.map((rows) => ({
           deliveries: rows.map((row) => ({
             eventId: row.eventId,
@@ -329,15 +373,42 @@ const currentUserPrincipal = Effect.gen(function* () {
   return principal;
 });
 
+/**
+ * BEH-EA-105/107/111: the administrator's own rate limit on the admin group, past the gate, declared once
+ * (it used to be enforced without being declared or registered). A group-wide rule: the breach event reports
+ * the admin action as its endpoint. The static `rateLimits` listing is derived from this table at the default
+ * number; `WebhooksConfig.adminRate` tunes it per operation (EP-007) through the budget's `tune`. (Delivery
+ * pacing, `webhooks:deliver:<endpointId>`, is outbound shaping, not a request throttle: it stays a raw
+ * `RateLimiter.consume` in `WebhookDelivery`.)
+ */
+const rules = {
+  admin: RateLimits.rule({
+    group: "webhooks.admin",
+    endpoint: "*",
+    key: RateLimits.Key.user,
+    ...WebhooksConfig.WebhooksConfig.defaultValue().adminRate,
+  }),
+};
+
+/** Named so the class's inferred `records` type can be emitted (TS2883 needs the `Encryption` namespace in scope). */
+export type RecordsEncryption = Encryption.Encryption;
+
 export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("webhooks", {
   apiVersion: 1,
   contract: WebhooksApi.WebhooksApi,
-  tables: ["webhooks_endpoint", "webhooks_delivery"],
+  // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
+  rateLimitRules: rules,
+  tables: {
+    webhooks_endpoint: AuthPlugin.Table.partitioned("tenantId"),
+    webhooks_delivery: AuthPlugin.Table.derived("webhooks_endpoint", "endpointId"),
+  },
   migrations: webhooksMigrations,
+  // Plan 08 (BEH-EA-T4): the endpoint and delivery store, memory and SQL, matched.
+  records: WebhookRecords.records,
   config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
 }) {
   static readonly layer = AuthPlugin.layer(Webhooks, {
-    ports: [Encryption.Encryption, HostResolver.HostResolver, RateLimiter.RateLimiter],
+    ports: [HostResolver.HostResolver, RateLimiter.RateLimiter],
     handlers: HttpApiBuilder.group(
       WebhooksApi.WebhooksApi,
       "webhooks.admin",
@@ -418,19 +489,20 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         });
       }),
     ),
-    contributes: Layer.mergeAll(webhooksErasure, webhooksExport),
+    contributes: Layer.mergeAll(webhooksErasure, webhooksExport, webhooksRetention),
     make: Effect.gen(function* () {
       const records = yield* WebhookRecords.WebhookRecords;
-      const encryption = yield* Encryption.Encryption;
       const crypto = yield* Crypto.Crypto;
       const events = yield* AuthEvents.AuthEvents;
-      const limiter = yield* RateLimiter.RateLimiter;
       const resolver = yield* HostResolver.HostResolver;
       // EP-007: the knobs are decided per operation, so a tenant's `Webhooks.config(...)` in the calling
       // fiber applies; with none, the build-time value does. (The background worker is deployment-wide
       // and reads the build-time value.)
       const builtSettings = yield* WebhooksConfig.WebhooksConfig;
       const configNow = Tenant.configInForce(WebhooksConfig.WebhooksConfig, builtSettings);
+      const limits = yield* RateLimits.budget(Webhooks, {
+        tune: Effect.map(configNow, (settings) => ({ admin: settings.adminRate })),
+      });
 
       /**
        * Gate first (fail-closed), then the administrator's own rate limit: a caller who fails the
@@ -450,58 +522,24 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           });
           return yield* Effect.fail(new WebhooksApi.WebhooksActionDenied());
         }
-        yield* RateLimits.enforce({
-          key: `webhooks:admin:${caller.ref.id}`,
-          limit: settings.adminRate.limit,
-          window: settings.adminRate.window,
-          meta: {
-            group: "webhooks.admin",
-            endpoint: action,
-            rule: "admin",
-            dimension: "principal",
-          },
-        }).pipe(
-          Effect.provideService(RateLimiter.RateLimiter, limiter),
-          Effect.provideService(AuthEvents.AuthEvents, events),
-          Effect.catchTag(
-            "RateLimitExceeded",
-            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-          ),
-        );
+        yield* limits.spend("admin", { userId: caller.ref.id }, { endpoint: action });
         return settings;
       });
 
       /**
-       * BEH-EA-309: administration is scoped to the ambient tenant. An endpoint of another tenant (or of the
-       * platform, from inside a tenant, and the reverse) is answered exactly like an id that does not exist.
+       * BEH-EA-309: administration is scoped to the ambient tenant, and the store does it: an
+       * endpoint of another tenant (or of the platform, from inside a tenant, and the reverse) is
+       * answered exactly like an id that does not exist.
        */
-      const inScope = (record: WebhookRecords.EndpointRecord) =>
-        Effect.map(
-          Tenant.TenantContext,
-          (tenant) => Option.getOrNull(record.tenantId) === Option.getOrNull(tenant),
-        );
-
       const existing = (endpointId: string) =>
         records.findEndpoint(endpointId).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.fail(new WebhooksApi.WebhookEndpointNotFound()),
-              onSome: (record) =>
-                Effect.flatMap(inScope(record), (visible) =>
-                  visible
-                    ? Effect.succeed(record)
-                    : Effect.fail(new WebhooksApi.WebhookEndpointNotFound()),
-                ),
+              onSome: Effect.succeed,
             }),
           ),
         );
-
-      /** The endpoints the ambient tenant may administer. */
-      const scopedEndpoints = Effect.gen(function* () {
-        const tenant = yield* Tenant.TenantContext;
-        const all = yield* records.listEndpoints;
-        return all.filter((row) => Option.getOrNull(row.tenantId) === Option.getOrNull(tenant));
-      });
 
       const adminId = (caller: Api.UserPrincipal) => Users.UserId(caller.ref.id);
 
@@ -535,16 +573,11 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           ? Effect.fail(new WebhooksApi.InvalidWebhookEndpoint({ reason: refused.value }))
           : Effect.void;
       };
-      const sealedHeaders = Effect.fnUntraced(function* (
-        endpointId: string,
-        headers: Readonly<Record<string, string>>,
-      ) {
+      /** BEH-EA-313: normalised custom headers and their names; the records seal the values. */
+      const customHeaders = (headers: Readonly<Record<string, string>>) => {
         const normalized = WebhookHeaders.normalize(headers);
-        return {
-          sealed: yield* WebhookSecrets.sealHeaders(encryption, endpointId, normalized),
-          names: WebhookHeaders.namesOf(normalized),
-        };
-      });
+        return { value: normalized, names: WebhookHeaders.namesOf(normalized) };
+      };
       const validateTags = (tags: ReadonlyArray<string>) => {
         const unknown = WebhookPayload.unknownPattern(tags);
         return unknown === undefined
@@ -559,8 +592,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       const createEndpoint: WebhooksShape["createEndpoint"] = Effect.fnUntraced(
         function* (caller, input) {
           const settings = yield* authorize(caller, "createEndpoint");
-          const tenant = yield* Tenant.TenantContext;
-          const current = yield* scopedEndpoints;
+          const current = yield* records.listEndpoints;
           if (current.length >= settings.maxEndpoints) {
             return yield* Effect.fail(
               new WebhooksApi.WebhookEndpointLimitReached({ limit: settings.maxEndpoints }),
@@ -573,19 +605,17 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           const secret = yield* WebhookSignature.generateSecret.pipe(
             Effect.provideService(Crypto.Crypto, crypto),
           );
-          const sealed = yield* WebhookSecrets.seal(encryption, id, "secret", secret);
           const record = yield* records.createEndpoint({
             id,
             url: input.url,
             description: input.description?.trim(),
             eventTags: input.eventTags,
-            secret: sealed,
+            secret,
             createdBy: caller.ref.id,
-            tenantId: Option.getOrUndefined(tenant),
             headers:
               input.headers === undefined || Object.keys(input.headers).length === 0
                 ? undefined
-                : yield* sealedHeaders(id, input.headers),
+                : customHeaders(input.headers),
           });
           yield* Effect.logInfo("awthaq/webhooks: endpoint created", { endpointId: id });
           yield* events.publish({
@@ -602,7 +632,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
 
       const listEndpoints: WebhooksShape["listEndpoints"] = Effect.fnUntraced(function* (caller) {
         yield* authorize(caller, "listEndpoints");
-        return (yield* scopedEndpoints).map(toEndpointDto);
+        return (yield* records.listEndpoints).map(toEndpointDto);
       });
 
       const getEndpoint: WebhooksShape["getEndpoint"] = Effect.fnUntraced(
@@ -621,7 +651,9 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           if (input.headers !== undefined && input.headers !== null) {
             yield* validateHeaders(input.headers);
           }
-          const notFound = <A>(effect: Effect.Effect<A, WebhookRecords.WebhookRecordNotFound>) =>
+          const notFound = <A, E>(
+            effect: Effect.Effect<A, E | WebhookRecords.WebhookRecordNotFound>,
+          ) =>
             effect.pipe(
               Effect.catchTag("WebhookRecordNotFound", () =>
                 Effect.fail(new WebhooksApi.WebhookEndpointNotFound()),
@@ -638,7 +670,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
                   ? undefined
                   : input.headers === null || Object.keys(input.headers).length === 0
                     ? null
-                    : yield* sealedHeaders(endpointId, input.headers),
+                    : customHeaders(input.headers),
             }),
           );
           if (input.enabled !== undefined) {
@@ -683,22 +715,14 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           const settings = yield* authorize(caller, "rotateSecret");
           const endpoint = yield* existing(endpointId);
           const now = yield* DateTime.now;
-          // The current secret becomes the previous one — re-sealed, because its AAD names the field.
-          const previous = yield* encryption
-            .decrypt(endpoint.secret, WebhookSecrets.aad(endpointId, "secret"))
-            .pipe(
-              Effect.flatMap((decrypted) =>
-                WebhookSecrets.seal(encryption, endpointId, "previousSecret", decrypted.plaintext),
-              ),
-              Effect.option,
-            );
+          // The current secret becomes the previous one — the records re-seal it, because the AAD names the column.
+          const previous = yield* SealedColumn.option(endpoint.secret.open);
           const secret = yield* WebhookSignature.generateSecret.pipe(
             Effect.provideService(Crypto.Crypto, crypto),
           );
-          const sealed = yield* WebhookSecrets.seal(encryption, endpointId, "secret", secret);
           const record = yield* records
             .setSecrets(endpointId, {
-              secret: sealed,
+              secret,
               previousSecret: Option.getOrNull(previous),
               previousSecretExpiresAt: Option.isSome(previous)
                 ? DateTime.addDuration(now, settings.secretGrace)

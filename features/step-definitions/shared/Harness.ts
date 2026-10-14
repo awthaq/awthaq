@@ -5,19 +5,10 @@
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 
 export const STRONG_PASSWORD = "correct horse battery staple";
-
-/** The `HttpRouter.toWebHandler` services a composition needs and nothing else does: `Path`, a weak `Etag`, `HttpPlatform`, a no-op `FileSystem`. */
-export const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
 
 /**
  * P20a: the suite's KDF layers, at the smallest legal cost so hundreds of scenarios do not pay
@@ -64,6 +55,11 @@ export const setCookieFrom = (response: Response): string => {
  */
 export const letForkedFibersRun = Effect.gen(function* () {
   for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+  // Over a real Postgres (`AWTHAQ_POSTGRES_URL`) a forked dispatch crosses socket I/O, which yielding
+  // alone does not outwait: give the real clock a moment so the fiber finishes before a step reads.
+  if (process.env["AWTHAQ_POSTGRES_URL"] !== undefined) {
+    yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+  }
 });
 
 /**

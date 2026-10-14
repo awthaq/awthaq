@@ -30,6 +30,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["features/**/*.steps.test.ts"],
+    // A scenario like "a request every minute for 30 days" is tens of thousands of statements: over a
+    // real Postgres (CI sets AWTHAQ_POSTGRES_URL) round trips need more than vitest's 5 s default.
+    testTimeout: process.env["AWTHAQ_POSTGRES_URL"] === undefined ? 5_000 : 120_000,
     tags: gherkinTags("features/**/*.feature", { cwd: process.cwd() }),
   },
   plugins: [gherkinWatchTriggers("features/**/*.feature", { cwd: process.cwd() })],

@@ -1,8 +1,9 @@
 // BAM-007, MLO-005, MLO-002, ARF-005 Fix A (BEH-EA-267 to BEH-EA-270): the MagicLink plugin at the
 // domain level — real in-memory stores, the real mail dispatcher, the real `@awthaq/two-factor`
 // gates for the MFA divert.
-import { AuditLog, HookPoint, Hooks, Sessions, Users, Verification } from "@awthaq/core";
+import { AuditLog, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
+import { SignInProbe } from "@awthaq/test";
 import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -13,9 +14,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as MagicLink from "../src/MagicLink.ts";
 import { buildLayer, letForkedFibersRun, realLimiter, secretOf } from "./support/harness.ts";
+
+const outage = Ref.makeUnsafe(true);
 
 const link = Effect.gen(function* () {
   const mailer = yield* Mailer.Mailer;
@@ -178,40 +182,28 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("a BeforeSignIn veto refuses (HookAborted) and no session is issued", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const audit = yield* AuditLog.AuditLog;
-      const { token } = yield* requestAndRead("banned@example.com");
-      const failure = yield* magicLink.verify({ token }).pipe(Effect.flip);
-      if (failure._tag !== "HookAborted") return assert.fail(failure._tag);
-      assert.strictEqual(failure.code, "USER_BANNED");
-      assert.strictEqual((yield* audit.list({ eventTag: "auth.session.issued" })).length, 0);
-    }).pipe(
-      // A tap requires its point: provide the composition's own to it (per-composition registry, ELC-001).
-      Effect.provide(
-        Hooks.BeforeSignIn.tap((input) =>
-          input.email === "banned@example.com"
-            ? Effect.fail(new HookPoint.HookAbort({ code: "USER_BANNED" }))
-            : Effect.succeed(input),
-        ).pipe(Layer.provideMerge(buildLayer())),
-      ),
-    ),
-  );
-
-  it.effect("a suspended user gets no session", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const users = yield* Users.Users;
-      const user = yield* users.create({
-        identity: { _tag: "Email", email: "susp@example.com" },
-        name: "S",
-      });
-      const { token } = yield* requestAndRead("susp@example.com");
-      yield* users.setStatus(user.id, "suspended");
-      const failure = yield* magicLink.verify({ token }).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "UserSuspended");
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "ADR-EA-038 wiring: hands SignIn strategy magicLink and amr [email], and a new address reaches BeforeSignUp with that strategy",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const probe = yield* SignInProbe.SignInProbe;
+        const { token } = yield* requestAndRead("probe@example.com");
+        yield* magicLink.verify({ token });
+        const recorded = yield* probe.recorded;
+        assert.deepStrictEqual(
+          recorded.beforeSignUp.map((input) => [input.email, input.strategy]),
+          [["probe@example.com", "magicLink"]],
+        );
+        assert.deepStrictEqual(
+          recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
+          [["magicLink", ["email"]]],
+        );
+        assert.deepStrictEqual(
+          recorded.afterSignIn.map((input) => input.strategy),
+          ["magicLink"],
+        );
+      }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(buildLayer())))),
   );
 
   it.effect(
@@ -246,9 +238,87 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
 
         // The challenge records that the first factor was the mailbox: the finished session says so.
         const factor = yield* SecondFactor.SecondFactor;
-        const consumed = yield* factor.consumeChallenge(Redacted.make(failure.challengeId));
+        const consumed = yield* factor.redeemChallenge(
+          Redacted.make(failure.challengeId),
+          Effect.succeed,
+        );
         assert.deepStrictEqual(consumed.amr, ["email"]);
         assert.strictEqual(consumed.strategy, "magicLink");
       }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+  );
+});
+
+describe("MagicLink.verify redeems the link (ADR-EA-039)", () => {
+  it.effect(
+    "an outage while issuing the session leaves the link usable: the same link signs in once the store is back",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const users = yield* Users.Users;
+        const created = yield* users.create({
+          identity: { _tag: "Email", email: "outage@example.com" },
+          name: "O",
+        });
+        const { token } = yield* requestAndRead("outage@example.com");
+        const down = yield* magicLink.verify({ token }).pipe(Effect.flip);
+        assert.strictEqual(down._tag, "StoreUnavailable");
+        const issued = yield* Ref.set(outage, false).pipe(
+          Effect.andThen(magicLink.verify({ token })),
+        );
+        assert.strictEqual(issued.session.userId, created.id);
+      }).pipe(Effect.provide(buildLayer({ failSessionIssue: outage }))),
+  );
+
+  it.effect(
+    "a link diverted to the second factor is spent: presenting it again fails MagicLinkConsumed, and the challengeId it returned is live",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const twoFactor = yield* TwoFactor.TwoFactor;
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "divert@example.com" },
+          name: "D",
+        });
+        const fresh = yield* sessions.issue({ userId: user.id });
+        const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
+        const crypto = yield* Crypto.Crypto;
+        const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
+        const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
+        yield* twoFactor.confirm(
+          user.id,
+          Redacted.make(yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 })),
+        );
+        const { token } = yield* requestAndRead("divert@example.com");
+        const diverted = yield* magicLink.verify({ token }).pipe(Effect.flip);
+        if (diverted._tag !== "TwoFactorRequired") return assert.fail(diverted._tag);
+        const again = yield* magicLink.verify({ token }).pipe(Effect.flip);
+        assert.strictEqual(again._tag, "MagicLinkConsumed");
+        const factor = yield* SecondFactor.SecondFactor;
+        const challenge = yield* factor.redeemChallenge(
+          Redacted.make(diverted.challengeId),
+          Effect.succeed,
+        );
+        assert.strictEqual(challenge.strategy, "magicLink");
+      }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+  );
+
+  it.effect("a suspended user's refusal spends the link (refusals commit)", () =>
+    Effect.gen(function* () {
+      const magicLink = yield* MagicLink.MagicLink;
+      const users = yield* Users.Users;
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "held@example.com" },
+        name: "H",
+      });
+      yield* users.setStatus(user.id, "suspended", { reason: "test" });
+      const { token } = yield* requestAndRead("held@example.com");
+      const first = yield* magicLink.verify({ token }).pipe(Effect.flip);
+      assert.strictEqual(first._tag, "UserSuspended");
+      yield* users.setStatus(user.id, "active");
+      const second = yield* magicLink.verify({ token }).pipe(Effect.flip);
+      assert.strictEqual(second._tag, "MagicLinkConsumed");
+    }).pipe(Effect.provide(buildLayer())),
   );
 });

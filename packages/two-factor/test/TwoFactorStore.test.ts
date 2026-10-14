@@ -4,16 +4,20 @@
 // `CREATE TABLE`.
 import { DataExport, Erasure, Migrations, Users } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
+import { SealedColumn } from "@awthaq/sql";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as TestSql from "../../sql/test/support/TestSql.ts";
+import { TestSql } from "@awthaq/test";
 import * as TwoFactor from "../src/TwoFactor.ts";
 import * as TwoFactorStore from "../src/TwoFactorStore.ts";
+import { EncryptionLive } from "./support/harness.ts";
 
 const SqlLive = TestSql.layer("two_factor_TwoFactorStore");
 
@@ -21,15 +25,22 @@ const Migrated = Layer.effectDiscard(Migrations.run(TwoFactor.TwoFactor.migratio
   Layer.provide(SqlLive),
 );
 
-const SqlStores = Layer.mergeAll(
+// The secrets layers need `Encryption` (the sealed `secret` column); the sealed suite below provides a
+// rotatable one itself.
+const SqlNeedsEncryption = Layer.mergeAll(
   TwoFactorStore.layerSecretsSql,
   TwoFactorStore.layerRecoveryCodesSql,
 ).pipe(Layer.provide(NodeCrypto.layer), Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
+const SqlStores = SqlNeedsEncryption.pipe(Layer.provide(EncryptionLive));
 
 const MemoryStores = Layer.mergeAll(
-  TwoFactorStore.layerSecretsMemory,
+  TwoFactorStore.layerSecretsMemory.pipe(Layer.provide(EncryptionLive)),
   TwoFactorStore.layerRecoveryCodesMemory,
 ).pipe(Layer.provide(NodeCrypto.layer));
+
+/** What a sealed secret holds, opened through the substrate. */
+const openSecret = (sealed: SealedColumn.Sealed<string>) =>
+  Effect.map(SealedColumn.orDie(sealed.open), Redacted.value);
 
 const hash = (text: string) => PasswordHasher.PhcHash(`$argon2id$test$${text}`);
 const userA = Users.UserId("user-a");
@@ -47,10 +58,10 @@ const suite = (
     it.effect("a pending secret is replaced until it is confirmed, then it is final", () =>
       Effect.gen(function* () {
         const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        assert.isTrue(yield* secrets.upsertPending(userA, "envelope-1"));
-        assert.isTrue(yield* secrets.upsertPending(userA, "envelope-2"));
+        assert.isTrue(yield* secrets.upsertPending(userA, Redacted.make("secret-1")));
+        assert.isTrue(yield* secrets.upsertPending(userA, Redacted.make("secret-2")));
         const pending = yield* secrets.find(userA);
-        assert.strictEqual(Option.getOrThrow(pending).envelope, "envelope-2");
+        assert.strictEqual(yield* openSecret(Option.getOrThrow(pending).secret), "secret-2");
         assert.isTrue(Option.isNone(Option.getOrThrow(pending).confirmedAt));
 
         // Confirmation records the step of the code that proved it, exactly once.
@@ -61,15 +72,18 @@ const suite = (
         assert.deepStrictEqual(confirmed.lastUsedStep, Option.some(BigInt(100)));
 
         // A confirmed secret is never overwritten by a fresh `enable`.
-        assert.isFalse(yield* secrets.upsertPending(userA, "envelope-3"));
-        assert.strictEqual(Option.getOrThrow(yield* secrets.find(userA)).envelope, "envelope-2");
+        assert.isFalse(yield* secrets.upsertPending(userA, Redacted.make("secret-3")));
+        assert.strictEqual(
+          yield* openSecret(Option.getOrThrow(yield* secrets.find(userA)).secret),
+          "secret-2",
+        );
       }).pipe(Effect.provide(layer)),
     );
 
     it.effect("THS-005: lastUsedStep only moves forward, and never on an unconfirmed secret", () =>
       Effect.gen(function* () {
         const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        yield* secrets.upsertPending(userA, "e");
+        yield* secrets.upsertPending(userA, Redacted.make("e"));
         // Not yet confirmed: no step can be spent.
         assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(5)));
         yield* secrets.confirm(userA, BigInt(10));
@@ -83,7 +97,7 @@ const suite = (
     it.effect("THS-005: of many concurrent verifications of one step, exactly one wins", () =>
       Effect.gen(function* () {
         const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        yield* secrets.upsertPending(userA, "e");
+        yield* secrets.upsertPending(userA, Redacted.make("e"));
         yield* secrets.confirm(userA, BigInt(1));
         const results = yield* Effect.all(
           Array.from({ length: 12 }, () => secrets.advanceLastUsedStep(userA, BigInt(2))),
@@ -93,23 +107,11 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect(
-      "reencrypt swaps the envelope only while the row still holds the one that was read",
-      () =>
-        Effect.gen(function* () {
-          const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-          yield* secrets.upsertPending(userA, "old");
-          assert.isFalse(yield* secrets.reencrypt(userA, "not-the-current-one", "new"));
-          assert.isTrue(yield* secrets.reencrypt(userA, "old", "new"));
-          assert.strictEqual(Option.getOrThrow(yield* secrets.find(userA)).envelope, "new");
-        }).pipe(Effect.provide(layer)),
-    );
-
     it.effect("delete reports whether a row existed and leaves other users alone", () =>
       Effect.gen(function* () {
         const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        yield* secrets.upsertPending(userA, "a");
-        yield* secrets.upsertPending(userB, "b");
+        yield* secrets.upsertPending(userA, Redacted.make("a"));
+        yield* secrets.upsertPending(userB, Redacted.make("b"));
         assert.isTrue(yield* secrets.delete(userA));
         assert.isFalse(yield* secrets.delete(userA));
         assert.isTrue(Option.isSome(yield* secrets.find(userB)));
@@ -206,8 +208,8 @@ describe("TwoFactor erasure and export contributions (CSG-001/CSG-005)", () => {
       const secrets = yield* TwoFactorStore.TwoFactorSecrets;
       const codes = yield* TwoFactorStore.TwoFactorRecoveryCodes;
       const registry = yield* Erasure.ErasureRegistry;
-      yield* secrets.upsertPending(userA, "a");
-      yield* secrets.upsertPending(userB, "b");
+      yield* secrets.upsertPending(userA, Redacted.make("a"));
+      yield* secrets.upsertPending(userB, Redacted.make("b"));
       yield* codes.replaceAll(userA, [hash("1")]);
       yield* codes.replaceAll(userB, [hash("2")]);
 
@@ -233,7 +235,7 @@ describe("TwoFactor erasure and export contributions (CSG-001/CSG-005)", () => {
         const secrets = yield* TwoFactorStore.TwoFactorSecrets;
         const codes = yield* TwoFactorStore.TwoFactorRecoveryCodes;
         const registry = yield* DataExport.DataExportRegistry;
-        yield* secrets.upsertPending(userA, "SUPER-SECRET-ENVELOPE");
+        yield* secrets.upsertPending(userA, Redacted.make("SUPER-SECRET-ENVELOPE"));
         yield* secrets.confirm(userA, BigInt(1));
         yield* codes.replaceAll(userA, [hash("SECRET-HASH-1"), hash("SECRET-HASH-2")]);
 
@@ -265,4 +267,73 @@ describe("TwoFactor erasure and export contributions (CSG-001/CSG-005)", () => {
         });
       }).pipe(Effect.scoped, Effect.provide(RegistryLayer)),
   );
+});
+
+// ---- the sealed `secret` column: the substrate's wiring suite over both adapters ----------------------------
+// (replaces the old `reencrypt` test: the compare-and-swap is the mechanism suite's lost-swap case)
+
+const vitestFramework: TestAuth.TestFramework = {
+  describe: (name, body) => describe(name, body),
+  it: (name, body) => it(name, body),
+  fail: (message) => assert.fail(message),
+};
+
+const writeSecret = (rowKey: string, value: string) =>
+  Effect.flatMap(TwoFactorStore.TwoFactorSecrets, (secrets) =>
+    Effect.asVoid(secrets.upsertPending(Users.UserId(rowKey), Redacted.make(value))),
+  );
+const readSecret = (rowKey: string) =>
+  Effect.flatMap(TwoFactorStore.TwoFactorSecrets, (secrets) =>
+    Effect.map(secrets.find(Users.UserId(rowKey)), (found) => Option.getOrThrow(found).secret),
+  );
+
+TestAuth.runSealedColumnTests<
+  string,
+  TwoFactorStore.TwoFactorSecrets | TwoFactorStore.MemoryEnvelopes
+>(vitestFramework, {
+  column: TwoFactorStore.secretColumn,
+  sample: "JBSWY3DPEHPK3PXP",
+  adapters: [
+    {
+      name: "layerMemory",
+      layer: TwoFactorStore.layerSecretsMemory,
+      raw: (rowKey) =>
+        Effect.flatMap(TwoFactorStore.MemoryEnvelopes, (rows) => rows.stored(Users.UserId(rowKey))),
+      plant: (rowKey, stored) =>
+        Effect.flatMap(TwoFactorStore.MemoryEnvelopes, (rows) =>
+          rows.plant(Users.UserId(rowKey), stored),
+        ),
+    },
+  ],
+  write: writeSecret,
+  read: readSecret,
+});
+
+TestAuth.runSealedColumnTests<
+  string,
+  TwoFactorStore.TwoFactorSecrets | TwoFactorStore.TwoFactorRecoveryCodes | SqlClient.SqlClient
+>(vitestFramework, {
+  column: TwoFactorStore.secretColumn,
+  sample: "JBSWY3DPEHPK3PXP",
+  adapters: [
+    {
+      name: "layerSql",
+      layer: SqlNeedsEncryption,
+      raw: (rowKey) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const rows = yield* sql<{
+            readonly value: string;
+          }>`SELECT secret AS value FROM two_factor_secret WHERE "userId" = ${rowKey}`;
+          return rows[0]?.value ?? "";
+        }),
+      plant: (rowKey, stored) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`UPDATE two_factor_secret SET secret = ${stored} WHERE "userId" = ${rowKey}`;
+        }),
+    },
+  ],
+  write: writeSecret,
+  read: readSecret,
 });

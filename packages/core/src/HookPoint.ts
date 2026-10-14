@@ -57,7 +57,9 @@
 // e.g. `users.create`, "already-typed, internal data" no longer holds for a
 // value that originates in third-party tap code.
 
-import { Defects } from "@awthaq/ports";
+import { Defects, SqlTransaction } from "@awthaq/ports";
+import { AuthRequestContext } from "./AuthRequestContext.ts";
+import { TenantContext } from "./Tenant.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -510,7 +512,7 @@ export const observe =
       serviceKey,
       Effect.sync(() => {
         const registry = makeRegistry<ObserveTap<Input>>(key);
-        const run: ObserveShape<Input>["run"] = (value) =>
+        const dispatch = (value: Input) =>
           dispatchSpan(
             key,
             Effect.forEach(
@@ -537,6 +539,21 @@ export const observe =
               { discard: true },
             ),
           );
+        // ADR-EA-037: inside a unit of work the taps run once it commits, and not at all if it
+        // rolls back, so a host never reacts to an operation that did not happen. They run on
+        // the committing fiber after the transaction, so the per-request ambient context they
+        // would have seen (tenant, request) is captured here. Outside any unit, they run now.
+        const run: ObserveShape<Input>["run"] = (value) =>
+          Effect.gen(function* () {
+            const tenantId = yield* TenantContext;
+            const request = yield* AuthRequestContext;
+            yield* SqlTransaction.onCommit(
+              dispatch(value).pipe(
+                Effect.provideService(TenantContext, tenantId),
+                Effect.provideService(AuthRequestContext, request),
+              ),
+            );
+          });
         return serviceKey.of({
           kind: "observe",
           run,

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) |
 
 ---
 
@@ -80,7 +80,7 @@ REQUIREMENT: A repository MUST be a `Context.Service` built via
 
 `research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so a repository that opened its own transaction internally would silently change the atomicity boundary any caller composing two repository calls expects. Keeping repositories transaction-agnostic and letting the domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) hold the boundary is what keeps composition safe. A domain-service transaction spanning several core tables (OAuth's just-in-time create-and-link, `confirmReset`) is only atomic if those tables share one transaction domain — see [INV-EA-017](../invariants.md#inv-ea-017-the-core-identity-tables-share-one-transaction-domain-and-any-partitioning-scheme-co-locates-a-user-with-its-accounts): any sharding or partitioning scheme must co-locate a user with its accounts.
 
-**One bounded exception (OHS-002).** A plugin's own records service (`@awthaq/organization`'s `TeamRecords`, hand-written over `SqlSchema` rather than `SqlModel.makeRepository`) whose *single* operation is inherently several statements — delete a team and its membership rows, insert a membership and bump the team's `memberCount` — wraps that one operation in `sql.withTransaction` so it is atomic even when called directly. This does not move the caller's boundary: inside a domain service's own transaction the wrapper is a savepoint, and the outer commit/rollback still decides the outcome. Composing two records calls remains the domain service's job (`Organization.delete` holds the cascade's transaction via the `SqlTransaction` port).
+**One bounded exception (OHS-002).** A plugin's own records service (`@awthaq/organization`'s `TeamRecords`, hand-written over `SqlSchema` rather than `SqlModel.makeRepository`) whose *single* operation is inherently several statements — delete a team and its membership rows, insert a membership and bump the team's `memberCount` — wraps that one operation in `SqlTransaction.transactional(sql)` (ADR-EA-037) so it is atomic even when called directly. This does not move the caller's boundary: inside a domain service's own transaction the wrapper is a savepoint, and the outer commit/rollback still decides the outcome. Composing two records calls remains the domain service's job (`Organization.delete` holds the cascade's transaction via the `SqlTransaction` port).
 
 **Read replicas (RRC-001, [ADR-EA-024](../decisions/024-read-replica-routing.md)).** Everything above assumes one primary: a read issued after a committed write sees it. Replica routing is opt-in (`ReadRouting.replica(layer)`) and never changes that for anything that decides liveness or authorization: every write, `Users`/`Accounts` read, `Sessions` point read and CAS, and all `Verification`/`VerificationReservations` methods are primary-pinned, and carry write results back with `RETURNING` rather than re-reading. Only display/history listings may ask for `consistency: "eventual"` (`Sessions.listByUser`, `AuditLog.list`), and an eventual read on a fiber that has written (`ReadRouting.captureToken`) goes to the replica only once it has replayed past that write, else to the primary.
 
@@ -175,3 +175,34 @@ REQUIREMENT: A plugin's migrations MUST create or alter only tables named
 
 _Previous: [BEH-EA-032](04-contract-stratum.md#beh-ea-032-authapi-merges-contracts-and-refuses-a-duplicate-group-id)_
 _Next: [BEH-EA-041](06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email)_
+
+## BEH-EA-324: A sealed column is declared once, opens lazily and re-seals on read
+
+```text
+REQUIREMENT: A table column stored as an `Encryption` envelope MUST be declared
+             once (`SealedColumn.column`) with the canonical AAD
+             `<table>:<rowKey>:<column>`. Reading it MUST yield a `Sealed<A>`
+             whose `open` is the only place the plaintext appears; an envelope
+             under a retired key or a listed legacy AAD MUST open and MUST be
+             re-sealed under the current key and canonical AAD by
+             compare-and-swap, without ever failing the read. A value that
+             does not open MUST be the typed `SealedColumn/Unreadable`, never
+             `null` and never a defect, and a call site MUST handle it with
+             `SealedColumn.orDie` or `SealedColumn.option`.
+```
+
+A ciphertext copied to another row or column fails authentication, because the AAD binds the table, the row key and the column ([ADR-EA-019](../decisions/019-encryption-key-rotation.md) decision 6). A lost or failed compare-and-swap is logged with ids only; `SealedColumnConfig.resealOnRead: false` turns the write off. `SealedColumn.sweep` re-seals every stale or legacy value of a column and reports `{ scanned, resealed, unreadable }`; it is an operator's job, never run by a request. The mechanism is proven once (`packages/sql/test/SealedColumn.test.ts`); each plugin's wiring is proven by `TestAuth.runSealedColumnTests`.
+
+## BEH-EA-325: A plugin records module fails with StoreUnavailable, never a defect, when its store is down
+
+```text
+REQUIREMENT: A plugin records module MUST map a `SqlError` to the typed
+             `StoreUnavailable` naming `<Records>.<method>` (via
+             `StoreFailure`), exactly as a core repository does
+             (BEH-EA-035); a `SchemaError`, and a statement the database
+             refused as malformed or unauthorised, MUST remain defects. A
+             credential-resolver contribution MAY fail with
+             `StoreUnavailable`, and the request then answers 503.
+```
+
+`StoreFailure` is defined once in `@awthaq/sql`; `@awthaq/core`'s `Errors` re-exports it ([ADR-EA-028](../decisions/028-infrastructure-error-policy.md) revision 1.3). A `SqlSyntaxError` or `AuthorizationError` (a missing GRANT, or a row-level-security refusal of a forgotten tenant filter) dies as `Defects/InvariantViolation` `store.statementRefused`, because a retry cannot fix it and a 503 would misreport it. Every first-party plugin records module follows it (`api-key`, `device-authorization`, `passkey`, `roles` and the `qadi` claims store included); each records suite has one outage case that makes a write fail through `TestSql.injectFailure` and asserts the typed error.

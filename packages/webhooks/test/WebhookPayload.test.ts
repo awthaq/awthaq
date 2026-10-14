@@ -51,7 +51,7 @@ describe("WebhookPayload.toBody: identifiers only", () => {
   );
 
   it.effect(
-    "drops declared free text about a person (PII_FIELDS): the impersonation justification",
+    "drops declared free text about a person (the event's declared `pii`): the impersonation justification",
     () =>
       Effect.gen(function* () {
         const started = yield* published({
@@ -66,6 +66,30 @@ describe("WebhookPayload.toBody: identifiers only", () => {
         assert.notInclude(text, "fraud");
         assert.include(text, "user-2");
       }),
+  );
+
+  it.effect("drops the operator's note on a ban and on an organization suspension", () =>
+    Effect.gen(function* () {
+      const banned = yield* published({
+        _tag: "auth.admin.userBanned",
+        adminUserId: Users.UserId("admin-1"),
+        userId: Users.UserId("user-2"),
+        reason: "harassed jane.doe@example.com",
+        until: null,
+      });
+      const bannedText = JSON.stringify(WebhookPayload.toBody(banned, withContext));
+      assert.notInclude(bannedText, "harassed");
+      assert.include(bannedText, "user-2");
+      const suspended = yield* published({
+        _tag: "auth.admin.organizationSuspended",
+        adminUserId: Users.UserId("admin-1"),
+        organizationId: "org-1",
+        reason: "unpaid invoice for Jane Doe",
+      });
+      const suspendedText = JSON.stringify(WebhookPayload.toBody(suspended, withContext));
+      assert.notInclude(suspendedText, "Jane Doe");
+      assert.include(suspendedText, "org-1");
+    }),
   );
 
   it.effect(
@@ -126,6 +150,7 @@ describe("WebhookPayload filters", () => {
     assert.include(WebhookPayload.knownEventTags, "auth.user.signedIn");
     assert.include(WebhookPayload.knownEventTags, "auth.organization.memberAdded");
     assert.isAbove(WebhookPayload.knownEventTags.length, 50);
+    assert.deepStrictEqual(WebhookPayload.knownEventTags, AuthEvents.eventTags);
     assert.isUndefined(WebhookPayload.unknownPattern(["*", "auth.user.*", "auth.session.revoked"]));
     assert.strictEqual(
       WebhookPayload.unknownPattern(["auth.user.signedIn", "auth.user.signedInn"]),

@@ -4,14 +4,21 @@
 // operator can do (creating a connection, an administrator's ban, live sessions, a team made
 // by hand), directly against the services the handler runs on. A Then reads the response, or
 // the services, for what HTTP cannot show.
-import { AuditLog, Sessions, Users } from "@awthaq/core";
-import { MembershipRecords, OrganizationRecords, TeamRecords } from "@awthaq/organization";
+import { Accounts, AuditLog, Erasure, Sessions, Users } from "@awthaq/core";
+import { Organization, OrganizationActor, OrganizationTeams } from "@awthaq/organization";
+import {
+  InvitationRecords,
+  MembershipRecords,
+  OrganizationRecords,
+  TeamRecords,
+} from "@awthaq/organization/records";
 import { ScimApi, ScimConnections, ScimRecords } from "@awthaq/scim";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { TenantScoped } from "@awthaq/sql";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import {
@@ -25,6 +32,15 @@ import {
 } from "./ScimWorld.ts";
 import { letForkedFibersRun } from "./shared/Harness.ts";
 import { isRecord, objectOf, type Snapshot } from "./shared/WireJson.ts";
+
+/** A platform administrator's suspension of an organization reads and writes across organizations. */
+const platformGrant = TenantScoped.crossTenant(
+  "feature step: platform suspension of an organization",
+);
+/** The step looks for an invitation addressed to an email, whichever organization sent it. */
+const stepGrant = TenantScoped.crossTenant(
+  "feature step: invitations addressed to an email, across organizations",
+);
 
 const USERS = "/scim/v2/Users";
 const GROUPS = "/scim/v2/Groups";
@@ -49,13 +65,14 @@ const stringOf = (record: Readonly<Record<string, unknown>>, key: string) => {
   return value;
 };
 
-/** Only the SCIM events the feature names may be looked up in the audit log (a type guard, not a cast). */
+/** Only the events the feature names (SCIM events, and core's erasure receipt) may be looked up in the audit log (a type guard, not a cast). */
 const SCIM_EVENT_TAGS = [
   "auth.scim.userProvisioned",
   "auth.scim.userDeactivated",
   "auth.scim.userReactivated",
   "auth.scim.userDeleted",
   "auth.scim.groupChanged",
+  "auth.user.deleted",
 ] as const;
 const isScimEventTag = (tag: string): tag is (typeof SCIM_EVENT_TAGS)[number] =>
   SCIM_EVENT_TAGS.some((known) => known === tag);
@@ -231,6 +248,28 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* configureApp({ organization: { membershipLimit } });
   });
 
+  Given("a beforeCreateTeam hook that vetoes every team creation", function* () {
+    yield* configureApp({ vetoCreateTeam: true });
+  });
+
+  const teamsConfig = (overrides: Partial<Organization.OrganizationConfigShape["teams"]>) => ({
+    enabled: true,
+    maximumTeams: Number.POSITIVE_INFINITY,
+    maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+    allowRemovingAllTeams: true,
+    ...overrides,
+  });
+
+  Given("the organization allows at most {int} teams", function* (maximumTeams: number) {
+    yield* configureApp({ organization: { teams: teamsConfig({ maximumTeams }) } });
+  });
+
+  Given("the organization does not allow removing every team", function* () {
+    yield* configureApp({
+      organization: { teams: teamsConfig({ allowRemovingAllTeams: false }) },
+    });
+  });
+
   Given("a beforeDelete hook that vetoes every user deletion", function* () {
     yield* configureApp({ vetoDelete: true });
   });
@@ -265,6 +304,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       Effect.gen(function* () {
         const organizations = yield* OrganizationRecords.OrganizationRecords;
         yield* organizations.setSuspended(
+          platformGrant,
           connection.organizationId,
           Option.some(yield* DateTime.now),
         );
@@ -278,7 +318,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* withContext(
       Effect.gen(function* () {
         const organizations = yield* OrganizationRecords.OrganizationRecords;
-        yield* organizations.setSuspended(connection.organizationId, Option.none());
+        yield* organizations.setSuspended(platformGrant, connection.organizationId, Option.none());
       }).pipe(Effect.orDie),
     );
   });
@@ -297,6 +337,34 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       }),
     );
     yield* world.userIds.set(email, id);
+  });
+
+  Given(
+    "the user {string} has a linked account {string} with the subject {string}",
+    function* (name: string, providerId: string, subject: string) {
+      const id = yield* userId(name);
+      yield* withContext(
+        Effect.flatMap(Accounts.Accounts, (accounts) =>
+          accounts.link({ userId: Users.UserId(id), providerId, subject }),
+        ).pipe(Effect.orDie),
+      );
+    },
+  );
+
+  Given("an invitation to {string} from another organization exists", function* (email: string) {
+    yield* withContext(
+      Effect.gen(function* () {
+        const invitations = yield* InvitationRecords.InvitationRecords;
+        yield* invitations.create({
+          organizationId: "another-organization",
+          email,
+          role: ["member"],
+          inviterId: Users.UserId("another-inviter"),
+          tokenHash: `hash-${email}`,
+          expiresAt: DateTime.addDuration(DateTime.nowUnsafe(), "1 hour"),
+        });
+      }),
+    );
   });
 
   Given("a signed-in user {string}", function* (name: string) {
@@ -403,11 +471,14 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       const world = yield* World;
       const connection = yield* world.connections.get(connectionName);
       const teamId = yield* withContext(
-        Effect.flatMap(TeamRecords.TeamRecords, (teams) =>
-          teams.createTeam({ organizationId: connection.organizationId, name }),
+        Effect.flatMap(OrganizationTeams.OrganizationTeams, (teams) =>
+          teams.create(OrganizationActor.application("bdd"), {
+            organizationId: connection.organizationId,
+            name,
+          }),
         ).pipe(
           Effect.orDie,
-          Effect.map((team) => team.id),
+          Effect.map((created) => created.team.id),
         ),
       );
       yield* world.groupIds.set(name, teamId);
@@ -440,8 +511,12 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (name: string, group: string) {
       const { teamId, organizationId } = yield* teamOf(group);
       yield* withContext(
-        Effect.flatMap(TeamRecords.TeamRecords, (teams) =>
-          teams.createTeam({ organizationId, name, parentId: teamId }),
+        Effect.flatMap(OrganizationTeams.OrganizationTeams, (teams) =>
+          teams.create(OrganizationActor.application("bdd"), {
+            organizationId,
+            name,
+            parentId: teamId,
+          }),
         ).pipe(Effect.orDie),
       );
     },
@@ -452,8 +527,8 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (group: string) {
       const { teamId, organizationId } = yield* teamOf(group);
       yield* withContext(
-        Effect.flatMap(TeamRecords.TeamRecords, (teams) =>
-          teams.removeTeam(organizationId, teamId),
+        Effect.flatMap(OrganizationTeams.OrganizationTeams, (teams) =>
+          teams.remove(OrganizationActor.application("bdd"), { organizationId, teamId }),
         ).pipe(Effect.orDie),
       );
     },
@@ -657,6 +732,15 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("{string} deletes the user {string}", function* (connection: string, name: string) {
     yield* sendAs(connection, { method: "DELETE", path: `${USERS}/${yield* userId(name)}` });
+  });
+
+  When("the account of {string} is erased by the user", function* (name: string) {
+    const id = yield* userId(name);
+    yield* withContext(
+      Erasure.AccountErasure.use((erasure) =>
+        erasure.eraseAccount(Users.UserId(id), Erasure.ErasureInitiator.Self()),
+      ).pipe(Effect.orDie),
+    );
   });
 
   // ---- groups ----------------------------------------------------------------------------------
@@ -1033,6 +1117,45 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  Then("every live session of {string} is still accepted", function* (name: string) {
+    const world = yield* World;
+    const tokens = world.sessions.get(name);
+    assert.ok(tokens !== undefined && tokens.length > 0, `"${name}" has no live sessions to check`);
+    for (const token of tokens) {
+      yield* withContext(
+        Effect.flatMap(Sessions.Sessions, (sessions) => sessions.verify(token)).pipe(Effect.orDie),
+      );
+    }
+  });
+
+  Then(
+    "the account {string} with the subject {string} is no longer linked",
+    function* (providerId: string, subject: string) {
+      const found = yield* withContext(
+        Effect.flatMap(Accounts.Accounts, (accounts) =>
+          accounts.findByProviderSubject(providerId, subject),
+        ).pipe(Effect.orDie),
+      );
+      assert.equal(Option.isNone(found), true, `${providerId}/${subject} is still linked`);
+    },
+  );
+
+  Then(
+    "the invitation to {string} from another organization still exists",
+    function* (email: string) {
+      const rows = yield* withContext(
+        Effect.flatMap(InvitationRecords.InvitationRecords, (invitations) =>
+          invitations.listByEmail(stepGrant, email),
+        ),
+      );
+      assert.equal(
+        rows.some((row) => row.organizationId === "another-organization"),
+        true,
+        `the invitation to ${email} is gone`,
+      );
+    },
+  );
+
   Then("none of the live sessions of {string} is accepted any more", function* (name: string) {
     const world = yield* World;
     const tokens = world.sessions.get(name);
@@ -1138,6 +1261,23 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(payload["connectionId"], connection.identity.id);
       assert.equal(payload["organizationId"], connection.organizationId);
       assert.equal(payload["userId"], yield* userId(name));
+    },
+  );
+
+  Then(
+    "the audit log records {int} {string} events deleted by the directory {string}",
+    function* (count: number, tag: string, connectionName: string) {
+      const world = yield* World;
+      const connection = yield* world.connections.get(connectionName);
+      const matching = (yield* auditRecords(tag)).filter((record) => {
+        const payload = payloadOf(record.payload);
+        return (
+          payload["deletedBy"] === "directory" &&
+          payload["connectionId"] === connection.identity.id &&
+          payload["organizationId"] === connection.organizationId
+        );
+      });
+      assert.equal(matching.length, count);
     },
   );
 

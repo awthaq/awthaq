@@ -1,7 +1,7 @@
 // BEH-EA-299 to BEH-EA-306: steps for features/features/05-authentication-methods/28-device-authorization.feature.
 // The service is driven directly where a clock, a race or an error tag is the point, and over the web handler
 // where the wire is (a form-encoded body, an RFC 6749 error, a bearer answer that sets no cookie).
-import { AuditLog, DataExport, Erasure, Sessions, Users } from "@awthaq/core";
+import { AuditLog, DataExport, Erasure, Retention, Sessions, Users } from "@awthaq/core";
 import { DeviceAuthorization, DeviceGrantRecords, UserCode } from "@awthaq/device-authorization";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
@@ -1130,6 +1130,25 @@ export const deviceAuthorizationSteps = defineSteps<World>(({ Given, When, Then 
     );
     yield* world.outcomes.set("purged", purged);
   });
+
+  When("the host runs the retention sweep", function* () {
+    const world = yield* World;
+    const report = yield* direct(Retention.sweep);
+    yield* world.outcomes.set(
+      "swept",
+      report.plugins.find((entry) => entry.id === "device_authorization.grants")?.deleted ?? -1,
+    );
+  });
+
+  Then(
+    "the sweep reports one device-authorization grant deleted and the live one remains",
+    function* () {
+      const world = yield* World;
+      assert.equal(yield* world.outcomes.getAs("swept", isNumber), 1);
+      assert.ok(Option.isNone(yield* grantOf(yield* codeAt(0))));
+      assert.ok(Option.isSome(yield* grantOf(yield* codeAt(1))));
+    },
+  );
 
   Then("one grant is reported purged and the live one remains", function* () {
     const world = yield* World;

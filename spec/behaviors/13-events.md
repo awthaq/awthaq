@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-13 |
-> | Revision | 1.1 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): `auth.user.deleted` names the initiator kind and its ids (architecture plan 03) <br> 1.3 (2026-10-13): each event declares its actor and personal-data fields with its schema (`defineEvent`); `PII_FIELDS` replaced by `AuthEvents.piiFieldsOf`; `AuthEvents.eventTags`/`actorOf` (architecture plan 09) <br> 1.4 (2026-10-13): the ban note and the organization suspension note are declared personal data (plan 09 phase 4) <br> 1.5 (2026-10-13): added BEH-EA-321: inside a unit of work a state-change event reaches live subscribers only on commit, an attempt event is recorded and delivered either way (ADR-EA-037, plan 10 item 5) <br> 1.6 (2026-10-13): BEH-EA-101: `signInFailed{suspended}` is published by every strategy through `SignIn` (ADR-EA-038, architecture plan 01) <br> 1.7 (2026-10-13): BEH-EA-100/102: `AuditLog` is one implementation over `AuditLogStore`; `record` is idempotent on `eventId`, `list` filters before it decodes, `replay` pages in byte order, erasure is all-or-nothing (plan 02 phase 2) |
 
 ---
 
@@ -80,6 +80,8 @@ REQUIREMENT: The audit trail of security-relevant operations MUST be
 
 **As shipped (ALF-010, ADR-EA-031):** the audit trail is kept for ever by default. `Retention.config({ auditLog: { default, rules } })` opts in to purge windows — `rules` are per-event-class (`{ tags, keepFor }`), `default` covers every tag no rule names — and only `Retention.sweep` (`AuditLog.purge`) deletes, in bounded batches over the `occurredAt` index (core migration 26). `admin_impersonation` and its hash chain are never purged (ADR-EA-031). `packages/core/test/Retention.test.ts`, `packages/sql/test/contract.ts` ("AuditLog.deleteOccurredBefore ...").
 
+**One implementation over a store port (plan 02, ADR-EA-041).** `AuditLog` is written once, over `AuditLogStore` (a `Ref` adapter in `@awthaq/ports`, a SQL adapter in `@awthaq/sql`), so the two backends cannot drift. Every store primitive is atomic by contract (`StoreContract.auditLog`): `append` is idempotent on the row id, so recording an event twice (a retried publish, a replayed relay) stores one row and is not an outage; `list` hands the filter to the store and decodes only the rows that match, so one undecodable row elsewhere in the log does not fail a narrower listing; `replay` pages in byte order of `id` on every adapter (Postgres `COLLATE "C"`), so a locale never reorders a checkpoint; `pseudonymizeActor` is all-or-nothing, the store applying the domain's one scrub to every referencing row inside its own atomic unit; `purge` with an empty `eventTags` allow-list deletes nothing, and `replay` refuses a `batchSize` that is not a positive integer. A store outage is `StoreUnavailable` named for the service operation (`AuditLog.record`, `AuditLog.list`, ...).
+
 ## BEH-EA-101: Events are typed, tagged values forming a registry contract
 
 ```ts
@@ -97,13 +99,15 @@ REQUIREMENT: Every event published to `AuthEvents` MUST be a tagged value
 
 `archive/design/usage-examples-v4.md` §15 and §19 show events named this way (`auth.user.signedIn`, `auth.user.created`, `auth.token.replay`, `auth.session.issued`) with payloads a subscriber destructures directly (`e.userId`, `e.strategy`). Treating the event set as a registry — the same aggregation pattern BEH-EA-024 describes for hook taps and rate-limit rules — is what lets a plugin author add a new event tag without breaking existing subscribers filtering on the tags they already know about.
 
-**The registry is schema-first and versioned (ESA-007).** Every event is an Effect `Schema` (`Schema.TaggedStruct`) in `packages/core/src/AuthEventSchemas.ts` and its TypeScript type is derived from it; `AuthEventSchema` is the union codec. The durable audit row stores the encoded event plus a `version` (currently `1`), so `AuditLog` decodes every stored payload back into a typed `AuthEvent` (a row that no longer decodes surfaces as the typed `AuditLogDecodeError`, never `unknown`). A breaking payload change bumps `EVENT_VERSION` and adds an upcaster in `upcastPayload`; rows written under an older version stay decodable. Id fields are branded (`UserId`, `SessionId`) so a bare string does not type-check (GC-007).
+**The registry is schema-first and versioned (ESA-007).** Every event is an Effect `Schema` (`Schema.TaggedStruct`) in `packages/core/src/AuthEventSchemas.ts` and its TypeScript type is derived from it; `AuthEventSchema` is the union codec. The durable audit row stores the encoded event plus a `version` (currently `1`), so `AuditLog` decodes every stored payload back into a typed `AuthEvent` (a row that no longer decodes surfaces as the typed `AuditLogDecodeError`, never `unknown`). A breaking payload change bumps `EVENT_VERSION` and adds an upcaster in `upcastPayload`; rows written under an older version stay decodable. Id fields are branded (`UserId`, `SessionId`) so a bare string does not type-check (GC-007). Every event is declared with `defineEvent(tag, fields, { actor, pii })`, and the compiler refuses a registry member without that declaration; `AuditLog`'s actor column (`AuthEvents.actorOf`) and its erasure (`AuthEvents.piiFieldsOf`) read it, as do the webhooks payload builder and `AuthEvents.eventTags`.
+
+*Implementation:* adding an event is one `defineEvent` call in `AuthEventSchemas.ts` plus its entry in the registry list.
 
 **Every delivered event is an envelope (ESA-002, ALF-006).** `publish` stamps one envelope — `eventId` (a time-ordered, uuidv7-shaped id, monotonic within a process), `occurredAt`, `correlationId`, `ip`, `userAgent` (from `AuthRequestContext`, populated by the server per request), and `traceId`/`spanId` of the span current at the publish site — and uses it for both the `AuditLog` row (whose `id` *is* the `eventId`) and the bus event, so a subscriber joins its event to the durable row by equality. `AuditLog.list` orders newest-first with `id` as the tiebreak, so the order is total.
 
-**PII posture (ESA-005, ADR-EA-029).** Payloads are identifiers-only: no email address and no free text about a person reaches the bus or the audit table (`auth.organization.invitationCreated` carries `invitationId`, not the invitee's email); a subscriber that needs contact details resolves the id through the record store, which the erasure cascade owns. The one free-text field, the impersonation justification, is declared in `PII_FIELDS`. On user erasure `AuditLog.pseudonymizeActor(userId)` rewrites every row naming the user (as actor or anywhere in its payload) to a fresh random alias — the same alias across that user's rows, unrelated to the id — and blanks the declared free-text fields, keeping row id, tag, timestamp and correlation, so the forensic timeline survives. Subscribing to the stream is an audit-read-level privilege.
+**PII posture (ESA-005, ADR-EA-029).** Payloads are identifiers-only: no email address and no free text about a person reaches the bus or the audit table (`auth.organization.invitationCreated` carries `invitationId`, not the invitee's email); a subscriber that needs contact details resolves the id through the record store, which the erasure cascade owns. The free-text fields (the impersonation justification, the ban note and the organization suspension note) are declared in the event's `pii` (read with `AuthEvents.piiFieldsOf`); a declared field must be blankable, so its encoded side accepts `""`. On user erasure `AuditLog.pseudonymizeActor(userId)` rewrites every row naming the user (as actor or anywhere in its payload) to a fresh random alias — the same alias across that user's rows, unrelated to the id — and blanks the declared free-text fields, keeping row id, tag, timestamp and correlation, so the forensic timeline survives. Subscribing to the stream is an audit-read-level privilege.
 
-**Taxonomy additions.** `auth.password.resetRequested` (a real account only, published from inside the detached mail branch so it adds no enumeration side channel, ARF-006), `auth.user.emailVerified` (ARF-006), `auth.user.deleted` (after the deletion commits, no email, SCP-006), `auth.user.dataExported` (each data-subject export, ids only and who requested it, CSG-005), `auth.session.rotated` (only the winning rotation) and `auth.session.superseded` (RRS-008). `auth.user.signInFailed` is published by every strategy and carries `clientIp` and, for the password strategy, `identifierDigest` — a keyed HMAC of the normalized attempted identifier, computed identically for real and nonexistent accounts, so a detector can key velocity on it without an existence oracle (CSD-004). The impersonation events name both parties and, for a denial, the refused operation and attempted target/session (IDS-006).
+**Taxonomy additions.** `auth.password.resetRequested` (a real account only, published from inside the detached mail branch so it adds no enumeration side channel, ARF-006), `auth.user.emailVerified` (ARF-006), `auth.user.deleted` (after the erasure commits, no email, SCP-006; `deletedBy` is `self`, `admin` or `directory`, with the initiator's ids: `adminUserId`, or `connectionId` and `organizationId`), `auth.user.dataExported` (each data-subject export, ids only and who requested it, CSG-005), `auth.session.rotated` (only the winning rotation) and `auth.session.superseded` (RRS-008). `auth.user.signInFailed` is published by every strategy (a suspended account's refusal included, `reason: "suspended"`, from `SignIn`'s gate for every strategy and for `SignIn.resume`, BEH-EA-322) and carries `clientIp` and, for the password strategy, `identifierDigest` — a keyed HMAC of the normalized attempted identifier, computed identically for real and nonexistent accounts, so a detector can key velocity on it without an existence oracle (CSD-004). The impersonation events name both parties and, for a denial, the refused operation and attempted target/session (IDS-006).
 
 **Session lifecycle events are published by `Sessions` itself (ESA-006, TIR-008).** The session tags are not the responsibility of whichever plugin happens to mint or end a session: `Sessions.issue` publishes exactly one `auth.session.issued` (session, user and family id, `actingAs` when present) for every path — password, OAuth, passkey, admin impersonation, a legacy-session bridge, a `supersedes` rotation. Every revocation primitive (`revoke`, `revokeOwned`, `revokeOthers`, `revokeAll`, and reuse detection's family revocation) takes the reason the session ended (`signOut`, `userRevoked`, `passwordChanged`, `passwordReset`, `userDeleted`, `impersonationStopped`, `admin`, `reuseDetected`) and publishes exactly one `auth.session.revoked` (`sessionId` for a single row, `null` for `others`/`all`/`family` scope), after the delete, so sign-out, account deletion and admin stops reach subscribers and `AuditLog` ([BEH-EA-100](13-events.md)). `Sessions.verify` publishes `auth.session.expired` (`absolute` or `idle`) when a correctly-secreted credential is presented past its expiry — lazily, since no background reaper exists. Plugins MUST NOT publish these tags themselves; they pass reasons instead. Cross-reference: [BEH-EA-053](07-sessions.md), [BEH-EA-054](07-sessions.md).
 
@@ -161,6 +165,37 @@ REQUIREMENT: A subscriber failure MUST be logged as `auth.event.observer.error`,
 **As shipped (EOTS-005).** The error-level line carries only a sanitized summary (`errorTag` and a truncated message — never the error's data fields, where a token or identifier could ride); the raw `Cause` is logged only at debug level. The failure is also counted in `awthaq_event_observer_error_total{tag}` (`awthaq_hook_observer_error_total{hook}` for hook taps, BEH-EA-092).
 
 `archive/design/usage-examples-v4.md` §15 fixes the log event's name directly. This gives operators a single, stable signal to alert on for "a subscriber is broken" (distinct from `auth.token.replay`, which signals a security event in the domain itself, per BEH-EA-059) without that signal ever becoming a second path by which a broken subscriber could affect request-serving code — the isolation BEH-EA-092 and BEH-EA-099 both require is only meaningful if the failure is observable somewhere, and this is the designed place it surfaces.
+
+## BEH-EA-321: A live subscriber never observes a state-change event whose unit of work rolled back; an attempt event is recorded and delivered whether or not its unit commits
+
+> **See:** [BEH-EA-098](13-events.md#beh-ea-098-a-publisher-never-awaits-its-subscribers), [BEH-EA-100](13-events.md#beh-ea-100-the-audit-table-is-the-durable-record-of-record-independent-of-the-pubsub-stream), [ADR-EA-037](../decisions/037-unit-of-work-releases-events-on-commit.md)
+
+```ts
+yield* SqlTransaction.transactional(sql)(
+  Effect.gen(function* () {
+    yield* events.publish({ _tag: "auth.session.revoked", ... })     // state change
+    yield* events.publish({ _tag: "auth.twoFactor.challengeFailed", ... }) // attempt
+    return yield* Effect.fail(...)                                    // the unit rolls back
+  }),
+)
+// the subscriber and AuditLog saw challengeFailed only
+```
+
+```text
+REQUIREMENT: Inside a unit of work (a transaction opened through
+             `SqlTransaction`), `AuthEvents.publish` of a state-change event
+             MUST write its audit row inside the transaction and MUST hand
+             its bus copy to live subscribers only once the outermost unit
+             has committed, and never if it rolls back. `publish` of an
+             attempt event (an event whose definition declares `attempt`)
+             MUST record its audit row and hand its bus copy over after the
+             outermost unit has ended, whether or not it committed. Outside
+             any unit both run immediately. A nested unit's state-change
+             copies follow the outermost commit (a rolled-back savepoint drops
+             its own); attempt copies always survive.
+```
+
+**As shipped (ADR-EA-037, plan 10 item 5).** The attempt events are `auth.user.signInFailed`, `auth.token.replay`, `auth.twoFactor.challengeFailed`, `auth.twoFactor.locked`, `auth.rateLimit.exceeded`, `auth.admin.actionDenied`, `auth.admin.impersonationDenied`, `auth.authz.denied`, `auth.organization.permissionDenied` and `auth.deviceAuthorization.denied`; `AuthEvents.isAttemptEvent(tag)` reads the classification off the event's `defineEvent` declaration. "Never suspends" (BEH-EA-098) still holds: deferring is a push into the unit's buffer. The memory composition (`SqlTransaction.layerNoop`) has no unit, so both lanes run immediately there. A failing audit insert inside a transaction runs in a savepoint, so the `"bestEffort"` policy (ADR-EA-028) degrades the trail without aborting the surrounding Postgres transaction. Tests: `packages/core/test/AuthEventsUnitOfWork.test.ts`, `packages/sql/test/UnitOfWork.test.ts`, `packages/core/test/AccountErasure.test.ts`, `packages/two-factor/test/TwoFactor.test.ts`.
 
 _Previous: [BEH-EA-096](12-hooks.md#beh-ea-096-the-resolved-order-of-every-hook-points-taps-is-introspectable-without-running-any-code)_
 _Next: [BEH-EA-113](15-password.md#beh-ea-113-sign-up-issues-a-pending-user-and-a-verification-mail)_

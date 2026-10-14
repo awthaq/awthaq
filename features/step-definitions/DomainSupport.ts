@@ -5,7 +5,7 @@ import type { Mailer } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./CsrfTestSupport.ts";
+import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import { direct, type HeldToken, type Person, World } from "./DomainWorld.ts";
 import { mailedToken } from "./MailedToken.ts";
 import { cookieFrom, STRONG_PASSWORD } from "./shared/Harness.ts";
@@ -85,6 +85,27 @@ export const heldTokenFrom = (message: Mailer.MailMessage): HeldToken => {
   };
 };
 
+/** `query` with its `?` placeholders as the ambient database wants them (Postgres numbers them `$1`...). */
+export const numbered = Effect.fn("features.domain.numbered")(function* (query: string) {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.onDialectOrElse({
+    pg: () => {
+      let index = 0;
+      return Effect.succeed(query.replace(/\?/g, () => `$${(index += 1)}`));
+    },
+    orElse: () => Effect.succeed(query),
+  });
+});
+
+/** The SQL literal a boolean column takes: SQLite stores 0/1, Postgres a real boolean. */
+export const booleanValue = Effect.fn("features.domain.booleanValue")(function* (value: boolean) {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.onDialectOrElse({
+    pg: () => Effect.succeed<boolean | number>(value),
+    orElse: () => Effect.succeed<boolean | number>(value ? 1 : 0),
+  });
+});
+
 /** Rows of an arbitrary read-only query, for the scenarios whose claim is about what is *persisted*. */
 export const rows = Effect.fn("features.domain.rows")(function* (
   query: string,
@@ -93,9 +114,27 @@ export const rows = Effect.fn("features.domain.rows")(function* (
   return yield* direct(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      return yield* sql.unsafe<Record<string, unknown>>(query, parameters);
+      const text = yield* numbered(query);
+      return yield* sql.unsafe<Record<string, unknown>>(text, parameters);
     }),
   );
+});
+
+/** The column names of `table` as the database itself reports them (SQLite pragma, Postgres catalog). */
+export const columnNames = Effect.fn("features.domain.columnNames")(function* (table: string) {
+  const found = yield* direct(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      return yield* sql.onDialectOrElse({
+        pg: () =>
+          sql<{
+            readonly name: string;
+          }>`SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ${table}`,
+        orElse: () => sql<{ readonly name: string }>`SELECT name FROM pragma_table_info(${table})`,
+      });
+    }),
+  );
+  return found.map((column) => column.name);
 });
 
 /** A scenario's person, registered by name. */

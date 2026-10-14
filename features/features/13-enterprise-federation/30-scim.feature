@@ -151,10 +151,12 @@ Feature: SCIM Provisioning
     Scenario: A failed provisioning leaves neither the user nor a mapping behind
       Given the organization allows at most 1 members
       And an organization "Acme" with the SCIM connection "Okta"
+      And an invitation to "extra@acme.example" from another organization exists
       When "Okta" provisions the user "extra@acme.example"
       Then the response is 403
       And no user "extra@acme.example" exists
       And as seen by "Okta", 0 users are listed
+      And the invitation to "extra@acme.example" from another organization still exists
 
     @REQ-EA-927
     Scenario Outline: A user that no connection provisioned is not found, and is left untouched
@@ -406,7 +408,41 @@ Feature: SCIM Provisioning
       Then the response is 204
       And no user "ada@acme.example" exists
       And none of the live sessions of "ada@acme.example" is accepted any more
+      And the user "ada@acme.example" is not a member of the organization of "Okta"
       And as seen by "Okta", 0 users are listed
+
+    @REQ-EA-1268
+    Scenario: An erasing DELETE runs the whole account erasure
+      Given the SCIM plugin is configured with deleteBehavior "erase"
+      And an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the user "ada@acme.example" with externalId "dir-1"
+      And the user "ada@acme.example" has a linked account "saml:okta" with the subject "nameid-1"
+      When "Okta" deletes the user "ada@acme.example"
+      Then the response is 204
+      And no user "ada@acme.example" exists
+      And the account "saml:okta" with the subject "nameid-1" is no longer linked
+      And the user "ada@acme.example" is not a member of the organization of "Okta"
+      And as seen by "Okta", 0 users are listed
+
+    @REQ-EA-1269
+    Scenario: An erasing DELETE frees the organization seat
+      Given the SCIM plugin is configured with deleteBehavior "erase"
+      And the organization allows at most 2 members
+      And an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the user "ada@acme.example"
+      And "Okta" has deleted the user "ada@acme.example"
+      When "Okta" provisions the user "bo@acme.example"
+      Then the response is 201
+
+    @REQ-EA-1270
+    Scenario: A user who deletes their own account loses the directory's mapping too
+      Given an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the user "ada@acme.example" with externalId "dir-1"
+      When the account of "ada@acme.example" is erased by the user
+      Then as seen by "Okta", 0 users are listed
+      When "Okta" provisions the user "ada@acme.example" with externalId "dir-1"
+      Then the response is 201
+      And the response names a new user
 
     @REQ-EA-950
     Scenario: After an erasing DELETE the external id is free to be provisioned again as a new user
@@ -424,10 +460,14 @@ Feature: SCIM Provisioning
       And a beforeDelete hook that vetoes every user deletion
       And an organization "Acme" with the SCIM connection "Okta"
       And "Okta" has provisioned the user "ada@acme.example"
+      And the user "ada@acme.example" has 1 live sessions
       When "Okta" deletes the user "ada@acme.example"
       Then the response is 403
       And the user "ada@acme.example" still has the status "active"
+      And every live session of "ada@acme.example" is still accepted
+      And the user "ada@acme.example" is a member of the organization of "Okta"
       And as seen by "Okta", 1 users are listed
+      And the audit log records 0 "auth.scim.userDeleted" events
 
   # BEH-EA-251 — spec/behaviors/30-scim.md; see also ADR-EA-018
   @BEH-EA-251
@@ -556,6 +596,32 @@ Feature: SCIM Provisioning
       When "Okta" creates the group "Eng" with externalId "grp-1"
       Then the response is 201
       And the response names a new group
+
+    @REQ-EA-1291
+    Scenario: A veto hook that refuses team creation makes POST /Groups 403 and creates nothing
+      Given a beforeCreateTeam hook that vetoes every team creation
+      And an organization "Acme" with the SCIM connection "Okta"
+      When "Okta" creates the group "Eng"
+      Then the response is 403
+      And as seen by "Okta", 0 groups are listed
+
+    @REQ-EA-1292
+    Scenario: A group beyond the organization's team limit is 403
+      Given the organization allows at most 1 teams
+      And an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the group "Eng"
+      When "Okta" creates the group "Sales"
+      Then the response is 403
+      And as seen by "Okta", 1 groups are listed
+
+    @REQ-EA-1293
+    Scenario: Deleting the organization's last group is 409 unless removing every team is allowed
+      Given the organization does not allow removing every team
+      And an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the group "Eng"
+      When "Okta" deletes the group "Eng"
+      Then the response is 409
+      And as seen by "Okta", 1 groups are listed
 
   # BEH-EA-252 — spec/behaviors/30-scim.md; see also ADR-EA-028
   @BEH-EA-252
@@ -739,6 +805,7 @@ Feature: SCIM Provisioning
       When "Okta" deletes the user "ada@acme.example"
       Then the audit log records 1 "auth.scim.userDeleted" events
       And the latest "auth.scim.userDeleted" event names the connection "Okta", its organization and the user "ada@acme.example"
+      And the audit log records 1 "auth.user.deleted" events deleted by the directory "Okta"
 
     @REQ-EA-983
     Scenario: Creating, changing and removing a group publishes groupChanged with the change
