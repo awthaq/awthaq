@@ -947,7 +947,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       });
       const sql = Context.get(context, SqlClient.SqlClient);
       const rows = yield* sql<{ readonly n: number }>`
-        SELECT count(*) AS n FROM accounts WHERE providerId = ${providerId} AND subject = ${subject}`.pipe(
+        SELECT CAST(count(*) AS INTEGER) AS n FROM accounts WHERE "providerId" = ${providerId} AND subject = ${subject}`.pipe(
         Effect.orDie,
       );
       yield* setOutcome("raceResults", results);

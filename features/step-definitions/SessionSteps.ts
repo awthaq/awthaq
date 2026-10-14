@@ -55,7 +55,9 @@ const sha256Hex = (value: string) => createHash("sha256").update(value).digest("
 
 const column = (row: SessionRow, name: string) => {
   const value = row[name];
-  assert.equal(typeof value, "string", `expected column "${name}" to be text`);
+  // SQLite stores timestamps as text; Postgres hands back a `Date`: both read as one ISO string.
+  if (value instanceof Date) return value.toISOString();
+  assert.equal(typeof value, "string", `expected column "${name}" to be text or a timestamp`);
   return String(value);
 };
 
@@ -675,7 +677,10 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       // The row first: presenting the superseded token is itself refresh-reuse (RRS-003), which
       // revokes the whole family, replacement included.
       const row = yield* readSessionRow(column(original, "id"));
-      assert.equal(typeof row["supersededAt"], "string", "the superseded row carries a tombstone");
+      assert.ok(
+        typeof row["supersededAt"] === "string" || row["supersededAt"] instanceof Date,
+        "the superseded row carries a tombstone",
+      );
       const replacement = tokenParts(cookieFrom(yield* responses.get(yield* actors.current))).id;
       assert.equal(row["supersededBy"], replacement);
       assert.equal(

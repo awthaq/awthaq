@@ -55,6 +55,11 @@ export const setCookieFrom = (response: Response): string => {
  */
 export const letForkedFibersRun = Effect.gen(function* () {
   for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+  // Over a real Postgres (`AWTHAQ_POSTGRES_URL`) a forked dispatch crosses socket I/O, which yielding
+  // alone does not outwait: give the real clock a moment so the fiber finishes before a step reads.
+  if (process.env["AWTHAQ_POSTGRES_URL"] !== undefined) {
+    yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+  }
 });
 
 /**

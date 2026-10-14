@@ -87,7 +87,7 @@ const consumeDirect = (held: HeldToken) =>
 
 const tokenRows = (identifier: string) =>
   rows(
-    "SELECT identifier, valueHash, consumedAt, userId FROM verification_tokens WHERE identifier = ?",
+    'SELECT identifier, "valueHash", "consumedAt", "userId" FROM verification_tokens WHERE identifier = ?',
     identifier,
   );
 
@@ -775,7 +775,7 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { tokens } = yield* World;
       const held = yield* tokens.get("live");
       const live = yield* rows(
-        "SELECT id FROM verification_tokens WHERE identifier = ? AND consumedAt IS NULL",
+        'SELECT id FROM verification_tokens WHERE identifier = ? AND "consumedAt" IS NULL',
         held.identifier,
       );
       assert.equal(live.length, 0);

@@ -24,6 +24,9 @@ import {
   getPerson,
   newPerson,
   request,
+  booleanValue,
+  columnNames,
+  numbered,
   rows,
   setPerson,
   signUp,
@@ -153,7 +156,7 @@ const storedEmailVerified = Effect.fn("features.usersAccounts.storedEmailVerifie
 ) {
   const person = yield* getPerson(name);
   const found = yield* rows(
-    "SELECT emailVerified FROM users WHERE lower(email) = ?",
+    'SELECT "emailVerified" FROM users WHERE lower(email) = ?',
     person.email.toLowerCase(),
   );
   assert.equal(found.length, 1, `exactly one users row for ${person.email}`);
@@ -245,11 +248,13 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
           return yield* sql.unsafe(
-            "INSERT INTO users (id, email, emailVerified, name, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
+            yield* numbered(
+              'INSERT INTO users (id, email, "emailVerified", name, "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?)',
+            ),
             [
               "raw-insert-1",
               email,
-              0,
+              yield* booleanValue(false),
               "raw",
               "2026-01-01T00:00:00.000Z",
               "2026-01-01T00:00:00.000Z",
@@ -269,7 +274,7 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
     assert.equal(column, "emailVerified");
     const person = yield* getPerson("signup");
     const found = yield* rows(
-      "SELECT emailVerified FROM users WHERE lower(email) = ?",
+      'SELECT "emailVerified" FROM users WHERE lower(email) = ?',
       person.email.toLowerCase(),
     );
     assert.equal(found.length, 1);
@@ -364,7 +369,7 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
     function* (providerId: string, subject: string) {
       assert.equal(
         (yield* rows(
-          "SELECT id FROM accounts WHERE providerId = ? AND subject = ?",
+          'SELECT id FROM accounts WHERE "providerId" = ? AND subject = ?',
           providerId,
           subject,
         )).length,
@@ -444,12 +449,14 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
       );
       assert.ok(loser !== undefined);
       assert.ok(failureOf(loser) instanceof Accounts.AccountAlreadyLinked);
-      const stored = yield* rows("SELECT providerId, subject, issuer FROM accounts");
+      const stored = yield* rows('SELECT "providerId", subject, issuer FROM accounts');
       const bypass = yield* directExit(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
           return yield* sql.unsafe(
-            "INSERT INTO accounts (id, userId, providerId, subject, issuer, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            yield* numbered(
+              'INSERT INTO accounts (id, "userId", "providerId", subject, issuer, "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?)',
+            ),
             [
               "raw-account-1",
               "someone-else",
@@ -514,7 +521,7 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
     function* (providerId: string, name: string) {
       const userId = yield* userIdOf(name);
       const found = yield* rows(
-        "SELECT providerId, subject FROM accounts WHERE userId = ?",
+        'SELECT "providerId", subject FROM accounts WHERE "userId" = ?',
         userId,
       );
       assert.equal(found.length, 1);
@@ -531,7 +538,7 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
         Effect.flatMap(Sessions.Sessions, (sessions) => sessions.issue({ userId: user.id })),
       );
       const found = yield* rows(
-        "SELECT id FROM accounts WHERE userId = ? AND providerId = ?",
+        'SELECT id FROM accounts WHERE "userId" = ? AND "providerId" = ?',
         user.id,
         providerId,
       );
@@ -560,9 +567,9 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
       assert.ok(Exit.isSuccess(outcome));
       assert.ok(Option.isOption(outcome.value) && Option.isNone(outcome.value));
       // There is no flag to consult: neither the users table nor the User record carries one.
-      const columns = yield* rows("SELECT name FROM pragma_table_info('users')");
+      const columns = yield* columnNames("users");
       assert.ok(
-        columns.every((column) => !/password|credential/i.test(String(column["name"]))),
+        columns.every((column) => !/password|credential/i.test(column)),
         "the users table has no password/credential column",
       );
     },
@@ -691,7 +698,7 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
       assert.ok(Option.isSome(person.userId));
       const userId = person.userId.value;
       assert.equal((yield* accountsOf(userId)).length, 0);
-      assert.equal((yield* rows("SELECT id FROM accounts WHERE userId = ?", userId)).length, 0);
+      assert.equal((yield* rows('SELECT id FROM accounts WHERE "userId" = ?', userId)).length, 0);
       for (const provider of [first, second]) {
         const subject =
           provider === Accounts.PASSWORD_PROVIDER_ID

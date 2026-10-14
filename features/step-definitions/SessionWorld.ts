@@ -270,7 +270,7 @@ export const pinSessionSecret = Effect.fn("features.session.pinSessionSecret")(f
   yield* inApp(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE sessions SET secretHash = ${secretHash} WHERE id = ${sessionId}`;
+      yield* sql`UPDATE sessions SET "secretHash" = ${secretHash} WHERE id = ${sessionId}`;
     }),
   );
 });
@@ -283,7 +283,7 @@ export const countSessionRows = Effect.fn("features.session.countSessionRows")(f
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       return yield* sql<{ readonly n: number }>`
-        SELECT COUNT(*) AS n FROM sessions WHERE userId = ${userId}`;
+        SELECT CAST(COUNT(*) AS INTEGER) AS n FROM sessions WHERE "userId" = ${userId}`;
     }),
   );
   return rows[0]?.n ?? 0;

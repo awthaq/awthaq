@@ -47,15 +47,22 @@ export const regclassTypes = () => {
 };
 
 const postgres = (url: string, suite: string) => {
-  const schema = `t_${suite.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
+  // Vitest runs files in parallel workers: files sharing a suite name (BDD worlds) must not drop each
+  // other's schema, so the worker's pool id joins the name (stable and bounded, unlike a pid).
+  const worker = process.env["VITEST_POOL_ID"] ?? "";
+  const schema =
+    `t_${suite.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}${worker === "" ? "" : `_w${worker}`}`.slice(
+      0,
+      63,
+    );
   const client = PgClient.layer({
     url: Redacted.make(url),
     // Every statement resolves unqualified names in this suite's own schema.
     startupParameters: { search_path: schema },
     maxConnections: 4,
     // The pool reclaims idle connections on the `Clock` every `idleTimeout` (default 10 s), so a test that
-    // advances `TestClock` by days replays millions of ticks and times out. An hour keeps that bounded.
-    idleTimeout: Duration.hours(1),
+    // advances `TestClock` by days replays millions of ticks and times out. A very long timeout keeps that bounded.
+    idleTimeout: Duration.days(100_000),
     types: regclassTypes(),
   });
   const reset = Layer.effectDiscard(
