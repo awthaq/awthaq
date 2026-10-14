@@ -2,7 +2,6 @@
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
 import { AuditLog, AuthEvents, Hooks, SignIn, Users, VerificationLink } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
 import { SealedColumn } from "@awthaq/sql";
 import { Password } from "@awthaq/password";
 import { assert, describe, it } from "@effect/vitest";
@@ -22,9 +21,9 @@ import * as TwoFactorStore from "../src/TwoFactorStore.ts";
 import { CHALLENGE_PURPOSE } from "../src/Challenge.ts";
 import {
   buildDurableAuditLayer,
+  awaitMail,
   buildLayer,
   codeFor,
-  letForkedFibersRun,
   realLimiter,
   tokenOf,
 } from "./support/harness.ts";
@@ -36,10 +35,8 @@ const secret = (text: string) => Redacted.make(text);
 const registerUser = (email: string) =>
   Effect.gen(function* () {
     const password = yield* Password.Password;
-    const mailer = yield* Mailer.Mailer;
     const issued = yield* password.signUp({ email, password: pw });
-    yield* letForkedFibersRun;
-    const verifyMail = (yield* mailer.sent).findLast((mail) => mail.template === "verify-email");
+    const verifyMail = yield* awaitMail("verify-email");
     yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
     return { email, userId: issued.session.userId, sessionId: issued.session.id };
   });
@@ -676,10 +673,8 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
   const requestResetToken = (email: string) =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
       yield* password.requestReset({ email });
-      yield* letForkedFibersRun;
-      const mail = (yield* mailer.sent).findLast((m) => m.template === "reset-password");
+      const mail = yield* awaitMail("reset-password");
       return Redacted.make(tokenOf(mail));
     });
   const newPassword = Redacted.make("a brand new strong password");

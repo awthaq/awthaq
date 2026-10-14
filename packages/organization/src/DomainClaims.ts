@@ -75,7 +75,7 @@ export class DomainClaims extends Context.Service<DomainClaims, DomainClaimsShap
 
 const taken = (domain: string): DomainClaimTaken => new DomainClaimTaken({ domain });
 
-/** The one cross-organization read this module makes. */
+/** The one cross-organization read this module makes (the owner row of the domain being claimed). */
 const claimGrant = TenantScoped.crossTenant(
   "domain claims: a domain has one owner organization, so the claim check reads every organization's owner row",
 );
@@ -162,7 +162,8 @@ export const layerSql = Layer.effect(
           for (const domain of input.domains) {
             // The primary key decides a race: the loser's insert is skipped and the read names the winner.
             yield* sql`INSERT INTO organization_domain_owner (domain, "organizationId") VALUES (${domain}, ${input.organizationId}) ON CONFLICT (domain) DO NOTHING`;
-            const owner = yield* ownerOf(domain);
+            // Only this read crosses organizations; the writes stay confined by the row-level policy.
+            const owner = yield* ownerOf(domain).pipe(TenantScoped.liftOn(sql, claimGrant));
             if (Option.isNone(owner) || owner.value.organizationId !== input.organizationId) {
               return yield* Effect.fail(taken(domain));
             }
@@ -172,7 +173,7 @@ export const layerSql = Layer.effect(
             yield* sql`INSERT INTO organization_domain_claim (domain, "connectionId", protocol, "organizationId") VALUES (${domain}, ${input.connectionId}, ${input.protocol}, ${input.organizationId})`;
           }
           yield* dropOrphanOwners(input.organizationId);
-        }).pipe(TenantScoped.liftOn(sql, claimGrant)),
+        }),
       ).pipe(unavailable("claim"));
 
     const release: DomainClaimsShape["release"] = (organizationId, connectionId) =>

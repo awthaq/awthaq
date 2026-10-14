@@ -24,6 +24,7 @@ import * as Exit from "effect/Exit";
 import type * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { TestFramework } from "./TestFramework.ts";
+import * as TestSql from "./TestSql.ts";
 
 /** Runs against row `id` under whatever tenant the suite set; `true` = it saw or changed that row. */
 export interface Probe<Id, R> {
@@ -267,9 +268,7 @@ export const runTenantIsolationTests = <Shape, Id, R>(
                       yield* sql.unsafe(
                         `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${PROBE_ROLE}') THEN CREATE ROLE ${PROBE_ROLE} NOLOGIN; END IF; END $$`,
                       );
-                      yield* sql.unsafe(
-                        `GRANT ALL ON ALL TABLES IN SCHEMA public TO ${PROBE_ROLE}`,
-                      );
+                      yield* TestSql.prepareRlsProbe(PROBE_ROLE);
                       yield* TenantScope.enableRls({
                         plugins: declaredTables(config),
                         includeKeyed: true,

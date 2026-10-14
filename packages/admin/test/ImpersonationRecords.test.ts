@@ -599,14 +599,10 @@ describe.skipIf(process.env["AWTHAQ_POSTGRES_URL"] === undefined)(
     it.effect("an intact chain stays intact inside TenantScope.withTenant with RLS on", () =>
       Effect.acquireUseRelease(
         Effect.gen(function* () {
-          const sql = yield* SqlClient.SqlClient;
           const records = yield* ImpersonationRecords.ImpersonationRecords;
           yield* seed(records, "rls-a").pipe(Tenant.withTenant("org-a"));
           yield* seed(records, "rls-b").pipe(Tenant.withTenant("org-b"));
-          yield* sql.unsafe(
-            `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${probeRole}') THEN CREATE ROLE ${probeRole} NOLOGIN; END IF; END $$`,
-          );
-          yield* sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA public TO ${probeRole}`);
+          yield* TestSql.prepareRlsProbe(probeRole);
           yield* TenantScope.enableRls({
             plugins: Object.entries(Admin.Admin.tenancy).map(([table, declaration]) => ({
               plugin: "admin",

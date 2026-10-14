@@ -10,6 +10,7 @@
 //
 // `pnpm run test:pg` sets the variable and runs the plugin suites this way.
 
+import { CoreMigrations } from "@awthaq/sql";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import * as PgTypes from "@effect/sql-pg/PgTypes";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -18,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
+import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
@@ -106,3 +108,24 @@ export const layer = (suite: string) =>
       ? SqliteClient.layer({ filename: ":memory:" })
       : postgres(postgresUrl, suite),
   );
+
+/**
+ * Readies the ambient database for a row-level-security probe: core's tables exist (`enableRls`
+ * always covers the partitioned core tables), `role` exists, and it can use this suite's schema
+ * (`layer` gives each suite its own, never `public`). Idempotent; call before `TenantScope.enableRls`.
+ */
+export const prepareRlsProbe = (role: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* Migrator.make({})({
+      loader: CoreMigrations.coreMigrations,
+      table: "effect_sql_migrations",
+    });
+    yield* sql.unsafe(
+      `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role}') THEN CREATE ROLE ${role} NOLOGIN; END IF; END $$`,
+    );
+    const current = yield* sql<{ readonly name: string }>`SELECT current_schema() AS name`;
+    const schema = current[0]?.name ?? "public";
+    yield* sql.unsafe(`GRANT USAGE ON SCHEMA "${schema}" TO ${role}`);
+    yield* sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA "${schema}" TO ${role}`);
+  });

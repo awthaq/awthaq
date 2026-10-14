@@ -87,6 +87,23 @@ export const letForkedFibersRun = Effect.gen(function* () {
   for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
 });
 
+/**
+ * The newest mail of `template`, waiting for the forked dispatch to land it. On a real database the
+ * dispatch crosses socket I/O, which a fixed number of `yieldNow`s does not outwait, so this polls on
+ * the real clock (bounded) until the mail is there.
+ */
+export const awaitMail = (template: string) =>
+  Effect.gen(function* () {
+    const mailer = yield* Mailer.Mailer;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      yield* letForkedFibersRun;
+      const found = (yield* mailer.sent).findLast((mail) => mail.template === template);
+      if (found !== undefined) return found;
+      yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
+    }
+    return undefined;
+  });
+
 /** A mailed token, whether the adapter-facing value is a plain string or `Redacted` (EOTS-010). */
 export const tokenOf = (mail: Mailer.MailMessage | undefined): string => {
   const token = mail?.data?.["token"];

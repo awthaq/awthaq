@@ -234,10 +234,9 @@ describe.skipIf(process.env["AWTHAQ_POSTGRES_URL"] === undefined)(
             organizationId: b.id,
             role: ["owner"],
           });
-          yield* sql.unsafe(
-            `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${probeRole}') THEN CREATE ROLE ${probeRole} NOLOGIN; END IF; END $$`,
+          yield* TestSql.prepareRlsProbe(probeRole).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
           );
-          yield* sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA public TO ${probeRole}`);
           yield* TenantScope.enableRls({
             plugins: Object.entries(Organization.Organization.tenancy).map(
               ([table, declaration]) => ({

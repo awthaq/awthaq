@@ -8,15 +8,15 @@
 // Atomicity, per primitive:
 // - `insert`: one transaction (a savepoint inside a caller's) only when it has more than one statement
 //   to commit (a `supersedes` or a `maxLive`): the ownership-checked tombstone, the insert, and the
-//   eviction. Under Postgres' READ COMMITTED two racing inserts can each see room and exceed the cap
-//   by one for a moment; the next insert evicts back.
+//   eviction. A capped insert takes a per-user advisory transaction lock on Postgres, so racing
+//   inserts for one user serialize and the cap holds exactly (READ COMMITTED alone let them all see room).
 // - `rotate`: one compare-and-swap `UPDATE`; on a lost swap, one authoritative read tells the caller
 //   what is there now.
 // - `flagReuse`: one transaction whose first statement is `UPDATE ... WHERE "supersededAt" IS NOT NULL
 //   AND "reusedAt" IS NULL RETURNING`, so of any number of racing presentations exactly one gets the
 //   family, and the family revocation commits with it.
 // - `remove`: one `DELETE ... RETURNING`.
-// - `reauthenticate`: a lock-free compare-and-swap loop on the stored `amr` text (there is no JSON
+// - `reauthenticate`: a compare-and-swap loop (queued per session by an advisory lock on Postgres) on the stored `amr` text (there is no JSON
 //   function and no `FOR UPDATE` that is dialect-neutral): read, union, `UPDATE ... WHERE amr = <read>`,
 //   and on a lost swap re-read and retry (five attempts, then `StoreUnavailable` for real contention).
 // - Retried on a transient failure: `insert` and `rotate` (the unit that failed rolled back, and a lost
@@ -87,6 +87,16 @@ export const layer = Layer.effect(
 
     const insert: SessionStore.SessionStoreShape["insert"] = ({ session, supersedes, maxLive }) => {
       const persist = Effect.gen(function* () {
+        // SMS-003: the cap is read-then-evict, so under READ COMMITTED racing inserts each saw room and
+        // all landed. A per-user transaction-scoped advisory lock serializes them (the next one reads
+        // the previous one's commit); SQLite already serializes writers.
+        if (Option.isSome(maxLive)) {
+          yield* sql.onDialectOrElse({
+            pg: () =>
+              sql`SELECT pg_advisory_xact_lock(hashtext(${`session-cap:${session.userId}`}))`,
+            orElse: () => Effect.void,
+          });
+        }
         // RRS-003: tombstoned, not deleted; an ancestor owned by another user, already tombstoned or
         // absent is "no ancestor", and the new row founds a fresh family (INV-EA-018).
         const ancestor = Option.isNone(supersedes)
@@ -243,51 +253,60 @@ export const layer = Layer.effect(
       }).pipe(read("SessionStore.listLive"));
 
     const reauthenticate: SessionStore.SessionStoreShape["reauthenticate"] = (input) =>
-      Effect.gen(function* () {
-        // THS-003: union the newly proven methods into the stored `amr` (monotone), written back only
-        // while the row still holds the text the union was computed from, so concurrent step-ups both land.
-        for (let attempt = 0; attempt < REAUTHENTICATE_ATTEMPTS; attempt++) {
-          const current = yield* repo.findById(input.id).pipe(
-            Effect.map(Option.some),
-            Effect.catchTag("NoSuchElementError", () => Effect.succeed(Option.none<Session>())),
-          );
-          // BEH-EA-319: a dead, foreign or absent row is refused; the UPDATE's own WHERE repeats the guard.
-          if (
-            Option.isNone(current) ||
-            current.value.userId !== input.owner ||
-            !SessionStore.isLive(
-              {
-                absoluteExpiresAt: current.value.absoluteExpiresAt,
-                idleExpiresAt: current.value.idleExpiresAt,
-                supersededAt: Option.fromNullOr(current.value.supersededAt),
-              },
-              input.at,
-            )
-          ) {
-            return Option.none<SessionStore.SessionRecord>();
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          // THS-003: a compare-and-swap loses once per concurrent winner, so N racing step-ups can exhaust
+          // any fixed attempt count. On Postgres a per-session advisory transaction lock queues them, and
+          // the loop below stays as the guard for a writer that does not take the lock.
+          yield* sql.onDialectOrElse({
+            pg: () => sql`SELECT pg_advisory_xact_lock(hashtext(${`session-amr:${input.id}`}))`,
+            orElse: () => Effect.void,
+          });
+          // THS-003: union the newly proven methods into the stored `amr` (monotone), written back only
+          // while the row still holds the text the union was computed from, so concurrent step-ups both land.
+          for (let attempt = 0; attempt < REAUTHENTICATE_ATTEMPTS; attempt++) {
+            const current = yield* repo.findById(input.id).pipe(
+              Effect.map(Option.some),
+              Effect.catchTag("NoSuchElementError", () => Effect.succeed(Option.none<Session>())),
+            );
+            // BEH-EA-319: a dead, foreign or absent row is refused; the UPDATE's own WHERE repeats the guard.
+            if (
+              Option.isNone(current) ||
+              current.value.userId !== input.owner ||
+              !SessionStore.isLive(
+                {
+                  absoluteExpiresAt: current.value.absoluteExpiresAt,
+                  idleExpiresAt: current.value.idleExpiresAt,
+                  supersededAt: Option.fromNullOr(current.value.supersededAt),
+                },
+                input.at,
+              )
+            ) {
+              return Option.none<SessionStore.SessionRecord>();
+            }
+            const updated = yield* (
+              input.addAmr.length === 0
+                ? repo.reauthenticate(input.id, input.owner, input.at)
+                : repo.reauthenticate(
+                    input.id,
+                    input.owner,
+                    input.at,
+                    JSON.stringify(
+                      SessionStore.unionMethods(parseAmr(current.value.amr), input.addAmr),
+                    ),
+                    current.value.amr,
+                  )
+            ).pipe(
+              Effect.map(Option.some),
+              Effect.catchTag("NoSuchElementError", () => Effect.succeed(Option.none<Session>())),
+            );
+            if (Option.isSome(updated)) return Option.some(toRecord(updated.value));
           }
-          const updated = yield* (
-            input.addAmr.length === 0
-              ? repo.reauthenticate(input.id, input.owner, input.at)
-              : repo.reauthenticate(
-                  input.id,
-                  input.owner,
-                  input.at,
-                  JSON.stringify(
-                    SessionStore.unionMethods(parseAmr(current.value.amr), input.addAmr),
-                  ),
-                  current.value.amr,
-                )
-          ).pipe(
-            Effect.map(Option.some),
-            Effect.catchTag("NoSuchElementError", () => Effect.succeed(Option.none<Session>())),
+          return yield* Effect.fail(
+            new StoreUnavailable({ operation: "SessionStore.reauthenticate" }),
           );
-          if (Option.isSome(updated)) return Option.some(toRecord(updated.value));
-        }
-        return yield* Effect.fail(
-          new StoreUnavailable({ operation: "SessionStore.reauthenticate" }),
-        );
-      }).pipe(write("SessionStore.reauthenticate"));
+        }),
+      ).pipe(write("SessionStore.reauthenticate"));
 
     const purgeExpired: SessionStore.SessionStoreShape["purgeExpired"] = (before) =>
       SqlStore.drainBatches((limit) =>

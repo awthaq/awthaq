@@ -9,7 +9,7 @@
 import { Api } from "@awthaq/api";
 import { AuthPlugin, HookPoint, Migrations, RateLimits } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
-import { StoreFailure, TenantScoped } from "@awthaq/sql";
+import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -133,15 +133,23 @@ export const layerMemory = Layer.effect(
   }),
 );
 
-const NoteRow = Schema.Struct({
-  id: Schema.String,
-  owner: Schema.String,
-  text: Schema.String,
-  created: Schema.DateTimeUtcFromString,
-  tenantId: Schema.NullOr(Schema.String),
-});
+// The row codec follows the dialect: SQLite stores `created` as TEXT, Postgres hands back a `Date`.
+const noteRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    owner: Schema.String,
+    text: Schema.String,
+    created: wire.dateTime,
+    tenantId: Schema.NullOr(Schema.String),
+  });
 
-const toRecord = (row: typeof NoteRow.Type): NoteRecord => ({
+const toRecord = (row: {
+  id: string;
+  owner: string;
+  text: string;
+  created: DateTime.Utc;
+  tenantId: string | null;
+}): NoteRecord => ({
   id: row.id,
   owner: row.owner,
   text: row.text,
@@ -154,6 +162,7 @@ export const layerSql = Layer.effect(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const crypto = yield* Crypto.Crypto;
+    const NoteRow = noteRow(SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql)));
 
     const insert = SqlSchema.findOne({
       Request: NoteRow,
