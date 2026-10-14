@@ -1,4 +1,3 @@
-// Hand-wired on purpose: one memo map shared by the web handler and a `ManagedRuntime`, with the application's `SubjectResolver` above the harness composition (plan 08 exemption).
 // BEH-EA-185..192 (24-nextjs-ssr.feature): what a Next.js app's server side does with awthaq.
 // `getSession`, `hasSessionCookie` and `withNextCookies` are called exactly as a Server Component,
 // `proxy.ts` and a server action call them: `getSession` over a real `ManagedRuntime` built from a
@@ -15,11 +14,9 @@ import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { makeOutcomes, type Outcomes } from "./shared/Outcomes.ts";
 
 const NoBreachHttpClient = Layer.succeed(
@@ -85,19 +82,13 @@ const appLayer = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<number>)
   );
 
 /**
- * One application, two ways in: the web `handler` (what a server action's in-process client
- * dispatches to — the only path that applies pre-response handlers, so the only one whose responses
- * carry `Set-Cookie`) and a `ManagedRuntime` (what `getSession` runs on). Both resolve against one
- * `MemoMap`, so they share the very same `Sessions`/`Users` instances — a session issued through
- * either is visible to the other.
+ * One application, two ways in: the web `handler` (what a server action's in-process client dispatches to — the only
+ * path that applies pre-response handlers, so the only one whose responses carry `Set-Cookie`) and a `ManagedRuntime`
+ * (what `getSession` runs on). `TestAuth.app` resolves both against one memo map, so they share the very same
+ * `Sessions`/`Users` instances — a session issued through either is visible to the other.
  */
-const makeApp = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<number>) => {
-  const layer = appLayer(roles, calls);
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler, dispose } = HttpRouter.toWebHandler(layer, { memoMap });
-  const runtime = ManagedRuntime.make(layer, { memoMap });
-  return { handler, runtime, dispose: () => Promise.all([dispose(), runtime.dispose()]) };
-};
+const makeApp = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<number>) =>
+  TestAuth.app(appLayer(roles, calls));
 
 export const WorldLive = Layer.effect(
   World,

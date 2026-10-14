@@ -17,11 +17,9 @@ import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Redacted from "effect/Redacted";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { STRONG_PASSWORD } from "./shared/Harness.ts";
 import { makeOutcomes, type Outcomes } from "./shared/Outcomes.ts";
 
@@ -44,12 +42,7 @@ export const reactTuple = Auth.make([Password.Password], {
 
 const appLayer = TestAuth.layer(reactTuple, { services: ReactServices });
 
-const makeApp = () => {
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const { handler, dispose } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  const runtime = ManagedRuntime.make(appLayer, { memoMap });
-  return { handler, runtime, dispose: () => Promise.all([dispose(), runtime.dispose()]) };
-};
+const makeApp = () => TestAuth.app(appLayer);
 
 /** One request the "browser" sent. */
 export interface SentRequest {

@@ -28,7 +28,11 @@ const adminRequest = (handler: (request: Request) => Promise<Response>, cookie?:
   );
 
 /** Posts one entry and lists the ledger back, as a signed-in caller would. */
-const roundTrip = (app: ReturnType<typeof TestAuth.app>, email: string, entry: string) =>
+const roundTrip = (
+  app: Pick<ReturnType<typeof TestAuth.app>, "signIn" | "request">,
+  email: string,
+  entry: string,
+) =>
   Effect.promise(async () => {
     const signedIn = await app.signIn(email);
     const added = await app.request("POST", "/ledger", {

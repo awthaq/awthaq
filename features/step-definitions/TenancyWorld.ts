@@ -1,4 +1,6 @@
-// Hand-wired on purpose: the identity, organization and connection stacks are built on separate memo maps, on the real clock, outside the step's `TestClock` (plan 08 exemption).
+// Hand-wired on purpose: the identity stack (SQL `Users`/`Sessions` with no plugin) and the connection stack (the store alone) are
+// not `Auth.make` compositions, and the tenant-middleware gateways are small routers; the organization and OAuth stacks run on
+// `TestAuth.layer`. Every stack is built through `TestAuth.buildContext` (own memo map, real clock) (plan 08 exemption).
 // P20a (tenancy follow-up to AH-003): the compositions 28-tenancy.feature runs against.
 //
 // Three independent stacks, each rebuilt per scenario, because the rules under test live in
@@ -453,9 +455,7 @@ export const WorldLive = Layer.effect(
     // service that reads the clock when it is built would otherwise be pinned to 1970.
     const scope = Scope.makeUnsafe();
     const build = <A, E>(layer: Layer.Layer<A, E>) =>
-      Effect.promise(() =>
-        Effect.runPromise(Layer.buildWithMemoMap(layer, Layer.makeMemoMapUnsafe(), scope)),
-      );
+      Effect.promise(() => TestAuth.buildContext(layer, { scope }));
     const identity = yield* build(buildIdentityStack());
     const organizations = yield* build(buildOrganizationStack());
     const connections = yield* build(buildConnectionStack());
@@ -490,13 +490,9 @@ export const WorldLive = Layer.effect(
 
     const buildOAuth: WorldShape["buildOAuth"] = (providers, resolver) =>
       Effect.promise(async () => {
-        const context = await Effect.runPromise(
-          Layer.buildWithMemoMap(
-            buildOAuthLayer(providers, resolver),
-            Layer.makeMemoMapUnsafe(),
-            scope,
-          ),
-        );
+        const context = await TestAuth.buildContext(buildOAuthLayer(providers, resolver), {
+          scope,
+        });
         return Context.get(context, OAuth.OAuth);
       });
 

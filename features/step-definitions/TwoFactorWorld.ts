@@ -251,13 +251,9 @@ const running = Effect.gen(function* () {
   const options = yield* Ref.get(world.options);
   // Built on the real clock, outside the step's `TestClock` (see the header).
   const context = yield* Effect.promise(() =>
-    Effect.runPromise(
-      Layer.buildWithMemoMap(
-        buildAppLayer(options, world.hashes, world.sessionOutage),
-        Layer.makeMemoMapUnsafe(),
-        world.scope,
-      ),
-    ),
+    TestAuth.buildContext(buildAppLayer(options, world.hashes, world.sessionOutage), {
+      scope: world.scope,
+    }),
   );
   yield* Ref.set(world.running, Option.some(context));
   return context;
@@ -516,19 +512,16 @@ export const auditRows = Effect.fn("features.twoFactor.auditRows")(function* (ev
 export const openSqlRecoveryCodes = Effect.fn("features.twoFactor.openSql")(function* () {
   const world = yield* World;
   const context = yield* Effect.promise(() =>
-    Effect.runPromise(
-      Layer.buildWithMemoMap(
-        TwoFactorStore.layerRecoveryCodesSql.pipe(
-          Layer.provide(NodeCrypto.layer),
-          Layer.provideMerge(
-            Layer.effectDiscard(Migrations.run(TwoFactor.TwoFactor.migrations)).pipe(
-              Layer.provideMerge(SqliteClient.layer({ filename: ":memory:" })),
-            ),
+    TestAuth.buildContext(
+      TwoFactorStore.layerRecoveryCodesSql.pipe(
+        Layer.provide(NodeCrypto.layer),
+        Layer.provideMerge(
+          Layer.effectDiscard(Migrations.run(TwoFactor.TwoFactor.migrations)).pipe(
+            Layer.provideMerge(SqliteClient.layer({ filename: ":memory:" })),
           ),
         ),
-        Layer.makeMemoMapUnsafe(),
-        world.scope,
       ),
+      { scope: world.scope },
     ),
   );
   yield* Ref.set(world.sql, Option.some(context));
