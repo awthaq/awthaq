@@ -5,7 +5,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHmac, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -30,11 +31,8 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-// `<iat>.<random>.<hmac(iat.random)>`: the double-submit pair CSRF protection requires on a mutation.
-const csrfToken = (() => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
-})();
+// The double-submit pair CSRF protection requires on a mutation.
+const csrfToken = TestAuth.csrfToken(CSRF_SECRET);
 
 const boot = (env: Record<string, string>) => {
   // Every message the console mailer prints, read back the way a person reads it from the terminal.

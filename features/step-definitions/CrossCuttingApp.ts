@@ -23,7 +23,6 @@ import {
 import { Password } from "@awthaq/password";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -31,7 +30,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -228,11 +226,9 @@ export const makeHost = Effect.gen(function* () {
 export const jsonPost = (path: string, body: unknown) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
-    const signed = `${Math.floor(now / 1000)}.${randomBytes(32).toString("hex")}`;
-    const signature = createHmac("sha256", Redacted.value(CsrfConfigForTests.secret))
-      .update(signed)
-      .digest("hex");
-    const token = `${signed}.${signature}`;
+    const token = TestAuth.csrfToken(CsrfConfigForTests.secret, {
+      issuedAt: Math.floor(now / 1000),
+    });
     return new Request(`http://localhost${path}`, {
       method: "POST",
       headers: {

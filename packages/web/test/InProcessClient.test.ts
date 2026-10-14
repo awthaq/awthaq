@@ -5,9 +5,9 @@
 // runtime — with the real `CsrfProtection` guarding the mutating group.
 import { Api } from "@awthaq/api";
 import { Csrf } from "@awthaq/server";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -27,11 +27,7 @@ import { inProcessClient, makeInProcessClient } from "../src/InProcessClient.ts"
 
 // CSRF secrets must be at least 32 bytes (the layer dies at build otherwise).
 const secret = "test-csrf-secret-0123456789-0123456789";
-// `<iatSeconds>.<random>.<hmac>` — the wire format `CsrfProtectionLive` mints and verifies.
-const validCsrfCookie = (): string => {
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", secret).update(signed).digest("hex")}`;
-};
+const validCsrfCookie = (): string => TestAuth.csrfToken(secret);
 
 const Echo = Schema.Struct({
   userAgent: Schema.NullOr(Schema.String),

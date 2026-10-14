@@ -8,11 +8,11 @@ import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Slots, Users } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { EvaluationServicesNone, permission, role } from "@qadi/core";
 import { RequirePermissionLive } from "@qadi/http";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -63,11 +63,7 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const CSRF_TOKEN = (() => {
-  // `<iat>.<random>.<hmac(iat.random)>` (CDS-006).
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
-})();
+const CSRF_TOKEN = TestAuth.csrfToken(CSRF_SECRET);
 
 // Path B: the guard resolves the subject itself (the `Roles` resolver flattens the roles),
 // so no `Api.Authentication` middleware is involved on this group.
