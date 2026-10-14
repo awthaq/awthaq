@@ -18,141 +18,45 @@
 // (`HttpEffect.toHandled`'s `sendResponse`), which `toWebHandler` goes
 // through and a bare `router.asHttpEffect()` call does not.
 import { Api, SessionContract } from "@awthaq/api";
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Errors,
-  Hooks,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, Errors, Sessions } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
-import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Ref from "effect/Ref";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Password from "../src/Password.ts";
 import * as PasswordApi from "../src/PasswordApi.ts";
-import { tokenOf } from "./harness.ts";
-
-/** BEH-EA-119: nothing in the corpus ever matches — this file never exercises the breach check itself. */
-const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make((request) =>
-    Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
-  ),
-);
-
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
-const CoreLive = Layer.mergeAll(
-  Users.layer.pipe(Layer.provide(Persistence.memory)),
-  Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-  Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Verification.layer.pipe(Layer.provide(Persistence.memory)),
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+import { NoBreachHttpClient, tokenOf } from "./harness.ts";
 
 /**
- * `changePassword` (shipping-gap map, ticket 11) is the one endpoint in
- * this plugin's contract carrying `Authentication` middleware.
+ * `PasswordGroup` carries `.middleware(Api.CsrfProtection)`, and this file calls the composed app's real HTTP
+ * handler directly, never through `@awthaq/client`'s `CsrfClientLive`, so every unsafe-method request below plays the
+ * double-submit role a browser client would, with a pair minted against the harness's own `CsrfConfig` (the handler
+ * runs on the real clock, so it is stamped now).
  */
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-/**
- * CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `PasswordGroup` now
- * carries `.middleware(Api.CsrfProtection)` at the group level — this file
- * calls the composed app's real HTTP handler directly, never through
- * `@awthaq/client`'s generated `CsrfClientLive`, so every unsafe-method
- * request built below has to play the double-submit role a real browser
- * client would (see `withCsrfCookie`/`CSRF_TEST_COOKIE_VALUE` below).
- * A reference HMAC computed independently of `Csrf.ts`'s own implementation
- * (Node's `node:crypto`), mirroring `packages/server/test/Csrf.test.ts`'s
- * own `validCookieValue()`.
- */
-const CSRF_TEST_SECRET = "password-authhttp-test-csrf-secret";
-const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The handler under test runs on the real clock here (a web handler).
-  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
-  return `${signed}.${signature}`;
-})();
+const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
 
 const withCsrfCookie = (cookie?: string): string =>
   cookie
     ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
     : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
 
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make(CSRF_TEST_SECRET),
-      allowedOrigins: [] as ReadonlyArray<string>,
-    }),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
+const built = Auth.make([Password.Password]);
 
 const buildAppLayer = (
   mailerLayer: Layer.Layer<Mailer.Mailer>,
   passwordConfig: Partial<Password.PasswordConfigShape> = {},
   coreOverride?: Layer.Layer<Sessions.Sessions, never, Sessions.Sessions>,
 ) =>
-  Layer.mergeAll(
-    AuthHttp.routes(PasswordApi.PasswordApi, { openapiPath: "/openapi.json" }).pipe(
-      Layer.provide(
-        Password.Password.layer.pipe(
-          Layer.provide(Password.config(passwordConfig)),
-          Layer.provide(coreOverride ?? Layer.empty),
-        ),
-      ),
-    ),
-    AuthHttp.docs(PasswordApi.PasswordApi),
-  ).pipe(
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(
-      Layer.mergeAll(PasswordHasher.layerArgon2id, mailerLayer, RateLimiter.layerPermissive).pipe(
-        Layer.provideMerge(NodeCrypto.layer),
-      ),
-    ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(NoBreachHttpClient),
-    // ARF-001: `confirmReset` now runs inside a `SqlTransaction` — a
-    // no-op wrapper for this in-memory composition.
-    Layer.provide(SqlTransaction.layerNoop),
-    // AGA-001/NHS-003: `signUp`/`signIn`/`requestReset` now resolve
-    // through `ClientAddress` — the direct passthrough is byte-for-byte
-    // today's `remoteAddress` behavior.
-    Layer.provide(ClientAddress.layerDirect),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-  );
+  TestAuth.layer(built, {
+    // BEH-EA-119: nothing in the corpus ever matches: this file never exercises the breach check itself.
+    services: Layer.mergeAll(NoBreachHttpClient, mailerLayer, Password.config(passwordConfig)),
+    ...(coreOverride === undefined ? {} : { decorate: coreOverride }),
+    openapiPath: "/openapi.json",
+    docsPath: "/docs",
+  });
 
 const AppLayer = buildAppLayer(Mailer.layerMemory);
 
@@ -242,7 +146,7 @@ const verifyLatestSignUp = (
 describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("BEH-EA-113/083: sign-up sets a session cookie and answers 200", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(handler, "/password/sign-up", { email: "ada@example.com", password: strongPassword }),
       );
@@ -259,7 +163,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "CSD-003: sign-up records the request's User-Agent on the session (capped at 512)",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const signUp = (email: string, userAgent: string) =>
           Effect.promise(() =>
             handler(
@@ -294,7 +198,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "IC-007/BO-005: the session Set-Cookie carries the default attributes and a 30-day Max-Age",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const response = yield* Effect.promise(() =>
           post(handler, "/password/sign-up", {
             email: "cookie-attrs@example.com",
@@ -319,7 +223,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("BEH-EA-113/422: a too-short password answers WeakPassword", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(handler, "/password/sign-up", { email: "weak@example.com", password: "short" }),
       );
@@ -329,7 +233,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("BEH-EA-113/409: signing up twice with the same email answers EmailAlreadyExists", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const signUp = () =>
         post(handler, "/password/sign-up", { email: "dupe@example.com", password: strongPassword });
       assert.strictEqual((yield* Effect.promise(signUp)).status, 200);
@@ -342,7 +246,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
 
         const signedUp = yield* Effect.promise(() =>
           post(handler, "/password/sign-up", { email: "bo@example.com", password: strongPassword }),
@@ -383,7 +287,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
 
         const signUp = yield* Effect.promise(() =>
           post(handler, "/password/sign-up", {
@@ -444,7 +348,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
 
         yield* Effect.promise(() =>
           post(handler, "/password/sign-up", {
@@ -482,7 +386,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
 
         const signUp = yield* Effect.promise(() =>
           post(handler, "/password/sign-up", {
@@ -508,7 +412,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("shipping-gaps/08/410: verifying with a garbage token answers TokenConsumed", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(handler, "/verify-email", { token: "not-a-real-token" }),
       );
@@ -519,7 +423,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("shipping-gaps/11: change-password rotates the hash for the authenticated caller", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();
-      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+      const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
       const signUp = yield* Effect.promise(() =>
         post(handler, "/password/sign-up", {
           email: "change@example.com",
@@ -587,7 +491,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
         const signUp = yield* Effect.promise(() =>
           post(handler, "/password/sign-up", {
             email: "before@example.com",
@@ -662,7 +566,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("shipping-gaps/11/401: change-password without a session is rejected", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(handler, "/change-password", {
           currentPassword: strongPassword,
@@ -677,7 +581,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "BEH-EA-084: serves generated OpenAPI JSON and Scalar docs from this plugin's own api",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
 
         const openapi = yield* Effect.promise(() =>
           handler(new Request("http://localhost/openapi.json")),
@@ -700,7 +604,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () => {
       const mailer = capturingMailer();
       return Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(
+        const { handler } = TestAuth.app(
           buildAppLayer(mailer.layer, { signUpEnumeration: "conceal" }),
         );
         const signUp = () =>
@@ -726,7 +630,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("TMS-005: conceal still reports a weak password, and reveal stays the default", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(
+      const { handler } = TestAuth.app(
         buildAppLayer(Mailer.layerMemory, { signUpEnumeration: "conceal" }),
       );
       const weak = yield* Effect.promise(() =>
@@ -740,7 +644,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
   // hasher or database work.
   it.effect("ESS-006: a malformed email answers 400 and creates no user", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       for (const path of [
         "/password/sign-up",
         "/password/sign-in",
@@ -757,7 +661,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("ESS-006: an oversized password answers 400 before reaching the hasher", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(handler, "/password/sign-in", {
           email: "ada@example.com",
@@ -789,7 +693,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
   // CSD-003: the handler threads the request's User-Agent onto the session.
   it.effect("CSD-003: sign-up with a User-Agent yields a session that reports it", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(
           handler,
@@ -813,7 +717,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "MNA-001: sign-up with X-Awthaq-Token-Delivery: bearer returns body.token and no Set-Cookie; the token authenticates a bearer request",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const { handler } = TestAuth.app(AppLayer);
         const signedUp = yield* Effect.promise(() =>
           post(
             handler,
@@ -861,7 +765,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("MNA-001: sign-in without the header sets the cookie and carries no body token", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();
-      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+      const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
       yield* Effect.promise(() =>
         post(handler, "/password/sign-up", {
           email: "cookie@example.com",
@@ -887,7 +791,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("MNA-001: sign-in with bearer delivery returns the token and no cookie", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();
-      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+      const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
       yield* Effect.promise(() =>
         post(handler, "/password/sign-up", {
           email: "device@example.com",
@@ -919,7 +823,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("native first sign-up and sign-in with no cookies and no CSRF pair succeed", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();
-      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+      const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
       const cookieless = (path: string, body: unknown, extra: Record<string, string> = {}) =>
         Effect.promise(() =>
           handler(
@@ -959,7 +863,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("MNA-001: an unknown delivery mode answers 400 and mints no session", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const { handler } = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(
           handler,
@@ -996,7 +900,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
           });
         }),
       );
-      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer, {}, sessionsDown));
+      const { handler } = TestAuth.app(buildAppLayer(mailer.layer, {}, sessionsDown));
       const signedUp = yield* Effect.promise(() =>
         post(handler, "/password/sign-up", { email: "cy@example.com", password: strongPassword }),
       );

@@ -31,6 +31,8 @@ export const makeTestLayer = <
     readonly mailer?: Layer.Layer<Mailer.Mailer>;
     readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
     readonly hasher?: Layer.Layer<PasswordHasher.PasswordHasher, never, Crypto.Crypto>;
+    /** Application taps on the composition's hook points (a veto or an observer). */
+    readonly taps?: Layer.Layer<never, never, unknown>;
     /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
     readonly coreOverride?: Layer.Layer<Wrapped, never, Wrapped>;
   } = {},
@@ -44,6 +46,7 @@ export const makeTestLayer = <
       ...(options.hasher === undefined ? [] : [options.hasher]),
     ),
     ...(options.coreOverride === undefined ? {} : { decorate: options.coreOverride }),
+    ...(options.taps === undefined ? {} : { taps: options.taps }),
   });
 
 /** Cooperative scheduler turns for the background mail fibers (see `Password.test.ts`). */
