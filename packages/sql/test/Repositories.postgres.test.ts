@@ -31,31 +31,20 @@ const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
 
 const skip = postgresUrl === undefined;
 
-const SqlLive = PgClient.layer({ url: Redacted.make(postgresUrl ?? "") });
-
-// Forward-only migrator with no down migration (ticket 00's own finding) —
-// each run starts from tables this suite drops and recreates itself. Only the
-// tables `CoreMigrations` owns are dropped, never the whole schema: the
-// rate-limiter suite shares this database and runs in parallel. Keep the list
-// in step with `CoreMigrations.ts` (auth_audit_log was once missing from it).
-const coreTables = [
-  "users",
-  "accounts",
-  "sessions",
-  "verification_tokens",
-  "verification_reservations",
-  "auth_audit_log",
-  "auth_relay_cursor",
-  "effect_sql_migrations",
-];
+// Its own schema: this file and TenantScope.postgres.test.ts both drop and recreate the core tables, and
+// vitest runs files in parallel workers, so sharing `public` made them wipe each other's tables mid-test.
+const schema = "t_sql_repositories_postgres";
+const SqlLive = PgClient.layer({
+  url: Redacted.make(postgresUrl ?? ""),
+  startupParameters: { search_path: schema },
+});
 
 const RepositoriesLive = repositoriesLayer(
   SqlLive,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    for (const table of coreTables) {
-      yield* sql.unsafe(`DROP TABLE IF EXISTS ${table} CASCADE`);
-    }
+    yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
   }),
 );
 
@@ -314,9 +303,8 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
             Layer.effectDiscard(
               Effect.gen(function* () {
                 const sql = yield* SqlClient.SqlClient;
-                for (const table of coreTables) {
-                  yield* sql.unsafe(`DROP TABLE IF EXISTS ${table} CASCADE`);
-                }
+                yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+                yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
                 yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
               }),
             ),
@@ -324,6 +312,7 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
               url: Redacted.make(postgresUrl ?? ""),
               types: regclassTypes(),
               maxConnections: 1,
+              startupParameters: { search_path: schema },
             }),
           ),
         ),

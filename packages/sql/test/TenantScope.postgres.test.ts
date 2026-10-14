@@ -25,27 +25,19 @@ const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
 
 const skip = postgresUrl === undefined;
 
-const SqlLive = PgClient.layer({ url: Redacted.make(postgresUrl ?? "") });
-
-// Same table list and drop-and-recreate discipline as `Repositories.postgres.test.ts`.
-const coreTables = [
-  "users",
-  "accounts",
-  "sessions",
-  "verification_tokens",
-  "verification_reservations",
-  "auth_audit_log",
-  "auth_relay_cursor",
-  "effect_sql_migrations",
-];
+// Its own schema: see Repositories.postgres.test.ts (parallel files must not share `public`).
+const schema = "t_sql_tenant_scope_postgres";
+const SqlLive = PgClient.layer({
+  url: Redacted.make(postgresUrl ?? ""),
+  startupParameters: { search_path: schema },
+});
 
 const RepositoriesLive = repositoriesLayer(
   SqlLive,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    for (const table of coreTables) {
-      yield* sql.unsafe(`DROP TABLE IF EXISTS ${table} CASCADE`);
-    }
+    yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
   }),
 );
 
@@ -80,7 +72,8 @@ describe.skipIf(skip)("Tenant RLS (real Postgres)", () => {
         yield* sql.unsafe(
           `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${probeRole}') THEN CREATE ROLE ${probeRole} NOLOGIN; END IF; END $$`,
         );
-        yield* sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA public TO ${probeRole}`);
+        yield* sql.unsafe(`GRANT USAGE ON SCHEMA ${schema} TO ${probeRole}`);
+        yield* sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA ${schema} TO ${probeRole}`);
         yield* TenantScope.enableRls();
       }),
       () => body,
@@ -156,7 +149,7 @@ describe.skipIf(skip)("Tenant RLS (real Postgres)", () => {
       const sql = yield* SqlClient.SqlClient;
       const rlsOn = (table: string) =>
         sql<{ readonly relrowsecurity: boolean }>`
-          SELECT relrowsecurity FROM pg_class WHERE relname = ${table} AND relnamespace = 'public'::regnamespace
+          SELECT relrowsecurity FROM pg_class WHERE relname = ${table} AND relnamespace = current_schema()::regnamespace
         `.pipe(Effect.map((rows) => rows[0]?.relrowsecurity ?? false));
 
       yield* TenantScope.enableRls();
@@ -210,7 +203,8 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
         yield* sql.unsafe(
           `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${probeRole}') THEN CREATE ROLE ${probeRole} NOLOGIN; END IF; END $$`,
         );
-        yield* sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA public TO ${probeRole}`);
+        yield* sql.unsafe(`GRANT USAGE ON SCHEMA ${schema} TO ${probeRole}`);
+        yield* sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA ${schema} TO ${probeRole}`);
       }),
       () => body,
       () =>
