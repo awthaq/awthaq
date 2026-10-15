@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` |
 
 ---
 
@@ -183,9 +183,9 @@ REQUIREMENT: A table column stored as an `Encryption` envelope MUST be declared
              once (`SealedColumn.column`) with the canonical AAD
              `<table>:<rowKey>:<column>`. Reading it MUST yield a `Sealed<A>`
              whose `open` is the only place the plaintext appears; an envelope
-             under a retired key or a listed legacy AAD MUST open and MUST be
-             re-sealed under the current key and canonical AAD by
-             compare-and-swap, without ever failing the read. A value that
+             under a retired key MUST open and MUST be re-sealed under the
+             current key by compare-and-swap, without ever failing the read;
+             an envelope sealed under any other AAD spelling MUST NOT open. A value that
              does not open MUST be the typed `SealedColumn/Unreadable`, never
              `null` and never a defect, and a call site MUST handle it with
              `SealedColumn.orDie` or `SealedColumn.option`.

@@ -2,10 +2,10 @@
 "@awthaq/sql": minor
 ---
 
-Legacy-AAD sunset preparation (plan 05 phase 14, additive; no `legacyAad` entry and no `adoptPlaintext` is removed).
+Remove the legacy-AAD read from `SealedColumn`. Values are sealed under the canonical AAD `<table>:<rowKey>:<column>` only (ADR-EA-019 revision 1.2).
 
-- `SealedColumn.SweepReport` gains `legacy`: of the values re-sealed, those that opened only under a legacy AAD. `SealedColumn.Revealed` gains `legacy: boolean` for the same fact on a single read. Code that builds a `SweepReport` or `Revealed` by hand must add the field.
-- New `SealedColumn.sweepAll(columns, { batch? })`: sweeps each column in order, answers one `{ table, column, scanned, resealed, legacy, unreadable }` per column and logs one Info line per column (ids and counts only).
-- A read that opens under a legacy AAD is now logged (ids only): debug when it re-seals, a warning when `resealOnRead` is off.
-- `SealedColumn.sweep`, `sqlSwap` and `aadOf` accept any column declaration regardless of its value type (the new `SealedColumn.Sweepable`).
-- Operator runbook in `docs/plugin-authoring.md`: run `sweepAll`, then `sweepAll` again; every column must report `legacy: 0` before a later release may delete the legacy read.
+- Removed: the `legacyAad` option of `SealedColumn.column` and of `SealedColumn.reveal`, the `legacyAad` field of `Column`/`Sweepable`, `Revealed.legacy` and `SweepReport.legacy` (so the `legacy` field of `ColumnSweep` and of the `sweepAll` Info line), and the legacy-AAD read logs. The plugin declarations in `@awthaq/webhooks`, `@awthaq/organization`, `@awthaq/saml` and `@awthaq/two-factor` drop their `legacyAad`, and `TestAuth.runSealedColumnTests` no longer has a legacy-AAD case.
+- Kept: `SealedColumn.sweepAll` and `sweep` for key rotation (`{ table, column, scanned, resealed, unreadable }`), and `adoptPlaintext` as an explicit opt-in for core PII.
+- A value that does not open is still the typed `SealedColumn/Unreadable`; the `SealedColumn.option` warning now hints that it may be sealed under a retired legacy AAD (restore from backup or re-enter the secret).
+
+Migration: none for installs that never ran a pre-release build. If you did, before upgrading run SealedColumn.sweepAll on a build containing the sweep and confirm unreadable: 0; rows still sealed under the old AADs (webhooks-endpoint:, organization-oauth-connection:, saml-sp-key:, and two_factor_secret:<id> without the field suffix) stop opening after this release: webhook secrets and headers silently drop, OAuth client secrets are dropped, SAML signing and TOTP fail closed. Nothing is deleted; rolling back or restoring a backup and re-running the sweep recovers every row.

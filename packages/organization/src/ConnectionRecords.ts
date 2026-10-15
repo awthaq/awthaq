@@ -143,12 +143,11 @@ const notFound = (id: string): ConnectionRecordNotFound => new ConnectionRecordN
 const domainTaken = (domain: string): ConnectionDomainTaken =>
   new ConnectionDomainTaken({ domain });
 
-/** The sealed `clientSecret` column (the legacy AAD spelling still opens, then re-seals canonically). */
+/** The sealed `clientSecret` column. */
 export const clientSecretColumn = SealedColumn.column({
   table: "organization_oauth_connection",
   column: "clientSecret",
   key: "id",
-  legacyAad: [(id) => `organization-oauth-connection:${id}:clientSecret`],
 });
 
 /** A connection as it is at rest: the secret is the stored envelope. */

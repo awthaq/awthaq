@@ -45,25 +45,22 @@ import type * as WebhookHeaders from "./WebhookHeaders.ts";
 
 const headersSchema = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 
-/** The three sealed columns of `webhooks_endpoint`; the pre-plan-05 AAD spelling still opens and re-seals. */
+/** The three sealed columns of `webhooks_endpoint`. */
 export const secretColumn = SealedColumn.column({
   table: "webhooks_endpoint",
   column: "secret",
   key: "id",
-  legacyAad: [(id) => `webhooks-endpoint:${id}:secret`],
 });
 export const previousSecretColumn = SealedColumn.column({
   table: "webhooks_endpoint",
   column: "previousSecret",
   key: "id",
-  legacyAad: [(id) => `webhooks-endpoint:${id}:previousSecret`],
 });
 export const headersColumn = SealedColumn.column({
   table: "webhooks_endpoint",
   column: "headers",
   key: "id",
   schema: headersSchema,
-  legacyAad: [(id) => `webhooks-endpoint:${id}:headers`],
 });
 
 export type DeliveryStatus = "pending" | "succeeded" | "dead";

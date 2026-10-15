@@ -144,20 +144,21 @@ Every table a plugin owns declares how it relates to the tenant (ADR-EA-018 deci
 
 A column that must be decryptable (a client secret, a signing key, a TOTP secret) is a `SealedColumn` (ADR-EA-019 decision 6), declared once and never encrypted by hand:
 
-- Declare it: `SealedColumn.column({ table, column, key, legacyAad? })`. The AAD is `<table>:<rowKey>:<column>`; list an older spelling in `legacyAad` and it still opens and re-seals canonically. Build one `SealedColumn.codec(column, swap)` per adapter (`sqlSwap(column)` in SQL, a `Ref`-backed swap in memory), so the memory adapter seals too.
-- The records accept the plaintext as a `Redacted` and hand out a `Sealed<A>` whose `open` effect is the only place the plaintext appears; domain code never sees an envelope or an AAD. A stale key or a legacy envelope is re-sealed on read by compare-and-swap.
+- Declare it: `SealedColumn.column({ table, column, key })`. The AAD is `<table>:<rowKey>:<column>` and the only spelling that opens: there is no fallback to an older one, so a column renamed or re-keyed after rows exist needs its own data migration. Build one `SealedColumn.codec(column, swap)` per adapter (`sqlSwap(column)` in SQL, a `Ref`-backed swap in memory), so the memory adapter seals too.
+- The records accept the plaintext as a `Redacted` and hand out a `Sealed<A>` whose `open` effect is the only place the plaintext appears; domain code never sees an envelope or an AAD. A stale key is re-sealed on read by compare-and-swap.
 - `open` fails with the typed `SealedColumn/Unreadable`; each call site picks exactly one treatment: `SealedColumn.orDie` (fail closed, for a value the operation cannot proceed without) or `SealedColumn.option` (degrade one value with a warning).
-- Prove it with `TestAuth.runSealedColumnTests` (one call per column and adapter: envelope at rest, round trip, moved ciphertext, key rotation, legacy AAD). `SealedColumn.sweep` re-seals the rows nobody reads again; running it is the operator's job.
+- Prove it with `TestAuth.runSealedColumnTests` (one call per column and adapter: envelope at rest, round trip, moved ciphertext, key rotation). `SealedColumn.sweep` re-seals the rows nobody reads again after a key rotation; running it is the operator's job.
 
-### Operator runbook: sweeping sealed columns (legacy-AAD sunset preparation)
+### Operator runbook: sweeping sealed columns (key rotation)
 
-A `legacyAad` entry and `adoptPlaintext` stay in the code until a later release deletes them (ADR-EA-019 decision 6; `.scratch` ticket "legacy-aad-sunset"). Nothing deletes them yet; this is how an operator gets a deployment ready.
+Values are sealed under the canonical AAD `<table>:<rowKey>:<column>` only; the old spellings (`webhooks-endpoint:`, `organization-oauth-connection:`, `saml-sp-key:`, `two_factor_secret:<id>` without the field suffix) no longer open (ADR-EA-019 revision 1.2). `adoptPlaintext` stays as an explicit opt-in for core PII. What an operator still runs is the sweep that finishes a key rotation for rows nobody reads.
 
 1. List every sealed column the deployment runs (each plugin's `SealedColumn.column` declarations, plus the core token and PII columns your composition enables).
-2. Run `SealedColumn.sweepAll([...columns])` as a one-off job against the production database, with the production `Encryption` and `SqlClient` (it is never run by a request). It pages each column by its key, re-seals every stale-key or legacy-AAD value by compare-and-swap (a concurrent writer always wins), and answers one report per column: `{ table, column, scanned, resealed, legacy, unreadable }`. It also logs one Info line per column with the same counts (ids and counts only, never a value).
-3. Read the reports. `legacy` counts the values re-sealed because only a legacy AAD opened them. `unreadable` values (tampered, or under a retired key) are never touched: investigate them, they will not heal.
-4. Run `sweepAll` again. Every column must now report `legacy: 0`. While a deployment reads with `resealOnRead: false`, any read of a legacy value logs a warning (ids only) and the value stays legacy until a sweep.
-5. A deployment is ready for the legacy read to be deleted only when step 4 holds on it. Keep the `legacyAad` entries until the release that removes them; they are what keeps unswept rows readable.
+2. After rotating the current key, run `SealedColumn.sweepAll([...columns])` as a one-off job against the production database, with the production `Encryption` and `SqlClient` (it is never run by a request). It pages each column by its key, re-seals every stale-key value by compare-and-swap (a concurrent writer always wins), and answers one report per column: `{ table, column, scanned, resealed, unreadable }`. It also logs one Info line per column with the same counts (ids and counts only, never a value).
+3. Read the reports. `unreadable` values (tampered, under a retired key, or sealed under a retired legacy AAD) are never touched and never deleted by the library: investigate them, they will not heal. Restore them from backup or re-enter the secret. A call site either fails closed on one (`orDie`: SAML signing key, TOTP secret) or degrades it with a warning (`option`: webhook secrets and headers, OAuth client secret).
+4. Run `sweepAll` again; `resealed: 0` on every column means no value is left on a retired key, and the retired key can leave the keyset.
+
+**Upgrading from a pre-release build that had sealed rows:** before upgrading, run `sweepAll` on a build that still contains the legacy read and confirm `unreadable: 0`. Rows still sealed under an old AAD spelling stop opening after the removal; nothing is deleted, and rolling back or restoring a backup and re-running the sweep recovers every row.
 
 ## Multi-statement writes
 
