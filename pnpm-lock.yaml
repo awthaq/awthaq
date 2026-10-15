@@ -321,8 +321,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/webhooks
       '@effect-cucumber/vitest':
-        specifier: ^0.10.1
-        version: 0.10.1(@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1))(@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2))(effect@4.0.0-rc.116)(vitest@5.0.2)
+        specifier: ^0.10.3
+        version: 0.10.3(@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1))(@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2))(effect@4.0.0-rc.116)(vitest@5.0.2)
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
@@ -1569,19 +1569,19 @@ packages:
     resolution: {integrity: sha512-Xc3VhU02wqZ1HvHRJUwL09HkZSTvidqY5Ya0NXBSYOxAp+Ln9dcJr9fySI+CkONzP3PekQo9WdzCv0PGER/mOA==}
     engines: {node: '>=14.17.0'}
 
-  '@effect-cucumber/gherkin@0.10.1':
-    resolution: {integrity: sha512-JGsPGMzjARSget8eb5BKmCL3O18HUxJAkQBpW1zfmg8CgcnEXD5Bq/vebkpUMdyF5ntFhYSIY5b6CUATSgJLUw==}
+  '@effect-cucumber/gherkin@0.10.3':
+    resolution: {integrity: sha512-prQuTovIl9CwFtyQMQV6ES77F4PWAlqYMVyOZ4ePOMMl62bA5YdoZALI46jd8Jcy8EpNLIqOsoKWjLCgQeMkpA==}
     engines: {node: '>=20'}
     peerDependencies:
-      effect: ^4.0.0-rc.116
+      effect: ^4.0.0
 
-  '@effect-cucumber/vitest@0.10.1':
-    resolution: {integrity: sha512-hs36Z/oENUumRXryWfJaeeOQfeZ9jat3iO3wP9XRByTznhcPPEQ5LhdoDEo+cC1xQta8+XQyJbzq0Hb9FLwzrg==}
+  '@effect-cucumber/vitest@0.10.3':
+    resolution: {integrity: sha512-ZXaT+F6v8v6KaIiQknXcrML5zd8Lj3PcGSwsaOQ82/HUUcOgKc9xTtzf3FIlj+liVRmt+2kI3AFPKwgZR0Jvzg==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
-      '@effect/platform-node': ^4.0.0-rc.116
-      '@effect/vitest': ^4.0.0-rc.116
-      effect: ^4.0.0-rc.116
+      '@effect/platform-node': ^4.0.0
+      '@effect/vitest': ^4.0.0
+      effect: ^4.0.0
       vitest: '>=5.0.0 <6.0.0'
 
   '@effect/atom-react@4.0.0-rc.116':
@@ -4371,16 +4371,16 @@ snapshots:
 
   '@discoveryjs/json-ext@1.1.0': {}
 
-  '@effect-cucumber/gherkin@0.10.1(effect@4.0.0-rc.116)':
+  '@effect-cucumber/gherkin@0.10.3(effect@4.0.0-rc.116)':
     dependencies:
       '@cucumber/cucumber-expressions': 20.1.0
       '@cucumber/gherkin': 42.0.1
       '@cucumber/messages': 34.2.1
       effect: 4.0.0-rc.116
 
-  '@effect-cucumber/vitest@0.10.1(@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1))(@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2))(effect@4.0.0-rc.116)(vitest@5.0.2)':
+  '@effect-cucumber/vitest@0.10.3(@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1))(@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2))(effect@4.0.0-rc.116)(vitest@5.0.2)':
     dependencies:
-      '@effect-cucumber/gherkin': 0.10.1(effect@4.0.0-rc.116)
+      '@effect-cucumber/gherkin': 0.10.3(effect@4.0.0-rc.116)
       '@effect/platform-node': 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
       '@effect/vitest': 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.2)
       effect: 4.0.0-rc.116

@@ -34,7 +34,7 @@
     "@awthaq/test": "workspace:*",
     "@awthaq/two-factor": "workspace:*",
     "@awthaq/webhooks": "workspace:*",
-    "@effect-cucumber/vitest": "^0.10.1",
+    "@effect-cucumber/vitest": "^0.10.3",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
