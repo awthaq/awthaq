@@ -200,3 +200,39 @@ describe("ClientAddress.layerTrustedProxy — Forwarded header", () => {
     }).pipe(Effect.provide(layer)),
   );
 });
+
+describe("ClientAddress.facts / address (plan 11)", () => {
+  it.effect(
+    "facts omits both keys for a bare request, carries ip and userAgent when present, and never carries undefined",
+    () =>
+      Effect.gen(function* () {
+        const clientAddress = yield* ClientAddress.ClientAddress;
+        const bare = yield* ClientAddress.facts(clientAddress, requestWith({}));
+        assert.deepStrictEqual(bare, {});
+        assert.isFalse("ip" in bare);
+        assert.isFalse("userAgent" in bare);
+        const full = yield* ClientAddress.facts(
+          clientAddress,
+          requestWith({ remoteAddress: "203.0.113.9", headers: { "user-agent": "agent/1" } }),
+        );
+        assert.deepStrictEqual(full, { ip: "203.0.113.9", userAgent: "agent/1" });
+        const onlyAgent = yield* ClientAddress.facts(
+          clientAddress,
+          requestWith({ headers: { "user-agent": "agent/2" } }),
+        );
+        assert.deepStrictEqual(onlyAgent, { userAgent: "agent/2" });
+      }).pipe(Effect.provide(ClientAddress.layerDirect)),
+  );
+
+  it.effect("address carries only ip", () =>
+    Effect.gen(function* () {
+      const clientAddress = yield* ClientAddress.ClientAddress;
+      const resolved = yield* ClientAddress.address(
+        clientAddress,
+        requestWith({ remoteAddress: "203.0.113.9", headers: { "user-agent": "agent/1" } }),
+      );
+      assert.deepStrictEqual(resolved, { ip: "203.0.113.9" });
+      assert.deepStrictEqual(yield* ClientAddress.address(clientAddress, requestWith({})), {});
+    }).pipe(Effect.provide(ClientAddress.layerDirect)),
+  );
+});

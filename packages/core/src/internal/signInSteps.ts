@@ -8,7 +8,6 @@ import * as Brand from "effect/Brand";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import type * as Redacted from "effect/Redacted";
 import { Defects } from "@awthaq/ports";
 import { AuthEvents } from "../AuthEvents.ts";
 import { AuthRequestContext } from "../AuthRequestContext.ts";
@@ -56,11 +55,8 @@ export interface SessionRequest {
   readonly userAgent?: string | undefined;
 }
 
-/** The one session-with-token type every sign-in plugin aliases. */
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
+/** The one session-with-token type every sign-in plugin aliases: `Sessions.IssuedSession`. */
+export type IssuedSession = Sessions.IssuedSession;
 
 export const makeSteps = Effect.gen(function* () {
   const users = yield* Users.Users;

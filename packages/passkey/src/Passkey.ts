@@ -27,6 +27,7 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import {
+  CurrentUser,
   Accounts,
   AuthEvents,
   AuthPlugin,
@@ -56,7 +57,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/unstable/http/Headers";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -172,11 +172,6 @@ export interface PasskeySignals {
   readonly allAcceptedCredentialIds: ReadonlyArray<string>;
 }
 
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
-
 export interface PasskeyShape {
   readonly registerOptions: (
     userId: Users.UserId,
@@ -252,7 +247,7 @@ export interface PasskeyShape {
     /** CSD-003: extra request context recorded on the issued session (its `User-Agent`; capped by `Sessions.issue`). The address is `input.ip`. */
     context?: { readonly userAgent?: string },
   ) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | Api.InvalidCredentials
     | Api.RateLimited
     | PasskeyApi.PasskeyChallengeInvalid
@@ -294,19 +289,6 @@ export interface PasskeyShape {
   >;
 }
 
-/** Same forward-reference pattern `@awthaq/password`'s own `PasswordHandlers` documents. */
-const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentPrincipal> =
-  Effect.gen(function* () {
-    const principal = yield* Api.CurrentPrincipal;
-    if (principal._tag !== "User") {
-      return yield* Defects.invariantViolation(
-        "NonUserPrincipal",
-        `awthaq: passkey group reached with a non-User principal: ${principal._tag}`,
-      );
-    }
-    return principal;
-  });
-
 export const PasskeyHandlers = Layer.mergeAll(
   HttpApiBuilder.group(
     PasskeyApi.PasskeyApi,
@@ -315,14 +297,14 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         registerOptions: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           return yield* passkey.registerOptions(
             Users.UserId(principal.ref.id),
             principal.sessionId,
           );
         }),
         registerOptionsConditional: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           return yield* passkey.registerOptionsConditional(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -333,7 +315,7 @@ export const PasskeyHandlers = Layer.mergeAll(
         }: {
           payload: PasskeyApi.RegisterVerifyPayload;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const record = yield* passkey.registerVerify(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -379,12 +361,8 @@ export const PasskeyHandlers = Layer.mergeAll(
           const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
             request,
             Effect.gen(function* () {
-              const resolvedAddress = yield* clientAddress.resolve(request);
-              const userAgent = Headers.get(request.headers, "user-agent");
-              return yield* passkey.authenticateVerify(
-                { ...payload, ip: Option.getOrUndefined(resolvedAddress) },
-                Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
-              );
+              const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
+              return yield* passkey.authenticateVerify({ ...payload, ip }, context);
             }),
           );
           return response;
@@ -399,12 +377,12 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         listCredentials: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const records = yield* passkey.listCredentials(Users.UserId(principal.ref.id));
           return records.map(toCredentialDto);
         }),
         signals: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const signals = yield* passkey.signals(Users.UserId(principal.ref.id));
           return new PasskeyApi.PasskeySignalsDto(signals);
         }),
@@ -415,7 +393,7 @@ export const PasskeyHandlers = Layer.mergeAll(
           params: PasskeyApi.CredentialIdParams;
           payload: PasskeyApi.RenamePayload;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const record = yield* passkey.renameCredential(
             Users.UserId(principal.ref.id),
             params.id,
@@ -428,7 +406,7 @@ export const PasskeyHandlers = Layer.mergeAll(
         }: {
           params: PasskeyApi.CredentialIdParams;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           yield* passkey.removeCredential(Users.UserId(principal.ref.id), params.id);
         }),
       });
@@ -458,7 +436,7 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         reauthenticateOptions: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           return yield* passkey.reauthenticateOptions(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -469,7 +447,7 @@ export const PasskeyHandlers = Layer.mergeAll(
         }: {
           payload: PasskeyApi.ReauthenticateVerifyPayload;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           yield* passkey.reauthenticateVerify(
             Users.UserId(principal.ref.id),
             principal.sessionId,

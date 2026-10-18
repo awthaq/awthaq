@@ -53,8 +53,6 @@ export class ChannelInvalid extends Data.TaggedError("MagicLink/ChannelInvalid")
   readonly reason: "noAddress" | "userMissing" | "signUpDisabled";
 }> {}
 
-export type IssuedSession = SignIn.IssuedSession;
-
 export interface Completion {
   /** The plugin's own strategy label — `magicLink` or `emailOtp` (also the `BeforeSessionIssue` strategy). */
   readonly strategy: string;
@@ -74,7 +72,7 @@ export interface Channel {
   readonly complete: (
     completion: Completion,
   ) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | ChannelInvalid
     | HookPoint.HookAborted
     | Hooks.TwoFactorRequired

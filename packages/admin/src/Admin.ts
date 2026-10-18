@@ -30,7 +30,6 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AdminApi from "./AdminApi.ts";
@@ -45,11 +44,6 @@ export {
   type TenantAdminGateInput,
   type UserAdminGateInput,
 } from "./internal/AdminGate.ts";
-
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
 
 export interface AdminShape {
   /**
@@ -66,7 +60,7 @@ export interface AdminShape {
     readonly targetUserId: Users.UserId;
     readonly reason: string;
   }) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | AdminApi.AdminImpersonationDenied
     | AdminApi.AdminSelfImpersonationRefused
     | AdminApi.AdminAlreadyImpersonating

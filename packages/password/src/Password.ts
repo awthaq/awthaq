@@ -9,6 +9,7 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import {
+  CurrentUser,
   Accounts,
   AuthEvents,
   AuthPlugin,
@@ -44,7 +45,6 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Headers from "effect/unstable/http/Headers";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -331,11 +331,6 @@ export const PasswordConfig: Context.Reference<PasswordConfigShape> = Context.Re
 export const config = (partial: Partial<PasswordConfigShape>): Layer.Layer<never> =>
   Layer.succeed(PasswordConfig, { ...defaultPasswordConfig, ...partial });
 
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
-
 export interface PasswordShape {
   /** BEH-EA-113: creates the user, links a password credential, issues a session, and dispatches (never awaits) a verification mail. */
   readonly signUp: (input: {
@@ -350,7 +345,7 @@ export interface PasswordShape {
     /** CSD-003: recorded on the issued session (device list, forensics); capped by `Sessions.issue`. */
     readonly userAgent?: string;
   }) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | PasswordApi.WeakPassword
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
@@ -400,7 +395,7 @@ export interface PasswordShape {
     /** CSD-003: recorded on the issued session; see `signUp`'s own `userAgent`. */
     readonly userAgent?: string;
   }) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | Api.InvalidCredentials
     | PasswordApi.EmailNotVerified
     | Users.UserSuspended
@@ -513,7 +508,7 @@ export interface PasswordShape {
     readonly ip?: string;
     readonly userAgent?: string;
   }) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited | Errors.StoreUnavailable
   >;
   /**
@@ -628,13 +623,6 @@ const sessionRequest = (input: { readonly ip?: string; readonly userAgent?: stri
   ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
 });
 
-/** CSD-003: the caller's `User-Agent` header, when present. */
-const requestUserAgent = (request: HttpServerRequest.HttpServerRequest) =>
-  Option.match(Headers.get(request.headers, "user-agent"), {
-    onNone: () => ({}),
-    onSome: (userAgent) => ({ userAgent }),
-  });
-
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
  * not inside each handler body — the same `HttpApiBuilder.group` pattern
@@ -666,11 +654,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         const signUpInput = Effect.gen(function* () {
-          const resolvedAddress = yield* clientAddress.resolve(request);
+          const facts = yield* ClientAddress.facts(clientAddress, request);
           return {
             ...payload,
-            ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-            ...requestUserAgent(request),
+            ...facts,
           };
         });
         // TMS-005: `conceal` answers 202 with no session for a fresh and an
@@ -704,11 +691,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
             // `ClientAddress` port rather than `request.remoteAddress`
             // directly, so a trusted-proxy-aware composition gets a real
             // client IP here too, not just for `OAuth`'s own callback.
-            const resolvedAddress = yield* clientAddress.resolve(request);
+            const facts = yield* ClientAddress.facts(clientAddress, request);
             return yield* password.signIn({
               ...payload,
-              ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-              ...requestUserAgent(request),
+              ...facts,
             });
           }),
         );
@@ -722,10 +708,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.RequestResetPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         yield* password.requestReset({
           ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
       }),
 
@@ -736,10 +722,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.ResendVerificationPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         yield* password.resendVerification({
           ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
       }),
 
@@ -758,10 +744,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.VerifyEmailPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         yield* password.verifyEmail({
           ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
       }),
 
@@ -772,10 +758,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.ConfirmEmailChangePayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         yield* password.confirmEmailChange({
           ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
       }),
     });
@@ -802,29 +788,18 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
         payload: PasswordApi.ChangePasswordPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const principal = yield* Api.CurrentPrincipal;
-        // `changePassword`'s own `Authentication` middleware already
-        // refused an unauthenticated request; a non-`User` principal
-        // reaching it is a wiring defect, mirroring `Session.ts`'s own
-        // `currentUserPrincipal` guard.
-        if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation(
-            "NonUserPrincipal",
-            `awthaq: change-password reached with a non-User principal: ${principal._tag}`,
-          );
-        }
+        const { principal } = yield* CurrentUser.current;
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
           request,
           Effect.gen(function* () {
-            const resolvedAddress = yield* clientAddress.resolve(request);
+            const facts = yield* ClientAddress.facts(clientAddress, request);
             return yield* password.changePassword({
               userId: Users.UserId(principal.ref.id),
               currentSessionId: Sessions.SessionId(principal.sessionId),
               currentPassword: payload.currentPassword,
               newPassword: payload.newPassword,
-              ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-              ...requestUserAgent(request),
+              ...facts,
             });
           }),
         );
@@ -836,13 +811,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ChangeEmailPayload;
       }) {
-        const principal = yield* Api.CurrentPrincipal;
-        if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation(
-            "NonUserPrincipal",
-            `awthaq: change-email reached with a non-User principal: ${principal._tag}`,
-          );
-        }
+        const { principal } = yield* CurrentUser.current;
         yield* password.requestEmailChange({
           userId: Users.UserId(principal.ref.id),
           currentSessionId: Sessions.SessionId(principal.sessionId),
@@ -855,13 +824,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ReauthenticatePayload;
       }) {
-        const principal = yield* Api.CurrentPrincipal;
-        if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation(
-            "NonUserPrincipal",
-            `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`,
-          );
-        }
+        const { principal } = yield* CurrentUser.current;
         yield* password.reauthenticate({
           userId: Users.UserId(principal.ref.id),
           currentSessionId: Sessions.SessionId(principal.sessionId),

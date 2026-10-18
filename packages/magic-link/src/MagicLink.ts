@@ -44,7 +44,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/unstable/http/Headers";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
@@ -134,12 +133,6 @@ const PURPOSE = "magic-link";
 /** The server-side payload a link carries: the address it was issued for (normalised). */
 const LinkPayload = Schema.Struct({ email: Schema.String });
 
-/** What `verify` returns: the session and the raw token to deliver it (cookie or bearer, `SessionDelivery`). */
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
-
 export interface MagicLinkShape {
   /** BEH-EA-268: always resolves (or is rate limited) — never says whether an account exists. */
   readonly requestLink: (input: {
@@ -151,7 +144,7 @@ export interface MagicLinkShape {
     input: { readonly token: Redacted.Redacted<string>; readonly ip?: string | undefined },
     context?: { readonly userAgent?: string | undefined },
   ) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | MagicLinkApi.MagicLinkConsumed
     | Api.RateLimited
     | HookPoint.HookAborted
@@ -160,19 +153,6 @@ export interface MagicLinkShape {
     | Errors.StoreUnavailable
   >;
 }
-
-/** The address (through the application-provided `ClientAddress` port, AGA-001/NHS-003) and user agent of a request. */
-const currentClient = Effect.fnUntraced(function* (
-  clientAddress: ClientAddress.ClientAddressShape,
-  request: HttpServerRequest.HttpServerRequest,
-) {
-  const resolved = yield* clientAddress.resolve(request);
-  const userAgent = Headers.get(request.headers, "user-agent");
-  return {
-    ip: Option.getOrUndefined(resolved),
-    context: Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
-  };
-});
 
 export const MagicLinkHandlers = HttpApiBuilder.group(
   MagicLinkApi.MagicLinkApi,
@@ -188,8 +168,8 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
         payload: MagicLinkApi.RequestPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const client = yield* currentClient(clientAddress, request);
-        yield* magicLink.requestLink({ email: payload.email, ip: client.ip });
+        const { ip } = yield* ClientAddress.address(clientAddress, request);
+        yield* magicLink.requestLink({ email: payload.email, ip });
       }),
       verify: Effect.fnUntraced(function* ({
         payload,
@@ -202,8 +182,8 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
           request,
           Effect.gen(function* () {
-            const client = yield* currentClient(clientAddress, request);
-            return yield* magicLink.verify({ token: payload.token, ip: client.ip }, client.context);
+            const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
+            return yield* magicLink.verify({ token: payload.token, ip }, context);
           }),
         );
         return response;

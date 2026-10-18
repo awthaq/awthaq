@@ -221,6 +221,18 @@ export interface SessionView {
   readonly tenantId: Option.Option<string>;
 }
 
+/** What `issue` returns: the session and the raw token to deliver (cookie or bearer, `SessionDelivery`). */
+export interface IssuedSession {
+  readonly session: SessionView;
+  readonly token: Redacted.Redacted<string>;
+}
+
+/** What `verify` returns: the session and, when this call rotated it (BEH-EA-052), the fresh token. */
+export interface VerifiedSession {
+  readonly session: SessionView;
+  readonly rotated: Option.Option<Redacted.Redacted<string>>;
+}
+
 /** BEH-EA-054: one row of `Sessions.list`. */
 export interface SessionListItem {
   readonly id: SessionId;
@@ -349,10 +361,7 @@ export interface SessionsShape {
     readonly amr?: ReadonlyArray<AuthMethod>;
     /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@awthaq/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
     readonly absoluteDuration?: Duration.Duration;
-  }) => Effect.Effect<
-    { readonly session: SessionView; readonly token: Redacted.Redacted<string> },
-    StoreUnavailable
-  >;
+  }) => Effect.Effect<IssuedSession, StoreUnavailable>;
   /**
    * BEH-EA-050/056: hashes the presented secret and compares it to the
    * stored hash in constant time; BEH-EA-052: also performs the
@@ -406,10 +415,7 @@ export interface SessionsShape {
    */
   readonly verify: (
     token: Redacted.Redacted<string>,
-  ) => Effect.Effect<
-    { readonly session: SessionView; readonly rotated: Option.Option<Redacted.Redacted<string>> },
-    SessionNotFound | SessionExpired | StoreUnavailable
-  >;
+  ) => Effect.Effect<VerifiedSession, SessionNotFound | SessionExpired | StoreUnavailable>;
   /**
    * TIR-008: every revocation primitive takes the `reason` the session ended
    * and publishes exactly one `auth.session.revoked` (`AuditLog` records it)

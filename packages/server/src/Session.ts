@@ -6,11 +6,10 @@
 // against that same group's own contract).
 
 import { AuthCore, Api, SessionContract } from "@awthaq/api";
-import { Sessions } from "@awthaq/core";
+import { CurrentUser, Sessions } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import { currentUser } from "./internal/CurrentUser.ts";
 import { expireSessionCookie } from "./internal/SessionCookie.ts";
 
 /**
@@ -52,7 +51,7 @@ const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>
  * the same way `@effect/platform`'s own `HttpApiBuilder.group` examples
  * resolve a domain service once and reuse it per handler. Only
  * `Api.CurrentPrincipal` (genuinely different per request) is read inside
- * each individual handler, through `currentUser` (GC-003).
+ * each individual handler, through `CurrentUser.current` (GC-003).
  */
 export const SessionHandlers = HttpApiBuilder.group(
   AuthCore.AuthCoreApi,
@@ -62,7 +61,7 @@ export const SessionHandlers = HttpApiBuilder.group(
 
     return handlers.handleAll({
       current: Effect.fnUntraced(function* () {
-        const { userId, sessionId } = yield* currentUser;
+        const { userId, sessionId } = yield* CurrentUser.current;
         // TIR-003/ESS-005: a keyed lookup, never `list` + `find` — a user
         // with many historical sessions used to push the current one off the
         // list's first page and turn this into a 500.
@@ -79,7 +78,7 @@ export const SessionHandlers = HttpApiBuilder.group(
       }),
 
       list: Effect.fnUntraced(function* () {
-        const { userId, sessionId } = yield* currentUser;
+        const { userId, sessionId } = yield* CurrentUser.current;
         // RRC-001: a display-only listing — the one session read a replica may serve.
         const items = yield* sessions.list(userId, sessionId, { consistency: "eventual" });
         return items.map(toDto);
@@ -91,7 +90,7 @@ export const SessionHandlers = HttpApiBuilder.group(
       // `SessionNotFound` here is swallowed rather than surfaced as an error.
       // CSS-002: the caller's own session ended, so its cookie is expired.
       signOut: Effect.fnUntraced(function* () {
-        const { sessionId } = yield* currentUser;
+        const { sessionId } = yield* CurrentUser.current;
         yield* sessions
           .revoke(sessionId, "signOut")
           .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void));
@@ -106,7 +105,7 @@ export const SessionHandlers = HttpApiBuilder.group(
       }: {
         payload: SessionContract.RevokePayload;
       }) {
-        const { userId, sessionId } = yield* currentUser;
+        const { userId, sessionId } = yield* CurrentUser.current;
         // The one wire-to-domain re-brand in this package (GC-003): the
         // payload id is untrusted input, not a verified session's own id.
         const targetId = Sessions.SessionId(payload.id);
@@ -122,7 +121,7 @@ export const SessionHandlers = HttpApiBuilder.group(
       }),
 
       revokeOthers: Effect.fnUntraced(function* () {
-        const { userId, sessionId } = yield* currentUser;
+        const { userId, sessionId } = yield* CurrentUser.current;
         yield* sessions.revokeOthers(userId, sessionId, "userRevoked");
       }),
 
@@ -130,7 +129,7 @@ export const SessionHandlers = HttpApiBuilder.group(
       // current session too, as a natural consequence of "all" meaning all;
       // CSS-002: so its cookie is expired as well.
       revokeAll: Effect.fnUntraced(function* () {
-        const { userId } = yield* currentUser;
+        const { userId } = yield* CurrentUser.current;
         yield* sessions.revokeAll(userId, "userRevoked");
         yield* expireSessionCookie;
       }),

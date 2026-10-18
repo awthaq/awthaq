@@ -4,8 +4,7 @@
 // authorized interface. Built over a service tag so this file never imports the plugin class.
 
 import { Api } from "@awthaq/api";
-import { Users } from "@awthaq/core";
-import { Defects } from "@awthaq/ports";
+import { CurrentUser, Users } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,6 +18,12 @@ import type { OrganizationShape } from "./OrganizationShape.ts";
 import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as TeamRecords from "./TeamRecords.ts";
+
+/** GC-003: the user-tier caller, as the `Api.UserPrincipal` the authorized interface takes (`Api` also lets declaration emit name the middleware requirements, TS2883). */
+const currentCaller = Effect.map(
+  CurrentUser.current,
+  ({ principal }: { readonly principal: Api.UserPrincipal }) => principal,
+);
 
 const toOrganizationDto = (
   record: OrganizationRecords.OrganizationRecord,
@@ -100,17 +105,6 @@ const toTeamMembershipDto = (
     createdAt: DateTime.formatIso(record.createdAt),
   });
 
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: organization group reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
-
 const parseIntQuery = (value: string | undefined): number | undefined =>
   value === undefined ? undefined : Number.parseInt(value, 10);
 
@@ -132,7 +126,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           payload: OrganizationApi.CreateOrganizationPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.create({ caller, ...payload });
           return toOrganizationDto(record);
         }),
@@ -145,7 +139,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           return new OrganizationApi.CheckSlugResult({ available });
         }),
         list: Effect.fnUntraced(function* () {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.list(caller);
           return records.map(toOrganizationDto);
         }),
@@ -154,12 +148,12 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           payload: OrganizationApi.SetActivePayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.setActive(caller, payload.organizationId);
           return toActiveContextDto(record);
         }),
         getActive: Effect.fnUntraced(function* () {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.getActive(caller);
           return toActiveContextDto(record);
         }),
@@ -168,17 +162,17 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           payload: OrganizationApi.SetActiveTeamPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.setActiveTeam(caller, payload.teamId);
           return toActiveContextDto(record);
         }),
         getActiveMember: Effect.fnUntraced(function* () {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.getActiveMember(caller);
           return toMembershipDto(record);
         }),
         getActiveMemberRole: Effect.fnUntraced(function* () {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const role = yield* organization.getActiveMemberRole(caller);
           return new OrganizationApi.MemberRoleResult({ role });
         }),
@@ -187,7 +181,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrganizationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.get(caller, params.organizationId);
           return toOrganizationDto(record);
         }),
@@ -198,7 +192,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.OrganizationIdParams;
           query: OrganizationApi.GetFullQuery;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const result = yield* organization.getFull(caller, params.organizationId, {
             membersLimit: parseIntQuery(query.membersLimit),
             membersOffset: parseIntQuery(query.membersOffset),
@@ -216,7 +210,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.OrganizationIdParams;
           payload: OrganizationApi.UpdateOrganizationPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.update(caller, params.organizationId, payload);
           return toOrganizationDto(record);
         }),
@@ -225,7 +219,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrganizationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           yield* organization.delete(caller, params.organizationId);
         }),
         listMembers: Effect.fnUntraced(function* ({
@@ -235,7 +229,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.OrganizationIdParams;
           query: OrganizationApi.ListMembersQuery;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listMembers(caller, params.organizationId, {
             limit: parseIntQuery(query.limit),
             offset: parseIntQuery(query.offset),
@@ -248,7 +242,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.MemberParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           yield* organization.removeMember(
             caller,
             params.organizationId,
@@ -262,7 +256,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.MemberParams;
           payload: OrganizationApi.UpdateMemberRolePayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.updateMemberRole(
             caller,
             params.organizationId,
@@ -276,7 +270,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrganizationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           yield* organization.leave(caller, params.organizationId);
         }),
         invite: Effect.fnUntraced(function* ({
@@ -286,7 +280,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.OrganizationIdParams;
           payload: OrganizationApi.InvitePayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.invite(caller, params.organizationId, payload);
           return toInvitationDto(record);
         }),
@@ -295,7 +289,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrganizationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listInvitationsForOrganization(
             caller,
             params.organizationId,
@@ -303,7 +297,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           return records.map(toInvitationDto);
         }),
         listInvitationsForUser: Effect.fnUntraced(function* () {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listInvitationsForUser(caller);
           return records.map(toInvitationDto);
         }),
@@ -312,7 +306,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.InvitationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.getInvitation(caller, params.invitationId);
           return toInvitationDto(record);
         }),
@@ -321,7 +315,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.InvitationTokenParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.getInvitationByToken(caller, params.token);
           return toInvitationDto(record);
         }),
@@ -332,7 +326,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.InvitationIdParams;
           payload: OrganizationApi.InvitationTokenPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.acceptInvitation(
             caller,
             params.invitationId,
@@ -347,7 +341,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.InvitationIdParams;
           payload: OrganizationApi.InvitationTokenPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           yield* organization.rejectInvitation(caller, params.invitationId, payload.token);
         }),
         cancelInvitation: Effect.fnUntraced(function* ({
@@ -355,7 +349,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.InvitationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           yield* organization.cancelInvitation(caller, params.invitationId);
         }),
         createRole: Effect.fnUntraced(function* ({
@@ -365,7 +359,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.OrganizationIdParams;
           payload: OrganizationApi.CreateOrgRolePayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.createRole(caller, params.organizationId, payload);
           return toOrgRoleDto(record);
         }),
@@ -374,7 +368,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrganizationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listRoles(caller, params.organizationId);
           return records.map(toOrgRoleDto);
         }),
@@ -383,7 +377,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrgRoleParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.getRole(caller, params.organizationId, params.roleId);
           return toOrgRoleDto(record);
         }),
@@ -394,7 +388,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.OrgRoleParams;
           payload: OrganizationApi.UpdateOrgRolePayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.updateRole(
             caller,
             params.organizationId,
@@ -408,7 +402,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrgRoleParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           yield* organization.deleteRole(caller, params.organizationId, params.roleId);
         }),
         createTeam: Effect.fnUntraced(function* ({
@@ -418,7 +412,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.OrganizationIdParams;
           payload: OrganizationApi.CreateTeamPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.createTeam(
             caller,
             params.organizationId,
@@ -434,7 +428,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.TeamIdParams;
           payload: OrganizationApi.MoveTeamPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.moveTeam(
             caller,
             params.organizationId,
@@ -448,7 +442,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.TeamIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listTeamAncestors(
             caller,
             params.organizationId,
@@ -461,7 +455,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.TeamIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listTeamDescendants(
             caller,
             params.organizationId,
@@ -474,7 +468,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrganizationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listTeams(caller, params.organizationId);
           return records.map(toTeamDto);
         }),
@@ -483,7 +477,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.OrganizationIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listUserTeams(caller, params.organizationId);
           return records.map(toTeamDto);
         }),
@@ -494,7 +488,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.TeamIdParams;
           payload: OrganizationApi.UpdateTeamPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.updateTeam(
             caller,
             params.organizationId,
@@ -508,7 +502,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.TeamIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           yield* organization.removeTeam(caller, params.organizationId, params.teamId);
         }),
         listTeamMembers: Effect.fnUntraced(function* ({
@@ -516,7 +510,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.TeamIdParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const records = yield* organization.listTeamMembers(
             caller,
             params.organizationId,
@@ -531,7 +525,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.TeamIdParams;
           payload: OrganizationApi.AddTeamMemberPayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.addTeamMember(
             caller,
             params.organizationId,
@@ -548,7 +542,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
           params: OrganizationApi.TeamMemberParams;
           payload: OrganizationApi.UpdateTeamMemberRolePayload;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           const record = yield* organization.updateTeamMemberRole(
             caller,
             params.organizationId,
@@ -563,7 +557,7 @@ export const make = <Self>(tag: Context.Service<Self, OrganizationShape>) =>
         }: {
           params: OrganizationApi.TeamMemberParams;
         }) {
-          const caller = yield* currentUserPrincipal;
+          const caller = yield* currentCaller;
           yield* organization.removeTeamMember(
             caller,
             params.organizationId,

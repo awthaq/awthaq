@@ -51,10 +51,7 @@ export const mode = (request: HttpServerRequest.HttpServerRequest) => {
  */
 export const deliver = Effect.fnUntraced(function* (
   deliveryMode: Mode,
-  issued: {
-    readonly session: Sessions.SessionView;
-    readonly token: Redacted.Redacted<string>;
-  },
+  issued: Sessions.IssuedSession,
 ) {
   const dto = toSessionDto(issued.session);
   if (deliveryMode === "cookie") {
@@ -75,14 +72,7 @@ export const deliver = Effect.fnUntraced(function* (
  */
 export const respond = <E, R>(
   request: HttpServerRequest.HttpServerRequest,
-  mint: Effect.Effect<
-    {
-      readonly session: Sessions.SessionView;
-      readonly token: Redacted.Redacted<string>;
-    },
-    E,
-    R
-  >,
+  mint: Effect.Effect<Sessions.IssuedSession, E, R>,
 ) =>
   Effect.gen(function* () {
     const deliveryMode = yield* mode(request);

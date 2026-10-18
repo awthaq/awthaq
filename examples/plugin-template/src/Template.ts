@@ -7,7 +7,7 @@
 // through this file top to bottom; `test/Template.test.ts` keeps it honest.
 
 import { Api } from "@awthaq/api";
-import { AuthPlugin, HookPoint, Migrations, RateLimits } from "@awthaq/core";
+import { CurrentUser, AuthPlugin, HookPoint, Migrations, RateLimits } from "@awthaq/core";
 import { RateLimiter, Tenant } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
@@ -267,15 +267,6 @@ const toDto = (record: NoteRecord) =>
     createdAt: DateTime.formatIso(record.created),
   });
 
-/** Handlers run behind `Api.Authentication`, so the principal is always there. */
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Effect.die(new Error(`notes: reached with a non-User principal`));
-  }
-  return principal;
-});
-
 export const NotesHandlers = HttpApiBuilder.group(
   TemplateApi.NotesApi,
   "notes",
@@ -287,11 +278,11 @@ export const NotesHandlers = HttpApiBuilder.group(
       }: {
         payload: TemplateApi.CreateNotePayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         return toDto(yield* notes.create(caller, payload.text));
       }),
       list: Effect.fnUntraced(function* () {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         return (yield* notes.list(caller)).map(toDto);
       }),
     });

@@ -42,6 +42,7 @@ export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
 export * as AuthRequestContext from "./AuthRequestContext.ts";
 export * as ConfigDescriptor from "./ConfigDescriptor.ts";
+export * as CurrentUser from "./CurrentUser.ts";
 export * as DataExport from "./DataExport.ts";
 // The tagged defect kinds (`Effect.die` with a name), defined in ports so ports and sql can use them too.
 export { Defects } from "@awthaq/ports";

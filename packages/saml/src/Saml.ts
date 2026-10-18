@@ -28,6 +28,7 @@
 
 import { Api } from "@awthaq/api";
 import {
+  CurrentUser,
   AuthEvents,
   AuthPlugin,
   Errors,
@@ -73,7 +74,6 @@ import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import * as Headers from "effect/unstable/http/Headers";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -131,7 +131,6 @@ const RequestPayload = Schema.Struct({
 const decodeRequestPayload = Schema.decodeUnknownOption(RequestPayload);
 
 type ServerError = Errors.StoreUnavailable;
-type IssuedSession = Effect.Success<ReturnType<Sessions.SessionsShape["issue"]>>;
 
 export interface SamlShape {
   /** BEH-EA-241: the SP metadata document for one connection. */
@@ -153,7 +152,7 @@ export interface SamlShape {
     readonly ip?: string | undefined;
     readonly userAgent?: string | undefined;
   }) => Effect.Effect<
-    { readonly callbackURL: string; readonly session: IssuedSession },
+    { readonly callbackURL: string; readonly session: Sessions.IssuedSession },
     | SamlApi.SamlAssertionRejected
     | Users.UserSuspended
     | HookPoint.HookAborted
@@ -455,10 +454,10 @@ export const SamlHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         yield* noReferrer;
-        const resolved = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         const started = yield* saml.authnRequest(query.connection, {
           callbackURL: query.callbackURL,
-          ...(Option.isSome(resolved) ? { ip: resolved.value } : {}),
+          ...address,
         });
         return yield* HttpServerResponse.setCookie(
           HttpServerResponse.redirect(started.location),
@@ -478,15 +477,11 @@ export const SamlHandlers = HttpApiBuilder.group(
         yield* noReferrer;
         // The request state is single-use: every ACS response, success or failure, clears it.
         yield* expireRequestCookie;
-        const resolved = yield* clientAddress.resolve(request);
+        const facts = yield* ClientAddress.facts(clientAddress, request);
         const outcome = yield* saml.acs({
           samlResponse: payload.SAMLResponse,
           cookieState: request.cookies[REQUEST_COOKIE],
-          ...(Option.isSome(resolved) ? { ip: resolved.value } : {}),
-          ...Option.match(Headers.get(request.headers, "user-agent"), {
-            onNone: () => ({}),
-            onSome: (userAgent) => ({ userAgent }),
-          }),
+          ...facts,
         });
         const cookie = yield* SessionCookie.render(outcome.session.session, outcome.session.token);
         return yield* HttpServerResponse.setCookie(
@@ -586,13 +581,7 @@ export const SamlAccountHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         yield* noReferrer;
-        const principal = yield* Api.CurrentPrincipal;
-        if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation(
-            "NonUserPrincipal",
-            `awthaq: saml.account reached with a non-User principal: ${principal._tag}`,
-          );
-        }
+        const { principal } = yield* CurrentUser.current;
         const resolved = yield* clientAddress.resolve(request);
         const started = yield* saml.logout(principal, {
           callbackURL: payload.callbackURL,
@@ -632,21 +621,27 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         payload: SamlApi.CreateConnectionPayload;
       }) {
-        return yield* admin.createConnection(yield* currentUserPrincipal, payload);
+        return yield* admin.createConnection((yield* CurrentUser.current).principal, payload);
       }),
       listConnections: Effect.fnUntraced(function* ({
         query,
       }: {
         query: SamlApi.ListConnectionsQuery;
       }) {
-        return yield* admin.listConnections(yield* currentUserPrincipal, query.organizationId);
+        return yield* admin.listConnections(
+          (yield* CurrentUser.current).principal,
+          query.organizationId,
+        );
       }),
       getConnection: Effect.fnUntraced(function* ({
         params,
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.getConnection(yield* currentUserPrincipal, params.connectionId);
+        return yield* admin.getConnection(
+          (yield* CurrentUser.current).principal,
+          params.connectionId,
+        );
       }),
       updateConnection: Effect.fnUntraced(function* ({
         params,
@@ -656,7 +651,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
         payload: SamlApi.UpdateConnectionPayload;
       }) {
         return yield* admin.updateConnection(
-          yield* currentUserPrincipal,
+          (yield* CurrentUser.current).principal,
           params.connectionId,
           payload,
         );
@@ -666,14 +661,17 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        yield* admin.deleteConnection(yield* currentUserPrincipal, params.connectionId);
+        yield* admin.deleteConnection((yield* CurrentUser.current).principal, params.connectionId);
       }),
       refreshMetadata: Effect.fnUntraced(function* ({
         params,
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.refreshMetadata(yield* currentUserPrincipal, params.connectionId);
+        return yield* admin.refreshMetadata(
+          (yield* CurrentUser.current).principal,
+          params.connectionId,
+        );
       }),
       rotateSigningKey: Effect.fnUntraced(function* ({
         params,
@@ -683,7 +681,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
         payload: SamlApi.SigningKeyPayload;
       }) {
         return yield* admin.rotateSigningKey(
-          yield* currentUserPrincipal,
+          (yield* CurrentUser.current).principal,
           params.connectionId,
           payload,
         );
@@ -693,23 +691,14 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.listSigningKeys(yield* currentUserPrincipal, params.connectionId);
+        return yield* admin.listSigningKeys(
+          (yield* CurrentUser.current).principal,
+          params.connectionId,
+        );
       }),
     });
   }),
 );
-
-/** Same forward-reference pattern `@awthaq/admin` and `@awthaq/webhooks` document: a handler reached without a `User` principal is a wiring defect. */
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: saml.admin reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
 
 // ---- rate limits --------------------------------------------------------------------------------------
 

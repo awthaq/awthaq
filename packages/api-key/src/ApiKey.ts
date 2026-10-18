@@ -41,6 +41,7 @@
 
 import { Api } from "@awthaq/api";
 import {
+  CurrentUser,
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
@@ -411,18 +412,6 @@ const toClientDto = (view: ApiKeyClientView) =>
     revokedAt: Option.match(view.revokedAt, { onNone: () => null, onSome: DateTime.formatIso }),
   });
 
-/** The management groups sit behind `Authentication` (user tier), so the principal is always a `User`. */
-const currentUserId = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq/api-key: management reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return Users.UserId(principal.ref.id);
-});
-
 const seconds = (value: number | undefined) =>
   value === undefined ? undefined : Duration.seconds(value);
 
@@ -457,7 +446,7 @@ export const ApiKeyHandlers = Layer.mergeAll(
         }: {
           payload: ApiKeyApi.CreateApiKeyPayload;
         }) {
-          const owner = yield* currentUserId;
+          const owner = (yield* CurrentUser.current).userId;
           return toCreatedDto(
             yield* apiKey.create(owner, {
               name: payload.name,
@@ -467,11 +456,11 @@ export const ApiKeyHandlers = Layer.mergeAll(
           );
         }),
         list: Effect.fnUntraced(function* () {
-          const owner = yield* currentUserId;
+          const owner = (yield* CurrentUser.current).userId;
           return (yield* apiKey.list(owner)).map(toDto);
         }),
         revoke: Effect.fnUntraced(function* ({ params }: { params: { readonly id: string } }) {
-          yield* apiKey.revoke(yield* currentUserId, params.id);
+          yield* apiKey.revoke((yield* CurrentUser.current).userId, params.id);
         }),
         rotate: Effect.fnUntraced(function* ({
           params,
@@ -481,7 +470,7 @@ export const ApiKeyHandlers = Layer.mergeAll(
           payload: ApiKeyApi.RotatePayload;
         }) {
           return toCreatedDto(
-            yield* apiKey.rotate(yield* currentUserId, params.id, {
+            yield* apiKey.rotate((yield* CurrentUser.current).userId, params.id, {
               gracePeriod: seconds(payload.gracePeriodSeconds),
               expiresIn: seconds(payload.expiresInSeconds),
             }),
@@ -501,7 +490,7 @@ export const ApiKeyHandlers = Layer.mergeAll(
         }: {
           payload: ApiKeyApi.RegisterClientPayload;
         }) {
-          const created = yield* apiKey.registerClient(yield* currentUserId, {
+          const created = yield* apiKey.registerClient((yield* CurrentUser.current).userId, {
             name: payload.name,
             scopes: payload.scopes,
           });
@@ -511,14 +500,14 @@ export const ApiKeyHandlers = Layer.mergeAll(
           });
         }),
         list: Effect.fnUntraced(function* () {
-          return (yield* apiKey.listClients(yield* currentUserId)).map(toClientDto);
+          return (yield* apiKey.listClients((yield* CurrentUser.current).userId)).map(toClientDto);
         }),
         revoke: Effect.fnUntraced(function* ({
           params,
         }: {
           params: { readonly clientId: string };
         }) {
-          yield* apiKey.revokeClient(yield* currentUserId, params.clientId);
+          yield* apiKey.revokeClient((yield* CurrentUser.current).userId, params.clientId);
         }),
         rotateSecret: Effect.fnUntraced(function* ({
           params,
@@ -527,9 +516,13 @@ export const ApiKeyHandlers = Layer.mergeAll(
           params: { readonly clientId: string };
           payload: ApiKeyApi.RotatePayload;
         }) {
-          const rotated = yield* apiKey.rotateClientSecret(yield* currentUserId, params.clientId, {
-            gracePeriod: seconds(payload.gracePeriodSeconds),
-          });
+          const rotated = yield* apiKey.rotateClientSecret(
+            (yield* CurrentUser.current).userId,
+            params.clientId,
+            {
+              gracePeriod: seconds(payload.gracePeriodSeconds),
+            },
+          );
           return new ApiKeyApi.ApiKeyClientSecretDto({
             clientId: rotated.clientId,
             clientSecret: Redacted.value(rotated.clientSecret),

@@ -5,15 +5,21 @@
 // the same way `Session.SessionHandlers` is.
 
 import { AuthCore, Api, AccountContract } from "@awthaq/api";
-import { DataExport, Erasure, RateLimits, UserFields, Users } from "@awthaq/core";
+import {
+  CurrentUser,
+  DataExport,
+  Defects,
+  Erasure,
+  RateLimits,
+  UserFields,
+  Users,
+} from "@awthaq/core";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import { currentUser } from "./internal/CurrentUser.ts";
-import { HandlerInvariantViolation } from "./internal/Defects.ts";
 import { expireSessionCookie } from "./internal/SessionCookie.ts";
 
 /**
@@ -82,16 +88,14 @@ export const AccountHandlers = HttpApiBuilder.group(
       }: {
         payload: AccountContract.UpdateProfilePayload;
       }) {
-        const { userId } = yield* currentUser;
+        const { userId } = yield* CurrentUser.current;
         // The token was validated at authentication time; the user it
         // names must still exist — a `UserNotFound` here is a defect, not
         // a request-level condition the caller can act on.
         const missing = () =>
-          Effect.die(
-            new HandlerInvariantViolation({
-              invariant: "AuthenticatedUserMissing",
-              message: `awthaq: authenticated user missing: ${userId}`,
-            }),
+          Defects.invariantViolation(
+            "AuthenticatedUserMissing",
+            `awthaq: authenticated user missing: ${userId}`,
           );
         // SAM-004/BEH-EA-048: declared fields first, as `source: "client"` — validated and gated as a
         // whole before anything is stored, so a refused field leaves the profile untouched too. Only
@@ -127,18 +131,16 @@ export const AccountHandlers = HttpApiBuilder.group(
       // (CSG-001/DRS-002, wayfinder ticket 30), so an admin console or a CLI runs the
       // same guaranteed-complete cascade; this handler is only the HTTP edge.
       deleteUser: Effect.fnUntraced(function* () {
-        const { userId } = yield* currentUser;
+        const { userId } = yield* CurrentUser.current;
         yield* erasure.eraseAccount(userId, Erasure.ErasureInitiator.Self()).pipe(
           // `@awthaq/api` (the contract stratum) sits below core and cannot name core's
           // `HookAborted`, so the endpoint declares no error for a `BeforeUserDelete` veto
           // (a legal hold): as before this refactor, it surfaces as a server defect.
           Effect.catchTag("HookAborted", Effect.die),
           Effect.catchTag("UserNotFound", () =>
-            Effect.die(
-              new HandlerInvariantViolation({
-                invariant: "AuthenticatedUserMissing",
-                message: `awthaq: authenticated user missing: ${userId}`,
-              }),
+            Defects.invariantViolation(
+              "AuthenticatedUserMissing",
+              `awthaq: authenticated user missing: ${userId}`,
             ),
           ),
         );
@@ -152,18 +154,18 @@ export const AccountHandlers = HttpApiBuilder.group(
       // section); this is the HTTP edge: a per-user rate limit (the export reads every
       // store), and headers that keep the document out of caches and name the download.
       exportData: Effect.fnUntraced(function* () {
-        const { userId } = yield* currentUser;
+        const { userId } = yield* CurrentUser.current;
         yield* limits.spend("exportData", { userId });
-        const document = yield* dataExport.exportAccount(userId, { requestedBy: "self" }).pipe(
-          Effect.catchTag("UserNotFound", () =>
-            Effect.die(
-              new HandlerInvariantViolation({
-                invariant: "AuthenticatedUserMissing",
-                message: `awthaq: authenticated user missing: ${userId}`,
-              }),
+        const document = yield* dataExport
+          .exportAccount(userId, { requestedBy: "self" })
+          .pipe(
+            Effect.catchTag("UserNotFound", () =>
+              Defects.invariantViolation(
+                "AuthenticatedUserMissing",
+                `awthaq: authenticated user missing: ${userId}`,
+              ),
             ),
-          ),
-        );
+          );
         yield* HttpEffect.appendPreResponseHandler((_request, response) =>
           Effect.succeed(
             HttpServerResponse.setHeaders(response, {

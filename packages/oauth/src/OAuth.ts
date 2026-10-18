@@ -56,7 +56,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/unstable/http/Headers";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
@@ -492,7 +491,7 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
           return yield* new OAuthApi.InvalidNativeRequest();
         }
         // OAP-008: resolved through the same `ClientAddress` port as `callback`.
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         const url = yield* oauth.authorize(params.provider, {
           callbackURL: query.callbackURL,
           link,
@@ -502,7 +501,7 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
                   query.code_challenge === undefined ? {} : { codeChallenge: query.code_challenge },
               }
             : {}),
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
         const response = HttpServerResponse.redirect(url.location);
         return yield* HttpServerResponse.setCookie(response, OAUTH_STATE_COOKIE, url.state, {
@@ -535,7 +534,7 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
         // proxy's own address, collapsing every client into one shared
         // rate-limit bucket unless the composition opts into
         // `ClientAddress.layerTrustedProxy`.
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const facts = yield* ClientAddress.facts(clientAddress, request);
         const outcome = yield* oauth.callback(params.provider, {
           code: query.code,
           state: query.state,
@@ -545,11 +544,7 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
             ? {}
             : { errorDescription: query.error_description }),
           cookieState,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-          ...Option.match(Headers.get(request.headers, "user-agent"), {
-            onNone: () => ({}),
-            onSome: (userAgent) => ({ userAgent }),
-          }),
+          ...facts,
         });
         // PV-016: a browser landing (never the native deep link) behind a `SameSite=Strict` session
         // cookie goes through the same-site interstitial so its first request carries the session.
@@ -594,7 +589,7 @@ const OAuthExchangeHandlers = HttpApiBuilder.group(
         payload: OAuthApi.ExchangePayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         // Holds a live token: never cacheable (MAPS-008).
         yield* HttpEffect.appendPreResponseHandler((_request, response) =>
           Effect.succeed(HttpServerResponse.setHeader(response, "cache-control", "no-store")),
@@ -603,7 +598,7 @@ const OAuthExchangeHandlers = HttpApiBuilder.group(
         const session: SessionContract.SessionDto = yield* oauth.exchange({
           code: payload.code,
           ...(payload.codeVerifier === undefined ? {} : { codeVerifier: payload.codeVerifier }),
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
         return session;
       }),
