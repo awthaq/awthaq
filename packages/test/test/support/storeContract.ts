@@ -8,6 +8,7 @@ import {
   AuditLogStore,
   Encryption,
   KeyProvider,
+  RelayCursorStore,
   SessionStore,
   SqlTransaction,
   UserStore,
@@ -142,6 +143,11 @@ export const runOnMemory = (): void => {
     adapter: "UserStore (Ref)",
     layer: Layer.mergeAll(UserStore.layerMemory, SqlTransaction.layerNoop),
     cases: StoreContract.users,
+  });
+  StoreContract.run(framework, {
+    adapter: "RelayCursorStore (Ref)",
+    layer: RelayCursorStore.layerMemory,
+    cases: StoreContract.relayCursor,
   });
 };
 
