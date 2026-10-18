@@ -16,6 +16,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as Model from "effect/unstable/schema/Model";
@@ -111,3 +112,45 @@ export const optionValue = <A>(option: Option.Option<A>): A | undefined =>
 export const MemoryUsersLive = Users.layer
   .pipe(Layer.provide(Persistence.memory))
   .pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+
+/**
+ * `Persistence.sql({ encryptPii: true })` over a fresh migrated in-memory database, with an `Encryption` whose current key
+ * a scenario can rotate and retire (plan 17, BEH-EA-339): the composition a deployment runs, and the keyset it rotates.
+ */
+export const sealedStack = () => {
+  let current = "k1";
+  const retired = new Set<string>();
+  const material = (kid: string): KeyProvider.KeyMaterial => ({
+    kid,
+    key: Redacted.make(new Uint8Array(32).fill(kid.charCodeAt(kid.length - 1) % 251)),
+  });
+  const provider = KeyProvider.KeyProvider.of({
+    currentKey: Effect.sync(() => material(current)),
+    getKey: (kid) =>
+      retired.has(kid)
+        ? Effect.fail(new KeyProvider.UnknownKeyId({ kid }))
+        : Effect.succeed(material(kid)),
+  });
+  const client = SqliteClient.layer({ filename: ":memory:" });
+  const migrated = Layer.effectDiscard(
+    Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
+  ).pipe(Layer.provide(client));
+  return {
+    rotateTo: (kid: string) => {
+      current = kid;
+    },
+    retire: (kid: string) => {
+      retired.add(kid);
+    },
+    layer: Persistence.sql({ encryptPii: true }).pipe(
+      Layer.provideMerge(
+        Encryption.layer.pipe(
+          Layer.provide(Layer.succeed(KeyProvider.KeyProvider, provider)),
+          Layer.provide(NodeCrypto.layer),
+        ),
+      ),
+      Layer.provideMerge(migrated),
+      Layer.provideMerge(client),
+    ),
+  };
+};

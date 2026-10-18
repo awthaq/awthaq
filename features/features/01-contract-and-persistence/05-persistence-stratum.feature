@@ -207,3 +207,14 @@ Feature: The Persistence Stratum
       Then the extension is a primitive, nullable scalar column: text, real or boolean
       And a declaration that is not one scalar is refused when the plugin is defined
       And it is never an unmediated ALTER TABLE from the plugin's migration code
+
+  # BEH-EA-339 — spec/behaviors/05-persistence-stratum.md; ADR-EA-019 revision 1.3 (plan 17)
+  @BEH-EA-339
+  Rule: A composition's sealed columns are swept as one list
+
+    @REQ-EA-1320
+    Scenario: After a key rotation and a sweep of every deployed sealed column, the retired key can be dropped
+      Given a user with metadata, a session and a linked account, sealed under the key "k1"
+      When the key rotates to "k2", every deployed sealed column is swept and "k1" is retired
+      Then the user's metadata, the session's device details and the account's tokens still open
+      And a second sweep reports that nothing is left to re-seal

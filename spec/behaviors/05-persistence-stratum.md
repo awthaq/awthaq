@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.5 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.6 |
+> | Effective Date | 2026-10-18 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` <br> 1.6 (2026-10-18): BEH-EA-034 names the canonical AADs and `Persistence.sql({ encryptPii })`; BEH-EA-324 covers core's six columns and the third treatment (a typed domain failure); BEH-EA-339 (a composition's sealed columns are swept as one list) (ADR-EA-019 revision 1.3, plan 17) |
 
 ---
 
@@ -58,9 +58,9 @@ REQUIREMENT: A field declared `Model.Sensitive` MUST be excluded from every
              merely by returning the entity value.
 ```
 
-The shipped `Account` model types its token columns as plain nullable strings, not `Schema.Redacted`: `Schema.Redacted`'s *encoded* form is itself a wrapped value and cannot be bound as a SQL parameter, so the repository stratum cannot carry it. The boundary is deliberate (SMS-007): a repository row holds the plaintext token in memory only transiently, the database holds AES-GCM ciphertext bound to the row and column through additional authenticated data (`ports/Encryption`), `Redacted` appears at the `Encryption` seam and again from core's domain records upward (`ProviderTokenSet.accessToken` is `Redacted<string>`), and JSON exclusion is guaranteed by `Model.Sensitive` regardless of the value's wrapper type.
+The shipped `Account` model types its token columns as plain nullable strings, not `Schema.Redacted`: `Schema.Redacted`'s *encoded* form is itself a wrapped value and cannot be bound as a SQL parameter, so the repository stratum cannot carry it. The boundary is deliberate (SMS-007): a repository row holds the plaintext token in memory only transiently, the database holds AES-GCM ciphertext bound to the row and column through additional authenticated data (`ports/Encryption`; for a provider token the AAD is `accounts:<id>:<field>`, ADR-EA-019 decision 6), `Redacted` appears at the `Encryption` seam and again from core's domain records upward (`ProviderTokenSet.accessToken` is `Redacted<string>`), and JSON exclusion is guaranteed by `Model.Sensitive` regardless of the value's wrapper type.
 
-The non-secret personal-data columns — `sessions.ipAddress`, `sessions.userAgent`, `users.metadata` — are plaintext by default and encrypted through the same `Encryption` port, with row-and-column AAD (`session:<id>:<field>`, `user:<id>:metadata`), when the deployment chooses `Repositories.SessionsRepositoryEncryptedLive`/`UsersRepositoryEncryptedLive` (CSG-006, option B). The choice is the layer, so the added `Encryption` requirement is a compile-time fact; `users.email` stays plaintext because it is the lookup and uniqueness key.
+The non-secret personal-data columns — `sessions.ipAddress`, `sessions.userAgent`, `users.metadata` — are plaintext by default and encrypted through the same `Encryption` port, with row-and-column AAD (`sessions:<id>:<field>`, `users:<id>:metadata`), when the composition chooses `Persistence.sql({ encryptPii: true })` (CSG-006, option B). The choice is the layer, so the added `Encryption` requirement is a compile-time fact; `users.email` stays plaintext because it is the lookup and uniqueness key. These six columns are declared `SealedColumn`s (`CoreSealedColumns`) and follow BEH-EA-324.
 
 `archive/PRD.md` §12 and §18 both require this: "`Model.Sensitive` for hashes and secrets so they never appear in JSON variants," and separately, "contract tests assert no `Redacted` value reaches spans or events." `better-auth/01-core-domain/01-entities-and-invariants.md` §6.1 documents the analogous rule in better-auth's schema (`returned:false` on `password`, `accessToken`, `refreshToken`, `idToken`) as a per-field attribute a schema author must set correctly; awthaq's plan folds the same guarantee into `Model.Sensitive` so the exclusion is a type-level fact about the field, not an attribute that could be omitted.
 
@@ -188,10 +188,11 @@ REQUIREMENT: A table column stored as an `Encryption` envelope MUST be declared
              an envelope sealed under any other AAD spelling MUST NOT open. A value that
              does not open MUST be the typed `SealedColumn/Unreadable`, never
              `null` and never a defect, and a call site MUST handle it with
-             `SealedColumn.orDie` or `SealedColumn.option`.
+             `SealedColumn.orDie`, `SealedColumn.option` (or
+             `Sealed.optional`), or by mapping it to its own typed domain failure.
 ```
 
-A ciphertext copied to another row or column fails authentication, because the AAD binds the table, the row key and the column ([ADR-EA-019](../decisions/019-encryption-key-rotation.md) decision 6). A lost or failed compare-and-swap is logged with ids only; `SealedColumnConfig.resealOnRead: false` turns the write off. `SealedColumn.sweep` re-seals every stale or legacy value of a column and reports `{ scanned, resealed, unreadable }`; it is an operator's job, never run by a request. The mechanism is proven once (`packages/sql/test/SealedColumn.test.ts`); each plugin's wiring is proven by `TestAuth.runSealedColumnTests`.
+A ciphertext copied to another row or column fails authentication, because the AAD binds the table, the row key and the column ([ADR-EA-019](../decisions/019-encryption-key-rotation.md) decision 6). A lost or failed compare-and-swap is logged with ids only; `SealedColumnConfig.resealOnRead: false` turns the write off. `SealedColumn.sweep` re-seals every stale or legacy value of a column and reports `{ scanned, resealed, unreadable }`; it is an operator's job, never run by a request. Core's columns (`users.metadata`, `sessions.ipAddress`/`userAgent` when `encryptPii` is on; `accounts.accessToken`/`refreshToken`/`idToken` always) are declared the same way. The core store ports carry them as `Sealed` values (`@awthaq/ports` `Sealed`); `Users` and `Sessions` degrade an unreadable value to absent, `Accounts.findProviderTokens` fails `ProviderTokensUnreadable`. `Persistence.sql(options)` provides `SealedColumn.Deployed`, the columns that composition seals, and `SealedColumn.sweepDeployed` sweeps them (BEH-EA-339). The mechanism is proven once (`packages/sql/test/SealedColumn.test.ts`); each plugin's wiring is proven by `TestAuth.runSealedColumnTests`.
 
 ## BEH-EA-325: A plugin records module fails with StoreUnavailable, never a defect, when its store is down
 
@@ -206,3 +207,16 @@ REQUIREMENT: A plugin records module MUST map a `SqlError` to the typed
 ```
 
 `StoreFailure` is defined once in `@awthaq/sql`; `@awthaq/core`'s `Errors` re-exports it ([ADR-EA-028](../decisions/028-infrastructure-error-policy.md) revision 1.3). A `SqlSyntaxError` or `AuthorizationError` (a missing GRANT, or a row-level-security refusal of a forgotten tenant filter) dies as `Defects/InvariantViolation` `store.statementRefused`, because a retry cannot fix it and a 503 would misreport it. Every first-party plugin records module follows it (`api-key`, `device-authorization`, `passkey`, `roles` and the `qadi` claims store included); each records suite has one outage case that makes a write fail through `TestSql.injectFailure` and asserts the typed error.
+
+## BEH-EA-339: A composition's sealed columns are swept as one list
+
+```text
+REQUIREMENT: `Persistence.sql(options)` MUST provide `SealedColumn.Deployed`,
+             the exact list of sealed columns that composition writes, derived
+             from the same options that choose its repositories; a column it
+             stores in plaintext MUST NOT be listed. `SealedColumn.sweepDeployed`
+             MUST sweep that list plus the columns the caller adds, each once,
+             and report `{ scanned, resealed, unreadable }` per column.
+```
+
+The list is a service built from the one `options` value and not a function an operator calls with options of their own, because a list that disagreed with the composition would sweep a plaintext column and seal it behind a plaintext adapter (the runbook corruption of [ADR-EA-019](../decisions/019-encryption-key-rotation.md) revision 1.3). It is three columns with `encryptPii` off (the provider tokens) and six with it on. `Persistence.memory` provides none: nothing there is sealed, so sweeping a memory composition does not compile. After a rotation the operator runs `sweepDeployed({ also: auth.sealedColumns })` (every plugin declares its own, `AuthPlugin.Service` `sealedColumns`, checked by `Auth.make`) until every report says `resealed: 0`, then drops the old key, and every user, session and linked-account token still opens (`packages/test/test/CoreSealedColumns.test.ts`).

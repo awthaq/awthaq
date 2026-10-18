@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Accounts, AuthEvents, Persistence, Users } from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
-import { Repositories } from "@awthaq/sql";
+import { Ids, Sealed, SessionStore, UserStore, AccountStore } from "@awthaq/ports";
+import { Repositories, SealedColumn } from "@awthaq/sql";
 import { RedactionGuard } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
@@ -34,6 +35,7 @@ import {
   M,
   MemoryUsersLive,
   RepositoriesLive,
+  sealedStack,
   withDatabase,
 } from "./PersistenceStratumWorld.ts";
 import * as HttpServer from "effect/unstable/http/HttpServer";
@@ -403,5 +405,122 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     assert.equal(ownTransactions, 0, "repository methods opened no transaction of their own");
     assert.ok((controlTransactions ?? 0) > 0, "an explicit withTransaction is visible as a span");
     assert.ok((repositorySpans ?? 0) > 0, "the repository methods really ran under the tracer");
+  });
+  // ---- BEH-EA-339: a composition's sealed columns are swept as one list (plan 17) ----
+
+  const rotation = cell(
+    "sealedRotation",
+    (value): value is { readonly opened: ReadonlyArray<boolean>; readonly secondPass: number } =>
+      typeof value === "object" && value !== null,
+  );
+
+  Given(
+    "a user with metadata, a session and a linked account, sealed under the key {string}",
+    function* (kid: string) {
+      yield* Effect.void; // an assertion-only step: the stack starts on "k1", the flow runs in the When
+      assert.equal(kid, "k1");
+    },
+  );
+
+  When(
+    "the key rotates to {string}, every deployed sealed column is swept and {string} is retired",
+    function* (next: string, old: string) {
+      const stack = sealedStack();
+      const at = DateTime.makeUnsafe(1_700_000_000_000);
+      const later = DateTime.makeUnsafe(1_700_003_600_000);
+      const userId = Schema.decodeUnknownSync(Ids.UserId)("rotation-user");
+      const sessionId = Schema.decodeUnknownSync(Ids.SessionId)("rotation-session");
+      const accountId = Schema.decodeUnknownSync(Ids.AccountId)("rotation-account");
+      const outcome = yield* Effect.gen(function* () {
+        const users = yield* UserStore.UserStore;
+        const sessions = yield* SessionStore.SessionStore;
+        const accounts = yield* AccountStore.AccountStore;
+        yield* users.insertOrHolder({
+          id: userId,
+          email: Option.some("rotation@example.com"),
+          emailVerified: false,
+          phone: Option.none(),
+          phoneVerified: false,
+          name: "Rotation",
+          image: Option.none(),
+          metadata: Option.some('{"plan":"pro"}'),
+          status: "active",
+          statusReason: Option.none(),
+          suspendedUntil: Option.none(),
+          createdAt: at,
+          updatedAt: at,
+        });
+        yield* sessions.insert({
+          session: {
+            id: sessionId,
+            userId,
+            secretHash: "rotation-hash",
+            at,
+            absoluteExpiresAt: later,
+            idleExpiresAt: later,
+            ipAddress: Option.some("203.0.113.9"),
+            userAgent: Option.some("Agent/1.0"),
+            actingAs: Option.none(),
+            amr: [],
+          },
+          supersedes: Option.none(),
+          maxLive: Option.none(),
+        });
+        yield* accounts.insertIfAbsent({
+          id: accountId,
+          userId,
+          providerId: "github",
+          subject: "rotation-subject",
+          issuer: "",
+          credentialHash: Option.none(),
+          tokens: Option.some({
+            accessToken: Redacted.make("access-secret"),
+            refreshToken: Option.some(Redacted.make("refresh-secret")),
+            idToken: Option.some(Redacted.make("id-secret")),
+            accessTokenExpiresAt: Option.none(),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.none(),
+            tokenType: Option.none(),
+          }),
+          createdAt: at,
+          updatedAt: at,
+        });
+        stack.rotateTo(next);
+        yield* SealedColumn.sweepDeployed();
+        const secondPass = (yield* SealedColumn.sweepDeployed()).reduce(
+          (total, report) => total + report.resealed,
+          0,
+        );
+        stack.retire(old);
+        const user = Option.getOrThrow(yield* users.get(userId));
+        const session = Option.getOrThrow(yield* sessions.get(sessionId));
+        const tokens = Option.getOrThrow(
+          Option.getOrThrow(yield* accounts.readProviderTokens(accountId)),
+        );
+        const opened = [
+          Option.isSome(yield* Sealed.openOption(user.metadata)),
+          Option.isSome(yield* Sealed.openOption(session.ipAddress)),
+          Option.isSome(yield* Sealed.openOption(session.userAgent)),
+          Redacted.value(yield* tokens.accessToken.open) === "access-secret",
+          Option.isSome(yield* Sealed.openOption(tokens.refreshToken)),
+          Option.isSome(yield* Sealed.openOption(tokens.idToken)),
+        ];
+        return { opened, secondPass };
+      }).pipe(Effect.provide(stack.layer));
+      yield* put(rotation, outcome);
+    },
+  );
+
+  Then(
+    "the user's metadata, the session's device details and the account's tokens still open",
+    function* () {
+      const { opened } = yield* take(rotation);
+      assert.deepEqual(opened, [true, true, true, true, true, true]);
+    },
+  );
+
+  Then("a second sweep reports that nothing is left to re-seal", function* () {
+    const { secondPass } = yield* take(rotation);
+    assert.equal(secondPass, 0);
   });
 });

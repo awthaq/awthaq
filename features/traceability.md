@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1310 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1319; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1311 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1320; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1328,3 +1328,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1317 | [BEH-EA-057](../spec/behaviors/08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose) | [02-domain/08-verification-tokens.feature](features/02-domain/08-verification-tokens.feature) | A link of one purpose cannot be minted with another's payload or redeemed as another's |
 | REQ-EA-1318 | [BEH-EA-122](../spec/behaviors/16-oauth.md#beh-ea-122-flow-state-lives-server-side-in-verification) | [05-authentication-methods/16-oauth.feature](features/05-authentication-methods/16-oauth.feature) | A callback state naming another purpose's token is refused before anything is consumed |
 | REQ-EA-1319 | [BEH-EA-117](../spec/behaviors/15-password.md#beh-ea-117-reset-revokes-other-sessions-in-the-same-transaction) | [05-authentication-methods/15-password.feature](features/05-authentication-methods/15-password.feature) | Confirming resets is throttled per source |
+| REQ-EA-1320 | [BEH-EA-339](../spec/behaviors/05-persistence-stratum.md#beh-ea-339-a-compositions-sealed-columns-are-swept-as-one-list) | [01-contract-and-persistence/05-persistence-stratum.feature](features/01-contract-and-persistence/05-persistence-stratum.feature) | After a key rotation and a sweep of every deployed sealed column, the retired key can be dropped |

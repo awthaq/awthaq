@@ -872,3 +872,27 @@ In the Consequences section, the negative list gains "rows sealed under the pre-
 6. **Should the core `Ref` adapters seal for real** (requiring `Encryption` in `Persistence.memory`, and therefore in every test composition and `TestAuth`)? **Recommended default: no.** They are test-grade (TRBS-005), sealing is proven at the SQL adapter by the wiring suite, and plugin memory adapters seal only because they have no SQL-only option.
 7. **Data export of an unreadable value.** `DataExport` (`DataExport.ts:141`, `:164`) receives `metadata`/`userAgent` through the domain records, so an unreadable value is exported as absent. **Recommended default: keep that** (with the warning). The alternative marks it `"<unreadable>"` in the export, which needs an export-specific read.
 8. **Order with plan 16.** **Recommended: 17 first** (§8). The plan holds either way.
+
+---
+
+## Decisions taken (implementation, 2026-10-18)
+
+Open questions took the plan's recommended default:
+
+1. **Q1, rows under today's core AADs: no environment, clean break.** Phase 2b (`SealedColumn.rekey`, `CoreSealedColumns.previousAad`) is NOT built. ADR-EA-019 rev 1.3 records the break and the rejected per-column AAD hook; the changesets carry the `Migration:` lines.
+2. **Q2, the core ports carry `Sealed` values: yes** (`StoredUser.metadata`, `SessionRecord.ipAddress`/`userAgent`, `readProviderTokens` returns `Option<Option<SealedProviderTokens>>`; `TokensRead` is deleted).
+3. **Q3, token strictness: strict.** Any one unreadable token fails `findProviderTokens` (`ProviderTokensUnreadable` per field).
+4. **Q4, plugins declare their sealed columns: yes** (phase 5): `AuthPlugin.Service` `sealedColumns`, `Auth.make` validation (`Auth/SealedColumnDeclarationInvalid`: `UnknownTable`, `Duplicate`), `auth.sealedColumns`; the runbook uses it.
+5. **Q5, no CLI command. Q6, the core `Ref` adapters stay plaintext** and hand out `Sealed.plain`. **Q7, `DataExport` exports an unreadable value as absent** (with the warning). **Q8, order: 17 before 16** (16 is not implemented; `Repositories.ts` still holds the repositories).
+
+Divergences from the plan, and what was not done:
+
+- **`AccountsRepository.insert` is kept**, as a writer that seals under `accounts:<id>:<field>` and returns the row as stored (no decrypt, D-8). The plan deletes the decrypting `insert`; about a dozen test and BDD seeds use it, so deleting would have meant rewriting them for no gain. `findById`, `listByUser`, `findTokensById`, `AccountTokenUndecryptable` and `AccountsRepositoryConfig` are deleted as planned; `findSealedTokensById` replaces `findTokensById`.
+- **The core columns test lives in `packages/test/test/CoreSealedColumns.test.ts`**, not `packages/sql/test/`: it needs `Persistence.sql` (core) and `TestAuth.runSealedColumnTests`, and `@awthaq/sql` cannot depend on either. It is in `scripts/test-pg.sh`.
+- **The phase 0 token test (3)** was written at the store port (`readProviderTokens` returned `Undecryptable`) and flipped in phase 3 to `open` failing `DecryptionFailed`; key retirement (4) flipped in phase 4.
+- **The BDD scenario** is REQ-EA-1320 under the new BEH-EA-339 (a new Rule at the end of `05-persistence-stratum.feature`), run on `Persistence.sql({ encryptPii: true })` with a rotatable keyset (`sealedStack` in `PersistenceStratumWorld.ts`).
+- **The pg-only savepoint case** runs on SQLite too (it passes there trivially); it was seen red on Postgres with the old `sqlSwap` (SQLSTATE 25P02).
+- **BEH-EA-339** is the new behavior id (the plan guessed 338, taken by plan 14). ADR-EA-019 is rev 1.3, BEH file 05 rev 1.6, overview 1.13, glossary 1.10, traceability 1.43, spec README 1.9.
+- **`.scratch/plugin-table-substrate/issues/16-adopt-plaintext-sunset.md` was not ticked** (untracked, not staged by instruction), and the per-phase tickets under `.scratch/core-sealed-columns/` were not written. The answer for the former is yes: `Deployed` covers the adopting columns when `encryptPii` is on.
+- **`ReadRouting.test.ts`** needed no change (it reads ids and liveness only).
+- **Gates run:** typecheck, test, lint, circular, knip (only `.reports/` files), format:check, check:readmes, check:error-tags, check:contract-tests, check:transactions, package:smoke, test:bdd, spec:verify:strict and `test:pg` (Docker postgres:16).

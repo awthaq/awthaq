@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.9 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.10 |
+> | Effective Date | 2026-10-18 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) |
 
 ---
 
@@ -49,6 +49,10 @@ Deciding which local User an External identity is: the Account anchored at `(pro
 ### Credential carrier
 
 One of the four places a request may present a credential: the `impersonation` and `cookie` cookies, the `x-api-key` header and `Authorization: Bearer`. A middleware's security declaration lists its carriers in order; that list is the strategy chain (BEH-EA-072). See: [ADR-EA-042](decisions/042-credential-resolution-module.md).
+
+### Sealed column
+
+A table column stored as an `Encryption` envelope, declared once (`SealedColumn.column`), AAD `<table>:<rowKey>:<column>`, read as a `Sealed<A>` whose `open` is the only place the plaintext appears. Core's six (`users.metadata`, `sessions.ipAddress`/`userAgent`, the three provider tokens) are declared the same way as a plugin's. See: [ADR-EA-019](decisions/019-encryption-key-rotation.md) decision 6, [BEH-EA-324](behaviors/05-persistence-stratum.md#beh-ea-324-a-sealed-column-is-declared-once-opens-lazily-and-re-seals-on-read).
 
 ### Tier
 
