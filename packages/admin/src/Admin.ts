@@ -12,6 +12,7 @@
 
 import { AccountContract, Api, SessionContract } from "@awthaq/api";
 import {
+  CurrentUser,
   AuditChain,
   AuthEvents,
   AuthPlugin,
@@ -259,18 +260,6 @@ const toRecordDto = (
     tenantId: Option.getOrNull(record.tenantId),
   });
 
-/** Same forward-reference pattern `@awthaq/passkey`'s own `Passkey.ts` documents. */
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: admin group reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
-
 /** APS-006: expires the impersonation cookie so the browser reverts to the admin's own session cookie. */
 const clearImpersonationCookie = SessionCookie.expireImpersonation;
 
@@ -287,7 +276,7 @@ export const AdminHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminApi.ImpersonatePayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         const issued = yield* admin.impersonate({
           caller,
           targetUserId: Users.UserId(params.userId),
@@ -299,18 +288,18 @@ export const AdminHandlers = HttpApiBuilder.group(
         return sessionResponse(issued.session);
       }),
       stopImpersonating: Effect.fnUntraced(function* () {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* admin.stopImpersonating(caller);
         yield* clearImpersonationCookie;
       }),
       forceStop: Effect.fnUntraced(function* ({ params }: { params: AdminApi.SessionIdParams }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* admin.forceStop(caller, params.sessionId);
         // APS-006: ending one's own current episode must hand the browser back.
         if (params.sessionId === caller.sessionId) yield* clearImpersonationCookie;
       }),
       effectiveConfig: Effect.fnUntraced(function* () {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         const items = yield* admin.effectiveConfig(caller);
         return items.map(
           (item) =>
@@ -323,7 +312,7 @@ export const AdminHandlers = HttpApiBuilder.group(
         );
       }),
       listUsers: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListUsersQuery }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         const page = yield* admin.listUsers(caller, { cursor: query.cursor, limit: query.limit });
         return new AdminApi.UserPageDto({
           items: page.items.map(toUserDto),
@@ -331,7 +320,7 @@ export const AdminHandlers = HttpApiBuilder.group(
         });
       }),
       getUser: Effect.fnUntraced(function* ({ params }: { params: AdminApi.UserIdParams }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         return toUserDto(yield* admin.getUser(caller, Users.UserId(params.userId)));
       }),
       updateUser: Effect.fnUntraced(function* ({
@@ -341,7 +330,7 @@ export const AdminHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminApi.UpdateUserPayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         const updated = yield* admin.updateUser(caller, Users.UserId(params.userId), payload);
         return toUserDto(updated);
       }),
@@ -352,7 +341,7 @@ export const AdminHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminApi.BanUserPayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         return toUserDto(
           yield* admin.banUser(caller, Users.UserId(params.userId), {
             reason: payload.reason,
@@ -361,7 +350,7 @@ export const AdminHandlers = HttpApiBuilder.group(
         );
       }),
       unbanUser: Effect.fnUntraced(function* ({ params }: { params: AdminApi.UserIdParams }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         return toUserDto(yield* admin.unbanUser(caller, Users.UserId(params.userId)));
       }),
       listUserSessions: Effect.fnUntraced(function* ({
@@ -369,7 +358,7 @@ export const AdminHandlers = HttpApiBuilder.group(
       }: {
         params: AdminApi.UserIdParams;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         const listed = yield* admin.listUserSessions(caller, Users.UserId(params.userId));
         return listed.map(toSessionListDto);
       }),
@@ -378,7 +367,7 @@ export const AdminHandlers = HttpApiBuilder.group(
       }: {
         params: AdminApi.UserSessionParams;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* admin.revokeUserSession(caller, Users.UserId(params.userId), params.sessionId);
       }),
       revokeUserSessions: Effect.fnUntraced(function* ({
@@ -386,11 +375,11 @@ export const AdminHandlers = HttpApiBuilder.group(
       }: {
         params: AdminApi.UserIdParams;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* admin.revokeUserSessions(caller, Users.UserId(params.userId));
       }),
       list: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListQuery }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         const page = yield* admin.list(caller, {
           active: query.active === "true",
           cursor: query.cursor,

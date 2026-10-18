@@ -27,10 +27,10 @@
 
 import { Api } from "@awthaq/api";
 import {
+  CurrentUser,
   Accounts,
   AuthEvents,
   AuthPlugin,
-  Defects,
   EmailChange,
   Erasure,
   Errors,
@@ -98,17 +98,6 @@ export interface AdminAccountsShape {
   >;
 }
 
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: admin.accounts group reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
-
 export const AdminAccountsHandlers = HttpApiBuilder.group(
   AdminAccountsApi.AdminAccountsApi,
   "admin.accounts",
@@ -116,7 +105,7 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
     const accounts = yield* AdminAccounts;
     return handlers.handleAll({
       deleteUser: Effect.fnUntraced(function* ({ params }: { params: AdminApi.UserIdParams }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* accounts.deleteUser(caller, Users.UserId(params.userId));
       }),
       setUserEmail: Effect.fnUntraced(function* ({
@@ -126,7 +115,7 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminAccountsApi.SetUserEmailPayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* accounts.setUserEmail(caller, Users.UserId(params.userId), payload);
       }),
       setUserPassword: Effect.fnUntraced(function* ({
@@ -136,7 +125,7 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminAccountsApi.SetUserPasswordPayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* accounts.setUserPassword(caller, Users.UserId(params.userId), payload);
       }),
     });

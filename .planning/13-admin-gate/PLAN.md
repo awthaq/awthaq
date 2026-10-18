@@ -995,7 +995,7 @@ Open questions took the plan's recommended default:
 
 Implementation notes and deviations:
 
-- **Phase 4 (consume plan 11's principal helper) was NOT done.** Plan 11 is not implemented yet, so the three `currentUserPrincipal` copies in `Admin.ts`, `AdminAccounts.ts` and `AdminTenants.ts` remain. Do it after plan 11.
+- **Phase 4 (consume plan 11's principal helper): done after plan 11 phase 1.** The three `currentUserPrincipal` copies in `Admin.ts`, `AdminAccounts.ts` and `AdminTenants.ts` are deleted; the handlers call `CurrentUser.current` (`@awthaq/core`). No changeset (no behavior change beyond the defect wording, which plan 11 phase 1's changeset covers).
 - Phase 0's four tests lived in `AdminTenantConfig.test.ts`; Phase 1 deleted that file and moved the cases into `AdminGate.test.ts` (matrix tests for opens/tightens, the per-operation non-gate configuration test, and one `LayerMap` test for the production path).
 - `AdminGate.test.ts` provides tenant configuration per request with `Effect.provide(Admin.config(...))` for the matrix (the mechanism `configInForce` reads), and a `LayerMap` for one end-to-end case.
 - TS2883: `AdminTenants.ts` no longer yields `AuthEvents`/`Users` itself, so it keeps them type-imported through an exported `GateServices` alias so declaration emit can name them. No return-type annotation was added.

@@ -16,7 +16,7 @@
 
 import { Api } from "@awthaq/api";
 import type { AuthEvents, Users } from "@awthaq/core";
-import { AuthPlugin, Defects, HookPoint } from "@awthaq/core";
+import { CurrentUser, AuthPlugin, HookPoint } from "@awthaq/core";
 import { Organization, OrganizationActor, OrganizationDirectory } from "@awthaq/organization";
 import { type StoreFailure } from "@awthaq/sql";
 import * as DateTime from "effect/DateTime";
@@ -100,17 +100,6 @@ const toOrganizationDto = (
     createdAt: DateTime.formatIso(record.createdAt),
   });
 
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: admin.tenants group reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
-
 export const AdminTenantsHandlers = HttpApiBuilder.group(
   AdminTenantsApi.AdminTenantsApi,
   "admin.tenants",
@@ -122,7 +111,7 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
       }: {
         query: AdminTenantsApi.ListOrganizationsQuery;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         const page = yield* tenants.listOrganizations(caller, {
           cursor: query.cursor,
           limit: query.limit,
@@ -137,7 +126,7 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
       }: {
         params: AdminTenantsApi.OrganizationIdParams;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         return toOrganizationDto(yield* tenants.getOrganization(caller, params.organizationId));
       }),
       suspendOrganization: Effect.fnUntraced(function* ({
@@ -147,7 +136,7 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
         params: AdminTenantsApi.OrganizationIdParams;
         payload: AdminTenantsApi.SuspendOrganizationPayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         return toOrganizationDto(
           yield* tenants.suspendOrganization(caller, params.organizationId, {
             reason: payload.reason,
@@ -159,7 +148,7 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
       }: {
         params: AdminTenantsApi.OrganizationIdParams;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         return toOrganizationDto(
           yield* tenants.unsuspendOrganization(caller, params.organizationId),
         );
