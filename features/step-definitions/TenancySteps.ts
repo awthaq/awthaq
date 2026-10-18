@@ -2,7 +2,7 @@
 // state the real services and repositories produced: the raw `"tenantId"` column, the response
 // a router middleware wrote, the typed refusal an organization operation returned.
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
-import { Encryption, PasswordHasher, Tenant } from "@awthaq/ports";
+import { AuditLogStore, Encryption, PasswordHasher, Tenant } from "@awthaq/ports";
 import {
   Organization,
   OrganizationActor,
@@ -12,7 +12,7 @@ import {
 import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
 import { AdminAccounts, AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
-import { Models, Repositories, TenantScope, TenantScoped } from "@awthaq/sql";
+import { Models, TenantScope, TenantScoped } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
 import { makeResourceId, makeSubjectId, RelationshipResolver } from "@qadi/core";
 import assert from "node:assert/strict";
@@ -507,21 +507,25 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.deepEqual(new Set(stored), new Set([null]));
   });
 
-  When(
-    "a user {string} is inserted with the explicit tenant {string}",
-    function* (email: string, tenant: string) {
-      const world = yield* World;
-      const row = yield* identity(
-        Effect.gen(function* () {
-          const users = yield* Repositories.UsersRepository;
-          return yield* users.insert(
-            yield* M.User.insert.makeEffect({ email, name: email, tenantId: tenant }),
-          );
-        }),
-      );
-      yield* Ref.set(world.userTenant, Option.fromNullishOr(row.tenantId));
-    },
-  );
+  When("an audit row is appended with the explicit tenant {string}", function* (tenant: string) {
+    const world = yield* World;
+    yield* identity(
+      Effect.gen(function* () {
+        const store = yield* AuditLogStore.AuditLogStore;
+        const occurredAt = yield* DateTime.now;
+        return yield* store.append({
+          id: fresh("explicit-audit"),
+          eventTag: "auth.test",
+          actorUserId: Option.none(),
+          occurredAt,
+          correlationId: Option.none(),
+          tenantId: Option.some(tenant),
+          payloadJson: "{}",
+        });
+      }),
+    );
+    yield* Ref.set(world.storedTenants, yield* storedTenants("auth_audit_log"));
+  });
 
   When("that user's profile is updated under the tenant {string}", function* (tenant: string) {
     const world = yield* World;

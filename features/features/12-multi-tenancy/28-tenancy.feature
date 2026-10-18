@@ -87,10 +87,10 @@ Feature: Multi-Tenancy
         | auth_audit_log            |
 
     @REQ-EA-821
-    Scenario: An explicit tenant on the input wins over the ambient one
+    Scenario: An explicit tenant on an audit row wins over the ambient one
       Given the ambient tenant is "tenant-a"
-      When a user "explicit@example.com" is inserted with the explicit tenant "tenant-explicit"
-      Then that user's tenant is "tenant-explicit"
+      When an audit row is appended with the explicit tenant "tenant-explicit"
+      Then the stored "tenantId" of that row is "tenant-explicit"
 
     @REQ-EA-822
     Scenario: A row is stamped once and a later update does not move it

@@ -6,7 +6,7 @@
 // `Repositories.file.test.ts` on a WAL file, `Repositories.postgres.test.ts`
 // on a real server) calls with its own migrated `SqlClient` layer, so a new
 // case lands on every dialect at once.
-import { Encryption, KeyProvider, Tenant } from "@awthaq/ports";
+import { Encryption, KeyProvider } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -24,6 +24,7 @@ import * as AuditLogStoreSql from "../src/AuditLogStoreSql.ts";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
 import * as Repositories from "../src/Repositories.ts";
+import * as UserStoreSql from "../src/UserStoreSql.ts";
 import * as VerificationStoreSql from "../src/VerificationStoreSql.ts";
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 18:
@@ -62,12 +63,12 @@ export const repositoriesLayer = <E>(
   ).pipe(Layer.provide(SqlLive));
 
   return Layer.mergeAll(
-    Repositories.UsersRepositoryLive,
     Repositories.SessionsRepositoryLive,
     // Plan 16: the audit log and verification stores are adapters without a repository; suites that need a row use the port.
     AuditLogStoreSql.layer,
     VerificationStoreSql.layer,
     AccountStoreSql.layer.pipe(Layer.provide(EncryptionLive)),
+    UserStoreSql.layer,
   ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 };
 
@@ -80,146 +81,16 @@ export const contractCases = (
   const M = Models.makeModels(dialect);
 
   describe.skipIf(options.skip)(label, () => {
-    it.effect("BEH-EA-033: Users repository inserts with a generated UuidV7 id", () =>
-      Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        const created = yield* users.insert(
-          yield* M.User.insert.makeEffect({
-            email: "person@example.com",
-            name: "Person",
-          }),
-        );
-        assert.isString(created.id);
-        assert.strictEqual(created.emailVerified, false);
-
-        const found = yield* users.findById(created.id);
-        assert.strictEqual(found.email, "person@example.com");
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect("BEH-EA-041: findByEmail matches case-insensitively", () =>
-      Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "mixed@example.com", name: "Mixed" }),
-        );
-        const found = yield* users.findByEmail("MIXED@EXAMPLE.COM");
-        assert.isTrue(Option.isSome(found));
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    // ---- FAMS-002/SCP-001/SCP-003: the identity, status and idempotent-insert operations ----
-
-    it.effect(
-      "FAMS-002: email-less rows (phone / anonymous) persist; email and phone are each unique",
-      () =>
-        Effect.gen(function* () {
-          const users = yield* Repositories.UsersRepository;
-          const anonymous = yield* users.insert(yield* M.User.insert.makeEffect({ name: "Guest" }));
-          const anonymous2 = yield* users.insert(
-            yield* M.User.insert.makeEffect({ name: "Guest 2" }),
-          );
-          assert.strictEqual(anonymous.email, null);
-          assert.strictEqual(anonymous.phone, null);
-          assert.strictEqual(anonymous.status, "active");
-          assert.notStrictEqual(anonymous.id, anonymous2.id);
-
-          const phone = Schema.decodeUnknownSync(Models.E164)("+15550142");
-          const phoned = yield* users.insert(
-            yield* M.User.insert.makeEffect({ phone, name: "Phoned" }),
-          );
-          assert.strictEqual(phoned.phone, "+15550142");
-          assert.strictEqual(phoned.phoneVerified, false);
-          const duplicate = yield* users
-            .insert(yield* M.User.insert.makeEffect({ phone, name: "Dup" }))
-            .pipe(Effect.flip);
-          assert.strictEqual(duplicate._tag, "SqlError");
-          assert.strictEqual(
-            Option.getOrThrow(yield* users.findByPhone("+15550142")).id,
-            phoned.id,
-          );
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "SCP-003: insertIfAbsent returns None on any unique conflict instead of erroring",
-      () =>
-        Effect.gen(function* () {
-          const users = yield* Repositories.UsersRepository;
-          const first = yield* users.insertIfAbsent(
-            yield* M.User.insert.makeEffect({ email: "once@example.com", name: "Once" }),
-          );
-          assert.isTrue(Option.isSome(first));
-          const second = yield* users.insertIfAbsent(
-            yield* M.User.insert.makeEffect({ email: "ONCE@example.com", name: "Twice" }),
-          );
-          assert.isTrue(Option.isNone(second));
-          // Still usable afterwards — the conflict did not poison the connection/transaction.
-          const sql = yield* SqlClient.SqlClient;
-          const rows = yield* sql.withTransaction(
-            Effect.gen(function* () {
-              yield* users.insertIfAbsent(
-                yield* M.User.insert.makeEffect({ email: "once@example.com", name: "Again" }),
-              );
-              return yield* users.findByEmail("once@example.com");
-            }),
-          );
-          assert.strictEqual(Option.getOrThrow(rows).name, "Once");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "SCP-001: setStatus is the only writer of status; updateProfile leaves it alone",
-      () =>
-        Effect.gen(function* () {
-          const users = yield* Repositories.UsersRepository;
-          const created = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "status@example.com", name: "Status" }),
-          );
-          const until = DateTime.makeUnsafe("2030-01-02T03:04:05.000Z");
-          const suspended = yield* users.setStatus(created.id, {
-            status: "suspended",
-            reason: "abuse",
-            until,
-          });
-          assert.strictEqual(suspended.status, "suspended");
-          assert.strictEqual(suspended.statusReason, "abuse");
-          assert.isTrue(
-            DateTime.Equivalence(suspended.suspendedUntil ?? DateTime.makeUnsafe(0), until),
-          );
-
-          const renamed = Option.getOrThrow(
-            yield* users.updateProfile({
-              id: created.id,
-              name: "Renamed",
-              metadata: undefined,
-              image: undefined,
-            }),
-          );
-          assert.strictEqual(renamed.name, "Renamed");
-          assert.strictEqual(renamed.status, "suspended");
-          assert.strictEqual(renamed.statusReason, "abuse");
-          assert.isNotNull(renamed.suspendedUntil);
-
-          const active = yield* users.setStatus(created.id, {
-            status: "active",
-            reason: null,
-            until: null,
-          });
-          assert.strictEqual(active.status, "active");
-          assert.strictEqual(active.suspendedUntil, null);
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
+    /** A user for the session cases: `sessions` has no foreign key, so the row need not exist. */
+    const makeUser = (email: string) =>
+      Effect.map(M.User.insert.makeEffect({ email, name: "S" }), ({ id }) => ({ id, email }));
 
     it.effect(
       "BEH-EA-050: Sessions repository persists only the secret's hash, never a secret",
       () =>
         Effect.gen(function* () {
           const sessions = yield* Repositories.SessionsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "session@example.com", name: "S" }),
-          );
+          const user = yield* makeUser("session@example.com");
           const now = yield* DateTime.now;
           const session = yield* sessions.insert(
             yield* M.Session.insert.makeEffect({
@@ -246,10 +117,7 @@ export const contractCases = (
     it.effect("BEH-EA-036: Sessions.listByUser pages by (createdAt, id), never an offset", () =>
       Effect.gen(function* () {
         const sessions = yield* Repositories.SessionsRepository;
-        const users = yield* Repositories.UsersRepository;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "many-sessions@example.com", name: "M" }),
-        );
+        const user = yield* makeUser("many-sessions@example.com");
         const now = yield* DateTime.now;
         const future = DateTime.addDuration(now, Duration.days(1));
         for (let i = 0; i < 5; i++) {
@@ -301,10 +169,7 @@ export const contractCases = (
     it.effect("BEH-EA-054: deleteAllForUserExcept revokes every session but the kept one", () =>
       Effect.gen(function* () {
         const sessions = yield* Repositories.SessionsRepository;
-        const users = yield* Repositories.UsersRepository;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "revoke@example.com", name: "R" }),
-        );
+        const user = yield* makeUser("revoke@example.com");
         const now = yield* DateTime.now;
         const future = DateTime.addDuration(now, Duration.days(1));
         const make = () =>
@@ -340,10 +205,7 @@ export const contractCases = (
       () =>
         Effect.gen(function* () {
           const sessions = yield* Repositories.SessionsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "revoke-all@example.com", name: "R" }),
-          );
+          const user = yield* makeUser("revoke-all@example.com");
           const now = yield* DateTime.now;
           const future = DateTime.addDuration(now, Duration.days(1));
           const make = () =>
@@ -377,10 +239,7 @@ export const contractCases = (
       () =>
         Effect.gen(function* () {
           const sessions = yield* Repositories.SessionsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "touch-race@example.com", name: "T" }),
-          );
+          const user = yield* makeUser("touch-race@example.com");
           const now = yield* DateTime.now;
           const session = yield* sessions.insert(
             M.Session.insert.make({
@@ -445,10 +304,7 @@ export const contractCases = (
       () =>
         Effect.gen(function* () {
           const sessions = yield* Repositories.SessionsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "rotation@example.com", name: "R" }),
-          );
+          const user = yield* makeUser("rotation@example.com");
           const now = yield* DateTime.now;
           // Live for an hour: `reauthenticate` refuses a dead row (BEH-EA-319).
           const expires = DateTime.addDuration(now, Duration.hours(1));
@@ -473,9 +329,7 @@ export const contractCases = (
           const fresh = yield* make("fresh");
 
           // INV-EA-018: a foreign owner cannot tombstone the row; the owner can.
-          const intruder = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "rotation-intruder@example.com", name: "I" }),
-          );
+          const intruder = yield* makeUser("rotation-intruder@example.com");
           const refused = yield* sessions
             .tombstone({
               id: old.id,
@@ -512,9 +366,7 @@ export const contractCases = (
           );
           // BEH-EA-319: the UPDATE's own WHERE refuses a foreign owner, a tombstoned row and an
           // expired instant (the 'old' row is tombstoned; 'fresh' expires an hour out).
-          const other = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "rotation-other@example.com", name: "O" }),
-          );
+          const other = yield* makeUser("rotation-other@example.com");
           const foreign = yield* sessions
             .reauthenticate(fresh.id, other.id, later)
             .pipe(Effect.flip);
@@ -543,10 +395,7 @@ export const contractCases = (
       () =>
         Effect.gen(function* () {
           const sessions = yield* Repositories.SessionsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "retention@example.com", name: "R" }),
-          );
+          const user = yield* makeUser("retention@example.com");
           const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
           const at = (days: number) => DateTime.addDuration(t0, Duration.days(days));
           const cutoff = at(10);
@@ -583,12 +432,6 @@ export const contractCases = (
     );
 
     // SMS-002/ESR-010/GC-005/ESR-002: the session device-list page query and owned delete.
-    const makeUser = (email: string) =>
-      Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        return yield* users.insert(yield* M.User.insert.makeEffect({ email, name: "S" }));
-      });
-
     const insertLiveSession = (
       userId: Models.UserId,
       options: {
@@ -721,73 +564,8 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    // ---- DRS-001 (ADR-EA-018): the ambient tenant is stamped on every insert path ----
-
-    /** One row of every partitioned table, written under whatever tenant is ambient. */
-    const insertEveryTable = (label: string) =>
-      Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        const now = yield* DateTime.now;
-        const future = DateTime.addDuration(now, Duration.days(1));
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: `${label}@tenant.test`, name: label }),
-        );
-        const orphan = yield* users.insertIfAbsent(
-          yield* M.User.insert.makeEffect({ email: `${label}-absent@tenant.test`, name: label }),
-        );
-        const session = yield* insertLiveSession(user.id, {
-          absoluteExpiresAt: future,
-          idleExpiresAt: future,
-        });
-        return {
-          users: [user.tenantId, ...(Option.isSome(orphan) ? [orphan.value.tenantId] : [])],
-          sessions: [session.tenantId],
-        };
-      });
-
-    it.effect("DRS-001: every insert path stamps the ambient tenantId, NULL when none", () =>
-      Effect.gen(function* () {
-        const tenanted = yield* insertEveryTable("t1").pipe(Tenant.withTenant("tenant-1"));
-        assert.deepStrictEqual(tenanted, {
-          users: ["tenant-1", "tenant-1"],
-          sessions: ["tenant-1"],
-        });
-
-        // Single-tenant behaviour is untouched: nothing provides the context, so NULL.
-        const plain = yield* insertEveryTable("plain");
-        assert.deepStrictEqual(plain, {
-          users: [null, null],
-          sessions: [null],
-        });
-
-        // An explicit tenant on the input wins over the ambient one.
-        const users = yield* Repositories.UsersRepository;
-        const explicit = yield* users
-          .insert(
-            yield* M.User.insert.makeEffect({
-              email: "explicit@tenant.test",
-              name: "E",
-              tenantId: "tenant-explicit",
-            }),
-          )
-          .pipe(Tenant.withTenant("tenant-1"));
-        assert.strictEqual(explicit.tenantId, "tenant-explicit");
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect("DRS-005: the email lookup stays global — a tenant never narrows the directory", () =>
-      Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        yield* users
-          .insert(yield* M.User.insert.makeEffect({ email: "global@tenant.test", name: "G" }))
-          .pipe(Tenant.withTenant("tenant-a"));
-        // The same email / provider subject resolves from another tenant's request.
-        const byEmail = yield* users
-          .findByEmail("global@tenant.test")
-          .pipe(Tenant.withTenant("tenant-b"));
-        assert.isTrue(Option.isSome(byEmail));
-      }).pipe(Effect.provide(RepositoriesLive)),
-    );
+    // DRS-001/DRS-005 (the ambient tenant is stamped on every insert path, and the login lookups stay
+    // global) are each port's contract in `StoreContract` (plan 16).
 
     it.effect("ESR-002: tombstone applies only to a still-live row", () =>
       Effect.gen(function* () {

@@ -53,11 +53,9 @@ describe("SQLite file database (SEA-004)", () => {
     const filename = yield* tempDatabaseFile;
     const first = yield* Layer.build(repositoriesLayer(SqliteClient.layer({ filename })));
     const second = yield* Layer.build(
-      Layer.mergeAll(
-        Repositories.UsersRepositoryLive,
-        Repositories.SessionsRepositoryLive,
-        VerificationStoreSql.layer,
-      ).pipe(Layer.provideMerge(SqliteClient.layer({ filename }))),
+      Layer.mergeAll(Repositories.SessionsRepositoryLive, VerificationStoreSql.layer).pipe(
+        Layer.provideMerge(SqliteClient.layer({ filename })),
+      ),
     );
     return { first, second };
   });
@@ -66,12 +64,9 @@ describe("SQLite file database (SEA-004)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { first, second } = yield* twoConnections;
-        const users = Context.get(first, Repositories.UsersRepository);
         const sessionsA = Context.get(first, Repositories.SessionsRepository);
         const sessionsB = Context.get(second, Repositories.SessionsRepository);
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "wal-touch@example.com", name: "W" }),
-        );
+        const user = yield* M.User.insert.makeEffect({ email: "wal-touch@example.com", name: "W" });
         const now = yield* DateTime.now;
         const session = yield* sessionsA.insert(
           M.Session.insert.make({

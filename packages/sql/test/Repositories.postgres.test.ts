@@ -6,6 +6,7 @@
 // (not fails) without `AWTHAQ_POSTGRES_URL` set — CI provisions a real
 // Postgres service and sets it; a local run without one just proves nothing,
 // rather than reporting a false failure for an environment gap.
+import { AuditLogStore } from "@awthaq/ports";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -52,63 +53,16 @@ const RepositoriesLive = repositoriesLayer(
 contractCases("Repositories contract (real Postgres)", "pg", RepositoriesLive, { skip });
 
 describe.skipIf(skip)("Repositories (real Postgres)", () => {
-  it.effect("migrates and round-trips a User through the real repository", () =>
-    Effect.gen(function* () {
-      const users = yield* Repositories.UsersRepository;
-      const created = yield* users.insert(
-        yield* M.User.insert.makeEffect({ email: "pg@example.com", name: "PG" }),
-      );
-      assert.isString(created.id);
-      assert.strictEqual(created.emailVerified, false);
-      const found = yield* users.findById(created.id);
-      assert.strictEqual(found.email, "pg@example.com");
-    }).pipe(Effect.provide(RepositoriesLive)),
-  );
-
-  // upstream-hardening-followups ticket 01: every one of these exercises a
-  // raw SQL query this ticket quoted — before the fix each failed against
-  // real Postgres with `column "..." does not exist` (Postgres folds an
-  // unquoted identifier to lowercase, but this table's own DDL declares
-  // these columns with preserved mixed case). The SQLite suite
-  // (`Repositories.test.ts`) can't catch this class of bug at all, since
-  // SQLite's identifier resolution is case-insensitive regardless of
-  // quoting.
-
-  it.effect("Users.casIdentity sets emailVerified/updatedAt via the quoted columns", () =>
-    Effect.gen(function* () {
-      const users = yield* Repositories.UsersRepository;
-      const user = yield* users.insert(
-        yield* M.User.insert.makeEffect({ email: "verify@example.com", name: "V" }),
-      );
-      assert.strictEqual(user.emailVerified, false);
-      const identity = {
-        email: user.email,
-        emailVerified: false,
-        phone: user.phone,
-        phoneVerified: false,
-      };
-      const verify = users.casIdentity({
-        id: user.id,
-        expected: identity,
-        next: { ...identity, emailVerified: true },
-        updatedAt: DateTime.add(user.updatedAt, { seconds: 1 }),
-      });
-      const verified = Option.getOrThrow(yield* verify);
-      assert.strictEqual(verified.emailVerified, true);
-      // AAPS-005: a second verification expecting the old state finds nothing to change.
-      assert.isTrue(Option.isNone(yield* verify));
-    }).pipe(Effect.provide(RepositoriesLive)),
-  );
+  // upstream-hardening-followups ticket 01 (quoted mixed-case columns): every primitive's statements
+  // run on Postgres in `StoreContract.sql.test.ts`, which subsumes the users and accounts cases that
+  // lived here. The sessions case stays until the sessions adapter absorbs it.
 
   it.effect(
     "Sessions.listByUser/deleteAllForUserExcept/deleteAllByUser all resolve the quoted userId/createdAt columns",
     () =>
       Effect.gen(function* () {
         const sessions = yield* Repositories.SessionsRepository;
-        const users = yield* Repositories.UsersRepository;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "sess-cols@example.com", name: "S" }),
-        );
+        const user = yield* M.User.insert.makeEffect({ email: "sess-cols@example.com", name: "S" });
         const now = yield* DateTime.now;
         const future = DateTime.addDuration(now, Duration.days(1));
         const make = () =>
@@ -156,12 +110,21 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
     () =>
       Effect.gen(function* () {
         const replicaLive = ReadRouting.replica(SqlLive);
-        const users = yield* Repositories.UsersRepository;
+        const audit = yield* AuditLogStore.AuditLogStore;
+        const now = yield* DateTime.now;
         const inFiber = Effect.gen(function* () {
           const router = yield* ReadRouting.makeRouter;
           assert.strictEqual(yield* router.target("eventual"), "replica"); // no token yet
           yield* ReadRouting.captureToken(
-            users.insert(yield* M.User.insert.makeEffect({ email: "lsn@example.com", name: "L" })),
+            audit.append({
+              id: "lsn-1",
+              eventTag: "auth.test",
+              actorUserId: Option.none(),
+              occurredAt: now,
+              correlationId: Option.none(),
+              tenantId: Option.none(),
+              payloadJson: "{}",
+            }),
           );
           const token = yield* ReadRouting.CurrentCausalToken;
           assert.isTrue(Option.isSome(token));

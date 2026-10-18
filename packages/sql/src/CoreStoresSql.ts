@@ -58,7 +58,7 @@ export const layer = (options?: Options) => {
   // One value decides both the stores and the `Deployed` list, so the two cannot disagree.
   const encryptPii = options?.encryptPii === true;
   return Layer.mergeAll(
-    UserStoreSql.layer,
+    encryptPii ? UserStoreSql.layerSealedPii : UserStoreSql.layer,
     AccountStoreSql.layer,
     SessionStoreSql.layer,
     VerificationStoreSql.layer,
@@ -69,7 +69,6 @@ export const layer = (options?: Options) => {
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
-        encryptPii ? Repositories.UsersRepositoryEncryptedLive : Repositories.UsersRepositoryLive,
         encryptPii
           ? Repositories.SessionsRepositoryEncryptedLive
           : Repositories.SessionsRepositoryLive,

@@ -1222,6 +1222,60 @@ export const users: ReadonlyArray<UserCase> = [
     }),
   },
   {
+    name: "updateProfile never writes the status, and setStatus is the only writer of it (SCP-001)",
+    run: Effect.gen(function* () {
+      const store = yield* UserStore.UserStore;
+      yield* store.insertOrHolder(newUser("u1", { email: "a@example.com" }));
+      yield* store.setStatus({
+        id: makeUserId("u1"),
+        status: "suspended",
+        reason: Option.some("spam"),
+        until: Option.some(at(100)),
+        at: at(2),
+      });
+      const renamed = Option.getOrThrow(
+        yield* store.updateProfile({
+          id: makeUserId("u1"),
+          name: "Renamed",
+          image: { _tag: "Keep" },
+          metadata: { _tag: "Keep" },
+          at: at(3),
+        }),
+      );
+      assert.equal(renamed.name, "Renamed");
+      assert.equal(renamed.status, "suspended");
+      assert.deepEqual(renamed.statusReason, Option.some("spam"));
+      assert.deepEqual(renamed.suspendedUntil, Option.some(at(100)));
+    }),
+  },
+  {
+    name: "the directory is global: a user stamped under tenant A is found by id, email and phone under tenant B and with no tenant (DRS-005)",
+    run: Effect.gen(function* () {
+      const store = yield* UserStore.UserStore;
+      yield* Tenant.withTenant("tenant-a")(
+        store.insertOrHolder(newUser("u1", { email: "global@example.com", phone: "+15550142" })),
+      );
+      const id = makeUserId("u1");
+      const phone = makeE164("+15550142");
+      const lookups = [
+        store.get(id),
+        store.getByEmail("global@example.com"),
+        store.getByPhone(phone),
+      ];
+      for (const lookup of lookups) {
+        const fromB = yield* Tenant.withTenant("tenant-b")(lookup);
+        assert.deepEqual(
+          Option.map(fromB, (user) => user.id),
+          Option.some("u1"),
+        );
+        assert.deepEqual(
+          Option.map(yield* lookup, (user) => user.id),
+          Option.some("u1"),
+        );
+      }
+    }),
+  },
+  {
     name: "setStatus writes the status, its reason and expiry, bumps updatedAt, and is None for no user",
     run: Effect.gen(function* () {
       const store = yield* UserStore.UserStore;

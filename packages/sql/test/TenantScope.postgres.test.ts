@@ -84,11 +84,9 @@ describe.skipIf(skip)("Tenant RLS (real Postgres)", () => {
     withRls(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const users = yield* Repositories.UsersRepository;
         const sessions = yield* Repositories.SessionsRepository;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "rls@example.com", name: "RLS" }),
-        );
+        // `sessions` has no foreign key: the owner need not exist.
+        const user = yield* M.User.insert.makeEffect({ email: "rls@example.com", name: "RLS" });
         const one = yield* sessions.insert(sessionFor(user.id)).pipe(TenantScope.withTenant("t1"));
         const two = yield* sessions.insert(sessionFor(user.id)).pipe(TenantScope.withTenant("t2"));
         assert.strictEqual(one.tenantId, "t1");

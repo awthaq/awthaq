@@ -7,8 +7,8 @@
 // whole flow against one database inside a single `withDatabase`, and the Then reads the result
 // back from the scratch (`FoundationsWorld`).
 import { Persistence, Users } from "@awthaq/core";
-import { AccountStoreSql, Models, Repositories, CoreMigrations } from "@awthaq/sql";
-import { AccountStore, Encryption, KeyProvider } from "@awthaq/ports";
+import { AccountStoreSql, Models, Repositories, CoreMigrations, UserStoreSql } from "@awthaq/sql";
+import { AccountStore, Encryption, KeyProvider, UserStore } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -52,7 +52,7 @@ const Migrated = Layer.effectDiscard(
 
 /** Every repository over one migrated in-memory database. */
 export const RepositoriesLive = Layer.mergeAll(
-  Repositories.UsersRepositoryLive,
+  UserStoreSql.layer,
   AccountStoreSql.layer.pipe(Layer.provide(EncryptionLive)),
   Repositories.SessionsRepositoryLive,
 ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
@@ -75,10 +75,36 @@ export const collectSpans = () => {
   return { spans, tracer };
 };
 
+/**
+ * One user stored through the `UserStore` port, read back as the `User` model entity (the row exactly
+ * as the database holds it). The id is the model's supplier-assigned UuidV7 default.
+ */
 export const insertUser = (email: string) =>
   Effect.gen(function* () {
-    const users = yield* Repositories.UsersRepository;
-    return yield* users.insert(yield* M.User.insert.makeEffect({ email, name: email }));
+    const users = yield* UserStore.UserStore;
+    const sql = yield* SqlClient.SqlClient;
+    const { id } = yield* M.User.insert.makeEffect({ email, name: email });
+    const at = yield* DateTime.now;
+    yield* users.insertOrHolder({
+      id,
+      email: Option.some(email),
+      emailVerified: false,
+      phone: Option.none(),
+      phoneVerified: false,
+      name: email,
+      image: Option.none(),
+      metadata: Option.none(),
+      status: "active",
+      statusReason: Option.none(),
+      suspendedUntil: Option.none(),
+      createdAt: at,
+      updatedAt: at,
+    });
+    return yield* SqlSchema.findOne({
+      Request: Models.UserId,
+      Result: M.User,
+      execute: (userId) => sql`SELECT * FROM users WHERE id = ${userId}`,
+    })(id);
   });
 
 /**

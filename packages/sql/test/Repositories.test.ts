@@ -8,7 +8,7 @@
 // in-memory stand-in. The dialect-neutral cases live in `contract.ts` (shared
 // with the file-backed and Postgres suites, ESR-009); the cases below are
 // SQLite-specific or cheap enough to keep on the in-memory database only.
-import { AccountStore, AuditLogStore, VerificationStore } from "@awthaq/ports";
+import { AccountStore, AuditLogStore, UserStore, VerificationStore } from "@awthaq/ports";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -55,10 +55,28 @@ const insertSession = (userId: Models.UserId, secretHash: string, createdAt: Dat
     );
   });
 
+/** One user stored through the `UserStore` port (the id is the model's UuidV7 default). */
 const insertUser = (email: string) =>
   Effect.gen(function* () {
-    const users = yield* Repositories.UsersRepository;
-    return yield* users.insert(yield* M.User.insert.makeEffect({ email, name: email }));
+    const users = yield* UserStore.UserStore;
+    const { id } = yield* M.User.insert.makeEffect({ email, name: email });
+    const at = yield* DateTime.now;
+    const outcome = yield* users.insertOrHolder({
+      id,
+      email: Option.some(email),
+      emailVerified: false,
+      phone: Option.none(),
+      phoneVerified: false,
+      name: email,
+      image: Option.none(),
+      metadata: Option.none(),
+      status: "active",
+      statusReason: Option.none(),
+      suspendedUntil: Option.none(),
+      createdAt: at,
+      updatedAt: at,
+    });
+    return outcome._tag === "Inserted" ? outcome.user : yield* Effect.die("user already held");
   });
 
 describe("Repositories (SQLite specifics)", () => {
@@ -83,7 +101,7 @@ describe("Repositories (SQLite specifics)", () => {
   it.effect("EOTS-008: hand-written repository methods emit named spans over sql.execute", () =>
     Effect.gen(function* () {
       const { spans, tracer } = collectSpans();
-      const users = yield* Repositories.UsersRepository;
+      const users = yield* UserStore.UserStore;
       const sessions = yield* Repositories.SessionsRepository;
       const verification = yield* VerificationStore.VerificationStore;
       const now = yield* DateTime.now;
@@ -92,7 +110,7 @@ describe("Repositories (SQLite specifics)", () => {
 
       yield* Effect.provideService(
         Effect.gen(function* () {
-          yield* users.findByEmail("spans@example.com");
+          yield* users.getByEmail("spans@example.com");
           yield* sessions.touch({
             id: session.id,
             expectedSecretHash: "hash-1",
@@ -121,7 +139,7 @@ describe("Repositories (SQLite specifics)", () => {
   it.effect("EOTS-008: no repository span attribute carries an email, identifier or hash", () =>
     Effect.gen(function* () {
       const { spans, tracer } = collectSpans();
-      const users = yield* Repositories.UsersRepository;
+      const users = yield* UserStore.UserStore;
       const accounts = yield* AccountStore.AccountStore;
       const verification = yield* VerificationStore.VerificationStore;
       const now = yield* DateTime.now;
@@ -129,7 +147,7 @@ describe("Repositories (SQLite specifics)", () => {
 
       yield* Effect.provideService(
         Effect.gen(function* () {
-          yield* users.findByEmail("secret-email@example.com");
+          yield* users.getByEmail("secret-email@example.com");
           yield* accounts.getByKey("github", "subject-secret", "");
           yield* accounts.listByUser(user.id);
           yield* verification.present({
@@ -161,53 +179,6 @@ describe("Repositories (SQLite specifics)", () => {
     }).pipe(Effect.provide(RepositoriesLive)),
   );
 
-  // ---- PPS-007 -----------------------------------------------------------------------
-
-  /** Number of statements `effect` runs, counted from `sql.execute` client spans. */
-  const statementsOf = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.gen(function* () {
-      const { spans, tracer } = collectSpans();
-      yield* Effect.provideService(effect, Tracer.Tracer, tracer);
-      return spans.filter((s) => s.name === "sql.execute").length;
-    });
-
-  it.effect("PPS-007: casIdentity returns the updated row from a single statement", () =>
-    Effect.gen(function* () {
-      const users = yield* Repositories.UsersRepository;
-      const user = yield* insertUser("verify-once@example.com");
-      let verified = user;
-      const statements = yield* statementsOf(
-        users
-          .casIdentity({
-            id: user.id,
-            expected: {
-              email: user.email,
-              emailVerified: false,
-              phone: user.phone,
-              phoneVerified: false,
-            },
-            next: {
-              email: user.email,
-              emailVerified: true,
-              phone: user.phone,
-              phoneVerified: false,
-            },
-            updatedAt: DateTime.add(user.updatedAt, { seconds: 1 }),
-          })
-          .pipe(
-            Effect.tap((row) =>
-              Effect.sync(() => {
-                verified = Option.getOrThrow(row);
-              }),
-            ),
-          ),
-      );
-      assert.strictEqual(statements, 1);
-      assert.isTrue(verified.emailVerified);
-      assert.isTrue(DateTime.isGreaterThanOrEqualTo(verified.updatedAt, user.updatedAt));
-    }).pipe(Effect.provide(RepositoriesLive)),
-  );
-
   // ---- SEA-005: the TEXT-timestamp encoding invariant ----------------------------
 
   const ISO_FIXED_WIDTH = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -217,7 +188,7 @@ describe("Repositories (SQLite specifics)", () => {
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const users = yield* Repositories.UsersRepository;
+        const users = yield* UserStore.UserStore;
         const sessions = yield* Repositories.SessionsRepository;
         const accounts = yield* AccountStore.AccountStore;
         const verification = yield* VerificationStore.VerificationStore;
@@ -227,14 +198,9 @@ describe("Repositories (SQLite specifics)", () => {
         const user = yield* insertUser("sea005@example.com");
         yield* users.casIdentity({
           id: user.id,
-          expected: {
-            email: user.email,
-            emailVerified: false,
-            phone: user.phone,
-            phoneVerified: false,
-          },
-          next: { email: user.email, emailVerified: true, phone: user.phone, phoneVerified: false },
-          updatedAt: now,
+          expected: UserStore.identityOf(user),
+          next: { ...UserStore.identityOf(user), emailVerified: true },
+          at: now,
         });
         const session = yield* insertSession(user.id, "h1", now);
         yield* sessions.touch({

@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { Accounts, AuthEvents, Persistence, Users } from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
 import { Ids, Sealed, SessionStore, UserStore, AccountStore } from "@awthaq/ports";
-import { Repositories, SealedColumn } from "@awthaq/sql";
+import { Repositories, SealedColumn, UserStoreSql } from "@awthaq/sql";
 import { RedactionGuard } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
@@ -164,10 +164,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   When("the entity is encoded to its JSON variant", function* () {
     const encoded = yield* withDatabase(
       Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "sens@example.com", name: "Sens" }),
-        );
+        const user = yield* insertUser("sens@example.com");
         const account = yield* insertAccount({
           userId: user.id,
           providerId: "password",
@@ -208,10 +205,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     const Handlers = HttpApiBuilder.group(LeakApi, "leak", (handlers) =>
       handlers.handle("account", () =>
         Effect.gen(function* () {
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "leak@example.com", name: "Leak" }),
-          );
+          const user = yield* insertUser("leak@example.com");
           // The whole entity — secrets included — is what the handler hands back.
           return yield* insertAccount({
             userId: user.id,
@@ -262,12 +256,9 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     const outcome = yield* Effect.gen(function* () {
       const guard = yield* RedactionGuard.RedactionGuard;
       yield* guard.watch("accessToken", CANARY);
-      const users = yield* Repositories.UsersRepository;
       const accounts = yield* AccountStore.AccountStore;
       const domain = yield* Accounts.Accounts;
-      const user = yield* users.insert(
-        yield* M.User.insert.makeEffect({ email: "spans@example.com", name: "Spans" }),
-      );
+      const user = yield* insertUser("spans@example.com");
       // The stored entity, secret included, through the store's own (traced) primitives...
       const account = yield* insertAccount({
         userId: user.id,
@@ -329,13 +320,17 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     function* (name: string) {
       yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(name, "Users");
-      assert.match(source("../../packages/sql/src/Repositories.ts"), /SqlModel\.makeRepository\(/);
+      assert.match(source("../../packages/sql/src/UserStoreSql.ts"), /SqlModel\.makeRepository\(/);
     },
   );
 
   When("the repository is resolved", function* () {
+    // The adapter's layer needs nothing but the ambient `SqlClient`: `withDatabase` provides only that.
     const key = yield* withDatabase(
-      Effect.map(Repositories.UsersRepository, () => Repositories.UsersRepository.key),
+      Effect.provide(
+        Effect.map(UserStore.UserStore, () => UserStore.UserStore.key),
+        UserStoreSql.layer,
+      ),
     );
     yield* put(strings, [key]);
   });
@@ -344,7 +339,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     const [key] = yield* take(strings);
     assert.equal(typeof key, "string");
     // Resolved by `yield* Repository` from a Layer needing nothing but the ambient `SqlClient`.
-    assert.equal(key, Repositories.UsersRepository.key);
+    assert.equal(key, UserStore.UserStore.key);
   });
 
   Given("a repository method that reads or writes a {string} row", function* (name: string) {
@@ -360,12 +355,12 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     yield* withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const users = yield* Repositories.UsersRepository;
+        const users = yield* UserStore.UserStore;
         const sessions = yield* Repositories.SessionsRepository;
         yield* Effect.provideService(
           Effect.gen(function* () {
             const user = yield* insertUser("plain@example.com");
-            yield* users.findByEmail("plain@example.com");
+            yield* users.getByEmail("plain@example.com");
             yield* insertSession(user.id, "h0", DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"));
             yield* sessions.listByUser(user.id, DateTime.makeUnsafe("2025-01-01T00:00:00.000Z"));
           }),

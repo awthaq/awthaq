@@ -46,8 +46,15 @@ import {
 } from "@awthaq/organization";
 import { ConnectionRecords, DomainClaims, OrganizationRecords } from "@awthaq/organization/records";
 import { OAuth, OAuthConnections, OAuthProvider } from "@awthaq/oauth";
-import { Encryption, KeyProvider, PasswordHasher, SqlTransaction, Tenant } from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import {
+  AuditLogStore,
+  Encryption,
+  KeyProvider,
+  PasswordHasher,
+  SqlTransaction,
+  Tenant,
+} from "@awthaq/ports";
+import { AuditLogStoreSql, CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { RelationshipResolver } from "@qadi/core";
@@ -104,7 +111,7 @@ export type IdentityServices =
   | Verification.Verification
   | AuthEvents.AuthEvents
   | AuditLog.AuditLog
-  | Repositories.UsersRepository
+  | AuditLogStore.AuditLogStore
   | SqlClient.SqlClient;
 
 const buildIdentityStack = () => {
@@ -114,7 +121,7 @@ const buildIdentityStack = () => {
   ).pipe(Layer.provide(SqlLive));
   const Stores = Layer.mergeAll(
     Users.layer.pipe(Layer.provide(SqlStores)),
-    Repositories.UsersRepositoryLive,
+    AuditLogStoreSql.layer,
     Accounts.layer.pipe(Layer.provide(SqlStores)),
     Sessions.layer.pipe(Layer.provide(SqlStores)),
     Verification.layer.pipe(Layer.provide(SqlStores)),
