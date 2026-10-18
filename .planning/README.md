@@ -1,5 +1,12 @@
 # Architecture deepening plans
 
+Two batches. **Plans 01–10** come from the review of 2026-10-13 and are all implemented (see each plan's
+"Decisions taken"). **Plans 11–24** come from the review of 2026-10-17 against `main` at `fc990c88`; they are
+indexed in [Batch 2](#batch-2-plans-1124-review-of-2026-10-17) at the end of this file. The shared conventions
+below apply to both batches.
+
+## Batch 1: plans 01–10 (review of 2026-10-13)
+
 Source: the architecture review of 2026-10-13 (`/improve-codebase-architecture`), against `main` at `38bcd1b`.
 Each plan turns one deepening candidate (or, for plan 10, a set of loose findings) into an executable, phased
 change. Vocabulary follows the codebase-design glossary: **module, interface, implementation, depth, seam,
@@ -110,3 +117,136 @@ Each plan's last section lists its open questions (80 in total). These block a w
 - **Wave B:** plan 01 Q1 (make `RequestContext.layer` required) and Q2 (host `BeforeSignUp` taps apply to SCIM) · plan 07 Q1 (do vetoes spend a magic link) · plan 10 Q7–Q8 (which hooks and events wait for commit).
 - **Wave C:** plan 05 Q1 (one AAD convention with lazy re-seal, or keep per-column formats) and Q3 (RLS on organization tables by default) · plan 10 Q5 (cross-protocol domain claims).
 - **Wave D:** plan 02 Q1 (external users of `layerSql`/`layerMemory`), Q3 (transactional memory) and Q4 (tenant filtering on SQLite) · plan 08 Q1 (absorb plugin-owned services into plugin layers; changes production).
+
+---
+
+## Batch 2: plans 11–24 (review of 2026-10-17)
+
+Source: the architecture review of 2026-10-17 against `main` at `fc990c88`, after plans 01–10 had all landed.
+Same ten-section shape, same conventions (above) and the same implementing rules (`IMPLEMENTING.md`). Every
+plan re-verified its candidate at `fc990c88`; where the review was wrong the plan's §2 says so. Line numbers
+shift as earlier plans land: re-locate by symbol before editing.
+
+### Plans
+
+| # | Plan | Strength | Dependency category | Live bugs it fixes (reproduced unless marked) | Phases | Open Qs |
+|---|---|---|---|---|---|---|
+| 11 | [One credential-resolution module](11-credential-resolution/PLAN.md) | Strong | in-process | web/next ignore `SessionCookieConfig`: under `SecureDomain` `getSession` is always `undefined`, `hasSessionCookie` always `false`, a rotation is written as `__Host-session` · qadi Path B: stale cookie (or failing `x-api-key`) + valid bearer → anonymous, Path A → the user | 7 | 6 |
+| 12 | [One passkey ceremony module](12-passkey-ceremony/PLAN.md) | Strong | ports & adapters · local-substitutable | **BEH-EA-132**: register/reauthenticate refuse a bad origin/rpId *before* spending the challenge, which then verifies · all three ceremonies leave the challenge live on unreadable `clientDataJSON` | 4 | 4 |
+| 13 | [One admin gate](13-admin-gate/PLAN.md) | Strong | in-process | **`AdminAccounts` ignores a tenant's `AdminConfig`** (`canDeleteUsers`, `canManageCredentials`, `passwordPolicy`, `links.changeEmail` read at build): a user is **erased** in a tenant whose config forbids it (ADR-EA-018 D8) | 6 | 6 |
+| 14 | [Federated identity resolution in core](14-federated-identity/PLAN.md) | Strong | in-process | SAML: two concurrent ACS for one new NameID → 500 (two paths) · OAuth/SAML refuse an identity that only lost a race · OAuth explicit link to another user's identity "succeeds", links nothing and **overwrites that user's provider tokens** · OAuth refresh race → 500 · SAML `trustsEmail` not bounded to the connection's domains | 6 | 7 |
+| 15 | [A host-composition module (`AuthHost`)](15-host-composition/PLAN.md) | Strong | local-substitutable | `examples/sql-server` + any table-owning plugin compiles (`RIn = never`) and answers 503 "no such table": plugin migrations never run; README quickstart has the same flaw · `userFieldsLayer` never provided (latent) | 5 | 9 |
+| 16 | [Fold `Repositories` into the SQL store adapters](16-sql-store-adapters/PLAN.md) | Strong | local-substitutable | none at runtime · removes 8 test-only repository methods, a dead degraded token-read path, dead wiring in 9 test compositions, a BDD scenario only a dead method satisfies, the false libSQL claim · housekeeping: `Repositories.ts-E`, stale `packages/sql/README.md` | 8 | 7 |
+| 17 | [Core sealed columns onto `SealedColumn`](17-core-sealed-columns/PLAN.md) | Strong | local-substitutable | **the documented runbook corrupts data** (`docs/plugin-authoring.md:156`: a hand-declared core sweep re-seals under an AAD the repository never reads → `null`) · account-token AAD doesn't bind the account · key retirement can't finish for core rows · a failed re-seal aborts an enclosing Postgres tx (plugin columns too) | 5 (+2b) | 8 |
+| 18 | [`VerificationLink` owns redeeming a mailed token](18-verification-link-redeem/PLAN.md) | Worth exploring | local-substitutable | **`OAuth.callback` consumes any identifier**: a state of `email-otp:<victim>.000000` burns the victim's OTP attempts and bypasses EmailOtp's per-address budget · `confirmReset` has no per-IP rule, so every forged token reaches the breach-check network call | 7 | 7 |
+| 19 | [A pure verdict for a presented session credential](19-session-verdict/PLAN.md) | Worth exploring | in-process | a rotation loser that finds the row expired publishes no `auth.session.expired` (ESA-006; narrow) | 4 | 6 |
+| 20 | [One in-process user agent](20-in-process-user-agent/PLAN.md) | Worth exploring | in-process | `TestAuth.signIn` hands back a hard-coded `__Host-session` cookie (`TestAuth.ts:519`) the server ignores under `SecureDomain` (401) · 63 `Set-Cookie` reads in 31 test files, 7 parsers, 4 hand-made jars | 6 | 7 |
+| 21 | [The session lifecycle is declared on the `HttpApi` contract](21-session-minting-annotation/PLAN.md) | Worth exploring (plan finds it stronger) | in-process | **a bearer client that changes its password is logged out everywhere**: the new token is not sent as `set-auth-token`, the superseded one is presented again, reuse detection revokes the whole family | 8 | 8 |
+| 22 | [Each plugin table's DDL lives with its records](22-table-ddl-locality/PLAN.md) | Worth exploring | local-substitutable | all 47 plugin indexes lack `IF NOT EXISTS` (the documented online-index procedure fails) · `passkey_credential.counter` is int4 on Postgres (uint32 counter ≥ 2³¹ breaks sign-in) · tenancy declarations never checked against the schema | 9 | 7 |
+| 23 | [`RelayCursorStore` is a store port](23-relay-cursor-store/PLAN.md) | Worth exploring | ports & adapters | cursor outage is a defect, not `StoreUnavailable`; a busy cursor write redelivers the whole batch · the composition in `README.md:390` and `packages/webhooks/README.md:19` does not compile · two same-named relays can move the cursor backwards | 4 | 4 |
+| 24 | [Plugin record stores: one behaviour for memory and SQL](24-memory-records-over-sqlite/PLAN.md) | Speculative | local-substitutable | `members?sortDirection=desc` returns ascending over SQL · team/connection-domain order drifts · duplicate JWT `kid` overwrites in memory, dies over SQL · SQLite PK clash missed by `orConflict` · **10 SQL record adapters not atomic on Postgres** (team-move cycle, negative member count, lost updates; confirmed by reading, not run) | 6 (+Track A) | 8 |
+
+Plan 24's default is **Track B** (keep the `Ref` adapters, enforce parity with a differential harness, fix the
+drifts and the Postgres races). Track A (memory bundles become SQL over SQLite `:memory:`) runs only if the
+Phase 0 spike passes gates G1–G5. The review's premise did not survive §2: SQLite serialises writers, so it
+cannot reproduce the Postgres races that matter most, and TRBS-005 means "single-process", not "driver-free".
+
+### Execution order
+
+```
+Wave 0 — hotfixes, each its own small PR, no refactor (security first)
+  13·P0   AdminAccounts reads the tenant's AdminConfig per operation         (erases accounts today)
+  18·P0   pin, then pull the OAuth-callback identifier-prefix check forward  (cross-flow token burn)
+  14·P0   SAML answers a lost race by re-reading the anchor                  (500 on concurrent ACS)
+  12·P0   passkey ceremonies spend the challenge first                       (BEH-EA-132)
+  11·P0   web/next read the configured cookie; Path B falls through to bearer
+  21·P0   pin the bearer change-password family revocation (fix lands in 21·P5; pull forward if wanted)
+  15·P0   pin the sql-server example; fix the README quickstart's missing plugin migrations
+
+Wave A — contained deepenings, independent of each other
+  13 (P1–P3, P5) · 12 (rest) · 14 (rest) · 19 · 23
+
+Wave B — the request path
+  11·P1 (shared current-user + IssuedSession helpers) ──► 13·P4
+  11·P2–P6 ──► 18 (uses 11's ClientAddress)
+  21 ──────────────────────────────────────────────► 20 (Wave D)
+
+Wave C — persistence
+  23 ──► 17 ──► 16          (see "16 vs 17" below)
+  22 ──► 24·P0 spike ──► 24 (Track B by default)
+
+Wave D — composition and test edge
+  15 ──► 20
+```
+
+Why this order:
+- **13·P0 first**: it is the only finding that destroys data an operator's configuration forbids touching.
+- **18·P0 early**: the cross-flow consume is an unauthenticated way to exhaust another person's OTP budget. The
+  plan fixes it in Phase 5 (the shared burn-first codec); the prefix check alone, the same `startsWith` the
+  native exchange already does at `OAuth.ts:1339`, can ship ahead of that.
+- **11·P1 before 13·P4**: 11 exports the one current-user helper (in core, because organization, webhooks and
+  SAML don't depend on server); 13 only deletes the admin copies. 12 also takes 11's `IssuedSession`.
+- **21 before 20**: 21 makes every bearer mint send `set-auth-token`, so 20's agent captures bearer tokens by
+  "follow the headers" instead of duck-typing the body.
+- **15 before 20 and 24**: 15 moves the example smoke tests onto `TestAuth.app` (which 20 then gives a cookie
+  jar), and 15 is the one place a memory composition is assembled (which 24's Track A would change).
+- **23 before 16**: 16 deletes `Repositories`, and `core/src/EventRelay.ts` is its only importer outside
+  `@awthaq/sql` besides `Persistence.ts`. 23 also builds the first SQL adapter with no repository behind it,
+  the shape 16 then applies to the other five stores.
+- **22 before 24**: both edit the same records modules; 24 builds on 22's colocated DDL.
+
+### New ADR numbers (reserved) and ADR revisions
+
+| ADR | Title (draft) | Plan |
+|---|---|---|
+| ADR-EA-042 | One credential-resolution module beneath every entry point | 11 |
+| ADR-EA-043 | Federated identity resolution is a core module | 14 |
+| ADR-EA-044 | One host-composition module derives the servable layer | 15 |
+| ADR-EA-045 | The session lifecycle is declared on the `HttpApi` contract | 21 |
+| ADR-EA-046 | Plugin record stores: one behaviour for memory and SQL | 24 |
+
+Several plans amend the same ADR and each wrote the next revision number it saw. **Revision numbers are
+assigned when a plan lands, in landing order**, not as written in the plan:
+
+| ADR | Amended by (claimed revision) | Assign in landing order |
+|---|---|---|
+| ADR-EA-004 (rev 1.2 today) | 16 (1.3), 22 (1.3), 24 (1.3) | 22 → 16 → 24 per the waves above: 1.3, 1.4, 1.5 |
+| ADR-EA-014 (rev 1.3) | 19 (1.4), 23 (1.4), 24 (1.4) | 19 → 23 → 24 |
+| ADR-EA-028 (rev 1.5) | 11 (1.6), 23 (1.6) | whichever lands first takes 1.6 |
+| ADR-EA-041 (rev 1.1) | 23 (1.2), 16 (1.3), 24 (if Track A) | as written: 23 then 16 |
+| ADR-EA-019 (rev 1.2) | 17 (1.3) | — |
+| ADR-EA-018 (rev 1.4) | 13 (1.5) | — |
+| ADR-EA-003 · 015 · 020 · 030 · 039 | 21 · 11 · 18 · 23 · 18 | one amender each |
+
+### Cross-plan reconciliations
+
+Where two plans in this batch touch the same thing, this table is authoritative:
+
+| Topic | Plans | Resolution |
+|---|---|---|
+| **16 vs 17 order** | 16 §8/Q7 says 23 → 16 → 17; 17 §8/Q8 says 17 first | **Recommended: 23 → 17 → 16.** 17 fixes live bugs (the runbook that corrupts data, the token AAD that doesn't bind the account); 16 fixes none at runtime. 16 is written to support either order and lists exactly what changes with 17 first (no `internal/CoreSealing.ts`, Q1 moot, it moves 17's `SealedColumn.codec` declarations). **User decision.** |
+| Shared current-user helper and `IssuedSession` | 11 P1, 12, 13 P4 | 11 owns them (11 copies of `currentUserPrincipal`, not 8; the helper goes in core). 12 and 13 consume them and only delete their own copies. |
+| Configured cookie names | 11, 20 | 11 makes every reader take the name from `SessionCookieConfig`; 20's agent (and `TestAuth.signIn`, `TestAuth.ts:519`) must read the configured names too, never a hard-coded name. |
+| "A cookie the handler wrote wins" | 11, 21 | 21 owns the rule (it declares which endpoints mint, rotate, end or swap); 11's delivery sink defers to it. |
+| Bearer token capture | 20, 21 | 21 makes the headers authoritative; 20 follows the headers. |
+| Session-lifecycle declaration mechanism | 21 | Effect rc.116 endpoint annotations are untyped (`HttpApiEndpoint.ts:189`) and there is no `annotateContext`, so 21 declares mint/rotate/end/swap with **middleware markers** (type-level gate checked by `tsc` probe), not annotations. Four handlers write the session cookie outside `SessionDelivery` today (OAuth callback and exchange, SAML ACS, admin impersonation); 21 brings them under the gate, so 12, 13 and 14 rebase onto the markers in those handlers. |
+| `Passkey.ts` regions | 12, 22 | 22 owns the migrations region (`Passkey.ts:803-958`) and the counter column; 12 leaves it alone. Disjoint, either order. |
+| Where new column DDL goes | 14 P5, 17, 22 | Wherever 22 has moved that table's DDL (its records module). 17's sealed-column declarations move with the table. |
+| Store insert primitives | 14, 16 | 16 must keep `insertIfAbsent`/`insertOrHolder` as single `ON CONFLICT DO NOTHING` statements; 14's race handling relies on them. |
+| Session verdict and sealed values | 17, 19 | 19's pure verdict never decrypts `ipAddress`/`userAgent`; 17 makes `toView` effectful, which changes two lines of 19's interpreter. |
+| `Sessions.verify` interface | 11, 19 | 19 keeps it unchanged, so 11 only rebases. |
+| `OAuth.callbackFlow` | 14, 18 | Both edit it; whichever lands second rebases (18 §8 has the merge note). |
+| Production hook points | 15 Q9 vs plan 08 Q5 | 15 proposes reversing plan 08's decision (provide declared `hookPoints` in production). **User decision** (15 Q9). |
+| `regclass` re-run note | 15, 16 | It didn't reproduce on Postgres 16 (15 §2); 16 re-tests it and drops the note from `packages/sql/README.md` if it still doesn't. |
+| Records bundle shape | 15, 23, 24 | Only Track A of 24 changes it. If Track A goes, 15's memory mode and 23's `Ref` cursor adapter are revisited in 24's Phase 0 decision record. |
+| Follow-ups handed off (not planned here) | 13 Q4, 14 Q7, 21 Q6 | SAML `canManageSaml` per tenant · SAML anchor stability when `entityId` is edited · JWT session-mirror cookie on sign-out. Open as tickets when the owning plan lands. |
+
+### Decisions needed before each wave
+
+Each plan's §10 has a recommended default for every question (94 in total). These block a wave from starting:
+
+- **Wave 0:** 13 Q6 (ship P0 alone; recommended yes) · 14 Q5 (a second lost race → typed `Contended`, recommended, or 503) · 12 Q2 (when both challenge and origin are wrong, `PasskeyChallengeInvalid` wins, a visible error change) · whether to pull 18's prefix check and 21's bearer fix forward into Wave 0.
+- **Wave A:** 13 Q1 (make `AdminConfig` private) and Q2 (`actionDenied` carries the target; a core event change) · 14 Q1–Q3 (SAML-created users verified within claimed domains; email trust bounded to claimed domains; new `auth.account.linked` event) · 12 Q1 (do admission refusals spend the challenge) · 23 Q1 (monotonic `advance`) and Q2 (a lease per relay name).
+- **Wave B:** 11 Q2 (Path B's tier) and Q3 (a non-`User` principal from a session is a 401 on user-tier groups) · 21 Q1 (keep `token` in the body), Q2 (refuse bearer impersonation), Q4 (an unsettled declared endpoint dies with 500 in production) and Q5 (core's cookie writers move to server) · 18 Q1 (a foreign row is spent) and Q2 (`confirmResetByIp` numbers).
+- **Wave C:** **16 vs 17 order** (above) · 17 Q1 (does any environment hold rows under today's core AADs; decides whether Phase 2b ships a re-key) and Q2 (core ports carry `Sealed` values) · 22 Q3 (rewrite shipped migrations' source, or freeze them) and Q4 (widen the passkey counter to `BIGINT` with a migration, or clamp) · 24 Q1 (accept G1–G5 as the go/no-go) and Q4 (fix the 10 Postgres atomicity bugs inside 24).
+- **Wave D:** 15 Q1 (`AuthHost` in server or a new package), Q2 (`migrations` required in SQL mode), Q6 (move the ledger drift check from the CLI into core) and **Q9 (reverse plan 08 Q5)**.
