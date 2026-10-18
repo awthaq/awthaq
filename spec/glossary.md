@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) |
 
 ---
 
@@ -49,6 +49,10 @@ A `Model.Class` entity representing one authenticated device or client instance.
 ### VerificationToken
 
 A `Model.Class` entity for a purpose-scoped, single-use token — email verification, password reset, and similar flows. A token is valid for one purpose only and is consumed exactly once, through `Verification.redeem`, in the same transaction as the action it authorizes; a replay is a distinct, published event (`auth.token.replay`), not a silent failure. See: [BEH-EA-057](behaviors/08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose).
+
+### Passkey ceremony
+
+One registration (modal or conditional), sign-in or step-up exchange of a WebAuthn challenge for a browser response. Its kind decides the challenge scope (`passkey.register[.conditional]:<sessionId>`, `passkey.authenticate:<ceremonyId>`, `passkey.reauthenticate:<sessionId>`). Verification spends the challenge first, then checks the origin, the signature and the kind's policy (user verification, attestation, user handle, signature counter), and answers a verified credential or a refusal reason. How precisely an endpoint reports a refusal is its posture. See: [BEH-EA-132](behaviors/17-passkey.md#beh-ea-132-challenges-are-single-use-and-short-lived), [BEH-EA-136](behaviors/17-passkey.md#beh-ea-136-typed-errors-are-enumeration-safe).
 
 ### CsrfProtection
 

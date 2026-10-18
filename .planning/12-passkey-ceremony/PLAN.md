@@ -1167,3 +1167,24 @@ Phases 1-3 carry no changeset: no package-visible change, since the `Passkey` na
    - "No" keeps today's cheaper path; Phase 2 item 6 says what to drop.
 4. **Should options generation also move into `PasskeyCeremony`?** That covers the creation/request options, `excludeCredentials`, the TC-001 decoy `allowCredentials` and `ceremonyKnobsOf`, which would then own the whole options half rather than only `begin`.
    - **Recommended: no, not in this plan.** The options inputs differ per endpoint (user lookup, user handle, decoys keyed by a boot-scoped secret, `Users.findByEmail`). Moving them would give the ceremony module `Users` and `PasskeyUserHandles` dependencies for no caller beyond today's, and the bug class here is on the verify half. Revisit if a fourth ceremony kind appears.
+
+---
+
+## Decisions taken (implementation, 2026-10-18)
+
+Open questions took the plan's recommended default:
+
+1. **Q1, admission precedes the attempt: yes.** A stale session, a spent per-IP budget and a bad token-delivery header leave the challenge usable. BEH-EA-132 says so; two admission tests pin it (`Passkey.test.ts`, `PasskeyEnumeration.test.ts`).
+2. **Q2, precedence: accept.** A missing or spent challenge outranks an origin refusal at registration and step-up, as sign-in already did.
+3. **Q3, step-up pays the TSS-004 decoy verification: yes.** `usableBy` is one branch for both assertion kinds.
+4. **Q4, options generation stays in `Passkey.ts`: yes.** Only `begin` moved into the ceremony.
+
+Implementation notes and deviations:
+
+- **Anything depending on plan 11 was skipped.** `currentUserPrincipal` and `IssuedSession` in `Passkey.ts` are untouched (plan 11 is not implemented yet).
+- **Phase boundaries.** Phase 0 (hotfix, tests, BDD, spec text, changeset) and Phase 1 (`PasskeyConfig.ts`) and Phase 2 (module and test migration) and Phase 3 (spec, glossary, traceability, README) are four commits. The `PasskeyCeremony` sentence of BEH-EA-132 and the glossary and traceability rows landed in Phase 3. `17-passkey.md` is therefore at revision 1.5 (1.4 from Phase 0, 1.5 from Phase 3), the glossary at 1.6, `spec/traceability.md` at 1.35.
+- **New REQ id.** The Phase 0 BDD scenario was allocated `REQ-EA-1309` (1307 and 1308 went to plan 13). `spec/traceability.md` crosswalk: `55 / 55`.
+- **TS2883.** The inferred type of `PasskeyCeremony.make` could not name `StoreUnavailable` from `@awthaq/api`. Fixed without an annotation by an exported `CeremonyFailure<Refused> = Refused | Api.StoreUnavailable` (type-imported `Api`), which the test suite's `reasonFrom` uses (knip counts it, and `RegistrationRefused`/`AssertionRefused`/`VerifiedAssertion`, as used only through the tests).
+- **Test deviations from §5.** (a) The WPS-003 case was reworded: a wrong-challenge probe spends the *addressed* scope (BEH-EA-132 "the entry gone either way"), so the plan's "leaves the modal sibling usable" holds only for the conditional-completes-then-modal direction, which is its own case. (b) The stale-session admission test sets `reauthMaxAgeSeconds` to one minute: with the default gate equal to the five-minute challenge TTL, the challenge would expire before the step-up. (c) Both admission cases live in the files the plan names for them, but the freshness one is in `Passkey.test.ts`. (d) `HSK-005` session-level `amr` cases were deleted; the `SignIn`-is-handed-`amr` wiring case stays. (e) The ceremony suite has 111 cases; the BEH-EA-132 table runs 22 rows over each of `records.memory` and `records.sql` (plus extra "signature" rows for the two registration modes).
+- **Sweep grep.** `grep` of `Passkey.ts` for `verifyRegistration` still hits `ceremonies.verifyRegistration` (the call into the module); every other sweep pattern is empty. `Passkey.ts` ended at 1,292 lines (estimate was ~1,390), `PasskeyCeremony.ts` at 474, `PasskeyConfig.ts` at 152.
+- **Gates run.** `pnpm typecheck`, `lint`, `knip` (only `.reports/` files), `circular`, `format:check`, `check:error-tags`, `check:readmes`, `spec:verify:strict`, `package:smoke`, `test` (one unrelated SCIM property test, `ScimFilter.property.test.ts`, failed once and passed twice on rerun), `test:bdd` and `test:pg` (46 files, including the ceremony suite on Postgres).
