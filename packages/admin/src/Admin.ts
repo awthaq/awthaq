@@ -38,7 +38,6 @@ import * as ImpersonationRecords from "./ImpersonationRecords.ts";
 import * as AdminGate from "./internal/AdminGate.ts";
 
 export {
-  AdminConfig,
   config,
   type AdminConfigShape,
   type EpisodeGateInput,

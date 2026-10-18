@@ -164,10 +164,10 @@ const defaultAdminConfig: AdminConfigShape = {
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
-export const AdminConfig: Context.Reference<AdminConfigShape> = Context.Reference(
-  "awthaq/admin/Config",
-  { defaultValue: () => defaultAdminConfig },
-);
+/** Module-private (plan 13): the only reader is `make` below, which reads it per operation. */
+const AdminConfig: Context.Reference<AdminConfigShape> = Context.Reference("awthaq/admin/Config", {
+  defaultValue: () => defaultAdminConfig,
+});
 
 export const config = (partial: Partial<AdminConfigShape>) =>
   Layer.succeed(AdminConfig, {
@@ -190,9 +190,9 @@ type GateOf<I> = {
     : never;
 }[keyof AdminConfigShape];
 /** "canManageUsers" | "canBanUsers" | "canDeleteUsers" | "canManageCredentials" (checked by AdminGate.types.test.ts). */
-type UserGate = GateOf<UserAdminGateInput>;
+export type UserGate = GateOf<UserAdminGateInput>;
 /** "canAdministerTenants". */
-type TenantGate = GateOf<TenantAdminGateInput>;
+export type TenantGate = GateOf<TenantAdminGateInput>;
 
 /**
  * BEH-EA-221 / BEH-EA-237: which predicate guards which action, and what the predicate is shown.
@@ -432,3 +432,5 @@ export const make = Effect.gen(function* () {
     crossTenantScope,
   };
 });
+
+export type AdminGate = Effect.Success<typeof make>;
