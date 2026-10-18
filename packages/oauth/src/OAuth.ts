@@ -21,12 +21,13 @@
 // calling the provider's API on the user's behalf never handles a raw
 // token directly.
 
-import { AccountContract, Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract } from "@awthaq/api";
 import {
   Accounts,
   AuthEvents,
   AuthPlugin,
   Errors,
+  FederatedIdentity,
   HookPoint,
   Hooks,
   Observability,
@@ -34,7 +35,6 @@ import {
   SessionCookie,
   Sessions,
   SignIn,
-  SignUp,
   Tenant,
   Users,
   Verification,
@@ -138,8 +138,6 @@ const bouncePage = (location: string) => {
 };
 
 const FLOW_TTL = Duration.minutes(10);
-/** NAM-009: the same bounded http(s) rule the client-writable `image` field has (`AccountContract.ImageUrl`). */
-const isImageUrl = Schema.is(AccountContract.ImageUrl);
 const FLOW_PREFIX = "oauth.flow:";
 
 const toBase64Url = (bytes: Uint8Array): string => {
@@ -252,10 +250,6 @@ export const accountAnchorFor = (provider: OAuthProvider.OAuthProviderConfig, su
       provider.issuer === undefined ? undefined : yield* OAuthProvider.liftConfig(provider.issuer);
     return { providerId: provider.id, subject, ...(issuer === undefined ? {} : { issuer }) };
   });
-
-/** Only present when there is an issuer — spreading this avoids ever assigning `issuer: undefined` under `exactOptionalPropertyTypes`. */
-const issuerField = (issuer: Option.Option<string>): { readonly issuer: string } | {} =>
-  Option.isSome(issuer) ? { issuer: issuer.value } : {};
 
 /** MNA-004: why a requested `callbackURL` was discarded for the safe default. */
 type CallbackDiscard =
@@ -751,7 +745,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
     ],
     handlers: OAuthHandlers,
     make: Effect.gen(function* () {
-      const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
@@ -826,8 +819,9 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement, consulted at
       // the sign-in-completing path of `callback` only (never `flow.link`, which issues no new session).
       const completion = yield* SignIn.make;
-      // NAM-002: the sign-up veto/observer for the first-login user creation below.
-      const creation = yield* SignUp.make;
+      // ADR-EA-043: the anchor, the email policy, the first-login sign-up (NAM-002: its veto and observer) and
+      // the lost-race re-read, once for every federated flow.
+      const federation = yield* FederatedIdentity.make;
 
       // The table above is registered (introspectable) and spent through one budget. The numbers in force
       // come from the configuration of the operation (EP-007), so a tenant's `OAuth.config(...)` provided
@@ -843,6 +837,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       const trustedProvidersOf = (config: OAuthConfigShape) =>
         config.linking === "explicit" ? [] : config.linking.trustedProviders;
+
+      /** BEH-EA-124: a provider named in `trustedProviders` is trusted for any address it verifies. */
+      const emailTrustOf = (config: OAuthConfigShape, providerId: string) =>
+        trustedProvidersOf(config).includes(providerId)
+          ? FederatedIdentity.trusted("any")
+          : FederatedIdentity.untrusted;
 
       /**
        * NAM-006: the provider ids `userId` actually has — never asserted,
@@ -1089,165 +1089,51 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           return yield* CallbackFailure.callbackFailed("no-subject");
         }
 
-        const accountIfLinked = yield* accounts.findByProviderSubject(
+        // ADR-EA-043: which local user is this provider identity is core's `FederatedIdentity`; the plugin
+        // hands over what the provider proved and its own trust verdict, and maps each refusal.
+        const identity: FederatedIdentity.ExternalIdentity = {
           providerId,
-          profile.subject,
-          Option.getOrUndefined(provider.issuer),
-        );
-
-        const targetUserId: Users.UserId = yield* Option.match(accountIfLinked, {
-          // BE-002: every successful OAuth sign-in against an
-          // already-linked account persists the freshly exchanged token
-          // set — previously discarded here on every re-authentication,
-          // silently leaving a stale (possibly already-expired) access
-          // token as this account's only stored credential.
-          onSome: (account) =>
-            accounts.updateProviderTokens(account.id, toProviderTokenSet(tokens, exchangedAt)).pipe(
-              Effect.as(account.userId),
-              // The row was read a moment ago: a vanished account is an invariant, an outage flows (ADR-EA-028).
-              Effect.catchTag("AccountNotFound", Effect.die),
-            ),
-          onNone: () =>
-            Effect.gen(function* () {
-              if (flow.link !== undefined) {
-                const userId = Users.UserId(flow.link.userId);
-                yield* accounts
-                  .link({
-                    userId,
-                    providerId,
-                    subject: profile.subject,
-                    tokens: toProviderTokenSet(tokens, exchangedAt),
-                    ...issuerField(provider.issuer),
-                  })
-                  .pipe(
-                    Effect.catchTag("AccountAlreadyLinked", () =>
-                      CallbackFailure.callbackFailed("account-already-linked"),
-                    ),
-                  );
-                return userId;
-              }
-
-              const existing =
-                profile.email === undefined
-                  ? Option.none()
-                  : yield* users.findByEmail(profile.email);
-
-              if (Option.isSome(existing)) {
-                // TMS-007: auto-link needs *both* sides proven — the provider
-                // asserts the email is verified AND the local account's own
-                // email is already verified. An unverified local account may
-                // have been registered by someone squatting the address, and
-                // linking a trusted identity into it would hand them the
-                // victim's account the moment anything verifies that email.
-                const autoLink =
-                  trustedProvidersOf(config).includes(providerId) &&
-                  profile.emailVerified === true &&
-                  Users.isEmailVerified(existing.value);
-                if (!autoLink) {
-                  return yield* Effect.fail(
-                    new OAuthApi.AccountExists({
-                      providers: yield* conflictingProviders(
-                        existing.value.id,
-                        profile.emailVerified === true,
-                      ),
-                    }),
-                  );
-                }
-                yield* accounts
-                  .link({
-                    userId: existing.value.id,
-                    providerId,
-                    subject: profile.subject,
-                    tokens: toProviderTokenSet(tokens, exchangedAt),
-                    ...issuerField(provider.issuer),
-                  })
-                  .pipe(
-                    // A concurrent callback linked this identity between the lookup and here.
-                    Effect.catchTag("AccountAlreadyLinked", () =>
-                      CallbackFailure.callbackFailed("account-already-linked"),
-                    ),
-                  );
-                return existing.value.id;
-              }
-
-              // BEH-EA-113-adjacent silent sign-up (research/05-oauth-oidc.md Q55): the ecosystem norm
-              // for a first-time, non-conflicting OAuth sign-in, with no separate "confirm sign-up"
-              // step in v1. ADR-EA-038: creation via OAuth is still a sign-up, so `SignUp` vets it
-              // (`BeforeSignUp`, whose `strategy` is the provider id) before anything is written, then
-              // creates, verifies and links in one unit and announces after it commits. The session
-              // follows below through `SignIn`, like every other flow.
-              const name = profile.name ?? profile.email ?? profile.subject;
-              const vetted = yield* creation.vet({
-                // FAMS-002: a profile with no email creates an Anonymous user (upgradeable through
-                // `Users.promoteIdentity`).
-                identity:
-                  profile.email === undefined
-                    ? { _tag: "Anonymous" }
-                    : { _tag: "Email", email: profile.email },
-                name,
-                strategy: providerId,
-              });
-              const created = yield* creation
-                .create(vetted, {
-                  // AOMS-007: a *trusted* provider's `email_verified` claim is proof enough to mark the
-                  // new local user verified, in the same unit. Deliberately not for an untrusted
-                  // provider (that claim must not flip local state TMS-007's auto-link gate later relies
-                  // on) and never on the auto-link/explicit-link paths.
-                  verified:
-                    profile.email !== undefined &&
-                    profile.emailVerified === true &&
-                    trustedProvidersOf(config).includes(providerId),
-                  // NAM-009: an http(s) avatar only, see `OAuthProfile.image`.
-                  ...(profile.image !== undefined && isImageUrl(profile.image)
-                    ? { image: profile.image }
-                    : {}),
-                  link: {
-                    providerId,
-                    subject: profile.subject,
-                    tokens: toProviderTokenSet(tokens, exchangedAt),
-                    ...issuerField(provider.issuer),
-                  },
-                })
-                .pipe(
-                  Effect.catchTag(
-                    "SignUp/IdentityTaken",
-                    Effect.fnUntraced(function* (taken) {
-                      if (taken.kind === "Account") {
-                        // A concurrent callback linked this identity to another user first.
-                        return yield* CallbackFailure.callbackFailed("account-already-linked");
-                      }
-                      // FAMS-002: no phone identity is created here.
-                      if (taken.kind === "Phone") {
-                        return yield* Defects.invariantViolation(
-                          "OAuthSignUpConflict",
-                          taken.message,
-                        );
-                      }
-                      // A concurrent sign-up claimed the address between our lookup and this insert:
-                      // report whatever the winner has, or nothing if it isn't visible yet.
-                      const winner =
-                        profile.email === undefined
-                          ? Option.none()
-                          : yield* users.findByEmail(profile.email);
-                      const providers = Option.isSome(winner)
-                        ? yield* conflictingProviders(
-                            winner.value.id,
-                            profile.emailVerified === true,
-                          )
-                        : [];
-                      return yield* new OAuthApi.AccountExists({ providers });
-                    }),
-                  ),
-                );
-              return created.id;
-            }),
-        });
+          subject: profile.subject,
+          issuer: provider.issuer,
+          email: Option.map(Option.fromNullishOr(profile.email), (address) => ({
+            address,
+            verified: profile.emailVerified === true,
+          })),
+          name: Option.fromNullishOr(profile.name),
+          // NAM-009: an http(s) avatar only, see `OAuthProfile.image` (applied by the resolver).
+          image: Option.fromNullishOr(profile.image),
+          // BE-002: the exchanged token set rides every link, creation and returning sign-in.
+          tokens: Option.some(toProviderTokenSet(tokens, exchangedAt)),
+        };
 
         if (flow.link !== undefined) {
-          // Linking an already-authenticated caller's own account: no new
-          // session, the caller's existing one is untouched.
+          // Linking an already-authenticated caller's own account: no email policy, no new session, the
+          // caller's existing one is untouched.
+          yield* federation.attach(identity, Users.UserId(flow.link.userId)).pipe(
+            Effect.catchTags({
+              "FederatedIdentity/LinkedElsewhere": () =>
+                CallbackFailure.callbackFailed("account-already-linked"),
+              "FederatedIdentity/TargetGone": () =>
+                CallbackFailure.callbackFailed("account-missing"),
+              "FederatedIdentity/Contended": () =>
+                CallbackFailure.callbackFailed("identity-contended"),
+            }),
+          );
           return { callbackURL: flow.callbackURL, session: undefined };
         }
+
+        const resolved = yield* federation.resolve(identity, emailTrustOf(config, providerId)).pipe(
+          Effect.catchTags({
+            // BEH-EA-123, NAM-006: the holder's real providers, only when this provider vouched for the address.
+            "FederatedIdentity/EmailInUse": (inUse) =>
+              Effect.flatMap(conflictingProviders(inUse.holder, inUse.claimVerified), (providers) =>
+                Effect.fail(new OAuthApi.AccountExists({ providers })),
+              ),
+            "FederatedIdentity/Contended": () =>
+              CallbackFailure.callbackFailed("identity-contended"),
+          }),
+        );
+        const targetUserId = resolved.userId;
 
         // ADR-EA-038: the provider proved the identity, so core's sign-in takes over (gate, veto,
         // MFA divert, session, announcement). CSD-003: the callback request is the browser's own,

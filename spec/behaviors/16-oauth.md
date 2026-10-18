@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-16 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-015 callout to BEH-EA-125 (CCR-EA-002) <br> 1.2 (2026-09-29): BEH-EA-128 gains the native return leg — exchange code, `POST /oauth/token`, native redirect allowlist (MNA-003/MNA-004) <br> 1.3 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-015 callout to BEH-EA-125 (CCR-EA-002) <br> 1.2 (2026-09-29): BEH-EA-128 gains the native return leg — exchange code, `POST /oauth/token`, native redirect allowlist (MNA-003/MNA-004) <br> 1.3 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.4 (2026-10-18): BEH-EA-123/124/125: the account-linking decision is core's `FederatedIdentity` (BEH-EA-338): an explicit link of an identity linked to another account is refused, a lost race resolves to the anchor's user, a returning sign-in whose account vanished is resolved again (architecture plan 14 phase 2) |
 ---
 
 > Implemented in `@awthaq/oauth` (`packages/oauth/src`; tests `packages/oauth/test`, wired scenarios in `features/`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -75,6 +75,8 @@ REQUIREMENT: When a provider callback's email matches an existing account that
 
 Auth.js calls its opt-in flag `allowDangerousEmailAccountLinking` for a reason research/05-oauth-oidc.md documents directly: auto-linking by email is account-takeover-prone whenever any linked provider has weak email verification, and email at the provider can change without awthaq ever finding out. Defaulting to explicit linking follows the stricter of the two major frameworks' stances; the typed error drives a "sign in, then link" UI flow instead of a silent account merge the user never asked for.
 
+**An explicit link is refused when the identity is linked elsewhere (plan 14).** The signed-in caller's `link` flow attaches the provider identity through `FederatedIdentity.attach` (BEH-EA-338): it is idempotent for the same user, fails `OAuthCallbackFailed` (reason `account-already-linked`) when the identity is already linked to another user, leaving that user's tokens untouched, and `account-missing` when the user the link was started for has been erased; a new link publishes `auth.account.linked { via: explicit }`.
+
 **`AccountExists` names the real providers (NAM-006).** The error's `providers` are the provider ids the matching account actually has (`"password"`, `"passkey"`, another OAuth provider, …), read from its account rows — never a hardcoded `"password"`. They are populated only when the callback's own provider asserted `email_verified`; otherwise `providers` is `[]`, so a caller holding an unverified identity for the victim's address is not handed a map of the victim's sign-in methods (the error's existence is already disclosed by this behavior itself). *Decision (2026-09-29): option C of the plan, adopted as recommended; the user may revisit.*
 
 _Previous: [BEH-EA-122](16-oauth.md#beh-ea-122-flow-state-lives-server-side-in-verification) | Next: [BEH-EA-124](16-oauth.md#beh-ea-124-trusted-provider-auto-link-is-opt-in-per-provider)_
@@ -92,7 +94,7 @@ REQUIREMENT: Automatic linking on a verified-email match MUST be disabled
              globally.
 ```
 
-Some deployments genuinely want the smoother OAuth-only onboarding better-auth's default-on stance provides; `trustedProviders` gives them that trade-off without lowering the bar for every provider at once. **Both sides must be proven (TMS-007).** A verified-email match auto-links only when the provider asserts `email_verified` **and** the local account's own `emailVerified` is already `true`. An unverified local account may have been registered by someone squatting the victim's address; linking a trusted identity into it would hand that person the account the moment anything verifies the address. Otherwise the callback answers `AccountExists`, exactly as the explicit path does.
+Some deployments genuinely want the smoother OAuth-only onboarding better-auth's default-on stance provides; `trustedProviders` gives them that trade-off without lowering the bar for every provider at once. **Both sides must be proven (TMS-007).** A verified-email match auto-links only when the provider asserts `email_verified` **and** the local account's own `emailVerified` is already `true`. An unverified local account may have been registered by someone squatting the victim's address; linking a trusted identity into it would hand that person the account the moment anything verifies the address. Otherwise the callback answers `AccountExists`, exactly as the explicit path does. The rule is core's `FederatedIdentity` (BEH-EA-338, ADR-EA-043); the plugin supplies only the verdict (`trusted("any")` for a provider named in `trustedProviders`, else untrusted) and maps the refusal.
 
 **Just-in-time creation inherits a trusted provider's verification (AOMS-007).** When a first-time sign-in with no matching local account creates a user, and the provider is named in `trustedProviders` *and* asserts `email_verified`, the new user is marked verified in the same transaction. An untrusted provider's claim never flips local state (it would otherwise let a weak provider mint a "verified" squat account for TMS-007's gate to trust), and the auto-link and explicit-link paths never call `verifyEmail` — a local account keeps its own verification state.
 
@@ -110,6 +112,8 @@ REQUIREMENT: An `Account` row MUST be keyed uniquely on `(provider, subject,
 ```
 
 Email is documented as an unreliable anchor across every provider awthaq targets: Apple strips it after the first login, Entra ID's own docs forbid using `email`/`preferred_username` for authorization, and Facebook exposes no verification flag (research/05-oauth-oidc.md). `subject` — OIDC's `sub`, or a provider's declared immutable field — never gets reassigned by the provider the way an email address can be changed or reused, which is exactly the property a uniqueness constraint needs to hold across the account's lifetime.
+
+**A lost race resolves to the anchor (plan 14).** Two callbacks that prove the same `(provider, subject, issuer)` at once (a double submit, two tabs) both sign in as the one user the first wrote, instead of one answering `AccountExists` or `OAuthCallbackFailed`; a returning sign-in whose account is unlinked or erased between its read and the token refresh is resolved again (the email policy decides), never a defect. A second loss in a row answers `OAuthCallbackFailed` (reason `identity-contended`).
 
 **Provider tokens live on the account row (BE-002, BAM-008).** The exchanged token set — access token, refresh token and, for an `oidc` provider, the `id_token` — is persisted on the account, each token encrypted at rest with row-and-column-bound additional data, and readable only through `Accounts.findProviderTokens`. The `id_token` is kept so a better-auth account import (BEH-EA-207, which must not drop a source field) has a destination and a future RP-initiated logout can send it as `id_token_hint`; a refresh response without a new `id_token` keeps the stored one, and one with a fresh `id_token` replaces it.
 

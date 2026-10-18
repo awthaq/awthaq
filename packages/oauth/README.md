@@ -99,7 +99,7 @@ A native app's system browser (`ASWebAuthenticationSession`, Android Custom Tabs
 | `allowDangerousEmailAccountLinking: true` on provider `x` | `linking: { trustedProviders: ["x"] }` |
 | no flag (the default) | `linking: "explicit"` (the default) |
 
-awthaq is deliberately stricter than Auth.js: a trusted provider auto-links only when the **provider asserts `email_verified`** *and* the **local account's own email is already verified** (a squatter-registered, unverified local account is never linked into). Otherwise the callback answers `409 AccountExists`, listing the providers the account really has, and the user must sign in and then link explicitly. Users who relied on Auth.js's unconditional auto-link will see `AccountExists` on their first sign-in after migration.
+awthaq is deliberately stricter than Auth.js: a trusted provider auto-links only when the **provider asserts `email_verified`** *and* the **local account's own email is already verified** (a squatter-registered, unverified local account is never linked into). Otherwise the callback answers `409 AccountExists`, listing the providers the account really has, and the user must sign in and then link explicitly. Users who relied on Auth.js's unconditional auto-link will see `AccountExists` on their first sign-in after migration. An explicit link of a provider identity already linked to another account answers `OAuthCallbackFailed` (`account-already-linked`) and no longer touches that account's tokens.
 
 ### Auth.js provider id to awthaq preset
 
