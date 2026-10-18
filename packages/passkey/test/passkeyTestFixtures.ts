@@ -121,6 +121,8 @@ export const assertionCredential = (input: {
 export const mockWebAuthn = (overrides?: {
   readonly registrationVerified?: Partial<WebAuthn.VerifiedRegistration>;
   readonly authenticationVerified?: Partial<WebAuthn.VerifiedAuthentication>;
+  /** Makes the matching `verify*` fail `PasskeyVerificationFailed`, as the wrapped library does for a bad signature. */
+  readonly fail?: { readonly registration?: boolean; readonly authentication?: boolean };
   /** Observes every call the plugin makes to the port, so a test can assert what was (or was not) asked of it. */
   readonly spy?: {
     readonly registrationOptions?: Array<WebAuthn.RegistrationOptionsInput>;
@@ -154,6 +156,11 @@ export const mockWebAuthn = (overrides?: {
     },
     verifyRegistration: (input) => {
       overrides?.spy?.verifyRegistration?.push(input);
+      if (overrides?.fail?.registration === true) {
+        return Effect.fail(
+          new WebAuthn.PasskeyVerificationFailed({ message: "mocked: bad response" }),
+        );
+      }
       const verified = {
         // The credential id the browser reported, like a real authenticator's —
         // so a test can register several distinct credentials (WPS-003/WPS-010).
@@ -191,6 +198,11 @@ export const mockWebAuthn = (overrides?: {
     },
     verifyAuthentication: (input) => {
       overrides?.spy?.verifyAuthentication?.push(input);
+      if (overrides?.fail?.authentication === true) {
+        return Effect.fail(
+          new WebAuthn.PasskeyVerificationFailed({ message: "mocked: bad signature" }),
+        );
+      }
       return Effect.succeed({
         credentialId: input.response.id,
         newCounter: 1,

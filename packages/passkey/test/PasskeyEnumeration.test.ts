@@ -1,4 +1,4 @@
-// spec/behaviors/17-passkey.md, BEH-EA-131/136 — TC-001/TSS-004 (+CB-006,
+// spec/behaviors/17-passkey.md, BEH-EA-131/136 — TC-001 (+CB-006,
 // WPS-007), and the rate limits on the anonymous ceremony (WPS-005).
 //
 // BEH-EA-136's envelope has to cover the *options* half of the anonymous
@@ -6,7 +6,6 @@
 // cost (how much work an unknown credential id costs), not only the verify
 // response's error tag.
 import { Users } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
 import * as Redacted from "effect/Redacted";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -112,42 +111,6 @@ describe("TC-001: allowCredentials does not reveal which emails are registered",
   );
 });
 
-describe("TSS-004: an unknown credential id costs one signature verification, like a bad signature", () => {
-  it.effect(
-    "authenticate/verify for an unknown credential id still calls WebAuthn.verifyAuthentication",
-    () => {
-      const spy: Array<WebAuthn.VerifyAuthenticationInput> = [];
-      return Effect.gen(function* () {
-        const passkey = yield* Passkey.Passkey;
-        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-        const failure = yield* passkey
-          .authenticateVerify({
-            ceremonyId,
-            credential: assertionCredential({ options, id: "no-such-credential" }),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "InvalidCredentials");
-        assert.strictEqual(spy.length, 1);
-        // Verified against the fixed decoy key, never against a real credential's.
-        assert.notStrictEqual(spy[0]?.credential.id, "no-such-credential");
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn({ spy: { verifyAuthentication: spy } }))));
-    },
-  );
-
-  it.effect("a known credential's bad signature performs the same single verification", () => {
-    const spy: Array<WebAuthn.VerifyAuthenticationInput> = [];
-    return Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      yield* registerNewUser("tss004@example.com");
-      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-      yield* passkey
-        .authenticateVerify({ ceremonyId, credential: assertionCredential({ options }) })
-        .pipe(Effect.ignore);
-      assert.strictEqual(spy.length, 1);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn({ spy: { verifyAuthentication: spy } }))));
-  });
-});
-
 describe("WPS-005/TC-001: the anonymous ceremony is rate-limited", () => {
   const limited = buildLayer(mockWebAuthn(), undefined, { rateLimiter: "enforcing" });
 
@@ -217,5 +180,33 @@ describe("WPS-005/TC-001: the anonymous ceremony is rate-limited", () => {
       const failure = yield* attempt().pipe(Effect.flip);
       assert.strictEqual(failure._tag, "RateLimited");
     }).pipe(Effect.provide(limited)),
+  );
+});
+
+describe("WPS-005 admission: an authenticate/verify throttled by the per-source budget leaves its challenge live", () => {
+  it.effect("the same response from another address is then verified", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      yield* registerNewUser("admission-throttle@example.com");
+      const { ceremonyId, options } = yield* passkey.authenticateOptions({ ip: "203.0.113.1" });
+      const credential = assertionCredential({ options });
+      // Spend the budget of one address on attempts at other ceremonies.
+      for (let i = 0; i < 60; i++) {
+        yield* passkey
+          .authenticateVerify({ ceremonyId: `other-${i}`, credential, ip: "203.0.113.9" })
+          .pipe(Effect.ignore);
+      }
+      const throttled = yield* passkey
+        .authenticateVerify({ ceremonyId, credential, ip: "203.0.113.9" })
+        .pipe(Effect.flip);
+      assert.strictEqual(throttled._tag, "RateLimited");
+      // Not an attempt: the challenge was not spent.
+      const issued = yield* passkey.authenticateVerify({
+        ceremonyId,
+        credential,
+        ip: "203.0.113.10",
+      });
+      assert.isString(issued.session.userId);
+    }).pipe(Effect.provide(buildLayer(mockWebAuthn(), undefined, { rateLimiter: "enforcing" }))),
   );
 });

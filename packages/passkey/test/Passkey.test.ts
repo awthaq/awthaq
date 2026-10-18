@@ -10,22 +10,20 @@
 import {
   Accounts,
   AuditLog,
-  AuthEvents,
   Erasure,
   Persistence,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction, type WebAuthn } from "@awthaq/ports";
 import { SignInProbe } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
@@ -50,14 +48,6 @@ const OrphaningErasure = Erasure.layer.pipe(
   Layer.provide(Verification.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provide(SqlTransaction.layerNoop),
 );
-
-// HSK-005: a synced (multiDevice) passkey is a software key, a device-bound one a hardware key.
-const SyncedLayer = buildLayer(
-  mockWebAuthn({
-    authenticationVerified: { credentialDeviceType: "multiDevice", credentialBackedUp: true },
-  }),
-);
-const NoUvLayer = buildLayer(mockWebAuthn({ authenticationVerified: { userVerified: false } }));
 
 describe("Passkey", () => {
   it.effect("BEH-EA-130/134: register/verify persists a credential and links an Accounts row", () =>
@@ -197,33 +187,6 @@ describe("Passkey", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
-  // HSK-005 (BEH-EA-258): the session records *what kind* of key proved it, so a policy can tell them apart.
-  const signInAmr = (email: string) =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      yield* registerNewUser(email);
-      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-      const issued = yield* passkey.authenticateVerify({
-        ceremonyId,
-        credential: assertionCredential({ options }),
-      });
-      return issued.session.amr;
-    });
-
-  it.effect("HSK-005: a synced (multiDevice) passkey with user verification records swk+user", () =>
-    signInAmr("hsk005-synced@example.com").pipe(
-      Effect.map((amr) => assert.deepStrictEqual(amr, ["swk", "user"])),
-      Effect.provide(SyncedLayer),
-    ),
-  );
-
-  it.effect("HSK-005: a device-bound passkey without user verification records hwk alone", () =>
-    signInAmr("hsk005-nouv@example.com").pipe(
-      Effect.map((amr) => assert.deepStrictEqual(amr, ["hwk"])),
-      Effect.provide(NoUvLayer),
-    ),
-  );
-
   // CSD-003: the ceremony's request context is recorded on the issued session.
   it.effect("CSD-003: authenticateVerify records ip and userAgent from its context", () =>
     Effect.gen(function* () {
@@ -278,32 +241,6 @@ describe("Passkey", () => {
       assert.deepStrictEqual(issued.session.ipAddress, Option.some("198.51.100.44"));
       assert.deepStrictEqual(issued.session.userAgent, Option.some("PasskeyBrowser/1.0"));
     }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "BEH-EA-136: an unknown credential id at authenticate/verify answers uniform InvalidCredentials",
-    () =>
-      Effect.gen(function* () {
-        const passkey = yield* Passkey.Passkey;
-        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-        const clientDataJSON = buildClientDataJSON({
-          type: "webauthn.get",
-          challenge: extractChallenge(options),
-          origin: ORIGIN,
-        });
-        const failure = yield* passkey
-          .authenticateVerify({
-            ceremonyId,
-            credential: {
-              id: "no-such-credential",
-              rawId: "no-such-credential",
-              type: "public-key",
-              response: { clientDataJSON, authenticatorData: "", signature: "" },
-            },
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "InvalidCredentials");
-      }).pipe(Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -373,133 +310,6 @@ describe("Passkey", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("a replayed or expired challenge is rejected as PasskeyChallengeInvalid", () =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-      const clientDataJSON = buildClientDataJSON({
-        type: "webauthn.get",
-        challenge: extractChallenge(options),
-        origin: ORIGIN,
-      });
-      const credential = {
-        id: "cred-mock-1",
-        rawId: "cred-mock-1",
-        type: "public-key" as const,
-        response: { clientDataJSON, authenticatorData: "", signature: "" },
-      };
-      // First attempt consumes the challenge (fails downstream for an
-      // unrelated reason — unknown credential — but the store entry is
-      // gone either way, per BEH-EA-132).
-      yield* passkey.authenticateVerify({ ceremonyId, credential }).pipe(Effect.ignore);
-      const replay = yield* passkey
-        .authenticateVerify({ ceremonyId, credential })
-        .pipe(Effect.flip);
-      assert.strictEqual(replay._tag, "PasskeyChallengeInvalid");
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "Missing required user verification is rejected as PasskeyUserVerificationRequired",
-    () =>
-      Effect.gen(function* () {
-        const passkey = yield* Passkey.Passkey;
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({
-          identity: { _tag: "Email", email: "uv@example.com" },
-          name: "UV",
-        });
-        const registerSession = yield* sessions.issue({ userId: user.id });
-        const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
-        yield* passkey.registerVerify(user.id, registerSession.session.id, {
-          credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.create",
-                challenge: extractChallenge(registerOptions),
-                origin: ORIGIN,
-              }),
-              attestationObject: "",
-            },
-          },
-        });
-
-        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-        const clientDataJSON = buildClientDataJSON({
-          type: "webauthn.get",
-          challenge: extractChallenge(options),
-          origin: ORIGIN,
-        });
-        const failure = yield* passkey
-          .authenticateVerify({
-            ceremonyId,
-            credential: {
-              id: "cred-mock-1",
-              rawId: "cred-mock-1",
-              type: "public-key",
-              response: { clientDataJSON, authenticatorData: "", signature: "" },
-            },
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "PasskeyUserVerificationRequired");
-      }).pipe(
-        Effect.provide(
-          buildLayer(mockWebAuthn({ authenticationVerified: { userVerified: false } }), {
-            authenticatorSelection: { userVerification: "required" },
-          }),
-        ),
-      ),
-  );
-
-  it.effect("a counter regression is flagged via AuthEvents without failing the ceremony", () =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      const events = yield* AuthEvents.AuthEvents;
-      const credentials = yield* PasskeyCredentials.PasskeyCredentials;
-
-      const { userId } = yield* registerNewUser("counter@example.com");
-      // Simulate this credential already having a genuinely nonzero
-      // counter from an earlier, real authentication — the mocked
-      // `verifyAuthentication` below always reports `newCounter: 1`,
-      // which is a real regression against this seeded value.
-      yield* credentials.recordUsage("cred-mock-1", 5, false);
-
-      const seen = yield* Effect.forkChild(
-        events.stream.pipe(
-          Stream.filter((event) => event._tag === "auth.passkey.counterAnomaly"),
-          Stream.take(1),
-          Stream.runCollect,
-        ),
-        { startImmediately: true },
-      );
-
-      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-      const clientDataJSON = buildClientDataJSON({
-        type: "webauthn.get",
-        challenge: extractChallenge(options),
-        origin: ORIGIN,
-      });
-      const issued = yield* passkey.authenticateVerify({
-        ceremonyId,
-        credential: {
-          id: "cred-mock-1",
-          rawId: "cred-mock-1",
-          type: "public-key",
-          response: { clientDataJSON, authenticatorData: "", signature: "" },
-        },
-      });
-      // "log + step-up, not an instant kill" — the ceremony still succeeds.
-      assert.strictEqual(issued.session.userId, userId);
-
-      const collected = yield* Fiber.join(seen);
-      assert.strictEqual(collected.length, 1);
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
   it.effect("BEH-EA-134: credential management refuses to remove the last credential", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;
@@ -531,68 +341,7 @@ describe("Passkey", () => {
   );
 });
 
-describe("Passkey — origin/rpId (BEH-EA-133)", () => {
-  it.effect("register/verify rejects a response asserting the wrong origin", () =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      const users = yield* Users.Users;
-      const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({
-        identity: { _tag: "Email", email: "origin@example.com" },
-        name: "Origin",
-      });
-      const registerSession = yield* sessions.issue({ userId: user.id });
-      // BEH-EA-132: the challenge is spent before the origin is checked, so it must be a live one.
-      const options = yield* passkey.registerOptions(user.id, registerSession.session.id);
-      const failure = yield* passkey
-        .registerVerify(
-          user.id,
-          registerSession.session.id,
-          registrationPayload({ options, origin: "https://evil.example" }),
-        )
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyOriginMismatch");
-    }).pipe(Effect.provide(TestLayer)),
-  );
-});
-
 describe("Passkey — Conditional Create (ticket 07)", () => {
-  it.effect(
-    "registerOptionsConditional's own challenge completes register/verify with UP=0/UV=0 accepted",
-    () =>
-      Effect.gen(function* () {
-        const passkey = yield* Passkey.Passkey;
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({
-          identity: { _tag: "Email", email: "conditional@example.com" },
-          name: "Conditional",
-        });
-        const issued = yield* sessions.issue({ userId: user.id });
-
-        const options = yield* passkey.registerOptionsConditional(user.id, issued.session.id);
-        const record = yield* passkey.registerVerify(user.id, issued.session.id, {
-          ceremony: "conditional",
-          credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.create",
-                challenge: extractChallenge(options),
-                origin: ORIGIN,
-              }),
-              attestationObject: "",
-            },
-          },
-        });
-        assert.strictEqual(record.id, "cred-mock-1");
-      }).pipe(
-        Effect.provide(buildLayer(mockWebAuthn({ registrationVerified: { userVerified: false } }))),
-      ),
-  );
-
   it.effect("conditionalCreate defaults to true", () =>
     Effect.gen(function* () {
       const enabled = yield* Passkey.PasskeyConfig;
@@ -615,87 +364,6 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyConditionalCreateDisabled");
     }).pipe(Effect.provide(buildLayer(mockWebAuthn(), { conditionalCreate: false }))),
-  );
-
-  it.effect(
-    "CB-001: register/verify via the ordinary scope accepts UV=0 under the default 'preferred' policy",
-    () =>
-      Effect.gen(function* () {
-        const passkey = yield* Passkey.Passkey;
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({
-          identity: { _tag: "Email", email: "preferred@example.com" },
-          name: "Preferred",
-        });
-        const issued = yield* sessions.issue({ userId: user.id });
-
-        const options = yield* passkey.registerOptions(user.id, issued.session.id);
-        // `defaultPasskeyConfig.authenticatorSelection.userVerification` is
-        // `"preferred"` — a PIN-less FIDO2 security key legitimately
-        // answers such a ceremony with UV=0, and the RP must accept it
-        // (WebAuthn §7.1: enforcement follows the RP's own conveyed
-        // policy), not reject a response its own options invited.
-        const record = yield* passkey.registerVerify(user.id, issued.session.id, {
-          credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.create",
-                challenge: extractChallenge(options),
-                origin: ORIGIN,
-              }),
-              attestationObject: "",
-            },
-          },
-        });
-        assert.strictEqual(record.id, "cred-mock-1");
-      }).pipe(
-        Effect.provide(buildLayer(mockWebAuthn({ registrationVerified: { userVerified: false } }))),
-      ),
-  );
-
-  it.effect(
-    "CB-001: register/verify via the ordinary scope still rejects UV=0 when the policy is 'required'",
-    () =>
-      Effect.gen(function* () {
-        const passkey = yield* Passkey.Passkey;
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({
-          identity: { _tag: "Email", email: "strict@example.com" },
-          name: "Strict",
-        });
-        const issued = yield* sessions.issue({ userId: user.id });
-
-        const options = yield* passkey.registerOptions(user.id, issued.session.id);
-        const failure = yield* passkey
-          .registerVerify(user.id, issued.session.id, {
-            credential: {
-              id: "cred-mock-1",
-              rawId: "cred-mock-1",
-              type: "public-key",
-              response: {
-                clientDataJSON: buildClientDataJSON({
-                  type: "webauthn.create",
-                  challenge: extractChallenge(options),
-                  origin: ORIGIN,
-                }),
-                attestationObject: "",
-              },
-            },
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "PasskeyUserVerificationRequired");
-      }).pipe(
-        Effect.provide(
-          buildLayer(mockWebAuthn({ registrationVerified: { userVerified: false } }), {
-            authenticatorSelection: { userVerification: "required" },
-          }),
-        ),
-      ),
   );
 });
 
@@ -824,70 +492,427 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
         assert.strictEqual(failure._tag, "Unauthenticated");
       }).pipe(Effect.provide(TestLayer)),
   );
+});
 
-  it.effect("reauthenticateVerify requires user verification unconditionally", () =>
+/** A fresh user with a live session, ready to run a registration ceremony. */
+const newUserSession = (email: string) =>
+  Effect.gen(function* () {
+    const users = yield* Users.Users;
+    const sessions = yield* Sessions.Sessions;
+    const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
+    const issued = yield* sessions.issue({ userId: user.id });
+    return { userId: user.id, sessionId: issued.session.id };
+  });
+
+// ---- BEH-EA-136: the posture of each endpoint -------------------------------------------------
+//
+// `PasskeyCeremony.test.ts` proves WHEN a ceremony refuses and why; these tables prove how each
+// endpoint WORDS that refusal: one row per refusal reason its ceremony can produce.
+
+const OTHER_ORIGIN = "https://other.test";
+const EVIL = { origin: "https://evil.example" } as const;
+
+describe("BEH-EA-136 posture: register/verify answers each ceremony refusal precisely", () => {
+  interface Row {
+    readonly reason: string;
+    readonly expected: string;
+    readonly layer: ReturnType<typeof buildLayer>;
+    readonly spoil?: { readonly origin?: string; readonly challenge?: string };
+  }
+  const rows: ReadonlyArray<Row> = [
+    {
+      reason: "challenge",
+      expected: "PasskeyChallengeInvalid",
+      layer: buildLayer(mockWebAuthn()),
+      spoil: { challenge: "never-issued" },
+    },
+    {
+      reason: "origin",
+      expected: "PasskeyOriginMismatch",
+      layer: buildLayer(mockWebAuthn()),
+      spoil: EVIL,
+    },
+    {
+      reason: "rpId",
+      expected: "PasskeyRpIdMismatch",
+      layer: buildLayer(mockWebAuthn(), { origins: [ORIGIN, OTHER_ORIGIN] }),
+      spoil: { origin: OTHER_ORIGIN },
+    },
+    {
+      reason: "signature",
+      expected: "PasskeyVerificationFailed",
+      layer: buildLayer(mockWebAuthn({ fail: { registration: true } })),
+    },
+    {
+      reason: "userVerification",
+      expected: "PasskeyUserVerificationRequired",
+      layer: buildLayer(mockWebAuthn({ registrationVerified: { userVerified: false } }), {
+        authenticatorSelection: { userVerification: "required" },
+      }),
+    },
+    {
+      reason: "attestation",
+      expected: "PasskeyAttestationRejected",
+      layer: buildLayer(mockWebAuthn(), {
+        attestationPolicy: { trustedAaguids: ["ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4"] },
+      }),
+    },
+  ];
+  for (const row of rows) {
+    it.effect(`${row.reason} -> ${row.expected}`, () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const { userId, sessionId } = yield* newUserSession(`posture-r-${row.reason}@example.com`);
+        const options = yield* passkey.registerOptions(userId, sessionId);
+        const failure = yield* passkey
+          .registerVerify(
+            userId,
+            sessionId,
+            registrationPayload({
+              options:
+                row.spoil?.challenge === undefined ? options : { challenge: row.spoil.challenge },
+              ...(row.spoil?.origin === undefined ? {} : { origin: row.spoil.origin }),
+            }),
+          )
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, row.expected);
+      }).pipe(Effect.provide(row.layer)),
+    );
+  }
+});
+
+/** One assertion posture row: how to provoke a reason through the endpoint, and what the wire says. */
+interface AssertionRow {
+  readonly reason: string;
+  readonly expected: string;
+  readonly layer: ReturnType<typeof buildLayer>;
+  readonly spoil?: {
+    readonly clientDataJSON?: string;
+    readonly origin?: string;
+    readonly id?: string;
+    readonly userHandle?: string;
+  };
+  /** The stored counter, seeded after registration (for the counter-anomaly row). */
+  readonly storedCounter?: number;
+}
+const assertionRows = (
+  wording: Record<
+    | "challenge"
+    | "origin"
+    | "rpId"
+    | "unknownCredential"
+    | "signature"
+    | "userHandle"
+    | "userVerification"
+    | "counterAnomaly",
+    string
+  >,
+): ReadonlyArray<AssertionRow> => [
+  {
+    reason: "challenge",
+    expected: wording.challenge,
+    layer: buildLayer(mockWebAuthn()),
+    spoil: { clientDataJSON: "not base64url!" },
+  },
+  {
+    reason: "origin",
+    expected: wording.origin,
+    layer: buildLayer(mockWebAuthn()),
+    spoil: EVIL,
+  },
+  {
+    reason: "rpId",
+    expected: wording.rpId,
+    layer: buildLayer(mockWebAuthn(), { origins: [ORIGIN, OTHER_ORIGIN] }),
+    spoil: { origin: OTHER_ORIGIN },
+  },
+  {
+    reason: "unknownCredential",
+    expected: wording.unknownCredential,
+    layer: buildLayer(mockWebAuthn()),
+    spoil: { id: "no-such-credential" },
+  },
+  {
+    reason: "signature",
+    expected: wording.signature,
+    layer: buildLayer(mockWebAuthn({ fail: { authentication: true } })),
+  },
+  {
+    reason: "userHandle",
+    expected: wording.userHandle,
+    layer: buildLayer(mockWebAuthn()),
+    spoil: { userHandle: "someone-elses" },
+  },
+  {
+    reason: "userVerification",
+    expected: wording.userVerification,
+    layer: buildLayer(mockWebAuthn({ authenticationVerified: { userVerified: false } }), {
+      authenticatorSelection: { userVerification: "required" },
+    }),
+  },
+  {
+    reason: "counterAnomaly",
+    expected: wording.counterAnomaly,
+    layer: buildLayer(mockWebAuthn(), { counterAnomalyPolicy: "reject" }),
+    storedCounter: 5,
+  },
+];
+
+describe("BEH-EA-136 posture: authenticate/verify collapses every refusal past the challenge into InvalidCredentials", () => {
+  const rows = assertionRows({
+    challenge: "PasskeyChallengeInvalid",
+    origin: "InvalidCredentials",
+    rpId: "InvalidCredentials",
+    unknownCredential: "InvalidCredentials",
+    signature: "InvalidCredentials",
+    userHandle: "InvalidCredentials",
+    userVerification: "PasskeyUserVerificationRequired",
+    counterAnomaly: "PasskeyCounterAnomaly",
+  });
+  for (const row of rows) {
+    it.effect(`${row.reason} -> ${row.expected}`, () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+        yield* registerNewUser(`posture-a-${row.reason}@example.com`);
+        if (row.storedCounter !== undefined) {
+          yield* credentials.recordUsage("cred-mock-1", row.storedCounter, false);
+        }
+        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
+        const failure = yield* passkey
+          .authenticateVerify({
+            ceremonyId,
+            credential: assertionCredential({ options, ...row.spoil }),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, row.expected);
+      }).pipe(Effect.provide(row.layer)),
+    );
+  }
+});
+
+describe("BEH-EA-136 posture: reauthenticate/verify answers precisely", () => {
+  const rows = assertionRows({
+    challenge: "PasskeyChallengeInvalid",
+    origin: "PasskeyOriginMismatch",
+    rpId: "PasskeyRpIdMismatch",
+    unknownCredential: "PasskeyCredentialNotFound",
+    signature: "PasskeyVerificationFailed",
+    userHandle: "PasskeyVerificationFailed",
+    userVerification: "PasskeyUserVerificationRequired",
+    counterAnomaly: "PasskeyCounterAnomaly",
+  });
+  for (const row of rows) {
+    it.effect(`${row.reason} -> ${row.expected}`, () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+        const { userId, sessionId } = yield* registerNewUser(`posture-s-${row.reason}@example.com`);
+        if (row.storedCounter !== undefined) {
+          yield* credentials.recordUsage("cred-mock-1", row.storedCounter, false);
+        }
+        const options = yield* passkey.reauthenticateOptions(userId, sessionId);
+        const failure = yield* passkey
+          .reauthenticateVerify(userId, sessionId, {
+            credential: assertionCredential({ options, ...row.spoil }),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, row.expected);
+      }).pipe(Effect.provide(row.layer)),
+    );
+  }
+
+  it.effect("a credential owned by another user is PasskeyCredentialNotFound", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;
-      const { userId, sessionId } = yield* registerNewUser("stepup-uv@example.com");
-
-      const options = yield* passkey.reauthenticateOptions(userId, sessionId);
-      const failure = yield* passkey
-        .reauthenticateVerify(userId, sessionId, {
-          credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.get",
-                challenge: extractChallenge(options),
-                origin: ORIGIN,
-              }),
-              authenticatorData: "",
-              signature: "",
-            },
-          },
-        })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyUserVerificationRequired");
-    }).pipe(
-      Effect.provide(buildLayer(mockWebAuthn({ authenticationVerified: { userVerified: false } }))),
-    ),
-  );
-
-  it.effect("reauthenticateVerify refuses a credential belonging to a different user", () =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      const users = yield* Users.Users;
-      const sessions = yield* Sessions.Sessions;
-      yield* registerNewUser("owner@example.com");
-      const other = yield* users.create({
-        identity: { _tag: "Email", email: "other@example.com" },
-        name: "Other",
-      });
-      const otherIssued = yield* sessions.issue({ userId: other.id });
-
-      const options = yield* passkey.reauthenticateOptions(other.id, otherIssued.session.id);
+      yield* registerNewUser("posture-owner@example.com");
+      const other = yield* newUserSession("posture-other@example.com");
+      const options = yield* passkey.reauthenticateOptions(other.userId, other.sessionId);
       // `cred-mock-1` belongs to the first user, not `other`.
       const failure = yield* passkey
-        .reauthenticateVerify(other.id, otherIssued.session.id, {
-          credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.get",
-                challenge: extractChallenge(options),
-                origin: ORIGIN,
-              }),
-              authenticatorData: "",
-              signature: "",
-            },
-          },
+        .reauthenticateVerify(other.userId, other.sessionId, {
+          credential: assertionCredential({ options }),
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyCredentialNotFound");
     }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+// ---- admission: refused BEFORE the attempt starts, so the challenge survives (BEH-EA-132) -------
+
+describe("BEH-EA-132/255 admission: a register/verify refused for a stale session leaves the challenge usable", () => {
+  it.effect("once a step-up discharges the gate, the same response is verified", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const { userId, sessionId } = yield* registerNewUser("admission-stale@example.com");
+      const options = yield* passkey.registerOptions(userId, sessionId);
+      // The gate is one minute here, so the stale session is still inside the challenge's five-minute TTL.
+      yield* TestClock.adjust(Duration.minutes(2));
+
+      const payload = registrationPayload({ options, id: "cred-second" });
+      const gated = yield* passkey.registerVerify(userId, sessionId, payload).pipe(Effect.flip);
+      assert.strictEqual(gated._tag, "PasskeyReauthRequired");
+
+      const stepUp = yield* passkey.reauthenticateOptions(userId, sessionId);
+      yield* passkey.reauthenticateVerify(userId, sessionId, {
+        credential: assertionCredential({ options: stepUp }),
+      });
+
+      // The refused attempt never started: its challenge is still good.
+      const record = yield* passkey.registerVerify(userId, sessionId, payload);
+      assert.strictEqual(record.id, "cred-second");
+    }).pipe(
+      Effect.provide(buildLayer(mockWebAuthn(), { reauthMaxAgeSeconds: Duration.minutes(1) })),
+    ),
+  );
+});
+
+// ---- options-side and boot-time policy (moved from the old ceremony suite) -------------------
+
+describe("TC-008: related origins at boot", () => {
+  it.effect("the layer refuses to build with a related origin that is not an https origin", () =>
+    Effect.gen(function* () {
+      for (const bad of ["http://example.co.uk", "https://example.co.uk/path", "example.co.uk"]) {
+        const exit = yield* Effect.exit(
+          Effect.gen(function* () {
+            yield* Passkey.Passkey;
+          }).pipe(Effect.provide(buildLayer(mockWebAuthn(), { relatedOrigins: [bad] }))),
+        );
+        assert.isTrue(Exit.isFailure(exit), `${bad} should be refused`);
+      }
+    }),
+  );
+});
+
+describe("TC-003: explicit ceremony timeout, hints and extensions", () => {
+  it.effect(
+    "every options response carries the configured timeout, never above the challenge TTL",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const { userId, sessionId } = yield* registerNewUser("tc003a@example.com");
+        const timeouts = [
+          (yield* passkey.registerOptions(userId, sessionId)).timeout,
+          (yield* passkey.registerOptionsConditional(userId, sessionId)).timeout,
+          (yield* passkey.authenticateOptions({})).options.timeout,
+          (yield* passkey.reauthenticateOptions(userId, sessionId)).timeout,
+        ];
+        // The default is 4m30s, under BEH-EA-132's fixed five-minute challenge TTL.
+        assert.deepStrictEqual(timeouts, [270_000, 270_000, 270_000, 270_000]);
+      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+  );
+
+  it.effect("a configured timeout, hints and extensions reach the port", () => {
+    const registration: Array<WebAuthn.RegistrationOptionsInput> = [];
+    const authentication: Array<WebAuthn.AuthenticationOptionsInput> = [];
+    return Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const { userId, sessionId } = yield* newUserSession("tc003b@example.com");
+      yield* passkey.registerOptions(userId, sessionId);
+      yield* passkey.authenticateOptions({});
+      assert.strictEqual(Duration.toMillis(registration[0]?.timeout ?? Duration.zero), 120_000);
+      assert.deepStrictEqual(registration[0]?.hints, ["security-key"]);
+      assert.deepStrictEqual(registration[0]?.extensions, { credProps: true });
+      assert.strictEqual(Duration.toMillis(authentication[0]?.timeout ?? Duration.zero), 120_000);
+      assert.deepStrictEqual(authentication[0]?.hints, ["security-key"]);
+    }).pipe(
+      Effect.provide(
+        buildLayer(
+          mockWebAuthn({
+            spy: { registrationOptions: registration, authenticationOptions: authentication },
+          }),
+          {
+            ceremonyTimeout: Duration.seconds(120),
+            hints: ["security-key"],
+            extensions: { credProps: true },
+          },
+        ),
+      ),
+    );
+  });
+
+  it.effect("a ceremonyTimeout above the challenge TTL refuses to build the plugin", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          yield* Passkey.Passkey;
+        }).pipe(
+          Effect.provide(buildLayer(mockWebAuthn(), { ceremonyTimeout: Duration.minutes(6) })),
+        ),
+      );
+      assert.isTrue(Exit.isFailure(exit));
+    }),
+  );
+});
+
+describe("CB-009: Conditional Create under a required-UV policy", () => {
+  it.effect("registerOptionsConditional answers PasskeyConditionalCreateDisabled", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const { userId, sessionId } = yield* newUserSession("cb009@example.com");
+      const failure = yield* passkey
+        .registerOptionsConditional(userId, sessionId)
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "PasskeyConditionalCreateDisabled");
+    }).pipe(
+      Effect.provide(
+        buildLayer(mockWebAuthn(), { authenticatorSelection: { userVerification: "required" } }),
+      ),
+    ),
+  );
+});
+
+describe("HSK-003: browser-reported transports", () => {
+  it.effect(
+    "a registration posting transports persists them and echoes them in excludeCredentials",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const { userId, sessionId } = yield* newUserSession("hsk003@example.com");
+        const options = yield* passkey.registerOptions(userId, sessionId);
+        const record = yield* passkey.registerVerify(
+          userId,
+          sessionId,
+          registrationPayload({ options, id: "cred-usb", transports: ["usb", "nfc"] }),
+        );
+        assert.deepStrictEqual(record.transports, ["usb", "nfc"]);
+
+        const next = yield* passkey.registerOptions(userId, sessionId);
+        assert.deepStrictEqual(next.excludeCredentials, [
+          { id: "cred-usb", type: "public-key", transports: ["usb", "nfc"] },
+        ]);
+        assert.isString(extractChallenge(next));
+      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+  );
+});
+
+describe("WPS-010: duplicate credential ids", () => {
+  it.effect(
+    "a second account registering an existing credential id is refused and links nothing",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const accounts = yield* Accounts.Accounts;
+        const first = yield* registerNewUser("wps010a@example.com");
+        const second = yield* newUserSession("wps010b@example.com");
+
+        const options = yield* passkey.registerOptions(second.userId, second.sessionId);
+        const failure = yield* passkey
+          .registerVerify(
+            second.userId,
+            second.sessionId,
+            registrationPayload({ options, id: "cred-mock-1" }),
+          )
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "PasskeyAlreadyRegistered");
+
+        // The original owner still owns the credential and its account link.
+        const listed = yield* passkey.listCredentials(first.userId);
+        assert.strictEqual(listed.length, 1);
+        assert.strictEqual((yield* passkey.listCredentials(second.userId)).length, 0);
+        const linked = yield* accounts.findByProviderSubject("passkey", "cred-mock-1");
+        assert.isTrue(Option.isSome(linked) && linked.value.userId === first.userId);
+      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });

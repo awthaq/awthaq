@@ -53,6 +53,7 @@ suites=(
   packages/organization/test/TeamRecords.test.ts
   packages/organization/test/TenantMiddleware.test.ts
   packages/passkey/test/ChallengeStore.test.ts
+  packages/passkey/test/PasskeyCeremony.test.ts
   packages/passkey/test/PasskeyCredentials.test.ts
   packages/passkey/test/PasskeyUserHandle.test.ts
   packages/qadi/test/UserClaims.test.ts

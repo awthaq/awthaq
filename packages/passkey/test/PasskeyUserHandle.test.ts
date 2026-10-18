@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
-import { assertionCredential, mockWebAuthn, registrationPayload } from "./passkeyTestFixtures.ts";
+import { mockWebAuthn, registrationPayload } from "./passkeyTestFixtures.ts";
 import { buildLayer } from "./passkeyTestLayers.ts";
 import { TestSql } from "@awthaq/test";
 
@@ -66,82 +66,6 @@ describe("BPAS-003: one stable handle per user", () => {
       const optionsB = yield* passkey.registerOptions(b.userId, b.sessionId);
       assert.notStrictEqual(optionsA.user.id, optionsB.user.id);
       assert.notStrictEqual(optionsA.user.id, a.userId);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
-  );
-
-  const signedUp = (email: string) =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      const user = yield* newUserSession(email);
-      const options = yield* passkey.registerOptions(user.userId, user.sessionId);
-      const record = yield* passkey.registerVerify(
-        user.userId,
-        user.sessionId,
-        registrationPayload({ options }),
-      );
-      return { ...user, handle: record.webauthnUserId };
-    });
-
-  it.effect("an assertion whose userHandle matches the stored handle signs in", () =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      const { userId, handle } = yield* signedUp("match@example.com");
-      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-      const issued = yield* passkey.authenticateVerify({
-        ceremonyId,
-        credential: assertionCredential({ options, userHandle: handle }),
-      });
-      assert.strictEqual(issued.session.userId, userId);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
-  );
-
-  it.effect("an assertion without a userHandle (a non-discoverable flow) still signs in", () =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      const { userId } = yield* signedUp("nohandle@example.com");
-      const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-      const issued = yield* passkey.authenticateVerify({
-        ceremonyId,
-        credential: assertionCredential({ options }),
-      });
-      assert.strictEqual(issued.session.userId, userId);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
-  );
-
-  it.effect(
-    "an assertion whose userHandle differs from the stored handle is InvalidCredentials",
-    () =>
-      Effect.gen(function* () {
-        const passkey = yield* Passkey.Passkey;
-        yield* signedUp("mismatch@example.com");
-        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-        const failure = yield* passkey
-          .authenticateVerify({
-            ceremonyId,
-            credential: assertionCredential({ options, userHandle: "someone-elses-handle" }),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "InvalidCredentials");
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
-  );
-
-  it.effect("step-up reauthentication cross-checks the userHandle too", () =>
-    Effect.gen(function* () {
-      const passkey = yield* Passkey.Passkey;
-      const { userId, sessionId, handle } = yield* signedUp("reauth-handle@example.com");
-
-      const good = yield* passkey.reauthenticateOptions(userId, sessionId);
-      yield* passkey.reauthenticateVerify(userId, sessionId, {
-        credential: assertionCredential({ options: good, userHandle: handle }),
-      });
-
-      const bad = yield* passkey.reauthenticateOptions(userId, sessionId);
-      const failure = yield* passkey
-        .reauthenticateVerify(userId, sessionId, {
-          credential: assertionCredential({ options: bad, userHandle: "someone-elses-handle" }),
-        })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
     }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });
