@@ -3,7 +3,7 @@
 // a lost or failed compare-and-swap, re-seal switched off) and `sweep`, on the SQL swap against
 // a real table. The per-plugin wiring suites (`TestAuth.runSealedColumnTests`) prove a plugin
 // used its declaration; this proves the declaration works.
-import { Encryption } from "@awthaq/ports";
+import { Encryption, SqlTransaction } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -431,4 +431,62 @@ describe("SealedColumn.sweepAll", () => {
       );
     }).pipe(Effect.provide(layer));
   });
+});
+
+describe("SealedColumn.sweepDeployed", () => {
+  it.effect("sweeps the bundle's columns plus `also`, and a column listed twice once", () => {
+    const { layer, prepare, keys } = setup("sealed_sweep_deployed");
+    return Effect.gen(function* () {
+      yield* prepare;
+      const encryption = yield* Encryption.Encryption;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO sealed_probe (id, secret, other) VALUES (
+        ${"r1"},
+        ${yield* encryption.encrypt(Redacted.make("s"), SealedColumn.aadOf(declared, "r1"))},
+        ${yield* encryption.encrypt(Redacted.make("o"), SealedColumn.aadOf(other, "r1"))})`;
+      keys.rotateTo("k2");
+      const reports = yield* SealedColumn.sweepDeployed({ also: [other, declared] }).pipe(
+        Effect.provideService(SealedColumn.Deployed, { columns: [declared] }),
+      );
+      assert.deepStrictEqual(reports, [
+        { table: "sealed_probe", column: "secret", scanned: 1, resealed: 1, unreadable: 0 },
+        { table: "sealed_probe", column: "other", scanned: 1, resealed: 1, unreadable: 0 },
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("SealedColumn.sqlSwap in a transaction", () => {
+  it.effect(
+    "a failed re-seal inside an outer transaction leaves that transaction usable (Postgres: SQLSTATE 25P02)",
+    () => {
+      const { layer, prepare, keys } = setup("sealed_swap_savepoint");
+      return Effect.gen(function* () {
+        yield* prepare;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sealedInto(declared, "r1", "one");
+        keys.rotateTo("k2");
+        yield* TestSql.injectFailure({
+          name: "sealed_probe_swap_fails",
+          table: "sealed_probe",
+          event: "UPDATE",
+        });
+        const codec = yield* SealedColumn.codec(declared, yield* SealedColumn.sqlSwap(declared));
+        yield* SqlTransaction.transactional(sql)(
+          Effect.gen(function* () {
+            const stored = (yield* raw("r1")) ?? "";
+            // The stale envelope opens; its re-seal UPDATE fails and is logged, never failing the read.
+            const opened = yield* codec.sealed("r1", stored).open;
+            assert.strictEqual(Redacted.value(opened), "one");
+            // The enclosing transaction is still usable: this statement runs and commits.
+            yield* sql`INSERT INTO sealed_probe (id) VALUES (${"after"})`;
+          }),
+        );
+        const rows = yield* sql<{
+          readonly id: string;
+        }>`SELECT id FROM sealed_probe WHERE id = ${"after"}`;
+        assert.strictEqual(rows.length, 1);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });

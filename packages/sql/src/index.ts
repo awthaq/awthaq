@@ -13,7 +13,7 @@
 // routing with per-read consistency classes and causal tokens (RRC-001,
 // ADR-EA-024). TenantScope.ts: opt-in Postgres row-level security under the
 // `"tenantId"` column and `withTenant` (DRS-001, ADR-EA-018). TenantScoped.ts, SealedColumn.ts and
-// StoreFailure.ts: the plugin-table substrate (plan 05): tenant scoping and the cross-tenant
+// StoreFailure.ts (plus CoreSealedColumns.ts, core's six sealed columns declared on it, plan 17): the plugin-table substrate (plan 05): tenant scoping and the cross-tenant
 // witness, sealed columns with lazy re-seal, and the `StoreUnavailable` mapping. See README.md for operations (drivers, pool configuration,
 // migrations, encryption boundary, replicas).
 // See spec/overview.md for the full package map.
@@ -21,6 +21,7 @@
 export * as AccountStoreSql from "./AccountStoreSql.ts";
 export * as AuditLogStoreSql from "./AuditLogStoreSql.ts";
 export * as CoreMigrations from "./CoreMigrations.ts";
+export * as CoreSealedColumns from "./CoreSealedColumns.ts";
 export * as Models from "./Models.ts";
 export * as RateLimiterStoreSql from "./RateLimiterStoreSql.ts";
 export * as RelayCursorStoreSql from "./RelayCursorStoreSql.ts";

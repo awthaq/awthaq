@@ -6,18 +6,21 @@
 // appears, so domain code never sees an envelope or an AAD.
 //
 // - One AAD convention, `<table>:<rowKey>:<column>`, so a ciphertext cannot be moved to another
-//   row or column. There is no fallback to an older spelling (ADR-EA-019 revision 1.2): an
-//   envelope sealed under one fails as `Unreadable`.
+//   row or column. There is no fallback to an older spelling (ADR-EA-019 revisions 1.2 and 1.3):
+//   an envelope sealed under one fails as `Unreadable`. Core's own six columns are declared the same
+//   way (`CoreSealedColumns`, plan 17).
 // - Lazy re-seal (ADR-EA-019 decision 3): when the stored envelope is under a retired key,
 //   `open` writes the fresh envelope back by compare-and-swap, so a concurrent
 //   rotation always wins. A failed or lost swap is logged (ids only) and never fails the read.
 // - A value that does not open is the typed `SealedColumn/Unreadable`, never `null` and never a
 //   defect. Each call site picks one of two treatments: `orDie` (fail closed) or `option`
-//   (degrade this value with a warning).
+//   (degrade this value with a warning). The value, its error and the treatments live in
+//   `@awthaq/ports` (`Sealed`) so the core store ports can carry them; they are re-exported here.
 // - `sweep` re-seals every stale value of a column: the operator's batch job (key rotation);
-//   `sweepAll` runs it over every column and logs one summary per column.
+//   `sweepAll` runs it over every column and logs one summary per column. `Deployed` lists the
+//   columns a composition (`Persistence.sql(options)`) really seals, and `sweepDeployed` sweeps them.
 
-import { Defects, Encryption, KeyProvider } from "@awthaq/ports";
+import { Encryption, KeyProvider, Sealed as SealedPort, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -82,21 +85,16 @@ export function column(
 /** What the AAD convention and `sweep` need of a column: everything but its value schema. */
 export type Sweepable = Pick<Column<unknown>, "table" | "column" | "key" | "adoptPlaintext">;
 
-/** ADR-EA-019 decision 6: the one AAD convention. Matches core's `<entity>:<id>:<field>` shape. */
+/** ADR-EA-019 decision 6: the one AAD convention, for plugin columns and core's six alike. */
 export const aadOf = (declared: Pick<Sweepable, "table" | "column">, rowKey: string) =>
   `${declared.table}:${rowKey}:${declared.column}`;
 
-export class Unreadable extends Data.TaggedError("SealedColumn/Unreadable")<{
-  readonly table: string;
-  readonly column: string;
-  readonly rowKey: string;
-  readonly reason: "DecryptionFailed" | "UnknownKeyId" | "Malformed";
-}> {}
+/** The typed failure of a value that does not open. The class lives in `@awthaq/ports` (`Sealed`); one class, one tag. */
+export const Unreadable = SealedPort.Unreadable;
+export type Unreadable = SealedPort.Unreadable;
 
 /** What a record carries in place of an envelope. Domain code opens it where it needs the value. */
-export interface Sealed<A> {
-  readonly open: Effect.Effect<Redacted.Redacted<A>, Unreadable>;
-}
+export type Sealed<A> = SealedPort.Sealed<A>;
 
 /** Re-seal is on by default (ADR-EA-019 decision 3); a deployment reading a replica-only path can turn it off. */
 export const SealedColumnConfig = Context.Reference<{ readonly resealOnRead: boolean }>(
@@ -109,15 +107,21 @@ export interface Swap {
   (rowKey: string, stored: string, fresh: string): Effect.Effect<boolean, unknown>;
 }
 
-/** The SQL `Swap`: `UPDATE t SET c = fresh WHERE key = rowKey AND c = stored RETURNING key`. */
+/**
+ * The SQL `Swap`: `UPDATE t SET c = fresh WHERE key = rowKey AND c = stored RETURNING key`, in a
+ * savepoint when nested (a one-statement transaction otherwise), so a failed re-seal rolls back only
+ * itself and never aborts the enclosing Postgres transaction (SQLSTATE 25P02).
+ */
 export const sqlSwap = (declared: Pick<Sweepable, "table" | "column" | "key">) =>
   Effect.map(
     SqlClient.SqlClient,
     (sql): Swap =>
       (rowKey, stored, fresh) =>
-        sql`UPDATE ${sql(declared.table)} SET ${sql(declared.column)} = ${fresh}
+        SqlTransaction.transactional(sql)(
+          sql`UPDATE ${sql(declared.table)} SET ${sql(declared.column)} = ${fresh}
           WHERE ${sql(declared.key)} = ${rowKey} AND ${sql(declared.column)} = ${stored}
-          RETURNING ${sql(declared.key)}`.pipe(Effect.map((rows) => rows.length > 0)),
+          RETURNING ${sql(declared.key)}`,
+        ).pipe(Effect.map((rows) => rows.length > 0)),
   );
 
 // ---- the low-level primitive (core PII and token codecs run on it too) ----------------
@@ -243,38 +247,13 @@ export const codec = <A>(declared: Column<A>, swap: Swap) =>
     return { seal, sealed };
   });
 
-// ---- the two sanctioned call-site treatments of Unreadable ---------------------------
-
-const isUnreadable = <E>(error: E): error is Extract<E, Unreadable> => error instanceof Unreadable;
-
-const describe = (unreadable: Unreadable) => ({
-  table: unreadable.table,
-  column: unreadable.column,
-  rowKey: unreadable.rowKey,
-  reason: unreadable.reason,
-});
+// ---- the sanctioned call-site treatments of Unreadable (defined beside `Sealed` in @awthaq/ports) ----
 
 /** Fail closed: a defect naming the column (never the value). For a value the operation cannot proceed without. */
-export const orDie = <A, E, R>(self: Effect.Effect<A, E, R>) =>
-  Effect.catchIf(self, isUnreadable, (unreadable) =>
-    Defects.invariantViolation(
-      "sealedColumn.readable",
-      `awthaq: ${unreadable.table}.${unreadable.column} of ${unreadable.rowKey} cannot be opened (${unreadable.reason})`,
-    ),
-  );
-
-const unreadableMarker: unique symbol = Symbol("awthaq/sql/SealedColumn/unreadable");
+export const orDie = SealedPort.orDie;
 
 /** Degrade: `None` plus one warning (ids only). For one optional value or one row of a list. */
-export const option = <A, E, R>(self: Effect.Effect<A, E, R>) =>
-  Effect.map(
-    Effect.catchIf(self, isUnreadable, (unreadable) =>
-      Effect.logWarning(
-        "awthaq: a sealed column cannot be opened; it may be sealed under a retired legacy AAD; restore from backup or re-enter the secret",
-      ).pipe(Effect.annotateLogs(describe(unreadable)), Effect.as(unreadableMarker)),
-    ),
-    (value) => (value === unreadableMarker ? Option.none<A>() : Option.some(value)),
-  );
+export const option = SealedPort.option;
 
 // ---- maintenance ----------------------------------------------------------------------
 
@@ -365,4 +344,33 @@ export const sweepAll = (
         ),
       ),
     ),
+  );
+
+/** Every sealed column a composition writes, as its persistence bundle declares them (`Persistence.sql`). */
+export class Deployed extends Context.Service<
+  Deployed,
+  { readonly columns: ReadonlyArray<Sweepable> }
+>()("awthaq/sql/SealedColumn/Deployed") {}
+
+const uniqueColumns = (columns: ReadonlyArray<Sweepable>) => {
+  const seen = new Set<string>();
+  return columns.filter((declared) => {
+    const name = `${declared.table}.${declared.column}`;
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  });
+};
+
+/**
+ * The operator's whole-deployment pass after a key rotation: the bundle's columns, plus `also`
+ * (plugin columns), deduplicated by `table.column`. Never run inside `TenantScope.withTenant`: row-level
+ * security would hide rows from the sweep.
+ */
+export const sweepDeployed = (options?: {
+  readonly batch?: number;
+  readonly also?: ReadonlyArray<Sweepable>;
+}) =>
+  Effect.flatMap(Deployed, ({ columns }) =>
+    sweepAll(uniqueColumns([...columns, ...(options?.also ?? [])]), options),
   );

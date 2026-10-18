@@ -43,6 +43,7 @@ export * as PruneExpired from "./PruneExpired.ts";
 export * as RateLimiter from "./RateLimiter.ts";
 export * as RefreshingCache from "./RefreshingCache.ts";
 export * as RelayCursorStore from "./RelayCursorStore.ts";
+export * as Sealed from "./Sealed.ts";
 export * as SessionStore from "./SessionStore.ts";
 export * as SmsSender from "./SmsSender.ts";
 export * as SqlTransaction from "./SqlTransaction.ts";
