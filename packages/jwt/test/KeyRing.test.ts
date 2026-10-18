@@ -660,3 +660,10 @@ describe("rotation", () => {
     }).pipe(Effect.provide(RotationLayer)),
   );
 });
+
+// Plan 17: the plugin declares its sealed column, so `auth.sealedColumns` (the `also` of a rotation sweep) lists it.
+describe("SigningKeyRecords sealed column declaration", () => {
+  it("the plugin declares the signing key's private JWK", () => {
+    assert.deepStrictEqual(Jwt.Jwt.sealedColumns, [SigningKeyRecords.privateKeyJwkColumn]);
+  });
+});

@@ -815,6 +815,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
     saml_sp_key: AuthPlugin.Table.derived("saml_connection", "connectionId"),
     saml_session: AuthPlugin.Table.derived("saml_connection", "connectionId"),
   },
+  // Plan 17: the sealed SP private key, declared beside the records that seal it.
+  sealedColumns: [SamlRecords.privateKeyColumn],
   migrations: samlMigrations,
   // Plan 08 (BEH-EA-T4): the connection/key/session store, memory and SQL, matched.
   records: SamlRecords.records,

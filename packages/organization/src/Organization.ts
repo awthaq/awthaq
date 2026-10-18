@@ -29,6 +29,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as ConnectionRecords from "./ConnectionRecords.ts";
 import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
@@ -104,6 +105,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     apiVersion: 1,
     contract: OrganizationApi.OrganizationApi,
     migrations: organizationMigrations,
+    // Plan 17: the sealed OAuth connection secret, declared beside the records that seal it.
+    sealedColumns: [ConnectionRecords.clientSecretColumn],
     // Plan 08 (BEH-EA-T4): the eight record stores, memory and SQL, matched.
     records: OrganizationBundle,
     // Plan 08: the 46 hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.

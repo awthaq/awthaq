@@ -391,6 +391,12 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
     webhooks_endpoint: AuthPlugin.Table.partitioned("tenantId"),
     webhooks_delivery: AuthPlugin.Table.derived("webhooks_endpoint", "endpointId"),
   },
+  // Plan 17: the sealed columns, declared beside the records that seal them.
+  sealedColumns: [
+    WebhookRecords.secretColumn,
+    WebhookRecords.previousSecretColumn,
+    WebhookRecords.headersColumn,
+  ],
   migrations: webhooksMigrations,
   // Plan 08 (BEH-EA-T4): the endpoint and delivery store, memory and SQL, matched.
   records: WebhookRecords.records,

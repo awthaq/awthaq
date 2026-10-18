@@ -360,3 +360,12 @@ TestAuth.runSealedColumnTests<string, ConnectionRecords.ConnectionRecords | SqlC
     read: readSecret,
   },
 );
+
+// Plan 17: the plugin declares its sealed column, so `auth.sealedColumns` (the `also` of a rotation sweep) lists it.
+describe("ConnectionRecords sealed column declaration", () => {
+  it("the plugin declares the OAuth connection clientSecret", () => {
+    assert.deepStrictEqual(Organization.Organization.sealedColumns, [
+      ConnectionRecords.clientSecretColumn,
+    ]);
+  });
+});

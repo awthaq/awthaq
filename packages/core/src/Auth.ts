@@ -17,7 +17,7 @@ import type * as Types from "effect/Types";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
-import { TenantScope, type TenantScoped } from "@awthaq/sql";
+import { type SealedColumn, TenantScope, type TenantScoped } from "@awthaq/sql";
 import * as AuthPlugin from "./AuthPlugin.ts";
 import * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
@@ -107,6 +107,22 @@ export class TenancyDeclarationInvalid extends Data.TaggedError("Auth/TenancyDec
   readonly pluginId: string;
   readonly table: string;
   readonly cause: "Identifier" | "UnknownParent" | "GlobalParent" | "Cycle";
+  readonly message: string;
+}> {}
+
+/**
+ * Plan 17 (ADR-EA-019 decision 6): a plugin's `sealedColumns` declaration is malformed: a column on a table the
+ * plugin does not own (a typo, or another plugin's column), or the same `table.column` declared twice in the
+ * composition. Found at link time, so an operator's `sweepDeployed({ also: auth.sealedColumns })` cannot be
+ * handed a column that is not the plugin's.
+ */
+export class SealedColumnDeclarationInvalid extends Data.TaggedError(
+  "Auth/SealedColumnDeclarationInvalid",
+)<{
+  readonly pluginId: string;
+  readonly table: string;
+  readonly column: string;
+  readonly cause: "UnknownTable" | "Duplicate";
   readonly message: string;
 }> {}
 
@@ -548,6 +564,12 @@ export interface Built<
    */
   readonly tenancy: ReadonlyArray<TenantScope.DeclaredTable>;
   /**
+   * Plan 17: every sealed column the plugins declare, in plugin order. Hand it to the post-rotation sweep so it
+   * cannot forget one (a TOTP secret is `orDie` once its key is dropped):
+   * `SealedColumn.sweepDeployed({ also: auth.sealedColumns })`.
+   */
+  readonly sealedColumns: ReadonlyArray<SealedColumn.Sweepable>;
+  /**
    * SAM-004 (BEH-EA-040/048): every plugin-declared user field of this composition, keyed `<plugin id>_<field>`
    * with the field's own schema. Pass it to `UserFields.layer` (so `Users` validates and gates writes) and to
    * `Users.typedFields` (typed reads and writes); `TestAuth.layer` provides the registry for you.
@@ -657,6 +679,34 @@ const declaredTenancy = (
       tenancy: declaration.tenancy,
     })),
   );
+
+/** Plan 17: every plugin's sealed columns, in plugin order. */
+const declaredSealedColumns = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+): ReadonlyArray<SealedColumn.Sweepable> => order.flatMap((plugin) => plugin.sealedColumns ?? []);
+
+/** Plan 17: refuses a sealed column on a table its plugin does not own, and one declared twice. */
+const checkSealedColumns = (order: ReadonlyArray<AuthPlugin.Any>): void => {
+  const seen = new Set<string>();
+  for (const plugin of order) {
+    for (const declared of plugin.sealedColumns ?? []) {
+      const invalid = (cause: SealedColumnDeclarationInvalid["cause"], detail: string) =>
+        new SealedColumnDeclarationInvalid({
+          pluginId: plugin.id,
+          table: declared.table,
+          column: declared.column,
+          cause,
+          message: `awthaq: plugin "${plugin.id}" sealed column "${declared.table}.${declared.column}": ${detail}`,
+        });
+      if (!plugin.tables.includes(declared.table)) {
+        throw invalid("UnknownTable", `"${declared.table}" is not one of the plugin's own tables`);
+      }
+      const name = `${declared.table}.${declared.column}`;
+      if (seen.has(name)) throw invalid("Duplicate", "it is declared more than once");
+      seen.add(name);
+    }
+  }
+};
 
 /** BEH-EA-328: refuses a malformed tenancy declaration. */
 const checkTenancy = (order: ReadonlyArray<AuthPlugin.Any>): void => {
@@ -1063,6 +1113,7 @@ export function make(
   const order = linkPlugins(plugins);
   checkTableDependencies(order);
   checkTenancy(order);
+  checkSealedColumns(order);
   const extraGroups = options?.extraGroups ?? [];
   return {
     plugins,
@@ -1073,6 +1124,7 @@ export function make(
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),
     tenancy: declaredTenancy(order),
+    sealedColumns: declaredSealedColumns(order),
     userFields: composeUserFields(order),
     userFieldsLayer: UserFields.layer(composeUserFields(order)),
   };

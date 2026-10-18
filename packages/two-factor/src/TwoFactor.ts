@@ -57,6 +57,7 @@ import {
   TwoFactorSecrets,
   migrations,
   records as twoFactorRecords,
+  secretColumn,
 } from "./TwoFactorStore.ts";
 
 // ---- the markers: what makes forgetting a gate a compile error --------------------------------
@@ -454,6 +455,8 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
     two_factor_secret: AuthPlugin.Table.global("per-user factor; the directory is global"),
     two_factor_recovery_code: AuthPlugin.Table.global("per-user codes; the directory is global"),
   },
+  // Plan 17: the sealed TOTP secret, declared beside the records that seal it.
+  sealedColumns: [secretColumn],
   migrations,
   // Plan 08 (BEH-EA-T4): the secret and recovery-code stores, memory and SQL, matched.
   records: twoFactorRecords,

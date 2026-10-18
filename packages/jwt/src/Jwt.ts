@@ -578,6 +578,8 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
     jwt_signing_key: AuthPlugin.Table.global("deployment-wide key ring, ADR-EA-017"),
     jwt_token_revocation: AuthPlugin.Table.global("the revoked jti set is deployment-wide"),
   },
+  // Plan 17: the sealed signing key, declared beside the records that seal it.
+  sealedColumns: [SigningKeyRecords.privateKeyJwkColumn],
   migrations: jwtMigrations,
   // Plan 08 (BEH-EA-T4): the signing-key and revocation stores, memory and SQL, matched.
   records: {
