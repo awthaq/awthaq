@@ -182,12 +182,13 @@ If your own code has work that must follow the same rule, use the lanes directly
 - A nested `transactional` is a savepoint: its `onCommit` work is dropped if the savepoint rolls back; its `afterUnit` work always reaches the parent. Both lanes take an `Effect<void>` with no error and no requirements, so handle or `orDie` errors inside, and capture any per-request context the work needs before deferring it.
 - A host that opens its own raw `sql.withTransaction` around awthaq calls is not covered: use `SqlTransaction.transactional(sql)`.
 
-## Completing a sign-in and creating a user (ADR-EA-038)
+## Completing a sign-in and creating a user (ADR-EA-038, ADR-EA-043)
 
-Resolve core's two modules once, in your plugin's `make`, and let them own the sequence; never hand-write it.
+Resolve core's modules once, in your plugin's `make`, and let them own the sequence; never hand-write it.
 
 - **Sign-in.** `const signIn = yield* SignIn.make`, then `signIn.complete({ userId, strategy, amr }, request)` once your credential is proven: it applies the user lookup, the suspension gate, `BeforeSignIn`, the `BeforeSessionIssue` divert, mints the session, publishes `auth.user.signedIn` and runs `AfterSignIn`. Use `clear` then `issue` when you must do something between the veto and the mint (device authorization consumes its grant there). Map `SignIn/UserGone` to your flow's own uniform refusal. A flow that a second factor can finish later passes a `continuation` and hands the divert's handoff to `SignIn.resume`.
 - **Sign-up.** `const signUp = yield* SignUp.make`, then `signUp.vet({ identity, name, strategy })` (this runs `BeforeSignUp`, so call it before any expensive work) and `create`, `createWith` or `createSignedIn` with the `Vetted` it returned: they create, mark verified, link your credential and run your own `within` work as one unit, answer every collision as `SignUp/IdentityTaken` (map it to your wire answer), and publish `auth.user.created` and run `AfterSignUp` only after the unit commits. List `SqlTransaction.SqlTransaction` among your `ports`.
+- **Federated identity.** A plugin whose credential is an external party's assertion (an OAuth or OIDC provider, a SAML connection) builds an `ExternalIdentity` and its own `EmailTrust` verdict (`FederatedIdentity.trusted("any" | domains)` or `untrusted`) and calls `const federation = yield* FederatedIdentity.make`, then `federation.resolve(identity, trust)` (or `attach(identity, userId)` for an explicit link). It never reads an account anchor, links an account or calls `SignUp` itself: the resolver owns the email policy, the sign-up and the lost-race re-read, so two requests for one identity sign in as one user. Map `EmailInUse` and `Contended` (and `LinkedElsewhere`/`TargetGone` for `attach`) to your flow's uniform refusal, then call `SignIn` with the user it returns (ADR-EA-043).
 - **Never** call `Sessions.issue` for a proven credential or `Users.create` for a sign-up. The compiler refuses a session or a user without a `Clearance` or a `Vetted`, and `core/test/SignInSeams.test.ts` fails on a new caller. Operator imports (`UserImport.importUser`, `awthaq seed admin`) are the named exemption.
 
 ### Answering the request with the session
@@ -250,6 +251,6 @@ const response = await app.request("POST", "/notes", { cookie, json: { text: "hi
 5. Hook points with a `.layer` each, merged into one layer declared as `hookPoints`.
 6. `test/Contract.test.ts` calls `TestAuth.runPluginContractTests` for every plugin class in the package (`pnpm check:contract-tests` enforces it; pass `hooks: [{ point: Hooks.AfterSignUp, input }]` to run the plugin's declared taps against a stub input: an observe tap must not try to abort, a veto tap may only abort with `HookAbort`; BEH-EA-200), plus a suite built with `TestAuth.layer` that runs the real migrations, exercises an endpoint over a real handler, aborts a veto, and runs in both `TestAuth.recordModes`.
 7. A package README stating what it ships (`pnpm check:readmes` enforces the status banner).
-8. A flow that signs a person in or creates a user goes through `SignIn`/`SignUp`, never `Sessions.issue`/`Users.create` (ADR-EA-038).
+8. A flow that signs a person in or creates a user goes through `SignIn`/`SignUp`, never `Sessions.issue`/`Users.create` (ADR-EA-038); a flow whose credential is an external party's assertion resolves its user through `FederatedIdentity` (ADR-EA-043).
 9. Every event declared with `defineEvent`, its actor chosen and its free-text fields in `pii`.
 10. Every table's tenancy declared, its records filtered through `TenantScoped`, and `TestAuth.runTenantIsolationTests` (and `runSealedColumnTests` for each sealed column) run over both adapters.

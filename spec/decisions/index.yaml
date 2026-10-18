@@ -169,4 +169,4 @@ entries:
   - id: "ADR-EA-043"
     file: "043-federated-identity-resolution.md"
     title: "Federated Identity Resolution Is a Core Module; a Lost Linking Race Resolves to the Anchor's User"
-    status: "Accepted — in progress"
+    status: "Accepted — implemented"

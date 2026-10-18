@@ -142,3 +142,49 @@ describe("the sign-up seam (ADR-EA-038)", () => {
     ]);
   });
 });
+
+describe("the federated seam (ADR-EA-043)", () => {
+  /** The federated plugins: whoever turns an external party's assertion into a local user. */
+  const federated = (file: string) => /^(oauth|saml|organization)\//.test(file);
+  const inFederated = (pattern: RegExp) =>
+    Object.fromEntries(Object.entries(countOf(pattern)).filter(([file]) => federated(file)));
+
+  it("a federated sign-in resolves its identity only through FederatedIdentity", () => {
+    assertExactly(
+      inFederated(/\baccounts\s*\.\s*(link|findByProviderSubject)\(|\bSignUp\.make\b/g),
+      [],
+    );
+  });
+
+  it("provider tokens are written only by the resolver and by the token refresh against the provider", () => {
+    assertExactly(countOf(/\baccounts\s*\.\s*updateProviderTokens\(/g), [
+      {
+        file: "core/src/FederatedIdentity.ts",
+        count: 1,
+        why: "a returning sign-in replaces the stored set (BE-002)",
+      },
+      {
+        file: "oauth/src/OAuthTokenAccess.ts",
+        count: 1,
+        why: "withAccessToken persists the set a provider refresh returned; no identity is resolved",
+      },
+    ]);
+  });
+
+  it("SignUp.make has exactly the named callers", () => {
+    assertExactly(countOf(/\bSignUp\.make\b/g), [
+      {
+        file: "core/src/FederatedIdentity.ts",
+        count: 1,
+        why: "the first-login user of a proven external identity",
+      },
+      { file: "password/src/Password.ts", count: 1, why: "password sign-up, both modes" },
+      {
+        file: "magic-link/src/Channel.ts",
+        count: 1,
+        why: "magic link and email OTP first sign-in",
+      },
+      { file: "scim/src/Scim.ts", count: 1, why: "directory provisioning" },
+    ]);
+  });
+});

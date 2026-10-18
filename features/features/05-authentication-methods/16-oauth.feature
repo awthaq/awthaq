@@ -96,6 +96,15 @@ Feature: OAuth and OIDC
       When "alice" calls "client.oauth.link" for provider "google"
       Then the callback attaches a "google" Account to "alice"'s current user
 
+    @REQ-EA-1310
+    Scenario: Linking an identity already linked to another account is refused, and that account is untouched
+      Given "bob" already holds the "google" identity "matching-sub" with the stored access token "bob-token"
+      And "alice" has her own "password" account
+      When "alice" tries to link the "google" identity "matching-sub"
+      Then the link is refused with the opaque "OAuthCallbackFailed" failure
+      And "bob"'s stored access token is still "bob-token"
+      And "alice" has no "google" Account
+
   # BEH-EA-124 — spec/behaviors/16-oauth.md
   @BEH-EA-124
   Rule: Trusted-provider auto-link is opt-in, per provider
@@ -165,6 +174,13 @@ Feature: OAuth and OIDC
       When two concurrent requests race to link that same provider, subject, and issuer
       Then only one link attempt succeeds
       And the other is rejected by the database-level constraint, not by application-level query discipline that could lose the race
+
+    @REQ-EA-1311
+    Scenario: Two concurrent first callbacks for one provider identity sign in as one user
+      Given a "google" provider whose account lookups of two concurrent callbacks meet before either writes
+      When two "google" callbacks for the same identity are handled at once
+      Then both callbacks sign in as the same user
+      And that user has exactly one "google" Account
 
   # BEH-EA-126 — spec/behaviors/16-oauth.md
   @BEH-EA-126

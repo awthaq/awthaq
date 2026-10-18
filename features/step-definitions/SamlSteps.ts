@@ -38,7 +38,9 @@ import {
   configure,
   ensureConnection,
   expectReason,
+  idpResponse,
   inApp,
+  isOutcome,
   lastOutcome,
   patchSpec,
   planConnection,
@@ -979,6 +981,57 @@ export const samlSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(linked.value.userId, userId);
     },
   );
+
+  // ---- ADR-EA-043: two concurrent first sign-ins for one NameID resolve to one user ----
+
+  Given("the account lookups of two concurrent sign-ins meet before either writes", function* () {
+    const world = yield* World;
+    if (yield* Ref.get(world.started)) {
+      return yield* Effect.die(
+        new Error("arrange the meeting before a connection or request exists"),
+      );
+    }
+    yield* Ref.set(world.anchorMeeting, 2);
+  });
+
+  When("the ACS receives that response from two browsers at once", function* () {
+    const world = yield* World;
+    const spec = yield* Ref.get(world.spec);
+    const first_ = yield* startLogin("acme", "first");
+    const second = yield* startLogin("acme", "second");
+    const firstPayload = yield* idpResponse(first_, spec);
+    const secondPayload = yield* idpResponse(second, spec);
+    const [a, b] = yield* Effect.all(
+      [postAcs(firstPayload, first_.state), postAcs(secondPayload, second.state)],
+      { concurrency: "unbounded" },
+    );
+    yield* world.outcomes.set("concurrent:first", a);
+    yield* world.outcomes.set("concurrent:second", b);
+  });
+
+  Then("both sign-ins resolve to one user", function* () {
+    const world = yield* World;
+    const a = yield* world.outcomes.getAs("concurrent:first", isOutcome);
+    const b = yield* world.outcomes.getAs("concurrent:second", isOutcome);
+    assert.equal(a._tag, "accepted", JSON.stringify(a));
+    assert.equal(b._tag, "accepted", JSON.stringify(b));
+    if (a._tag === "accepted" && b._tag === "accepted") {
+      assert.equal(a.userId, b.userId);
+      world.users.set("concurrent", a.userId);
+    }
+  });
+
+  Then("that user has exactly one linked account", function* () {
+    const world = yield* World;
+    const userId = world.users.get("concurrent");
+    assert.ok(userId !== undefined);
+    const owned = yield* inApp(
+      Effect.flatMap(Accounts.Accounts, (accounts) =>
+        accounts.listByUser(Users.UserId(userId)).pipe(Effect.orDie),
+      ),
+    );
+    assert.equal(owned.length, 1);
+  });
 
   Given("an existing local account {string}", function* (email: string) {
     const world = yield* World;

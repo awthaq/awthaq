@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-043 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-10-18 |
-> | Status | Accepted — in progress |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-18): Initial release (architecture plan 14) |
+> | Change History | 1.0 (2026-10-18): Initial release (architecture plan 14) <br> 1.1 (2026-10-18): OAuth and SAML are migrated and the seam is guarded (`SignInSeams.test.ts`); status Accepted — implemented |
 
 ---
 

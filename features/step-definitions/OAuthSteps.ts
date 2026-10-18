@@ -611,6 +611,134 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  // ---- ADR-EA-043: an explicit link of an identity linked elsewhere is refused ----
+
+  Given(
+    "{string} already holds the {string} identity {string} with the stored access token {string}",
+    Effect.fn(function* (name: string, providerId: string, subject: string, token: string) {
+      yield* configure({ providers: [google()], httpRoutes: googleRoutes });
+      const users = yield* usersService();
+      const accounts = yield* accountsService();
+      const holder = yield* users
+        .create({ identity: { _tag: "Email", email: `${name}@example.com` }, name })
+        .pipe(Effect.orDie);
+      const account = yield* accounts
+        .link({
+          userId: holder.id,
+          providerId,
+          subject,
+          tokens: {
+            accessToken: Redacted.make(token),
+            refreshToken: Option.none(),
+            idToken: Option.none(),
+            accessTokenExpiresAt: Option.none(),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.none(),
+            tokenType: Option.none(),
+          },
+        })
+        .pipe(Effect.orDie);
+      yield* setOutcome(`user:${name}`, holder.id);
+      yield* setOutcome(`account:${name}`, account.id);
+    }),
+  );
+
+  Given(
+    "{string} has her own {string} account",
+    Effect.fn(function* (name: string, _providerId: string) {
+      const users = yield* usersService();
+      const own = yield* users
+        .create({ identity: { _tag: "Email", email: `${name}@example.com` }, name })
+        .pipe(Effect.orDie);
+      yield* setOutcome(`user:${name}`, own.id);
+    }),
+  );
+
+  When(
+    "{string} tries to link the {string} identity {string}",
+    Effect.fn(function* (name: string, providerId: string, _subject: string) {
+      const userId = (yield* getOutcome(`user:${name}`)) as Users.UserId;
+      const oauth = yield* oauthService();
+      const { state } = yield* oauth.authorize(providerId, {
+        callbackURL: undefined,
+        link: { userId },
+      });
+      const outcome = yield* oauth
+        .callback(providerId, { code: "auth-code", state, iss: undefined, cookieState: state })
+        .pipe(Effect.exit);
+      yield* setOutcome("linkAttempt", outcome);
+    }),
+  );
+
+  Then("the link is refused with the opaque {string} failure", function* (tag: string) {
+    const outcome = (yield* getOutcome("linkAttempt")) as Exit.Exit<unknown, unknown>;
+    assert.ok(Exit.isFailure(outcome));
+    assert.match(String(outcome.cause), new RegExp(tag));
+  });
+
+  Then("{string}'s stored access token is still {string}", function* (name: string, token: string) {
+    const accounts = yield* accountsService();
+    const accountId = (yield* getOutcome(`account:${name}`)) as Accounts.AccountId;
+    const stored = yield* accounts.findProviderTokens(accountId).pipe(Effect.orDie);
+    assert.strictEqual(Redacted.value(Option.getOrThrow(stored).accessToken), token);
+  });
+
+  Then("{string} has no {string} Account", function* (name: string, providerId: string) {
+    const accounts = yield* accountsService();
+    const userId = (yield* getOutcome(`user:${name}`)) as Users.UserId;
+    const owned = yield* accounts.listByUser(userId);
+    assert.strictEqual(owned.filter((account) => account.providerId === providerId).length, 0);
+  });
+
+  // ---- ADR-EA-043: concurrent first callbacks for one identity resolve to one user ----
+
+  Given(
+    "a {string} provider whose account lookups of two concurrent callbacks meet before either writes",
+    function* (_providerId: string) {
+      yield* configure({ providers: [google()], httpRoutes: googleRoutes, concurrentLookups: 2 });
+    },
+  );
+
+  When(
+    "two {string} callbacks for the same identity are handled at once",
+    Effect.fn(function* (providerId: string) {
+      const oauth = yield* oauthService();
+      const handle = Effect.gen(function* () {
+        const { state } = yield* oauth.authorize(providerId, {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        return yield* oauth
+          .callback(providerId, { code: "auth-code", state, iss: undefined, cookieState: state })
+          .pipe(Effect.exit);
+      });
+      yield* setOutcome(
+        "concurrentCallbacks",
+        yield* Effect.all([handle, handle], { concurrency: "unbounded" }),
+      );
+    }),
+  );
+
+  Then("both callbacks sign in as the same user", function* () {
+    const exits = (yield* getOutcome("concurrentCallbacks")) as ReadonlyArray<
+      Exit.Exit<{ readonly session?: { readonly session: { readonly userId: string } } }, unknown>
+    >;
+    const users = exits.map((exit) => {
+      assert.ok(Exit.isSuccess(exit), `a callback failed: ${String(exit)}`);
+      return exit.value.session?.session.userId;
+    });
+    assert.ok(users[0] !== undefined);
+    assert.strictEqual(users[0], users[1]);
+    yield* setOutcome("concurrentUser", users[0]);
+  });
+
+  Then("that user has exactly one {string} Account", function* (providerId: string) {
+    const accounts = yield* accountsService();
+    const userId = (yield* getOutcome("concurrentUser")) as Users.UserId;
+    const owned = yield* accounts.listByUser(userId);
+    assert.strictEqual(owned.filter((account) => account.providerId === providerId).length, 1);
+  });
+
   // ---- REQ-EA-338/339/340: trusted-provider auto-link ----
 
   Given(

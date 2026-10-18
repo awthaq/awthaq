@@ -911,3 +911,29 @@ New REQ ids are the next free ones at execution (above `REQ-EA-1306` today; sibl
 5. **A second lost race:** answer the typed `Contended` refusal mapped to each flow's uniform rejection (recommended), or `StoreUnavailable` (503, which a client retries)? The recommendation follows ADR-EA-028: it is not an outage.
 6. **Is it acceptable that the losing request of a create race has run `BeforeSignUp`** (and only the winner announces `auth.user.created`)? Recommended: **accept and document**. The race is only visible at the insert, after the veto ran; the alternative is a flag on the hook input that no tap needs today.
 7. **SAML anchor stability (follow-up, not this plan):** a connection's editable `entityId` is the anchor's issuer, so an edit orphans every linked account (§2.6 F7). Recommended: open a follow-up that either freezes `entityId` once accounts are linked or re-keys the connection's accounts in the same transaction as the edit. This plan leaves it as is.
+
+---
+
+## Decisions taken (implementation, 2026-10-18)
+
+Open questions took the plan's recommended default:
+
+1. **Q1, SAML-created users are verified under a trusting connection: yes**, inside its claimed domains (AOMS-007 parity). Two tests pin it (trusting and non-trusting).
+2. **Q2, a connection's email trust is bounded to its claimed domains: yes.** `trusted(connection.emailDomains)`; an empty list links and verifies nothing. Static OAuth providers stay `trusted("any")`. The changeset carries the `Migration:` line with the query.
+3. **Q3, `auth.account.linked` event: yes** (`userId`, `providerId`, `via`; no subject). Published for an auto-link and a new explicit link only.
+4. **Q4, per-connection email trust for OIDC organization connections (Phase 5): NOT DONE.** It is the plan's recommended default, but it adds a `trustsEmail` column to `ConnectionRecords` with a migration across the organization package's memory and SQL adapters. Plan 22 (table DDL locality), which the plan says decides where that DDL goes, is not implemented. Skipped and listed here; `FederatedIdentity.EmailTrust` and OAuth's `emailTrustOf` are ready for it (add `emailTrust?` to `OAuthConnection` and prefer it in `emailTrustOf`).
+5. **Q5, a second lost race is the typed `Contended`** (OAuth `OAuthCallbackFailed` with reason `identity-contended`; SAML `SamlAssertionRejected` with reason `identityContended`), not `StoreUnavailable`.
+6. **Q6, a create race runs `BeforeSignUp` twice: accepted and documented** (BEH-EA-338).
+7. **Q7, SAML anchor stability when `entityId` is edited: follow-up, not done.** Open a ticket when this plan is reviewed.
+
+Implementation notes and deviations from the plan:
+
+- **Phase 0** went in with one more branch than the plan names. The email-holder branch (`existing` found, connection not trusting or holder unverified) can be hit by the *loser* after the winner has created the user but before it has linked, so it also calls `anchoredOr` before refusing. The resolver does the same (a refusal first re-reads the anchor and, if it is now present, treats it as a lost race). Without this the plan's own test #10(b) (email create race) failed on memory.
+- **Phases 0-1** also edit `@awthaq/test`: `Rendezvous` (`make`, `anchorReadsMeet`) is exported from the index. Core's own tests import `Rendezvous.make` through the relative path (`../../test/src/Rendezvous.ts`) because `@awthaq/core` cannot depend on `@awthaq/test`; they decorate `Accounts` themselves with the core-source tag.
+- **Core test layout.** The 24 cases live in `packages/core/test/support/federatedIdentitySuite.ts` (`suite(name, env)`), run by `FederatedIdentity.test.ts` (memory) and `FederatedIdentitySql.test.ts` (SQLite, Postgres under `test:pg`, plus cases 21-24). Total 71 cases in the two files.
+- **TS2883.** `FederatedIdentity.make` could not name `SqlTransaction` (it comes through `SignUp.make`); fixed without an annotation by importing it as a value and re-exporting it from the module.
+- **`OAuthTokenAccess.updateProviderTokens` stays in OAuth** (the token refresh against the provider is a non-goal). The Phase 4 guard therefore forbids `link`, `findByProviderSubject` and `SignUp.make` under `oauth/src`, `saml/src`, `organization/src` and pins `updateProviderTokens` to exactly two callers (the resolver and `OAuthTokenAccess`), instead of forbidding it outright as §4 says.
+- **Tests deleted** in OAuth: the 14 of §5.3 (OAuth 235 -> 221 with the 3 new regressions). In SAML: the `:566` test and the Phase 0 email and trustsEmail race cases; `:589` was rewritten (domain bound) and two verify-on-create cases added.
+- **BDD.** Four scenarios (REQ-EA-1310 to 1313): OAuth concurrent first callbacks and an explicit link refused with the other account untouched; SAML concurrent first sign-ins and the domain-bounded trust. The OAuth and SAML worlds gained a `concurrentLookups`/`anchorMeeting` slot feeding `Rendezvous.anchorReadsMeet` through `TestAuth.layer`'s `decorate`.
+- **Plan 11/16/17/18/22 dependencies:** none were needed except the Phase 5 DDL note above.
+- **Gates run.** Typecheck, lint, knip (only `.reports/`), circular, format:check, spec:verify:strict, check:error-tags, check:readmes, test (full), test:bdd and test:pg (Docker).
