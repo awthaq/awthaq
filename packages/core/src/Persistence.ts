@@ -1,12 +1,12 @@
 // @awthaq/core — Persistence
 //
 // Plan 02 (ADR-EA-041): the matched store bundles. Each core service (`Users`, `Accounts`, `Sessions`,
-// `Verification`, `AuditLog`) is written once over a store port; a composition provides the five
-// stores, and the transaction that goes with them, once. Matching is the point: a bundle supplies every
-// store AND the right `SqlTransaction` (a no-op beside the `Ref` stores, a real one over the same
-// `SqlClient` beside the SQL stores), so a composition cannot pair a memory store with a SQL
-// transaction by accident, which used to leave a swapped module's writes silently outside it
-// (INV-EA-017, DRS-006).
+// `Verification`, `AuditLog`) is written once over a store port; a composition provides the six
+// stores (the sixth, `RelayCursorStore`, is the event relay's position, plan 23) and the transaction
+// that goes with them, once. Matching is the point: a bundle supplies every store AND the right
+// `SqlTransaction` (a no-op beside the `Ref` stores, a real one over the same `SqlClient` beside the
+// SQL stores), so a composition cannot pair a memory store with a SQL transaction by accident, which
+// used to leave a swapped module's writes silently outside it (INV-EA-017, DRS-006).
 //
 // Swapping one store is still legal (ADR-EA-014), and explicit:
 //
@@ -19,6 +19,7 @@ import {
   AccountStore,
   AuditLogStore,
   type Encryption,
+  RelayCursorStore,
   SessionStore,
   SqlTransaction,
   UserStore,
@@ -27,6 +28,7 @@ import {
 import {
   AccountStoreSql,
   AuditLogStoreSql,
+  RelayCursorStoreSql,
   Repositories,
   SessionStoreSql,
   UserStoreSql,
@@ -46,6 +48,7 @@ export const memory = Layer.mergeAll(
   SessionStore.layerMemory,
   VerificationStore.layerMemory,
   AuditLogStore.layerMemory,
+  RelayCursorStore.layerMemory,
   SqlTransaction.layerNoop,
 );
 
@@ -72,6 +75,7 @@ export const sql = (options?: SqlOptions) =>
     SessionStoreSql.layer,
     VerificationStoreSql.layer,
     AuditLogStoreSql.layer,
+    RelayCursorStoreSql.layer,
     SqlTransaction.layerSql,
   ).pipe(
     Layer.provide(

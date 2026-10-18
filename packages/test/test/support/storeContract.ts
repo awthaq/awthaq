@@ -18,6 +18,7 @@ import {
   AccountStoreSql,
   AuditLogStoreSql,
   CoreMigrations,
+  RelayCursorStoreSql,
   Repositories,
   SessionStoreSql,
   UserStoreSql,
@@ -86,6 +87,7 @@ const sqlStores = <E>(client: Layer.Layer<SqlClient.SqlClient, E>) => {
   return Layer.mergeAll(
     AccountStoreSql.layer,
     AuditLogStoreSql.layer,
+    RelayCursorStoreSql.layer,
     SessionStoreSql.layer,
     UserStoreSql.layer,
     VerificationStoreSql.layer,
@@ -177,5 +179,10 @@ export const runOnSql = <E>(label: string, client: Layer.Layer<SqlClient.SqlClie
     adapter: `UserStore (${label})`,
     layer: sqlStores(client),
     cases: StoreContract.users,
+  });
+  StoreContract.run(framework, {
+    adapter: `RelayCursorStore (${label})`,
+    layer: sqlStores(client),
+    cases: StoreContract.relayCursor,
   });
 };
