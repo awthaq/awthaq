@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as AuditLogStoreSql from "../src/AuditLogStoreSql.ts";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
 import * as Repositories from "../src/Repositories.ts";
@@ -65,7 +66,8 @@ export const repositoriesLayer = <E>(
     Repositories.SessionsRepositoryLive,
     Repositories.VerificationRepositoryLive,
     Repositories.VerificationReservationsRepositoryLive,
-    Repositories.AuditLogRepositoryLive,
+    // Plan 16: the audit log is an adapter without a repository; suites that need a row use the port.
+    AuditLogStoreSql.layer,
   ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 };
 
@@ -962,7 +964,6 @@ export const contractCases = (
         const accounts = yield* Repositories.AccountsRepository;
         const verification = yield* Repositories.VerificationRepository;
         const reservations = yield* Repositories.VerificationReservationsRepository;
-        const auditLog = yield* Repositories.AuditLogRepository;
         const now = yield* DateTime.now;
         const future = DateTime.addDuration(now, Duration.days(1));
         const user = yield* users.insert(
@@ -1006,14 +1007,6 @@ export const contractCases = (
           attempts: 0,
         });
         yield* reservations.claim({ identifier: `signup:${label}`, expiresAt: future, now });
-        yield* auditLog.insertIfAbsent({
-          id: `${label}-audit`,
-          eventTag: "auth.test",
-          actorUserId: null,
-          occurredAt: now,
-          correlationId: null,
-          payload: "null",
-        });
         return {
           users: [user.tenantId, ...(Option.isSome(orphan) ? [orphan.value.tenantId] : [])],
           accounts: [account.tenantId],
@@ -1022,14 +1015,12 @@ export const contractCases = (
         };
       });
 
-    /** `tenantId` of the reservation and audit rows, which no repository reads back. */
-    const rawTenantOf = (table: "verification_reservations" | "auth_audit_log", label: string) =>
+    /** `tenantId` of the reservation row, which no repository reads back. */
+    const rawTenantOf = (table: "verification_reservations", label: string) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const column = table === "auth_audit_log" ? "id" : "identifier";
-        const key = table === "auth_audit_log" ? `${label}-audit` : `signup:${label}`;
         const rows = yield* sql.unsafe<{ readonly tenantId: string | null }>(
-          `SELECT "tenantId" FROM ${table} WHERE ${column} = '${key}'`,
+          `SELECT "tenantId" FROM ${table} WHERE identifier = 'signup:${label}'`,
         );
         return rows.map((row) => row.tenantId);
       });
@@ -1044,7 +1035,6 @@ export const contractCases = (
           verification: ["tenant-1", "tenant-1"],
         });
         assert.deepStrictEqual(yield* rawTenantOf("verification_reservations", "t1"), ["tenant-1"]);
-        assert.deepStrictEqual(yield* rawTenantOf("auth_audit_log", "t1"), ["tenant-1"]);
 
         // Single-tenant behaviour is untouched: nothing provides the context, so NULL.
         const plain = yield* insertEveryTable("plain");
@@ -1055,7 +1045,6 @@ export const contractCases = (
           verification: [null, null],
         });
         assert.deepStrictEqual(yield* rawTenantOf("verification_reservations", "plain"), [null]);
-        assert.deepStrictEqual(yield* rawTenantOf("auth_audit_log", "plain"), [null]);
 
         // An explicit tenant on the input wins over the ambient one.
         const users = yield* Repositories.UsersRepository;

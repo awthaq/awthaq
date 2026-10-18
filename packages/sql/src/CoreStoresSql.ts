@@ -76,7 +76,6 @@ export const layer = (options?: Options) => {
         Repositories.AccountsRepositoryLive,
         Repositories.VerificationRepositoryLive,
         Repositories.VerificationReservationsRepositoryLive,
-        Repositories.AuditLogRepositoryLive,
       ),
     ),
   );

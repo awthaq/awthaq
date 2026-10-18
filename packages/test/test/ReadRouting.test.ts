@@ -4,7 +4,8 @@
 // that only changes when the test calls `catchUp` (`LaggingReplica`).
 import * as TestEncryption from "../src/TestEncryption.ts";
 import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
-import { CoreMigrations, Models, ReadRouting, Repositories } from "@awthaq/sql";
+import { AuditLogStore } from "@awthaq/ports";
+import { AuditLogStoreSql, CoreMigrations, Models, ReadRouting, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -125,35 +126,38 @@ describe("ReadRouting (RRC-001)", () => {
       ),
   );
 
-  it.effect("AuditLog.list is an eventual read by default and can be forced to the primary", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const lag = yield* newReplica;
-        const context = yield* Layer.build(
-          Repositories.AuditLogRepositoryLive.pipe(Layer.provide(lag.layer)),
-        );
-        const audit = Context.get(context, Repositories.AuditLogRepository);
-        const now = yield* DateTime.now;
-        yield* audit.insertIfAbsent({
-          id: "a1",
-          eventTag: "auth.test",
-          actorUserId: null,
-          occurredAt: now,
-          correlationId: null,
-          payload: "{}",
-        });
-        const all = {
-          eventTag: null,
-          actorUserId: null,
-          occurredAfter: null,
-          occurredBefore: null,
-        };
-        assert.strictEqual((yield* audit.list(all)).length, 0);
-        assert.strictEqual((yield* audit.list(all, { consistency: "authoritative" })).length, 1);
-        yield* lag.catchUp;
-        assert.strictEqual((yield* audit.list(all)).length, 1);
-      }).pipe(Effect.provide(MigratedSqlite)),
-    ),
+  it.effect(
+    "AuditLogStore.select is an eventual read when asked, and authoritative reads the primary",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const lag = yield* newReplica;
+          const context = yield* Layer.build(AuditLogStoreSql.layer.pipe(Layer.provide(lag.layer)));
+          const audit = Context.get(context, AuditLogStore.AuditLogStore);
+          const now = yield* DateTime.now;
+          yield* audit.append({
+            id: "a1",
+            eventTag: "auth.test",
+            actorUserId: Option.none(),
+            occurredAt: now,
+            correlationId: Option.none(),
+            tenantId: Option.none(),
+            payloadJson: "{}",
+          });
+          const all = {
+            eventTag: Option.none<string>(),
+            actorUserId: Option.none<string>(),
+            from: Option.none<DateTime.Utc>(),
+            to: Option.none<DateTime.Utc>(),
+          };
+          assert.strictEqual((yield* audit.select(all, "eventual")).length, 0);
+          assert.strictEqual((yield* audit.select(all, "authoritative")).length, 1);
+          yield* lag.catchUp;
+          assert.strictEqual((yield* audit.select(all, "eventual")).length, 1);
+          const page = { after: Option.none<string>(), eventTag: Option.none<string>(), limit: 10 };
+          assert.strictEqual((yield* audit.pageAfter(page, "eventual")).length, 1);
+        }).pipe(Effect.provide(MigratedSqlite)),
+      ),
   );
 
   it.effect(

@@ -8,6 +8,7 @@
 // in-memory stand-in. The dialect-neutral cases live in `contract.ts` (shared
 // with the file-backed and Postgres suites, ESR-009); the cases below are
 // SQLite-specific or cheap enough to keep on the in-memory database only.
+import { AuditLogStore } from "@awthaq/ports";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -220,7 +221,6 @@ describe("Repositories (SQLite specifics)", () => {
         const accounts = yield* Repositories.AccountsRepository;
         const verification = yield* Repositories.VerificationRepository;
         const reservations = yield* Repositories.VerificationReservationsRepository;
-        const auditLog = yield* Repositories.AuditLogRepository;
         const now = yield* DateTime.now;
 
         // Every write path that encodes a timestamp.
@@ -300,13 +300,15 @@ describe("Repositories (SQLite specifics)", () => {
           expiresAt: DateTime.add(now, { minutes: 1 }),
           now,
         });
-        yield* auditLog.insertIfAbsent({
+        const auditLog = yield* AuditLogStore.AuditLogStore;
+        yield* auditLog.append({
           id: "a1",
           eventTag: "test",
-          actorUserId: null,
+          actorUserId: Option.none(),
           occurredAt: now,
-          correlationId: null,
-          payload: "{}",
+          correlationId: Option.none(),
+          tenantId: Option.none(),
+          payloadJson: "{}",
         });
 
         const columns: ReadonlyArray<readonly [table: string, column: string]> = [
