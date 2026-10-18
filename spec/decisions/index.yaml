@@ -166,3 +166,7 @@ entries:
     file: "041-domain-store-ports.md"
     title: "Core Domain Services Are Written Once Over Atomic Store Ports"
     status: "Accepted — implemented"
+  - id: "ADR-EA-043"
+    file: "043-federated-identity-resolution.md"
+    title: "Federated Identity Resolution Is a Core Module; a Lost Linking Race Resolves to the Anchor's User"
+    status: "Accepted — in progress"

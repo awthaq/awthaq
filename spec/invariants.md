@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-INV |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) <br> 1.4 (2026-09-29): Replaced the pre-implementation banner and the "(planned)" runtime section; every INV-EA-007..016 Enforcement cell now names the test that exists (or says plainly that none does); the check that keeps them honest is in `spec/scripts/check-drift.mjs` (TMS-009, DTWS-007, DTWS-001, IDS-009, CCR-EA-006) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) <br> 1.4 (2026-09-29): Replaced the pre-implementation banner and the "(planned)" runtime section; every INV-EA-007..016 Enforcement cell now names the test that exists (or says plainly that none does); the check that keeps them honest is in `spec/scripts/check-drift.mjs` (TMS-009, DTWS-007, DTWS-001, IDS-009, CCR-EA-006) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): INV-EA-015 names `FederatedIdentity` as the one reader-then-writer of the anchor (architecture plan 14) |
 
 ---
 
@@ -166,7 +166,7 @@ These are properties that hold at runtime through the domain services, persisten
 
 **Implication**: Without tuple uniqueness, two different upstream accounts (or the same upstream account under two issuers, in a token-confusion attack) could collide onto one local account. Without single-use state/verifier, a captured or replayed authorization callback could complete a second time. With both, account linking is unambiguous and the OAuth exchange cannot be replayed.
 
-**Enforcement**: uniqueness: the `UNIQUE ("providerId", subject, issuer)` index in `packages/sql/src/CoreMigrations.ts` and `packages/core/test/Accounts.test.ts` ("BEH-EA-125: a second link under the same (providerId, subject, issuer) is rejected"); single-use flow state: `packages/oauth/test/OAuth.test.ts` ("REQ-EA-333: a replayed callback using an already-consumed state fails").
+**Enforcement**: `FederatedIdentity` (ADR-EA-043, `packages/core/test/FederatedIdentity.test.ts`, `FederatedIdentitySql.test.ts`) is the one reader-then-writer of the anchor and resolves a lost race to it; uniqueness: the `UNIQUE ("providerId", subject, issuer)` index in `packages/sql/src/CoreMigrations.ts` and `packages/core/test/Accounts.test.ts` ("BEH-EA-125: a second link under the same (providerId, subject, issuer) is rejected"); single-use flow state: `packages/oauth/test/OAuth.test.ts` ("REQ-EA-333: a replayed callback using an already-consumed state fails").
 
 **Related**: [BEH-EA-121 through 128](behaviors/16-oauth.md).
 

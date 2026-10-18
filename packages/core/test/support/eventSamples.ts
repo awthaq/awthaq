@@ -461,6 +461,12 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     userId,
     clientId: "awthaq-cli",
   },
+  "auth.account.linked": {
+    _tag: "auth.account.linked",
+    userId,
+    providerId: "acme",
+    via: "emailMatch",
+  },
   "auth.deviceAuthorization.denied": {
     _tag: "auth.deviceAuthorization.denied",
     userId,

@@ -31,6 +31,7 @@ suites=(
   packages/api-key/test/ApiKey.test.ts
   packages/api-key/test/StoreOutage.test.ts
   packages/core/test/AuthEventsUnitOfWork.test.ts
+  packages/core/test/FederatedIdentitySql.test.ts
   packages/core/test/SignUpSql.test.ts
   packages/core/test/Users.test.ts
   packages/core/test/UserFields.test.ts

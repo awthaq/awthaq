@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.6 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) |
 
 ---
 
@@ -32,7 +32,19 @@ A `Model.Class` entity representing a registered person or account holder, indep
 
 ### Account
 
-A `Model.Class` entity linking a User to one sign-in method, keyed on `(provider, subject)` (for example, a password credential or one linked OAuth provider identity). A User cannot unlink their last remaining Account, since that would leave them with no way to authenticate. See: [BEH-EA-041](behaviors/06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email).
+A `Model.Class` entity linking a User to one sign-in method, keyed on `(provider, subject, issuer)` (for example, a password credential or one linked OAuth provider identity). A User cannot unlink their last remaining Account, since that would leave them with no way to authenticate. See: [BEH-EA-041](behaviors/06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email).
+
+### External identity
+
+What an asserting party (an OAuth provider, an organization's OIDC or SAML connection) proved about a person: provider id, subject, issuer, an asserted email (with whether the party vouches for it), profile and the token set to store. Resolved to a local User by `FederatedIdentity`. See: [BEH-EA-338](behaviors/06-domain-users-accounts.md#beh-ea-338-a-federated-sign-in-resolves-its-identity-through-federatedidentity-and-a-lost-race-resolves-to-the-anchors-user).
+
+### Email trust
+
+The caller's verdict on an asserting party's email claims: untrusted, or trusted for any domain or for a list of domains. `FederatedIdentity` applies the rule (trusted party, address inside its domains, claim verified, local address verified); the plugin supplies the verdict from its own configuration. See: [BEH-EA-338](behaviors/06-domain-users-accounts.md#beh-ea-338-a-federated-sign-in-resolves-its-identity-through-federatedidentity-and-a-lost-race-resolves-to-the-anchors-user).
+
+### Federated identity resolution
+
+Deciding which local User an External identity is: the Account anchored at `(provider, subject, issuer)`, else a trusted email match, else a sign-up through `SignUp`. A request that loses a race for the same identity reads the anchor again and signs in as the winner's User. See: [ADR-EA-043](decisions/043-federated-identity-resolution.md).
 
 ### CurrentPrincipal
 

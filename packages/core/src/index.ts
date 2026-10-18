@@ -19,6 +19,9 @@
 // implementation of sign-in completion: a branded `Clearance`, then the session),
 // SignUp.ts (spec/behaviors/06-domain-users-accounts.md, BEH-EA-323, ADR-EA-038 — the one
 // implementation of user creation for a sign-up: a branded `Vetted` application, then the unit),
+// FederatedIdentity.ts (spec/behaviors/06-domain-users-accounts.md, BEH-EA-338, ADR-EA-043 — the one
+// implementation of resolving an external party's assertion to a local user: anchor, trusted email
+// match, or sign-up, and a lost race resolves to the anchor's user),
 // Slots.ts (spec/behaviors/03-ports-slots-hooks-registries.md, BEH-EA-017/019/021,
 // scoped as documented in that module's own header — its `SlotConflict<P>`
 // check is real but runtime, not the compile-time one BEH-EA-012 illustrates,
@@ -63,6 +66,7 @@ export * as Retention from "./Retention.ts";
 export * as SecretHash from "./SecretHash.ts";
 export * as SecuritySignals from "./SecuritySignals.ts";
 export * as SessionCookie from "./SessionCookie.ts";
+export * as FederatedIdentity from "./FederatedIdentity.ts";
 export * as Sessions from "./Sessions.ts";
 export * as SignIn from "./SignIn.ts";
 export * as SignUp from "./SignUp.ts";
