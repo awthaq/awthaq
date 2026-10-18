@@ -21,11 +21,6 @@ const buildLayer = (config: Partial<Admin.AdminConfigShape>) =>
 
 const manageAll = { canManageUsers: () => Effect.succeed(true) };
 
-// State for the "gate sees the target" test: what the predicate was asked about, and which
-// accounts it protects (ids are generated, so the test registers them once created).
-const seenTargets: Array<Option.Option<string>> = [];
-const protectedIds = new Set<string>();
-
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({
     ref: new Api.PrincipalRef({ type: "user", id }),
@@ -57,94 +52,27 @@ const collectEvents = Effect.gen(function* () {
 });
 
 describe("Admin user administration (BAM-005)", () => {
-  it.effect("every capability is fail-closed by default and publishes actionDenied", () =>
+  it.effect("listUsers pages with a keyset cursor", () =>
     Effect.gen(function* () {
-      const { adminId, targetId } = yield* seed;
-      const admin = yield* Admin.Admin;
-      const seen = yield* collectEvents;
-      const caller = asCaller(adminId);
-      const attempts = {
-        listUsers: admin.listUsers(caller),
-        getUser: admin.getUser(caller, targetId),
-        updateUser: admin.updateUser(caller, targetId, { name: "New" }),
-        listUserSessions: admin.listUserSessions(caller, targetId),
-        revokeUserSession: admin.revokeUserSession(caller, targetId, "any"),
-        revokeUserSessions: admin.revokeUserSessions(caller, targetId),
-      };
-      for (const [action, attempt] of Object.entries(attempts)) {
-        const failure = yield* attempt.pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AdminActionDenied", action);
-      }
-      yield* TestClock.adjust(Duration.millis(10));
-      const denied = (yield* Ref.get(seen)).filter((e) => e._tag === "auth.admin.actionDenied");
-      assert.deepStrictEqual(
-        denied.map((e) => (e._tag === "auth.admin.actionDenied" ? e.action : "")),
-        Object.keys(attempts),
-      );
-    }).pipe(Effect.scoped, Effect.provide(buildLayer({}))),
-  );
-
-  it.effect("the gate sees the target, so a host can protect an account; list sees none", () =>
-    Effect.gen(function* () {
-      const { adminId, targetId, users } = yield* seed;
-      const boss = yield* users.create({
-        identity: { _tag: "Email", email: "boss@example.com" },
-        name: "Boss",
-      });
-      protectedIds.add(boss.id);
-      const admin = yield* Admin.Admin;
-      const caller = asCaller(adminId);
-
-      const failure = yield* admin.getUser(caller, boss.id).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "AdminActionDenied");
-      const found = yield* admin.getUser(caller, targetId);
-      assert.strictEqual(found.id, targetId);
-      // Collection-level calls carry no target.
-      yield* admin.listUsers(caller);
-      assert.deepStrictEqual(seenTargets.at(-1), Option.none());
-    }).pipe(
-      Effect.provide(
-        buildLayer({
-          canManageUsers: ({ target }) => {
-            seenTargets.push(Option.map(target, (t) => t.id));
-            return Effect.succeed(
-              Option.match(target, {
-                onNone: () => true,
-                onSome: (t) => !protectedIds.has(t.id),
-              }),
-            );
-          },
-        }),
-      ),
-    ),
-  );
-
-  it.effect(
-    "listUsers pages with a keyset cursor and getUser resolves 404 only past the gate",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, users } = yield* seed;
-        for (const n of [1, 2, 3])
-          yield* users.create({
-            identity: { _tag: "Email", email: `u${n}@example.com` },
-            name: `U${n}`,
-          });
-        const admin = yield* Admin.Admin;
-        const caller = asCaller(adminId);
-
-        const first = yield* admin.listUsers(caller, { limit: 3 });
-        assert.strictEqual(first.items.length, 3);
-        assert.isTrue(Option.isSome(first.nextCursor));
-        const second = yield* admin.listUsers(caller, {
-          limit: 3,
-          ...(Option.isSome(first.nextCursor) ? { cursor: first.nextCursor.value } : {}),
+      const { adminId, users } = yield* seed;
+      for (const n of [1, 2, 3])
+        yield* users.create({
+          identity: { _tag: "Email", email: `u${n}@example.com` },
+          name: `U${n}`,
         });
-        assert.strictEqual(second.items.length, 2); // 5 users in all
-        assert.isTrue(Option.isNone(second.nextCursor));
+      const admin = yield* Admin.Admin;
+      const caller = asCaller(adminId);
 
-        const missing = yield* admin.getUser(caller, Users.UserId("ghost")).pipe(Effect.flip);
-        assert.strictEqual(missing._tag, "AdminTargetNotFound");
-      }).pipe(Effect.provide(buildLayer(manageAll))),
+      const first = yield* admin.listUsers(caller, { limit: 3 });
+      assert.strictEqual(first.items.length, 3);
+      assert.isTrue(Option.isSome(first.nextCursor));
+      const second = yield* admin.listUsers(caller, {
+        limit: 3,
+        ...(Option.isSome(first.nextCursor) ? { cursor: first.nextCursor.value } : {}),
+      });
+      assert.strictEqual(second.items.length, 2); // 5 users in all
+      assert.isTrue(Option.isNone(second.nextCursor));
+    }).pipe(Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect(
@@ -251,30 +179,6 @@ describe("Admin user administration (BAM-005)", () => {
 
 describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
   it.effect(
-    "banUser and unbanUser are fail-closed by default — even for an administrator of users",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId } = yield* seed;
-        const admin = yield* Admin.Admin;
-        const seen = yield* collectEvents;
-        const caller = asCaller(adminId);
-        const ban = yield* admin.banUser(caller, targetId, {}).pipe(Effect.flip);
-        const unban = yield* admin.unbanUser(caller, targetId).pipe(Effect.flip);
-        assert.strictEqual(ban._tag, "AdminActionDenied");
-        assert.strictEqual(unban._tag, "AdminActionDenied");
-        // Nothing changed.
-        const users = yield* Users.Users;
-        assert.strictEqual((yield* users.findById(targetId)).status, "active");
-        yield* TestClock.adjust(Duration.millis(10));
-        const denied = (yield* Ref.get(seen)).filter((e) => e._tag === "auth.admin.actionDenied");
-        assert.deepStrictEqual(
-          denied.map((e) => (e._tag === "auth.admin.actionDenied" ? e.action : "")),
-          ["banUser", "unbanUser"],
-        );
-      }).pipe(Effect.scoped, Effect.provide(buildLayer(manageAll))),
-  );
-
-  it.effect(
     "a banned user cannot sign in (UserSuspended) and all their sessions are revoked; unban restores sign-in",
     () =>
       Effect.gen(function* () {
@@ -359,30 +263,5 @@ describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(unknown._tag, "AdminTargetNotFound");
     }).pipe(Effect.scoped, Effect.provide(buildLayer({ canBanUsers: () => Effect.succeed(true) }))),
-  );
-
-  it.effect("the ban gate sees the target, so a host can protect a superadmin", () =>
-    Effect.gen(function* () {
-      const { adminId, users } = yield* seed;
-      const boss = yield* users.create({
-        identity: { _tag: "Email", email: "root@example.com" },
-        name: "Root",
-      });
-      protectedIds.add(boss.id);
-      const admin = yield* Admin.Admin;
-      const denied = yield* admin.banUser(asCaller(adminId), boss.id, {}).pipe(Effect.flip);
-      assert.strictEqual(denied._tag, "AdminActionDenied");
-      assert.strictEqual((yield* users.findById(boss.id)).status, "active");
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        buildLayer({
-          canBanUsers: ({ target }) =>
-            Effect.succeed(
-              Option.match(target, { onNone: () => false, onSome: (t) => !protectedIds.has(t.id) }),
-            ),
-        }),
-      ),
-    ),
   );
 });

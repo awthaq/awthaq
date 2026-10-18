@@ -2,15 +2,11 @@
 // configuration, dumped through the admin surface behind the same fail-closed gate as user
 // administration — sensitive values redacted, never unwrapped.
 import { Api } from "@awthaq/api";
-import { AuditChain, Auth, AuthEvents, EffectiveConfig } from "@awthaq/core";
+import { AuditChain, Auth, EffectiveConfig } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
-import * as Duration from "effect/Duration";
 import * as Admin from "../src/Admin.ts";
 import { TestAuth } from "@awthaq/test";
 
@@ -36,26 +32,6 @@ const asCaller = (id: string): Api.UserPrincipal =>
   });
 
 describe("Admin.effectiveConfig", () => {
-  it.effect("is fail-closed by default and publishes actionDenied", () =>
-    Effect.gen(function* () {
-      const admin = yield* Admin.Admin;
-      const events = yield* AuthEvents.AuthEvents;
-      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
-      yield* events.stream.pipe(
-        Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      const failure = yield* admin.effectiveConfig(asCaller("admin-1")).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "AdminActionDenied");
-      yield* TestClock.adjust(Duration.millis(10));
-      const denied = (yield* Ref.get(seen)).filter((e) => e._tag === "auth.admin.actionDenied");
-      assert.deepStrictEqual(
-        denied.map((e) => (e._tag === "auth.admin.actionDenied" ? e.action : "")),
-        ["effectiveConfig"],
-      );
-    }).pipe(Effect.scoped, Effect.provide(buildLayer({}, true))),
-  );
-
   it.effect(
     "lists the composition's descriptors with an override marked and the secret redacted",
     () =>

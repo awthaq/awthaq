@@ -15,17 +15,17 @@
 // `requireOrganization` gate and qadi relationships); this plugin only flips it.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Defects, HookPoint, Tenant, Users } from "@awthaq/core";
+import type { AuthEvents, Users } from "@awthaq/core";
+import { AuthPlugin, Defects, HookPoint } from "@awthaq/core";
 import { Organization, OrganizationActor, OrganizationDirectory } from "@awthaq/organization";
 import { type StoreFailure } from "@awthaq/sql";
-import { makeSubject } from "@qadi/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import { AdminConfig } from "./Admin.ts";
 import * as AdminApi from "./AdminApi.ts";
 import * as AdminTenantsApi from "./AdminTenantsApi.ts";
+import * as AdminGate from "./internal/AdminGate.ts";
 
 export interface OrganizationCursor {
   readonly createdAt: DateTime.Utc;
@@ -168,6 +168,13 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
   }),
 );
 
+/**
+ * The services the admin gate requires. Naming them here lets declaration emit write `layer`'s
+ * inferred type without a reference into core's internals (TS2883) now that the gate, not this
+ * file, yields them.
+ */
+export type GateServices = AuthEvents.AuthEvents | Users.Users;
+
 /** ADR-EA-018: the default page size when a caller names no `limit`. */
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -182,36 +189,12 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
     dependsOn: [Organization.Organization],
     handlers: AdminTenantsHandlers,
     make: Effect.gen(function* () {
-      const events = yield* AuthEvents.AuthEvents;
       // ADR-EA-040: the platform reads and suspends through the exposed Directory, never the records.
       const directory = yield* OrganizationDirectory.OrganizationDirectory;
-      // EP-007: the tenant-administration gate is read per operation (see `Admin.layer`).
-      const builtAdminConfig = yield* AdminConfig;
-      const configNow = Tenant.configInForce(AdminConfig, builtAdminConfig);
+      const gate = yield* AdminGate.make;
 
-      /** Gate first, existence second — a caller who fails the gate cannot probe which ids exist. */
-      const authorize = Effect.fnUntraced(function* (
-        caller: Api.UserPrincipal,
-        action: string,
-        organizationId: Option.Option<string>,
-      ) {
-        const adminConfig = yield* configNow;
-        const allowed = yield* adminConfig.canAdministerTenants({
-          admin: makeSubject({ id: caller.ref.id }),
-          organizationId,
-        });
-        if (!allowed) {
-          yield* events.publish({
-            _tag: "auth.admin.actionDenied",
-            adminUserId: Users.UserId(caller.ref.id),
-            action,
-          });
-          return yield* Effect.fail(new AdminApi.AdminActionDenied());
-        }
-      });
-
-      const existing = (organizationId: string) =>
-        directory.find(organizationId).pipe(
+      const existing = (cleared: AdminGate.OrganizationClearance) =>
+        directory.find(cleared.organizationId).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.fail(new AdminTenantsApi.AdminOrganizationNotFound()),
@@ -222,7 +205,7 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
 
       const listOrganizations: AdminTenantsShape["listOrganizations"] = Effect.fnUntraced(
         function* (caller, input) {
-          yield* authorize(caller, "listOrganizations", Option.none());
+          yield* gate.collection(caller, "listOrganizations");
           const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
           const rows = yield* directory.listPage({
             after: Option.fromNullishOr(input?.cursor),
@@ -242,19 +225,20 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
 
       const getOrganization: AdminTenantsShape["getOrganization"] = Effect.fnUntraced(
         function* (caller, organizationId) {
-          yield* authorize(caller, "getOrganization", Option.some(organizationId));
-          return yield* existing(organizationId);
+          return yield* existing(
+            yield* gate.organization(caller, "getOrganization", organizationId),
+          );
         },
       );
 
       const suspendOrganization: AdminTenantsShape["suspendOrganization"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
-          yield* authorize(caller, "suspendOrganization", Option.some(organizationId));
+          const cleared = yield* gate.organization(caller, "suspendOrganization", organizationId);
           // The veto, the write, `auth.admin.organizationSuspended` and the observe point are the
           // Directory's: a suspension is observable, so decision caches clear (BEH-EA-237).
           return yield* directory
-            .suspend(OrganizationActor.platformAdmin(Users.UserId(caller.ref.id)), {
-              organizationId,
+            .suspend(OrganizationActor.platformAdmin(cleared.adminUserId), {
+              organizationId: cleared.organizationId,
               reason: input.reason,
             })
             .pipe(
@@ -267,10 +251,10 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
 
       const unsuspendOrganization: AdminTenantsShape["unsuspendOrganization"] = Effect.fnUntraced(
         function* (caller, organizationId) {
-          yield* authorize(caller, "unsuspendOrganization", Option.some(organizationId));
+          const cleared = yield* gate.organization(caller, "unsuspendOrganization", organizationId);
           return yield* directory
-            .reinstate(OrganizationActor.platformAdmin(Users.UserId(caller.ref.id)), {
-              organizationId,
+            .reinstate(OrganizationActor.platformAdmin(cleared.adminUserId), {
+              organizationId: cleared.organizationId,
             })
             .pipe(
               Effect.catchTag("OrganizationNotFound", () =>

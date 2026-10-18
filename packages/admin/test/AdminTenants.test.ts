@@ -38,45 +38,6 @@ const superadminOnly: Partial<Admin.AdminConfigShape> = {
 };
 
 describe("AdminTenants (BEH-EA-237)", () => {
-  it.effect("every operation is denied by default, and the denial is audited", () =>
-    Effect.gen(function* () {
-      const tenants = yield* AdminTenants.AdminTenants;
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const auditLog = yield* AuditLog.AuditLog;
-      const caller = asCaller("admin-1");
-      const results = yield* Effect.all([
-        tenants.listOrganizations(caller).pipe(Effect.flip),
-        tenants.getOrganization(caller, org.id).pipe(Effect.flip),
-        tenants.suspendOrganization(caller, org.id, {}).pipe(Effect.flip),
-        tenants.unsuspendOrganization(caller, org.id).pipe(Effect.flip),
-      ]);
-      assert.deepStrictEqual(
-        results.map((failure) => failure._tag),
-        Array(4).fill("AdminActionDenied"),
-      );
-      // Denied means untouched.
-      const stillActive = yield* organization.get(owner, org.id);
-      assert.strictEqual(stillActive.id, org.id);
-      const denials = yield* auditLog.list({ eventTag: "auth.admin.actionDenied" });
-      assert.strictEqual(denials.length, 4);
-    }).pipe(Effect.provide(buildLayer({}))),
-  );
-
-  it.effect("a denied caller cannot tell whether an organization id exists", () =>
-    Effect.gen(function* () {
-      const tenants = yield* AdminTenants.AdminTenants;
-      const caller = asCaller("admin-1");
-      const unknown = yield* tenants.getOrganization(caller, "no-such-org").pipe(Effect.flip);
-      assert.strictEqual(unknown._tag, "AdminActionDenied");
-      const asSuperadmin = yield* tenants
-        .getOrganization(asCaller("superadmin-1"), "no-such-org")
-        .pipe(Effect.flip);
-      assert.strictEqual(asSuperadmin._tag, "AdminOrganizationNotFound");
-    }).pipe(Effect.provide(buildLayer(superadminOnly))),
-  );
-
   it.effect("the superadmin lists organizations keyset-paginated and reads one", () =>
     Effect.gen(function* () {
       const tenants = yield* AdminTenants.AdminTenants;

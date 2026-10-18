@@ -7,18 +7,8 @@
 // same established convention `@awthaq/passkey`'s own ticket 06
 // corrected `Passkey.ts` to (see that file's own header comment).
 //
-// `AdminConfig.canImpersonate` takes a `@qadi/core` `AuthSubject`, but this
-// plugin never depends on `@awthaq/qadi` (that would put a plugin
-// sitting at the same stratum as `@awthaq/passkey`/`password` above
-// `@awthaq/server`, breaking the stratum ordering `spec/overview.md`
-// fixes) — so the subject passed to the predicate is a bare, identity-only
-// one this plugin builds itself (`subjectOf`, below), the same "id only, no
-// roles, no permissions" shape `@awthaq/qadi`'s own `SubjectResolver.ts`
-// documents as its own *default* resolution. A host application whose
-// `canImpersonate` needs more than an id looks the rest up itself (e.g. by
-// closing over its own `Roles`/`SubjectResolver` at `config()` call time) —
-// this plugin has no way to reach a fuller subject without the layering
-// violation above.
+// The admin gate (configuration in force, predicates, denial events, target lookup) is the one
+// internal module `./internal/AdminGate.ts`; this plugin never reads `AdminConfig` itself.
 
 import { AccountContract, Api, SessionContract } from "@awthaq/api";
 import {
@@ -32,186 +22,35 @@ import {
   Migrations,
   SessionCookie,
   Sessions,
-  Tenant,
   Users,
 } from "@awthaq/core";
 import { Session } from "@awthaq/server";
 import { TenantScoped } from "@awthaq/sql";
-import type { AuthSubject } from "@qadi/core";
-import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AdminApi from "./AdminApi.ts";
 import * as ImpersonationRecords from "./ImpersonationRecords.ts";
+import * as AdminGate from "./internal/AdminGate.ts";
 
-/**
- * IDS-001/MTI-006: the gate sees BOTH sides of the act, so a host can refuse
- * impersonating a more privileged (or another tenant's) account. Both subjects
- * are identity-only (see `subjectOf`); a host needing roles/tenant looks them
- * up itself by id.
- */
-export interface ImpersonationGateInput {
-  readonly admin: AuthSubject;
-  readonly target: AuthSubject;
-  /** IDS-002: the ambient tenant the request acts for, so a host predicate can compare tenant affinity. */
-  readonly tenantId: Option.Option<string>;
-}
-
-/** IDS-001: the per-episode form of the gate used by `forceStop` and `list`. */
-export interface EpisodeGateInput {
-  readonly admin: AuthSubject;
-  readonly episode: ImpersonationRecords.ImpersonationRecord;
-}
-
-export interface AdminConfigShape {
-  /** BEH-EA-210: the hard expiry every impersonation session gets at issuance. */
-  readonly maxDuration: Duration.Duration;
-  /** BEH-EA-212: fail-closed by default — an application that installs this plugin but never configures a gate denies every attempt. */
-  readonly canImpersonate: (input: ImpersonationGateInput) => Effect.Effect<boolean>;
-  /**
-   * IDS-001: may `admin` end (`forceStop`) or see (`list`) this episode?
-   * `config` defaults it to `canImpersonate` evaluated against the episode's
-   * target, so a host scoping impersonation by privilege/tenant gets the same
-   * scoping on stop/list without writing a second predicate.
-   */
-  readonly canManageEpisode: (input: EpisodeGateInput) => Effect.Effect<boolean>;
-  /**
-   * BAM-005: the one fail-closed predicate behind the user and session administration
-   * endpoints. `target` is `None` for a collection-level call (`listUsers`) and the
-   * user being acted on otherwise — the same "the gate sees the target" rule as
-   * `canImpersonate` (IDS-001), so a host can keep, say, a superadmin account out of
-   * reach of ordinary administrators. Banning (`canBanUsers`) and tenant administration
-   * (`canAdministerTenants`) get their own predicates when those capabilities land.
-   */
-  readonly canManageUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
-  /**
-   * IDS-002/EP-003 (ADR-EA-018): the superadmin predicate — "may `admin` act across
-   * tenants?". Fail-closed. Without it, `list`/`forceStop` see only the ambient
-   * tenant's impersonation episodes; with it they see every tenant's. The tenant
-   * administration surface (`AdminTenants`, `listOrganizations`, `suspendOrganization`,
-   * ...) is gated by it too, with `organizationId` naming the organization acted on
-   * (`None` for the collection-level listing).
-   */
-  readonly canAdministerTenants: (input: TenantAdminGateInput) => Effect.Effect<boolean>;
-  /**
-   * BAM-005/SCP-001: the fail-closed predicate behind `banUser`/`unbanUser` — its own
-   * capability, since locking an account out is a stronger act than editing it. Same
-   * `{ admin, target }` shape as `canManageUsers`.
-   */
-  readonly canBanUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
-  /**
-   * BAM-005: the fail-closed predicate behind `AdminAccounts.deleteUser` — erasing an account
-   * is irreversible, so it is its own capability, apart from editing or banning. Same
-   * `{ admin, target }` shape as `canManageUsers`.
-   */
-  readonly canDeleteUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
-  /**
-   * BAM-005/BAM-009: the fail-closed predicate behind `AdminAccounts.setUserEmail` and
-   * `setUserPassword` — the two acts that change *how a user proves who they are*, so a host
-   * that lets support staff edit profiles need not let them do this. Same shape as
-   * `canManageUsers`.
-   */
-  readonly canManageCredentials: (input: UserAdminGateInput) => Effect.Effect<boolean>;
-  /**
-   * BAM-005: the strength policy for an administrator-set password: the hints it violates
-   * (empty = acceptable), the same contract `@awthaq/password`'s own policy has. `Admin` cannot
-   * depend on the password plugin, so this is its own knob; the default is the password
-   * plugin's default floor (12 to 1024 characters), and a host that screens against a breach
-   * corpus, or wants the same policy as its `Password.config`, supplies it here.
-   */
-  readonly passwordPolicy: (
-    password: Redacted.Redacted<string>,
-  ) => Effect.Effect<ReadonlyArray<string>>;
-  /**
-   * BAM-009: builds the link mailed to the *new* address of an administrator-requested email
-   * change (the same `data.url` `@awthaq/password`'s `links.changeEmail` builds for a user's
-   * own request). Point both at the page that posts the token to `POST /change-email/confirm`.
-   */
-  readonly links: { readonly changeEmail?: (token: string) => string };
-}
-
-/** BAM-005: what `canManageUsers` is asked — see there. */
-export interface UserAdminGateInput {
-  readonly admin: AuthSubject;
-  readonly target: Option.Option<AuthSubject>;
-  /** IDS-002: the ambient tenant of the request. */
-  readonly tenantId: Option.Option<string>;
-}
-
-/** EP-003: what `canAdministerTenants` is asked — see there. */
-export interface TenantAdminGateInput {
-  readonly admin: AuthSubject;
-  readonly organizationId: Option.Option<string>;
-}
-
-/** IDS-001: the identity-only subject for a bare user id (the episode's target). */
-const subjectOfUserId = (id: string): AuthSubject => makeSubject({ id });
-
-const episodeGateFrom =
-  (canImpersonate: AdminConfigShape["canImpersonate"]): AdminConfigShape["canManageEpisode"] =>
-  ({ admin, episode }) =>
-    canImpersonate({
-      admin,
-      target: subjectOfUserId(episode.targetUserId),
-      // The episode's own tenant: the gate compares affinity with where the episode ran.
-      tenantId: episode.tenantId,
-    });
-
-/** The password plugin's default floor and ceiling (`Password.config`'s `minLength` 12, `MAX_PASSWORD_LENGTH` 1024). */
-const defaultPasswordHints = (password: string): ReadonlyArray<string> =>
-  password.length < 12
-    ? ["must be at least 12 characters"]
-    : password.length > 1024
-      ? ["must be at most 1024 characters"]
-      : [];
-
-const defaultAdminConfig: AdminConfigShape = {
-  maxDuration: Duration.hours(1),
-  canImpersonate: () => Effect.succeed(false),
-  canManageEpisode: episodeGateFrom(() => Effect.succeed(false)),
-  canManageUsers: () => Effect.succeed(false),
-  canBanUsers: () => Effect.succeed(false),
-  canDeleteUsers: () => Effect.succeed(false),
-  canManageCredentials: () => Effect.succeed(false),
-  passwordPolicy: (password) => Effect.succeed(defaultPasswordHints(Redacted.value(password))),
-  links: {},
-  canAdministerTenants: () => Effect.succeed(false),
-};
-
-/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
-export const AdminConfig: Context.Reference<AdminConfigShape> = Context.Reference(
-  "awthaq/admin/Config",
-  { defaultValue: () => defaultAdminConfig },
-);
-
-export const config = (partial: Partial<AdminConfigShape>) =>
-  Layer.succeed(AdminConfig, {
-    ...defaultAdminConfig,
-    ...partial,
-    canManageEpisode:
-      partial.canManageEpisode ??
-      episodeGateFrom(partial.canImpersonate ?? defaultAdminConfig.canImpersonate),
-  });
+export {
+  AdminConfig,
+  config,
+  type AdminConfigShape,
+  type EpisodeGateInput,
+  type ImpersonationGateInput,
+  type TenantAdminGateInput,
+  type UserAdminGateInput,
+} from "./internal/AdminGate.ts";
 
 export interface IssuedSession {
   readonly session: Sessions.SessionView;
   readonly token: Redacted.Redacted<string>;
 }
-
-/**
- * BEH-EA-137-style "identity-only" subject — this plugin's own, independent
- * copy (see this module's own header comment for why it cannot import
- * `@awthaq/qadi`'s real `SubjectResolver` default instead).
- */
-const subjectOf = (principal: Api.UserPrincipal): AuthSubject =>
-  makeSubject({ id: principal.ref.id });
 
 export interface AdminShape {
   /**
@@ -841,7 +680,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   },
   // The impersonation audit rows are hash-chained (`AuditChain`); the chain's key is this plugin's concern.
   config: [
-    ConfigDescriptor.make(AdminConfig),
+    AdminGate.descriptor,
     ConfigDescriptor.make(AuditChain.AuditChainConfig, {
       audit: (value, environment) =>
         environment.production && Option.isNone(value.key)
@@ -863,12 +702,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const events = yield* AuthEvents.AuthEvents;
       const records = yield* ImpersonationRecords.ImpersonationRecords;
       const users = yield* Users.Users;
-      // EP-007 (ADR-EA-018 Decision 8): every gate and the impersonation ceiling are read per
-      // operation — a tenant's `Admin.config(...)` provided in the calling fiber applies to that
-      // request (a tenant may tighten its own `canImpersonate`, say); with none, the build-time
-      // value applies exactly as before, still deny-all by default.
-      const builtAdminConfig = yield* AdminConfig;
-      const configNow = Tenant.configInForce(AdminConfig, builtAdminConfig);
+      // ADR-EA-018 Decision 8 (plan 13): every gate and the impersonation ceiling are read per
+      // operation by the one admin gate, so a tenant's `Admin.config(...)` governs its own requests.
+      const gate = yield* AdminGate.make;
       // EP-009: captured at build, like every other configuration read — a request-time read would
       // see only the router's own context, not the overrides the composed layer was built under.
       const builtIn = yield* Effect.context<never>();
@@ -877,65 +713,6 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         EffectiveConfig.Catalog,
         () => EffectiveConfig.core,
       );
-
-      // IDS-006: the denied event names the refused call and, when the call named one,
-      // the attempted target/session, so a SIEM need not join `ImpersonationRecords`.
-      const deny = Effect.fnUntraced(function* (
-        caller: Api.UserPrincipal,
-        attempt: {
-          readonly operation: "impersonate" | "forceStop" | "list";
-          readonly targetUserId?: Users.UserId;
-          readonly sessionId?: Sessions.SessionId;
-        },
-      ) {
-        yield* events.publish({
-          _tag: "auth.admin.impersonationDenied",
-          adminUserId: Users.UserId(caller.ref.id),
-          operation: attempt.operation,
-          ...(attempt.targetUserId === undefined ? {} : { targetUserId: attempt.targetUserId }),
-          ...(attempt.sessionId === undefined ? {} : { sessionId: attempt.sessionId }),
-        });
-        return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
-      });
-
-      // BAM-005: the user-administration gate — same shape as `deny` above but its own
-      // predicate and its own event, so impersonation monitoring stays uncluttered.
-      const authorizeUsers = Effect.fnUntraced(function* (
-        caller: Api.UserPrincipal,
-        action: string,
-        target: Option.Option<Users.UserId>,
-        gate: "canManageUsers" | "canBanUsers" = "canManageUsers",
-      ) {
-        const adminConfig = yield* configNow;
-        const allowed = yield* adminConfig[gate]({
-          admin: subjectOf(caller),
-          target: Option.map(target, subjectOfUserId),
-          tenantId: yield* Tenant.TenantContext,
-        });
-        if (!allowed) {
-          yield* events.publish({
-            _tag: "auth.admin.actionDenied",
-            adminUserId: Users.UserId(caller.ref.id),
-            action,
-          });
-          return yield* Effect.fail(new AdminApi.AdminActionDenied());
-        }
-      });
-
-      /** Gate first, then existence — a caller who fails the gate cannot probe which ids exist. */
-      const authorizeUser = Effect.fnUntraced(function* (
-        caller: Api.UserPrincipal,
-        action: string,
-        userId: Users.UserId,
-        gate: "canManageUsers" | "canBanUsers" = "canManageUsers",
-      ) {
-        yield* authorizeUsers(caller, action, Option.some(userId), gate);
-        return yield* users
-          .findById(userId)
-          .pipe(
-            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
-          );
-      });
 
       /** Sessions an impersonation episode owns are never touched by user-session administration (`forceStop` ends them). */
       // IDS-002: classification, not authorization — a session that any tenant's episode owns must
@@ -956,21 +733,24 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       });
 
       const effectiveConfig: AdminShape["effectiveConfig"] = Effect.fnUntraced(function* (caller) {
-        yield* authorizeUsers(caller, "effectiveConfig", Option.none());
+        yield* gate.collection(caller, "effectiveConfig");
         return EffectiveConfig.read(builtIn, catalog);
       });
 
       const listUsers: AdminShape["listUsers"] = Effect.fnUntraced(function* (caller, input) {
-        yield* authorizeUsers(caller, "listUsers", Option.none());
+        yield* gate.collection(caller, "listUsers");
         return yield* users.list(input);
       });
 
       const getUser: AdminShape["getUser"] = (caller, userId) =>
-        authorizeUser(caller, "getUser", userId);
+        Effect.flatMap(gate.user(caller, "getUser", userId), (cleared) => cleared.target);
 
       const updateUser: AdminShape["updateUser"] = Effect.fnUntraced(
         function* (caller, userId, input) {
-          yield* authorizeUser(caller, "updateUser", userId);
+          yield* Effect.flatMap(
+            gate.user(caller, "updateUser", userId),
+            (cleared) => cleared.target,
+          );
           const updated = yield* users
             .updateProfile(userId, {
               name: input.name,
@@ -993,13 +773,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const banUser: AdminShape["banUser"] = Effect.fnUntraced(function* (caller, userId, input) {
         // Gate first (the caller learns nothing about ids or about the refusal rule), then the
         // lock-out guard, then existence.
-        yield* authorizeUsers(caller, "banUser", Option.some(userId), "canBanUsers");
+        const cleared = yield* gate.user(caller, "banUser", userId);
         if (caller.ref.id === userId) return yield* Effect.fail(new AdminApi.AdminSelfBanRefused());
-        yield* users
-          .findById(userId)
-          .pipe(
-            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
-          );
+        yield* cleared.target;
         const suspended = yield* users
           .setStatus(userId, "suspended", { reason: input.reason?.trim(), until: input.until })
           .pipe(
@@ -1020,7 +796,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       });
 
       const unbanUser: AdminShape["unbanUser"] = Effect.fnUntraced(function* (caller, userId) {
-        yield* authorizeUser(caller, "unbanUser", userId, "canBanUsers");
+        yield* Effect.flatMap(gate.user(caller, "unbanUser", userId), (cleared) => cleared.target);
         const reactivated = yield* users
           .setStatus(userId, "active")
           .pipe(
@@ -1036,14 +812,20 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
 
       const listUserSessions: AdminShape["listUserSessions"] = Effect.fnUntraced(
         function* (caller, userId) {
-          yield* authorizeUser(caller, "listUserSessions", userId);
+          yield* Effect.flatMap(
+            gate.user(caller, "listUserSessions", userId),
+            (cleared) => cleared.target,
+          );
           return yield* ownSessions(userId);
         },
       );
 
       const revokeUserSession: AdminShape["revokeUserSession"] = Effect.fnUntraced(
         function* (caller, userId, sessionId) {
-          yield* authorizeUser(caller, "revokeUserSession", userId);
+          yield* Effect.flatMap(
+            gate.user(caller, "revokeUserSession", userId),
+            (cleared) => cleared.target,
+          );
           // Must be one of *this user's own* revocable sessions — the same not-found for an
           // unknown id, another user's, or an impersonation session (no ownership oracle).
           const own = yield* ownSessions(userId);
@@ -1065,7 +847,10 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
 
       const revokeUserSessions: AdminShape["revokeUserSessions"] = Effect.fnUntraced(
         function* (caller, userId) {
-          yield* authorizeUser(caller, "revokeUserSessions", userId);
+          yield* Effect.flatMap(
+            gate.user(caller, "revokeUserSessions", userId),
+            (cleared) => cleared.target,
+          );
           const own = yield* ownSessions(userId);
           yield* Effect.forEach(
             own,
@@ -1089,7 +874,6 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         targetUserId,
         reason,
       }) {
-        const adminConfig = yield* configNow;
         // BEH-EA-214/218: validation refusals never reach the gate and never
         // publish `impersonationDenied`.
         if (caller.ref.id === targetUserId) {
@@ -1099,24 +883,14 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           return yield* Effect.fail(new AdminApi.AdminAlreadyImpersonating());
         }
 
-        const allowed = yield* adminConfig.canImpersonate({
-          admin: subjectOf(caller),
-          target: subjectOfUserId(targetUserId),
-          tenantId: yield* Tenant.TenantContext,
-        });
-        if (!allowed) return yield* deny(caller, { operation: "impersonate", targetUserId });
-
+        const cleared = yield* gate.impersonation(caller, targetUserId);
         // IDS-003: only a gate-passing caller learns whether the target exists.
-        yield* users
-          .findById(targetUserId)
-          .pipe(
-            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
-          );
+        yield* cleared.target;
 
         const issued = yield* sessions.issue({
           userId: targetUserId,
           actingAs: { type: caller.ref.type, id: caller.ref.id },
-          absoluteDuration: adminConfig.maxDuration,
+          absoluteDuration: cleared.config.maxDuration,
         });
         const trimmedReason = reason.trim();
         yield* records.create({
@@ -1192,31 +966,11 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         },
       );
 
-      /**
-       * IDS-002: episodes are confined to the ambient tenant unless the caller passes the
-       * superadmin predicate, in which case a `CrossTenant` witness is minted (only then) and the
-       * records are read tenant-blind. A denied predicate is not an error here — it just leaves
-       * the confinement in place (`None`).
-       */
-      const tenantScopeFor = (caller: Api.UserPrincipal) =>
-        Effect.flatMap(configNow, (adminConfig) =>
-          adminConfig
-            .canAdministerTenants({ admin: subjectOf(caller), organizationId: Option.none() })
-            .pipe(
-              Effect.map((allowed) =>
-                allowed
-                  ? Option.some(
-                      TenantScoped.crossTenant("admin: superadmin (canAdministerTenants)"),
-                    )
-                  : Option.none(),
-              ),
-            ),
-        );
-
       const forceStop: AdminShape["forceStop"] = Effect.fnUntraced(function* (caller, sessionId) {
-        const adminConfig = yield* configNow;
         yield* sweepExpired;
-        const scope = Option.getOrUndefined(yield* tenantScopeFor(caller));
+        // IDS-002: episodes are confined to the ambient tenant unless the caller passes the
+        // superadmin predicate, in which case a `CrossTenant` witness is minted (only then).
+        const scope = Option.getOrUndefined(yield* gate.crossTenantScope(caller));
         // IDS-001: the row is the only proof `sessionId` is an impersonation
         // session, and the per-episode gate needs its target. IDS-002: another
         // tenant's episode is simply not found, unless the caller is a superadmin.
@@ -1224,17 +978,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         if (Option.isNone(episode)) {
           return yield* Effect.fail(new AdminApi.AdminImpersonationNotFound());
         }
-        const allowed = yield* adminConfig.canManageEpisode({
-          admin: subjectOf(caller),
-          episode: episode.value,
-        });
-        if (!allowed) {
-          return yield* deny(caller, {
-            operation: "forceStop",
-            sessionId: Sessions.SessionId(sessionId),
-            targetUserId: episode.value.targetUserId,
-          });
-        }
+        yield* gate.episode(caller, episode.value);
         // IDS-007: revoke first and idempotently — the row proves this really is an
         // impersonation session, so it is safe to revoke even if the row is already
         // ended (which is then reported as not-found below).
@@ -1256,22 +1000,16 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       });
 
       const list: AdminShape["list"] = Effect.fnUntraced(function* (caller, input) {
-        const adminConfig = yield* configNow;
         // IDS-004: lazy reconciliation — an expired episode is never reported active.
         yield* sweepExpired;
-        const admin = subjectOf(caller);
         const page = yield* records.list(
           input,
-          Option.getOrUndefined(yield* tenantScopeFor(caller)),
+          Option.getOrUndefined(yield* gate.crossTenantScope(caller)),
         );
         // IDS-001: per-row gate — a deny-all/unconfigured host exposes nothing. The gate
         // runs after paging, so a page can hold fewer than `limit` visible rows while
         // `nextCursor` still points onward.
-        const items = yield* Effect.filter(
-          page.items,
-          (episode) => adminConfig.canManageEpisode({ admin, episode }),
-          { concurrency: 8 },
-        );
+        const items = yield* gate.visibleEpisodes(caller, page.items);
         return { items, nextCursor: page.nextCursor };
       });
 
