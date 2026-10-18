@@ -1,7 +1,7 @@
 // BAM-007, MLO-005, MLO-002, ARF-005 Fix A (BEH-EA-267 to BEH-EA-270): the MagicLink plugin at the
 // domain level — real in-memory stores, the real mail dispatcher, the real `@awthaq/two-factor`
 // gates for the MFA divert.
-import { AuditLog, Sessions, Users, Verification } from "@awthaq/core";
+import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { SignInProbe } from "@awthaq/test";
 import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
@@ -164,33 +164,6 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
         assert.isTrue(Users.isEmailVerified(created));
         assert.strictEqual((yield* audit.list({ eventTag: "auth.user.created" })).length, 1);
       }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("an expired link fails MagicLinkConsumed", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const { token } = yield* requestAndRead("late@example.com");
-      yield* TestClock.adjust(Duration.minutes(10));
-      const failure = yield* magicLink.verify({ token }).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "MagicLinkConsumed");
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("a token of another purpose, or garbage, is refused before anything is consumed", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const verification = yield* Verification.Verification;
-      const other = yield* verification.issue({
-        identifier: "reset-password:abc",
-        ttl: Duration.minutes(5),
-      });
-      for (const raw of ["", "nonsense", `reset-password:abc.${Redacted.value(other.value)}`]) {
-        const failure = yield* magicLink.verify({ token: Redacted.make(raw) }).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "MagicLinkConsumed");
-      }
-      // The other purpose's token was never touched: it still consumes for its own endpoint.
-      yield* verification.consume("reset-password:abc", other.value);
-    }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect(

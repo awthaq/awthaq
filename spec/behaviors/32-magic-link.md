@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-32 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (BAM-007, MLO-005, MLO-002, ARF-005 Fix A; wayfinder ticket 05 §2), replacing [MOD-EA-004](../models/04-magic-link.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-269: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-10-13): BEH-EA-269 redeems the link through `Verification.redeem`: an outage while completing leaves it usable (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-29): Initial release (BAM-007, MLO-005, MLO-002, ARF-005 Fix A; wayfinder ticket 05 §2), replacing [MOD-EA-004](../models/04-magic-link.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-269: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-10-13): BEH-EA-269 redeems the link through `Verification.redeem`: an outage while completing leaves it usable (ADR-EA-039, plan 07) <br> 1.3 (2026-10-18): the link is a `VerificationLink.forAddress` purpose redeemed through `VerificationLink.redeemer` (BEH-EA-270, ADR-EA-039 decision 9, plan 18) |
 ---
 
 > Status: the `MagicLink` plugin in `@awthaq/magic-link` is implemented and tested (`packages/magic-link/test/MagicLink.test.ts`, `AuthHttp.test.ts`). It shares its channel-credential module with [`EmailOtp`](33-email-otp.md).
@@ -97,6 +97,8 @@ REQUIREMENT: A magic-link token MUST be a `Verification` row under the purpose
              issued for MUST ride in the row's server-side `payload`. The
              plugin MUST declare no table.
 ```
+
+The link's purpose is `magic-link` (`VerificationLink.forAddress`, payload `{ email }`), redeemed through `VerificationLink.redeemer` with both budgets declared; a row whose payload does not decode is refused and spent.
 
 The token is `VerificationLink`'s `<identifier>.<secret>`; the user is recovered from the consumed row, and a link for a not-yet-existing user carries the address in its payload so verification knows whom to create. Rows are hashed at rest and purged by the retention sweep like every other verification row.
 
