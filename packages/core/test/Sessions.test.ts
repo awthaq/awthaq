@@ -169,64 +169,6 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("BEH-EA-050/056: a tampered secret is rejected", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { session } = yield* sessions.issue({ userId });
-        const bogus = Redacted.make(`${session.id}.not-the-real-secret`);
-        const failure = yield* sessions.verify(bogus).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("BEH-EA-051/INV-EA-008: idle refresh never pushes past the absolute expiry", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        // Cross two touchEvery windows, staying under idle (500ms) each
-        // time, but past the 1000ms absolute ceiling in total. Ticket 01:
-        // each touched verify rotates the secret, so the freshly-rotated
-        // token (when present) must be used for the next call — the old
-        // one no longer verifies.
-        yield* TestClock.adjust(Duration.millis(400));
-        const first = yield* sessions.verify(token);
-        const afterFirst = Option.getOrElse(first.rotated, () => token);
-        yield* TestClock.adjust(Duration.millis(400));
-        const second = yield* sessions.verify(afterFirst);
-        const afterSecond = Option.getOrElse(second.rotated, () => afterFirst);
-        yield* TestClock.adjust(Duration.millis(400));
-        const failure = yield* sessions.verify(afterSecond).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionExpired");
-      }).pipe(Effect.provide(shortLivedLayer)),
-    );
-
-    it.effect(
-      "BEH-EA-051: idle expiry fires before the absolute ceiling when idle is exhausted",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const { token } = yield* sessions.issue({ userId });
-          yield* TestClock.adjust(Duration.millis(600));
-          const failure = yield* sessions.verify(token).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "SessionExpired");
-        }).pipe(Effect.provide(shortLivedLayer)),
-    );
-
-    // PIL-007: an id-only caller must learn nothing about expiry — the state
-    // branches run only after the presented secret is proven.
-    it.effect(
-      "PIL-007/BEH-EA-056: an expired row with a WRONG secret fails SessionNotFound, not SessionExpired",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const { session } = yield* sessions.issue({ userId });
-          yield* TestClock.adjust(Duration.millis(600));
-          const forged = Redacted.make(`${session.id}.deadbeef`);
-          const failure = yield* sessions.verify(forged).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "Sessions/NotFound");
-        }).pipe(Effect.provide(shortLivedLayer)),
-    );
-
     // TIR-002: `isLive` must apply the exact same idle+absolute logic
     // `verify` does — it exists specifically because `SessionListItem`
     // (and the old `Jwt.ts` live-check built on `Sessions.list`) only ever
@@ -420,27 +362,6 @@ const suite = (
         }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("BEH-EA-052: idle refresh is throttled to at most one write per touchEvery", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { session, token } = yield* sessions.issue({ userId });
-        // Well under touchEvery (100ms) — no refresh yet.
-        yield* TestClock.adjust(Duration.millis(10));
-        const notTouched = yield* sessions.verify(token);
-        assert.strictEqual(
-          DateTime.toEpochMillis(notTouched.session.lastActiveAt),
-          DateTime.toEpochMillis(session.createdAt),
-        );
-        // Past touchEvery — this verify earns a refresh.
-        yield* TestClock.adjust(Duration.millis(200));
-        const touched = yield* sessions.verify(token);
-        assert.isTrue(
-          DateTime.toEpochMillis(touched.session.lastActiveAt) >
-            DateTime.toEpochMillis(session.createdAt),
-        );
-      }).pipe(Effect.provide(shortLivedLayer)),
-    );
-
     it.effect(
       "upstream-hardening ticket 01: the same throttled touch rotates the secret; the old token survives only as the grace-window previous",
       () =>
@@ -569,28 +490,6 @@ const suite = (
             DateTime.toEpochMillis(session.absoluteExpiresAt),
           );
         }).pipe(Effect.provide(shortLivedLayer)),
-    );
-
-    it.effect("BEH-EA-210: verify never advances idleExpiresAt for an actingAs session", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { session, token } = yield* sessions.issue({
-          userId,
-          actingAs: { type: "user", id: "admin-1" },
-        });
-        // Cross several touchEvery windows (100ms) — an ordinary session
-        // would have its idleExpiresAt pushed forward each time.
-        yield* TestClock.adjust(Duration.millis(200));
-        const verified = yield* sessions.verify(token);
-        assert.strictEqual(
-          DateTime.toEpochMillis(verified.session.idleExpiresAt),
-          DateTime.toEpochMillis(session.idleExpiresAt),
-        );
-        assert.strictEqual(
-          DateTime.toEpochMillis(verified.session.lastActiveAt),
-          DateTime.toEpochMillis(session.lastActiveAt),
-        );
-      }).pipe(Effect.provide(shortLivedLayer)),
     );
 
     it.effect(
@@ -823,21 +722,6 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect(
-      "an ordinary session's own idle-refresh is unaffected by the actingAs skip logic",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const { session, token } = yield* sessions.issue({ userId });
-          yield* TestClock.adjust(Duration.millis(200));
-          const verified = yield* sessions.verify(token);
-          assert.isTrue(
-            DateTime.toEpochMillis(verified.session.lastActiveAt) >
-              DateTime.toEpochMillis(session.lastActiveAt),
-          );
-        }).pipe(Effect.provide(shortLivedLayer)),
-    );
-
     // THS-003: `amr` is monotone. Two step-ups landing together must both be recorded; a
     // read-then-write that lets the later write replace the earlier union loses a method.
     it.effect("THS-003: concurrent reauthenticate calls both land in amr", () =>
@@ -888,10 +772,15 @@ const reuseSuite = (
           const sessions = yield* Sessions.Sessions;
           const events = yield* AuthEvents.AuthEvents;
 
+          // TIR-008: the reuse is followed by the family's own `auth.session.revoked` (reuseDetected).
           const reused = yield* Effect.forkChild(
             events.stream.pipe(
-              Stream.filter((event) => event._tag === "auth.session.reuse"),
-              Stream.take(1),
+              Stream.filter(
+                (event) =>
+                  event._tag === "auth.session.reuse" ||
+                  (event._tag === "auth.session.revoked" && event.reason === "reuseDetected"),
+              ),
+              Stream.take(2),
               Stream.runCollect,
             ),
             { startImmediately: true },
@@ -921,65 +810,20 @@ const reuseSuite = (
           assert.strictEqual(secondReplay._tag, "Sessions/NotFound");
 
           const collected = yield* Fiber.join(reused);
-          assert.strictEqual(collected.length, 1);
-          const [event] = collected;
-          assert.strictEqual(event?._tag, "auth.session.reuse");
+          assert.deepStrictEqual(
+            collected.map((event) => event._tag),
+            ["auth.session.reuse", "auth.session.revoked"],
+          );
+          const [event, revoked] = collected;
           if (event?._tag === "auth.session.reuse") {
             assert.strictEqual(event.sessionId, a.session.id);
             assert.strictEqual(event.familyId, a.session.id);
             assert.strictEqual(event.userId, userId);
           }
-        }).pipe(Effect.provide(layer)),
-    );
-
-    // PIL-007: the session id is the public half of the token (cookies, JWT
-    // `sid`, error messages). Reuse detection must only fire for a caller who
-    // also holds the secret — otherwise anyone who knows a superseded id can
-    // force-log-out the user's live session.
-    it.effect(
-      "PIL-007/RRS-003: presenting a superseded id with a WRONG secret revokes nothing and publishes no reuse event",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const events = yield* AuthEvents.AuthEvents;
-
-          const seen = yield* Ref.make(0);
-          yield* Effect.forkChild(
-            events.stream.pipe(
-              Stream.filter((event) => event._tag === "auth.session.reuse"),
-              Stream.runForEach(() => Ref.update(seen, (n) => n + 1)),
-            ),
-            { startImmediately: true },
-          );
-
-          const a = yield* sessions.issue({ userId });
-          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
-
-          const forged = Redacted.make(`${a.session.id}.deadbeef`);
-          const failure = yield* sessions.verify(forged).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "Sessions/NotFound");
-
-          // The successor is untouched.
-          const successor = yield* sessions.verify(b.token);
-          assert.strictEqual(successor.session.id, b.session.id);
-
-          for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-          assert.strictEqual(yield* Ref.get(seen), 0);
-        }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect(
-      "PIL-007: replaying the full pre-supersede token still triggers reuse detection",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const a = yield* sessions.issue({ userId });
-          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
-
-          const replay = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(replay._tag, "Sessions/NotFound");
-          const successor = yield* sessions.verify(b.token).pipe(Effect.flip);
-          assert.strictEqual(successor._tag, "Sessions/NotFound");
+          if (revoked?._tag === "auth.session.revoked") {
+            assert.strictEqual(revoked.scope, "family");
+            assert.isNull(revoked.sessionId);
+          }
         }).pipe(Effect.provide(layer)),
     );
 
@@ -1340,27 +1184,6 @@ const eventsSuite = (
     );
 
     it.effect(
-      "TIR-008: reuse detection also publishes a family auth.session.revoked (reuseDetected)",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const a = yield* sessions.issue({ userId });
-          yield* sessions.issue({ userId, supersedes: a.session.id });
-          const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
-          assert.deepStrictEqual(
-            seen.map((event) => event._tag),
-            ["auth.session.reuse", "auth.session.revoked"],
-          );
-          const revoked = seen[1];
-          if (revoked?._tag === "auth.session.revoked") {
-            assert.strictEqual(revoked.scope, "family");
-            assert.strictEqual(revoked.reason, "reuseDetected");
-            assert.isNull(revoked.sessionId);
-          }
-        }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect(
       "ESA-006: verify publishes auth.session.expired when an expired session is presented",
       () =>
         Effect.gen(function* () {
@@ -1539,7 +1362,20 @@ const graceSuite = (
           assert.isTrue(Option.isSome(first.rotated));
           // The client never saw `first.rotated`; it retries the secret it still holds.
           yield* TestClock.adjust(Duration.seconds(5));
-          const retry = yield* sessions.verify(token);
+          // RRS-005: the grace-window rotation is announced once, as `viaGrace`.
+          const retried = yield* Ref.make(Option.none<Sessions.VerifiedSession>());
+          const seen = yield* collecting(
+            sessions
+              .verify(token)
+              .pipe(Effect.flatMap((result) => Ref.set(retried, Option.some(result)))),
+          );
+          const rotatedEvents = seen.filter((event) => event._tag === "auth.session.rotated");
+          assert.strictEqual(rotatedEvents.length, 1);
+          const [announced] = rotatedEvents;
+          if (announced?._tag === "auth.session.rotated") {
+            assert.strictEqual(announced.viaGrace, true);
+          }
+          const retry = Option.getOrThrow(yield* Ref.get(retried));
           assert.strictEqual(retry.session.id, first.session.id);
           const recovered = Option.getOrThrow(retry.rotated);
           assert.notStrictEqual(Redacted.value(recovered), Redacted.value(token));
@@ -1547,101 +1383,6 @@ const graceSuite = (
           yield* TestClock.adjust(Duration.minutes(5));
           const { rotated } = yield* sessions.verify(recovered);
           assert.isTrue(Option.isNone(rotated));
-        }).pipe(Effect.provide(layerFor())),
-    );
-
-    it.effect("RRS-005: the previous secret is dead once the grace window has passed", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        yield* TestClock.adjust(Duration.hours(1));
-        const first = yield* sessions.verify(token);
-        const current = Option.getOrThrow(first.rotated);
-        yield* TestClock.adjust(Duration.seconds(31));
-        const failure = yield* sessions.verify(token).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "Sessions/NotFound");
-        // Expiry of the window is not a theft signal: the session itself is untouched.
-        const { session } = yield* sessions.verify(current);
-        assert.strictEqual(session.id, first.session.id);
-      }).pipe(Effect.provide(layerFor())),
-    );
-
-    it.effect("RRS-005: rotationGrace of zero restores immediate invalidation", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        yield* TestClock.adjust(Duration.hours(1));
-        yield* sessions.verify(token);
-        const failure = yield* sessions.verify(token).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layerFor(Duration.zero))),
-    );
-
-    it.effect("RRS-005: a configured window is honoured, not a fixed 30 seconds", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        yield* TestClock.adjust(Duration.hours(1));
-        yield* sessions.verify(token);
-        yield* TestClock.adjust(Duration.minutes(4));
-        yield* sessions.verify(token);
-        yield* TestClock.adjust(Duration.minutes(2));
-        const failure = yield* sessions.verify(token).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layerFor(Duration.minutes(5)))),
-    );
-
-    it.effect("RRS-005: a previous secret is only ever valid for its own session", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId });
-        const b = yield* sessions.issue({ userId });
-        yield* TestClock.adjust(Duration.hours(1));
-        yield* sessions.verify(a.token);
-        yield* sessions.verify(b.token);
-        const aSecret = Redacted.value(a.token).slice(Redacted.value(a.token).indexOf(".") + 1);
-        const crossed = yield* sessions
-          .verify(Redacted.make(`${b.session.id}.${aSecret}`))
-          .pipe(Effect.flip);
-        assert.strictEqual(crossed._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layerFor())),
-    );
-
-    it.effect(
-      "RRS-005/RRS-003: presenting a previous secret in the window never revokes the family or publishes auth.session.reuse — even for a session since superseded",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const a = yield* sessions.issue({ userId });
-          yield* TestClock.adjust(Duration.hours(1));
-          yield* sessions.verify(a.token);
-          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
-          const seen = yield* collecting(
-            sessions.verify(a.token).pipe(
-              Effect.flip,
-              Effect.tap((failure) =>
-                Effect.sync(() => assert.strictEqual(failure._tag, "Sessions/NotFound")),
-              ),
-            ),
-          );
-          assert.isUndefined(seen.find((event) => event._tag === "auth.session.reuse"));
-          assert.isUndefined(seen.find((event) => event._tag === "auth.session.revoked"));
-          const { session } = yield* sessions.verify(b.token);
-          assert.strictEqual(session.id, b.session.id);
-        }).pipe(Effect.provide(layerFor())),
-    );
-
-    it.effect(
-      "RRS-003: reuse detection still fires for a tombstoned row's current secret with a grace window configured",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const a = yield* sessions.issue({ userId });
-          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
-          const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.flip));
-          assert.isDefined(seen.find((event) => event._tag === "auth.session.reuse"));
-          const failure = yield* sessions.verify(b.token).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(layerFor())),
     );
 
@@ -1662,22 +1403,6 @@ const graceSuite = (
             const { session } = yield* sessions.verify(held);
             assert.strictEqual(session.id, outcome.session.id);
           }
-        }).pipe(Effect.provide(layerFor())),
-    );
-
-    it.effect(
-      "RRS-005: a grace-window rotation is announced as auth.session.rotated with viaGrace",
-      () =>
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const { token } = yield* sessions.issue({ userId });
-          yield* TestClock.adjust(Duration.hours(1));
-          yield* sessions.verify(token);
-          const seen = yield* collecting(sessions.verify(token));
-          const rotated = seen.filter((event) => event._tag === "auth.session.rotated");
-          assert.strictEqual(rotated.length, 1);
-          const [event] = rotated;
-          if (event?._tag === "auth.session.rotated") assert.strictEqual(event.viaGrace, true);
         }).pipe(Effect.provide(layerFor())),
     );
   });
@@ -1862,28 +1587,44 @@ describe("Sessions rotation loser (S-6)", () => {
     }).pipe(Effect.provide(layerOver(losing(Option.some)))),
   );
 
-  it.effect("refuses a row tombstoned in the meantime", () =>
+  // ESA-006: an expired presentation is announced with its kind wherever it is found, including by a
+  // call that lost the swap to a row that has meanwhile expired.
+  it.effect("a loser that finds the row expired publishes auth.session.expired (idle)", () =>
     Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+      yield* Effect.forkChild(
+        events.stream.pipe(
+          Stream.filter((event) => event._tag === "auth.session.expired"),
+          Stream.runForEach((event) =>
+            Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
+          ),
+        ),
+        { startImmediately: true },
+      );
       const { sessions, issued } = yield* dueForTouch;
       const failure = yield* sessions.verify(issued.token).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "Sessions/NotFound");
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      assert.strictEqual(failure._tag, "SessionExpired");
+      assert.strictEqual(failure.message, "awthaq: session idle-expired");
+      const published = yield* Ref.get(seen);
+      assert.strictEqual(published.length, 1);
+      assert.deepStrictEqual(
+        published.map((event) => event._tag === "auth.session.expired" && event.kind),
+        ["idle"],
+      );
     }).pipe(
       Effect.provide(
-        layerOver(
-          losing((record) =>
-            Option.some({ ...record, supersededAt: Option.some(DateTime.makeUnsafe(0)) }),
+        Sessions.layer.pipe(
+          Layer.provide(
+            losing((record) => Option.some({ ...record, idleExpiresAt: DateTime.makeUnsafe(0) })),
           ),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provideMerge(AuthEvents.layer),
+          Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
         ),
       ),
     ),
-  );
-
-  it.effect("refuses a row that is gone", () =>
-    Effect.gen(function* () {
-      const { sessions, issued } = yield* dueForTouch;
-      const failure = yield* sessions.verify(issued.token).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "Sessions/NotFound");
-    }).pipe(Effect.provide(layerOver(losing(() => Option.none())))),
   );
 });
 

@@ -9,7 +9,8 @@
 //
 // What the contract fixes, so the domain can rely on it without knowing the adapter:
 // - A session is *live* at `now` iff it is not tombstoned and `now` is before both its absolute and
-//   its idle expiry (`isLive`, below, the one definition every adapter shares: SMS-002/ESS-005).
+//   its idle expiry (`isLive`, defined by `expiryOf`, below: the one definition every adapter and the
+//   domain share: SMS-002/ESS-005).
 // - A tombstoned row (`supersededBy`/`supersededAt`, RRS-003) is never deleted by a rotation: it is the
 //   evidence that makes a replayed token detectable as reuse.
 // - A store MAY drop a row only once it is past its absolute expiry (a `Ref` adapter prunes above a size
@@ -196,8 +197,26 @@ export class SessionStore extends Context.Service<SessionStore, SessionStoreShap
 // ---- the pure contract helpers every adapter and the domain share ---------------------------
 
 /**
+ * RRS-003/BEH-EA-051: which deadline `row` has passed at `now`, absolute first; `None` while both are
+ * ahead. The one expiry rule: `isLive`, the core session verdict and the rotation loser all share it.
+ */
+export const expiryOf = (
+  row: {
+    readonly absoluteExpiresAt: DateTime.Utc;
+    readonly idleExpiresAt: DateTime.Utc;
+  },
+  now: DateTime.Utc,
+): Option.Option<"absolute" | "idle"> =>
+  DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)
+    ? Option.some("absolute")
+    : DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)
+      ? Option.some("idle")
+      : Option.none();
+
+/**
  * TIR-003/SMS-002: the one liveness predicate: not tombstoned (RRS-003), and `now` before both the
- * absolute and the idle expiry. `list`, `findOwned`, `isLive` and the concurrent-session cap share it.
+ * absolute and the idle expiry (`expiryOf`). `list`, `findOwned`, `isLive` and the concurrent-session
+ * cap share it.
  */
 export const isLive = (
   row: {
@@ -206,10 +225,7 @@ export const isLive = (
     readonly supersededAt: Option.Option<DateTime.Utc>;
   },
   now: DateTime.Utc,
-): boolean =>
-  Option.isNone(row.supersededAt) &&
-  DateTime.toEpochMillis(now) < DateTime.toEpochMillis(row.absoluteExpiresAt) &&
-  DateTime.toEpochMillis(now) < DateTime.toEpochMillis(row.idleExpiresAt);
+): boolean => Option.isNone(row.supersededAt) && Option.isNone(expiryOf(row, now));
 
 /**
  * SMS-003: which of a user's existing live, non-impersonation sessions the about-to-be-inserted one
