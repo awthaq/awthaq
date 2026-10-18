@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-17 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Amended BEH-EA-130/131's requirements with the user-presence and config-gated user-verification policy; added BEH-EA-255 (registration requires a fresh session), BEH-EA-256 (Conditional Create) and BEH-EA-257 (one stable random user handle), which the shipped code already enforced; banner replaced with implementation pointers (BPAS-007, CCR-EA-006) <br> 1.2 (2026-10-13): `POST /passkey/reauthenticate/verify` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.3 (2026-10-13): BEH-EA-255 names `Sessions.requireFresh` as the gate (BEH-EA-320) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Amended BEH-EA-130/131's requirements with the user-presence and config-gated user-verification policy; added BEH-EA-255 (registration requires a fresh session), BEH-EA-256 (Conditional Create) and BEH-EA-257 (one stable random user handle), which the shipped code already enforced; banner replaced with implementation pointers (BPAS-007, CCR-EA-006) <br> 1.2 (2026-10-13): `POST /passkey/reauthenticate/verify` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.3 (2026-10-13): BEH-EA-255 names `Sessions.requireFresh` as the gate (BEH-EA-320) <br> 1.4 (2026-10-18): BEH-EA-132 states the step order: every ceremony spends its challenge first, even when the client data is unreadable; admission refusals precede the attempt; a refused challenge outranks every other refusal (architecture plan 12) |
 ---
 
 > Status: implemented in `packages/passkey` (`Passkey.ts`, `ChallengeStore.ts`, `PasskeyApi.ts`, `PasskeyCredentials.ts`, `PasskeyUserHandles.ts`; tests `packages/passkey/test`, `packages/ports/test/WebAuthn.test.ts`; the Gherkin scenarios are wired). The `@awthaq/passkey` plugin, the `WebAuthn` port (`@awthaq/ports`, `layerSimpleWebAuthn` over `@simplewebauthn/server`) and the browser layer (`@awthaq/client`'s `passkeyClient`) are implemented and tested against every behavior below; the requirements state what the shipped code enforces. Known remaining gaps are listed in `packages/passkey/README.md` ("Limits").
@@ -113,9 +113,13 @@ REQUIREMENT: A challenge MUST be deleted from the store on every verification
              attempt for it, regardless of whether that attempt succeeds; a
              challenge MUST NOT be reusable across two verification calls, and
              MUST expire within a bounded TTL (five minutes) if never used.
+             The challenge MUST be spent before any other check of the
+             attempt, so that no refusal leaves it usable.
 ```
 
 research/06-webauthn-passkeys.md states this exactly: "consumed (deleted) on every verification attempt regardless of outcome, bound to ceremony type + session/cookie" — deleting only on success would let a failed attempt be retried against the same challenge, reopening a replay window the single-use design exists to close. `ChallengeStore` is injected (Redis, memory, or cookie-backed), so its expiry is `Clock`/`TestClock`-driven and testable without real wall-clock waits.
+
+**Step order.** Every ceremony spends the challenge of its scope first: before the origin check, the `WebAuthn` port or any credential lookup, and even when the browser's `clientDataJSON` cannot be read, since the scope comes from the session or the `ceremonyId`, never from the client data. A refused challenge therefore outranks every other refusal. A request refused *before* verification starts is not an attempt and leaves the challenge alone: an `authenticate/verify` over its per-source budget, a `register/verify` from a session older than `reauthMaxAgeSeconds` (BEH-EA-255, so the same response can be presented again after a step-up), and an unsupported token-delivery header.
 
 Shipped guarantees, stated in the type (WPS-009): `ChallengeStore.guarantees` is `{ singleUse, replacesPriorOnIssue }` — `layerMemory`/`layerSql` claim both, `layerCookie` (stateless) claims neither and `Passkey.layer` warns at build time when the store cannot guarantee single use. The final challenge comparison is constant-time over decoded bytes (BPAS-008). Expired, never-consumed challenges (abandoned anonymous ceremonies) are reclaimed on every `issue` and by `sweepExpired` (WPS-005), and the anonymous `authenticate/options` and `authenticate/verify` are rate-limited per source address (plus per email on options).
 

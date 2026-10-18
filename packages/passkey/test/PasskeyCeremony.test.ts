@@ -549,3 +549,69 @@ describe("WPS-010: duplicate credential ids", () => {
       }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });
+
+describe("BEH-EA-132: every verification attempt spends its challenge, whatever else is wrong with it", () => {
+  const spoilers = {
+    "unreadable client data": { clientDataJSON: "not base64url!" },
+    "an origin outside origins": { origin: "https://evil.example" },
+    "a listed origin outside rpId": { origin: "https://other.test" },
+    "an embedded ceremony nobody allowed": { crossOrigin: true, topOrigin: "https://evil.example" },
+  } as const;
+  const config = { origins: ["https://example.com", "https://other.test"] }; // so the rpId row reaches the rpId check
+
+  for (const [name, spoil] of Object.entries(spoilers)) {
+    it.effect(`register/verify refused for ${name} spends the challenge`, () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const { userId, sessionId } = yield* newUserSession(`r-${name}@example.com`);
+        const options = yield* passkey.registerOptions(userId, sessionId);
+        yield* passkey
+          .registerVerify(userId, sessionId, registrationPayload({ options, ...spoil }))
+          .pipe(Effect.flip);
+        const again = yield* passkey
+          .registerVerify(userId, sessionId, registrationPayload({ options }))
+          .pipe(Effect.flip);
+        assert.strictEqual(again._tag, "PasskeyChallengeInvalid");
+      }).pipe(Effect.provide(buildLayer(mockWebAuthn(), config))),
+    );
+
+    it.effect(`reauthenticate/verify refused for ${name} spends the challenge`, () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const { userId, sessionId } = yield* registerNewUser(`s-${name}@example.com`);
+        const options = yield* passkey.reauthenticateOptions(userId, sessionId);
+        yield* passkey
+          .reauthenticateVerify(userId, sessionId, {
+            credential: assertionCredential({ options, ...spoil }),
+          })
+          .pipe(Effect.flip);
+        const again = yield* passkey
+          .reauthenticateVerify(userId, sessionId, {
+            credential: assertionCredential({ options }),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(again._tag, "PasskeyChallengeInvalid");
+      }).pipe(Effect.provide(buildLayer(mockWebAuthn(), config))),
+    );
+  }
+
+  for (const name of ["unreadable client data", "an origin outside origins"] as const) {
+    it.effect(`authenticate/verify refused for ${name} spends the challenge`, () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        yield* registerNewUser(`a-${name}@example.com`);
+        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
+        yield* passkey
+          .authenticateVerify({
+            ceremonyId,
+            credential: assertionCredential({ options, ...spoilers[name] }),
+          })
+          .pipe(Effect.flip);
+        const again = yield* passkey
+          .authenticateVerify({ ceremonyId, credential: assertionCredential({ options }) })
+          .pipe(Effect.flip);
+        assert.strictEqual(again._tag, "PasskeyChallengeInvalid");
+      }).pipe(Effect.provide(buildLayer(mockWebAuthn(), config))),
+    );
+  }
+});

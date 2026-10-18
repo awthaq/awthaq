@@ -1266,24 +1266,22 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           const config = yield* configNow;
           yield* requireFreshSession(userId, sessionId);
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
-          if (Option.isNone(clientDataOpt)) {
+
+          // WPS-003: the payload names its ceremony, and only that ceremony's
+          // scope is consumed — probing both destroyed a sibling's still-valid
+          // challenge (BEH-EA-132 deletes the addressed one on every attempt).
+          // BEH-EA-132: spend first, even when the client data is unreadable (the scope never comes from it).
+          const conditional = input.ceremony === "conditional";
+          const consumed = yield* challengeStore.consume(
+            conditional ? conditionalScope(sessionId) : registrationScope(sessionId),
+            Option.match(clientDataOpt, { onNone: () => "", onSome: (data) => data.challenge }),
+          );
+          if (!consumed || Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
           }
           const clientData = clientDataOpt.value;
 
           yield* checkOrigin(clientData, config);
-
-          // WPS-003: the payload names its ceremony, and only that ceremony's
-          // scope is consumed — probing both destroyed a sibling's still-valid
-          // challenge (BEH-EA-132 deletes the addressed one on every attempt).
-          const conditional = input.ceremony === "conditional";
-          const consumed = yield* challengeStore.consume(
-            conditional ? conditionalScope(sessionId) : registrationScope(sessionId),
-            clientData.challenge,
-          );
-          if (!consumed) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
 
           const verified = yield* webAuthn
             .verifyRegistration({
@@ -1461,18 +1459,15 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // and challenge probing from one address.
           yield* limits.spend("authenticateVerifyByIp", { ip: input.ip });
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
-          if (Option.isNone(clientDataOpt)) {
+          // BEH-EA-132: spend first, even when the client data is unreadable (the scope never comes from it).
+          const consumed = yield* challengeStore.consume(
+            authenticateScope(input.ceremonyId),
+            Option.match(clientDataOpt, { onNone: () => "", onSome: (data) => data.challenge }),
+          );
+          if (!consumed || Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
           }
           const clientData = clientDataOpt.value;
-
-          const consumed = yield* challengeStore.consume(
-            authenticateScope(input.ceremonyId),
-            clientData.challenge,
-          );
-          if (!consumed) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
 
           // BEH-EA-136: from here on, every failure collapses into the same
           // `Api.InvalidCredentials` an unknown password-sign-in email
@@ -1681,20 +1676,17 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         function* (userId, sessionId, input) {
           const config = yield* configNow;
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
-          if (Option.isNone(clientDataOpt)) {
+          // BEH-EA-132: spend first, even when the client data is unreadable (the scope never comes from it).
+          const consumed = yield* challengeStore.consume(
+            reauthenticateScope(sessionId),
+            Option.match(clientDataOpt, { onNone: () => "", onSome: (data) => data.challenge }),
+          );
+          if (!consumed || Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
           }
           const clientData = clientDataOpt.value;
 
           yield* checkOrigin(clientData, config);
-
-          const consumed = yield* challengeStore.consume(
-            reauthenticateScope(sessionId),
-            clientData.challenge,
-          );
-          if (!consumed) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
 
           const storedOpt = yield* credentials.findById(input.credential.id);
           if (Option.isNone(storedOpt) || storedOpt.value.userId !== userId) {

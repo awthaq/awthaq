@@ -58,6 +58,8 @@ export const registrationPayload = (input: {
   readonly crossOrigin?: boolean;
   readonly topOrigin?: string;
   readonly transports?: ReadonlyArray<"usb" | "nfc" | "internal">;
+  /** Replaces the built `clientDataJSON` (for an unreadable one). */
+  readonly clientDataJSON?: string;
 }) => {
   const id = input.id ?? "cred-mock-1";
   return {
@@ -67,13 +69,15 @@ export const registrationPayload = (input: {
       rawId: id,
       type: "public-key" as const,
       response: {
-        clientDataJSON: buildClientDataJSON({
-          type: "webauthn.create",
-          challenge: extractChallenge(input.options),
-          origin: input.origin ?? ORIGIN,
-          ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
-          ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
-        }),
+        clientDataJSON:
+          input.clientDataJSON ??
+          buildClientDataJSON({
+            type: "webauthn.create",
+            challenge: extractChallenge(input.options),
+            origin: input.origin ?? ORIGIN,
+            ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
+            ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
+          }),
         attestationObject: "",
         ...(input.transports === undefined ? {} : { transports: input.transports }),
       },
@@ -89,6 +93,8 @@ export const assertionCredential = (input: {
   readonly userHandle?: string;
   readonly crossOrigin?: boolean;
   readonly topOrigin?: string;
+  /** Replaces the built `clientDataJSON` (for an unreadable one). */
+  readonly clientDataJSON?: string;
 }) => {
   const id = input.id ?? "cred-mock-1";
   return {
@@ -96,13 +102,15 @@ export const assertionCredential = (input: {
     rawId: id,
     type: "public-key" as const,
     response: {
-      clientDataJSON: buildClientDataJSON({
-        type: "webauthn.get",
-        challenge: extractChallenge(input.options),
-        origin: input.origin ?? ORIGIN,
-        ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
-        ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
-      }),
+      clientDataJSON:
+        input.clientDataJSON ??
+        buildClientDataJSON({
+          type: "webauthn.get",
+          challenge: extractChallenge(input.options),
+          origin: input.origin ?? ORIGIN,
+          ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
+          ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
+        }),
       authenticatorData: "",
       signature: "",
       ...(input.userHandle === undefined ? {} : { userHandle: input.userHandle }),

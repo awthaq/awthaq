@@ -95,6 +95,13 @@ Feature: Passkey and WebAuthn
       When a second verification attempt is made using that same challenge value
       Then the second attempt also fails, since the first attempt already deleted the challenge on failure
 
+    @REQ-EA-1309
+    Scenario: A challenge presented from an origin the relying party does not accept is spent all the same
+      Given a challenge issued for a ceremony
+      When a verification attempt presents that challenge from origin "https://evil.example"
+      Then that attempt is refused as "PasskeyOriginMismatch"
+      And presenting the same challenge from the configured origin is refused as "PasskeyChallengeInvalid"
+
     @REQ-EA-367
     Scenario: An unused challenge expires within its five-minute TTL
       Given a challenge issued and never presented for verification

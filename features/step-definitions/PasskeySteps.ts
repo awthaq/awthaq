@@ -72,6 +72,7 @@ const verifyChallenge = Effect.fn("features.passkey.verifyChallenge")(function* 
   cookie: string,
   challenge: string,
   credentialId = "cred-mock-1",
+  origin = ORIGIN,
 ) {
   return yield* request("POST", "/passkey/register/verify", {
     body: {
@@ -83,7 +84,7 @@ const verifyChallenge = Effect.fn("features.passkey.verifyChallenge")(function* 
           clientDataJSON: buildClientDataJSON({
             type: "webauthn.create",
             challenge,
-            origin: ORIGIN,
+            origin,
           }),
           attestationObject: "",
         },
@@ -500,6 +501,34 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
       const cookie = yield* signIn("challenge-364@example.com");
       yield* setOutcome("cookie", cookie);
       yield* setOutcome("challenge", yield* issueChallenge(cookie));
+    }),
+  );
+
+  When(
+    "a verification attempt presents that challenge from origin {string}",
+    Effect.fn(function* (origin: string) {
+      const cookie = (yield* getOutcome("cookie")) as string;
+      const challenge = (yield* getOutcome("challenge")) as string;
+      yield* setOutcome(
+        "originAttempt",
+        yield* verifyChallenge(cookie, challenge, "cred-mock-1", origin),
+      );
+    }),
+  );
+
+  Then(
+    "that attempt is refused as {string}",
+    Effect.fn(function* (tag: string) {
+      yield* assertRejectedWith((yield* getOutcome("originAttempt")) as Response, tag);
+    }),
+  );
+
+  Then(
+    "presenting the same challenge from the configured origin is refused as {string}",
+    Effect.fn(function* (tag: string) {
+      const cookie = (yield* getOutcome("cookie")) as string;
+      const challenge = (yield* getOutcome("challenge")) as string;
+      yield* assertRejectedWith(yield* verifyChallenge(cookie, challenge), tag);
     }),
   );
 

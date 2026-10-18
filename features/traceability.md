@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1299 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1308; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1300 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1309; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1317,3 +1317,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1306 | [BEH-EA-317](../spec/behaviors/29-saml-sp.md#beh-ea-317-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url) | [13-enterprise-federation/29-saml-sp.feature](features/13-enterprise-federation/29-saml-sp.feature) | Another organization cannot claim a domain the first one routes over the other protocol |
 | REQ-EA-1307 | [BEH-EA-236](../spec/behaviors/28-tenancy.md#beh-ea-236-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple) | [12-multi-tenancy/28-tenancy.feature](features/12-multi-tenancy/28-tenancy.feature) | A tenant's administration configuration can refuse deleting a user the platform would allow |
 | REQ-EA-1308 | [BEH-EA-236](../spec/behaviors/28-tenancy.md#beh-ea-236-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple) | [12-multi-tenancy/28-tenancy.feature](features/12-multi-tenancy/28-tenancy.feature) | A tenant's administration configuration supplies its own password policy |
+| REQ-EA-1309 | [BEH-EA-132](../spec/behaviors/17-passkey.md#beh-ea-132-challenges-are-single-use-and-short-lived) | [05-authentication-methods/17-passkey.feature](features/05-authentication-methods/17-passkey.feature) | A challenge presented from an origin the relying party does not accept is spent all the same |

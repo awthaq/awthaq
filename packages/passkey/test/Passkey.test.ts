@@ -36,6 +36,7 @@ import {
   buildClientDataJSON,
   extractChallenge,
   mockWebAuthn,
+  registrationPayload,
 } from "./passkeyTestFixtures.ts";
 
 const TestLayer = buildLayer(mockWebAuthn());
@@ -541,22 +542,14 @@ describe("Passkey — origin/rpId (BEH-EA-133)", () => {
         name: "Origin",
       });
       const registerSession = yield* sessions.issue({ userId: user.id });
+      // BEH-EA-132: the challenge is spent before the origin is checked, so it must be a live one.
+      const options = yield* passkey.registerOptions(user.id, registerSession.session.id);
       const failure = yield* passkey
-        .registerVerify(user.id, registerSession.session.id, {
-          credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.create",
-                challenge: "x",
-                origin: "https://evil.example",
-              }),
-              attestationObject: "",
-            },
-          },
-        })
+        .registerVerify(
+          user.id,
+          registerSession.session.id,
+          registrationPayload({ options, origin: "https://evil.example" }),
+        )
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyOriginMismatch");
     }).pipe(Effect.provide(TestLayer)),
