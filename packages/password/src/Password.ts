@@ -52,6 +52,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as Ref from "effect/Ref";
 import * as PasswordApi from "./PasswordApi.ts";
 
@@ -533,8 +534,8 @@ const { toHex } = Hmac;
 
 // MLO-009: the mailed token's codec is `VerificationLink`'s, shared with every
 // plugin that mails a `Verification` token; these are this plugin's purposes.
-const RESET_PURPOSE = "reset-password";
-const VERIFY_PURPOSE = "verify-email";
+const ResetLink = VerificationLink.forUser({ name: "reset-password" });
+const VerifyLink = VerificationLink.forUser({ name: "verify-email" });
 const VERIFY_TTL = Duration.hours(24);
 
 /** PHS-004: internal only — routed to `onUnavailable` by `isBreached`, never surfaced. */
@@ -1038,10 +1039,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         return yield* mailDispatcher.dispatch(
           { template: "verify-email", userId: user.id },
           Effect.gen(function* () {
-            const issued = yield* VerificationLink.issue(
-              { verification, crypto },
-              { purpose: VERIFY_PURPOSE, ttl: VERIFY_TTL, userId: user.id },
-            );
+            const issued = yield* VerificationLink.issue({ verification, crypto }, VerifyLink, {
+              ttl: VERIFY_TTL,
+              userId: user.id,
+            });
             // FAMS-002: only an Email identity has an address to mail.
             const to = Users.emailOf(user);
             if (Option.isNone(to)) return;
@@ -1289,10 +1290,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 yield* mailer.send({ to: to.value, template: "reset-password-unavailable" });
                 return;
               }
-              const issued = yield* VerificationLink.issue(
-                { verification, crypto },
-                { purpose: RESET_PURPOSE, ttl: config.resetTtl, userId: user.id },
-              );
+              const issued = yield* VerificationLink.issue({ verification, crypto }, ResetLink, {
+                ttl: config.resetTtl,
+                userId: user.id,
+              });
               yield* mailer.send({
                 to: to.value,
                 template: "reset-password",
@@ -1329,7 +1330,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const config = yield* configNow;
         // ARF-007: a token of another purpose (a verify-email token) or a
         // malformed one is refused before it is rate-limited or consumed.
-        const decoded = VerificationLink.decode(Redacted.value(input.token), RESET_PURPOSE);
+        const decoded = VerificationLink.decode(Redacted.value(input.token), ResetLink);
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
@@ -1461,7 +1462,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // `signIn`/`requestReset`'s own IP-then-identity ordering.
         yield* limits.spend("verifyEmailByIp", input);
         // ARF-007: mirror of `confirmReset`'s purpose check.
-        const decoded = VerificationLink.decode(Redacted.value(input.token), VERIFY_PURPOSE);
+        const decoded = VerificationLink.decode(Redacted.value(input.token), VerifyLink);
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
@@ -1563,7 +1564,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           // Same order as `verifyEmail`: source first, then the well-formedness check, then the
           // token's own budget (keyed on its public id, which names no user).
           yield* limits.spend("confirmEmailChangeByIp", input);
-          const decoded = VerificationLink.decode(Redacted.value(input.token), EmailChange.PURPOSE);
+          const decoded = VerificationLink.decode(Redacted.value(input.token), EmailChange.Link);
           if (Option.isNone(decoded)) {
             return yield* Effect.fail(new PasswordApi.TokenConsumed());
           }
@@ -1578,7 +1579,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               value,
               use: (consumed) =>
                 Effect.gen(function* () {
-                  const newEmail = EmailChange.newEmailOf(consumed.payload);
+                  const newEmail = Option.map(
+                    Schema.decodeUnknownOption(EmailChange.Payload)(consumed.payload),
+                    (payload) => payload.newEmail,
+                  );
                   if (Option.isNone(consumed.userId) || Option.isNone(newEmail)) {
                     return yield* Effect.fail(new PasswordApi.TokenConsumed());
                   }

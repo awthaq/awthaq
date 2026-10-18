@@ -9,14 +9,13 @@
 // The token is issued on the *account* (`userId` on the row) with the new address in its payload
 // and mailed to the *new* address only, so consuming it proves control of that mailbox — the
 // address is never replaced on anyone's say-so, and never before its owner has proven it.
-// Consumption commits together with `Users.changeEmail` + `Users.verifyEmail` (BEH-EA-058); that
-// half lives with the confirming endpoint.
+// Consumption commits together with `Users.changeEmail` + `Users.verifyEmail` (BEH-EA-058); the
+// confirming endpoint redeems `EmailChange.Link`.
 
 import { Mailer } from "@awthaq/ports";
 import type * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { StoreUnavailable } from "./Errors.ts";
 import type { UserId } from "./Users.ts";
@@ -36,11 +35,11 @@ export const DEFAULT_TTL = Duration.hours(24);
 export const Payload = Schema.Struct({ newEmail: Schema.String });
 export type Payload = typeof Payload.Type;
 
-const decodePayload = Schema.decodeUnknownOption(Payload);
-
-/** The new address a consumed token's payload names, or `None` for a row this flow did not issue. */
-export const newEmailOf = (payload: unknown): Option.Option<string> =>
-  Option.map(decodePayload(payload), (decoded) => decoded.newEmail);
+/**
+ * The purpose both halves share (BEH-EA-057): every row names the account and carries the address
+ * being proven, so a row that does not is a foreign row to the redeemer.
+ */
+export const Link = VerificationLink.forUser({ name: PURPOSE, payload: Payload });
 
 /**
  * Issues a `change-email` token for `userId` and mails it to `newEmail`, awaited: both callers
@@ -63,11 +62,10 @@ export const request = (
   },
 ): Effect.Effect<void, Mailer.MailDeliveryFailed | StoreUnavailable> =>
   Effect.gen(function* () {
-    const issued = yield* VerificationLink.issue(deps, {
-      purpose: PURPOSE,
+    const issued = yield* VerificationLink.issue(deps, Link, {
       ttl: input.ttl ?? DEFAULT_TTL,
       userId: input.userId,
-      payload: { newEmail: input.newEmail } satisfies Payload,
+      payload: { newEmail: input.newEmail },
     });
     yield* deps.mailer.send({
       to: input.newEmail,

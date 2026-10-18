@@ -461,7 +461,9 @@ export const layer = Layer.effect(
     const redeemChallenge: SecondFactorShape["redeemChallenge"] = (challengeId, use) =>
       Effect.gen(function* () {
         const invalid = new InvalidTwoFactorCode({});
-        const decoded = VerificationLink.decode(Redacted.value(challengeId), CHALLENGE_PURPOSE);
+        const decoded = VerificationLink.decode(Redacted.value(challengeId), {
+          name: CHALLENGE_PURPOSE,
+        });
         if (Option.isNone(decoded)) return yield* Effect.fail(invalid);
         // The identifier is derived from the claimed user, so a challenge cannot be spent as another's.
         return yield* verification

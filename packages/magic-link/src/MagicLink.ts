@@ -128,10 +128,9 @@ const rules = {
 
 // ---- the service -------------------------------------------------------------------------------------
 
-const PURPOSE = "magic-link";
-
 /** The server-side payload a link carries: the address it was issued for (normalised). */
 const LinkPayload = Schema.Struct({ email: Schema.String });
+const MagicLinkPurpose = VerificationLink.forAddress({ name: "magic-link", payload: LinkPayload });
 
 export interface MagicLinkShape {
   /** BEH-EA-268: always resolves (or is rate limited) — never says whether an account exists. */
@@ -245,8 +244,8 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
             if (!fresh) return;
             const issued = yield* VerificationLink.issue(
               { verification, crypto },
+              MagicLinkPurpose,
               {
-                purpose: PURPOSE,
                 ttl: settings.ttl,
                 ...(Option.isSome(existing) ? { userId: existing.value.id } : {}),
                 payload: { email },
@@ -269,7 +268,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       const verify: MagicLinkShape["verify"] = Effect.fnUntraced(function* (input, context) {
         yield* limits.spend("verifyByIp", { ip: input.ip });
         // ARF-007-style purpose check before anything is rate limited or consumed.
-        const decoded = VerificationLink.decode(Redacted.value(input.token), PURPOSE);
+        const decoded = VerificationLink.decode(Redacted.value(input.token), MagicLinkPurpose);
         const refused = Effect.gen(function* () {
           yield* events.publish({
             _tag: "auth.user.signInFailed",

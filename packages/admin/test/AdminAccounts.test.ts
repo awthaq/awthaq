@@ -22,6 +22,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -217,7 +218,10 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
       );
       assert.strictEqual(Option.getOrNull(consumed.userId), targetId);
       assert.deepStrictEqual(
-        EmailChange.newEmailOf(consumed.payload),
+        Option.map(
+          Schema.decodeUnknownOption(EmailChange.Payload)(consumed.payload),
+          (p) => p.newEmail,
+        ),
         Option.some("new@example.com"),
       );
       yield* TestClock.adjust(Duration.millis(10));
