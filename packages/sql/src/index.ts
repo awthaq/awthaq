@@ -22,6 +22,7 @@ export * as AccountStoreSql from "./AccountStoreSql.ts";
 export * as AuditLogStoreSql from "./AuditLogStoreSql.ts";
 export * as CoreMigrations from "./CoreMigrations.ts";
 export * as CoreSealedColumns from "./CoreSealedColumns.ts";
+export * as CoreStoresSql from "./CoreStoresSql.ts";
 export * as Models from "./Models.ts";
 export * as RateLimiterStoreSql from "./RateLimiterStoreSql.ts";
 export * as RelayCursorStoreSql from "./RelayCursorStoreSql.ts";

@@ -17,13 +17,14 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlModel from "effect/unstable/sql/SqlModel";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import * as CoreSealedColumns from "./CoreSealedColumns.ts";
+import { sealCell, sealedCell, type ColumnCodec } from "./internal/Cells.ts";
+import { traced } from "./internal/traced.ts";
 import * as ReadRouting from "./ReadRouting.ts";
 import * as SealedColumn from "./SealedColumn.ts";
 import {
@@ -59,51 +60,6 @@ export interface Page<A> {
 }
 
 type RepositoryError = Schema.SchemaError | SqlError;
-
-/**
- * EOTS-008: SqlModel names its own CRUD spans `<spanPrefix>.<method>`; every
- * hand-written method gets the same convention so a flame graph reads
- * `Users.findByEmail > sql.execute`. Attributes are ids only — never an
- * email, identifier, hash, token or payload (BEH-EA-199).
- */
-const traced = (name: string, attributes?: Record<string, unknown>) =>
-  Effect.withSpan(name, attributes === undefined ? {} : { attributes }, {
-    captureStackTrace: false,
-  });
-
-// ---- Opt-in PII column encryption (CSG-006, option B) -------------------------------
-
-/**
- * One codec over a sealed column (`SealedColumn.codec`): `seal` for writes, `sealed` wraps a stored
- * cell for a record. The default repositories build none and hand out `Sealed.plain`; the encrypted
- * ones (`Users`/`SessionsRepositoryEncryptedLive`) build one per `CoreSealedColumns` declaration, which
- * puts `Encryption` in the layer's requirements, so forgetting to provide it is a compile error, not a
- * runtime surprise. Rows leave a repository as stored: the sealed cell is opened where the domain needs it.
- */
-type ColumnCodec = Effect.Success<ReturnType<typeof SealedColumn.codec<string>>>;
-
-const columnCodec = (declared: SealedColumn.Column<string>) =>
-  Effect.flatMap(SealedColumn.sqlSwap(declared), (swap) => SealedColumn.codec(declared, swap));
-
-/** The stored cell of a nullable sealed column, as a `Sealed`: the codec when sealing, `Sealed.plain` otherwise. */
-const sealedCell = (codec: Option.Option<ColumnCodec>, rowKey: string, stored: string | null) =>
-  Option.map(Option.fromNullOr(stored), (cell) =>
-    Option.match(codec, {
-      onNone: () => Sealed.plain(cell),
-      onSome: (c) => c.sealed(rowKey, cell),
-    }),
-  );
-
-/** A value on its way into a nullable sealed column: sealed under the canonical AAD when a codec is present. */
-const sealCell = (codec: Option.Option<ColumnCodec>, rowKey: string, value: string | null) =>
-  Effect.flatMap(Effect.succeed(value), (present) =>
-    present === null
-      ? Effect.succeed(null)
-      : Option.match(codec, {
-          onNone: () => Effect.succeed(present),
-          onSome: (c) => c.seal(rowKey, Redacted.make(present)),
-        }),
-  );
 
 // ---- Users ------------------------------------------------------------
 
@@ -581,7 +537,7 @@ export const UsersRepositoryEncryptedLive: Layer.Layer<
   SqlClient.SqlClient | Encryption.Encryption
 > = Layer.effect(
   UsersRepository,
-  Effect.flatMap(columnCodec(CoreSealedColumns.usersMetadata), (codec) =>
+  Effect.flatMap(SealedColumn.sqlCodec(CoreSealedColumns.usersMetadata), (codec) =>
     makeUsersRepository(Option.some(codec)),
   ),
 );
@@ -736,9 +692,9 @@ export const AccountsRepositoryLive: Layer.Layer<
       idColumn: "id",
     });
     const codecs = {
-      accessToken: yield* columnCodec(CoreSealedColumns.accountsAccessToken),
-      refreshToken: yield* columnCodec(CoreSealedColumns.accountsRefreshToken),
-      idToken: yield* columnCodec(CoreSealedColumns.accountsIdToken),
+      accessToken: yield* SealedColumn.sqlCodec(CoreSealedColumns.accountsAccessToken),
+      refreshToken: yield* SealedColumn.sqlCodec(CoreSealedColumns.accountsRefreshToken),
+      idToken: yield* SealedColumn.sqlCodec(CoreSealedColumns.accountsIdToken),
     };
 
     const encryptToken = (
@@ -1564,8 +1520,8 @@ export const SessionsRepositoryEncryptedLive: Layer.Layer<
 > = Layer.effect(
   SessionsRepository,
   Effect.all({
-    ipAddress: columnCodec(CoreSealedColumns.sessionsIpAddress),
-    userAgent: columnCodec(CoreSealedColumns.sessionsUserAgent),
+    ipAddress: SealedColumn.sqlCodec(CoreSealedColumns.sessionsIpAddress),
+    userAgent: SealedColumn.sqlCodec(CoreSealedColumns.sessionsUserAgent),
   }).pipe(Effect.flatMap((codecs) => makeSessionsRepository(Option.some(codecs)))),
 );
 

@@ -14,16 +14,7 @@ import {
   UserStore,
   VerificationStore,
 } from "@awthaq/ports";
-import {
-  AccountStoreSql,
-  AuditLogStoreSql,
-  CoreMigrations,
-  RelayCursorStoreSql,
-  Repositories,
-  SessionStoreSql,
-  UserStoreSql,
-  VerificationStoreSql,
-} from "@awthaq/sql";
+import { CoreMigrations, CoreStoresSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as LibsqlClient from "@effect/sql-libsql/LibsqlClient";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -85,25 +76,8 @@ const sqlStores = <E>(client: Layer.Layer<SqlClient.SqlClient, E>) => {
       yield* addUserFieldColumns;
     }),
   ).pipe(Layer.provide(client));
-  return Layer.mergeAll(
-    AccountStoreSql.layer,
-    AuditLogStoreSql.layer,
-    RelayCursorStoreSql.layer,
-    SessionStoreSql.layer,
-    UserStoreSql.layer,
-    VerificationStoreSql.layer,
-    SqlTransaction.layerSql,
-  ).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
-        Repositories.AuditLogRepositoryLive,
-        Repositories.SessionsRepositoryLive,
-        Repositories.UsersRepositoryLive,
-        Repositories.VerificationRepositoryLive,
-        Repositories.VerificationReservationsRepositoryLive,
-      ),
-    ),
+  return CoreStoresSql.layer().pipe(
+    Layer.provide(EncryptionLive),
     Layer.provideMerge(client),
     Layer.provideMerge(migrated),
   );

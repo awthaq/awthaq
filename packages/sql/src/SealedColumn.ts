@@ -374,3 +374,10 @@ export const sweepDeployed = (options?: {
   Effect.flatMap(Deployed, ({ columns }) =>
     sweepAll(uniqueColumns([...columns, ...(options?.also ?? [])]), options),
   );
+
+/**
+ * `codec` over the SQL `Swap` of the same column (`sqlSwap`): what a store adapter builds once per
+ * sealed column at layer construction. Requires `SqlClient` and `Encryption`.
+ */
+export const sqlCodec = (declared: Column<string>) =>
+  Effect.flatMap(sqlSwap(declared), (swap) => codec(declared, swap));
