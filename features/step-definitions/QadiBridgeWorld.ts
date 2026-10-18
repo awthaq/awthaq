@@ -32,7 +32,7 @@ import {
 } from "@awthaq/core";
 import { AuthorizedSubject, SubjectApi, SubjectExtractor, SubjectResolver } from "@awthaq/qadi";
 import { Roles } from "@awthaq/roles";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, Credentials, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   AttributeResolver,
@@ -713,7 +713,7 @@ const buildApp = (world: WorldShape, options: BridgeOptions) => {
 
   // One core, one resolver stack: every consumer below sees the very same instances (BEH-EA-160).
   const sharedCore = subjects.pipe(Layer.provideMerge(CoreLive));
-  const principals = Authentication.PrincipalResolverLive.pipe(Layer.provideMerge(sharedCore));
+  const principals = Credentials.PrincipalResolverLive.pipe(Layer.provideMerge(sharedCore));
   // What qadi's enforcement (and a bare route's `guardRoute`) needs per request, not at build time.
   const requestServices = AuthzLive.pipe(
     Layer.provideMerge(
@@ -852,7 +852,7 @@ export const setOwner = Effect.fn("features.qadiBridge.setOwner")(function* (
 
 /** Domain-level composition on the *ambient* (test) clock, for scenarios that must move time: the extractor over the same core Authentication resolves against. */
 const DomainLive = SubjectExtractor.SubjectExtractorLive.pipe(
-  Layer.provideMerge(Authentication.PrincipalResolverLive),
+  Layer.provideMerge(Credentials.PrincipalResolverLive),
   Layer.provideMerge(CoreLive),
 );
 

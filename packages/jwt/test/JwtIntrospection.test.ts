@@ -6,7 +6,7 @@ import { Api } from "@awthaq/api";
 import { Auth, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { SqlTransaction } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -29,7 +29,7 @@ const SessionsLive = Sessions.layer
   );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provide(Credentials.PrincipalResolverLive),
 );
 
 const jwtBase = Jwt.Jwt.layer.pipe(

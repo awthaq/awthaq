@@ -54,7 +54,7 @@ import {
 } from "@awthaq/core";
 import { Jwt, JwtCodec } from "@awthaq/jwt";
 import { ClientAddress, Defects, Hmac, RateLimiter } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Credentials } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -599,7 +599,7 @@ const CredentialContributionsLive = Layer.unwrap(
     const settings = yield* ApiKeyConfig;
     const clientAddress = yield* ClientAddress.ClientAddress;
     const limits = yield* RateLimits.budgetOf(ApiKey);
-    const registry = yield* Authentication.CredentialResolvers;
+    const registry = yield* Credentials.CredentialResolvers;
 
     const throttle = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
@@ -607,7 +607,7 @@ const CredentialContributionsLive = Layer.unwrap(
       yield* limits.spend("resolveByIp", { ip: Option.getOrUndefined(address) });
     });
 
-    const keys = Authentication.contribute("apiKey", {
+    const keys = Credentials.contribute("apiKey", {
       id: "apikey.key",
       claims: (raw) => raw.startsWith(settings.prefix),
       resolve: (credential) =>
@@ -625,7 +625,7 @@ const CredentialContributionsLive = Layer.unwrap(
     });
 
     // Service tokens are stateless: a signature/`aud`/`exp`/`typ` check, no database hit.
-    const serviceTokens = Authentication.contribute("bearer", {
+    const serviceTokens = Credentials.contribute("bearer", {
       id: "apikey.service-token",
       claims: (raw) =>
         Option.exists(JwtCodec.peekTyp(raw), (typ) => typ.toLowerCase() === SERVICE_TOKEN_TYP),
@@ -660,7 +660,7 @@ const CredentialContributionsLive = Layer.unwrap(
     });
 
     return Layer.mergeAll(keys, serviceTokens).pipe(
-      Layer.provide(Layer.succeed(Authentication.CredentialResolvers, registry)),
+      Layer.provide(Layer.succeed(Credentials.CredentialResolvers, registry)),
     );
   }),
 );

@@ -4,7 +4,7 @@
 // exemption).
 import { Auth, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -48,7 +48,7 @@ const ShortLivedCoreLive = Layer.mergeAll(
 );
 
 const ShortLivedTestLayer = SubjectExtractor.SubjectExtractorLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provide(Credentials.PrincipalResolverLive),
   Layer.provideMerge(ShortLivedCoreLive),
 );
 
@@ -203,7 +203,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
-        const resolver = yield* Authentication.PrincipalResolver;
+        const resolver = yield* Credentials.PrincipalResolver;
         const extractor = yield* QadiSubjectExtractor;
         const user = yield* users.create({
           identity: { _tag: "Email", email: "both-bridges@example.com" },
@@ -238,7 +238,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const subject = yield* extractor.extract(request);
         assert.strictEqual(subject.id, `user:${user.id}`);
       }).pipe(
-        Effect.provide(Layer.mergeAll(Authentication.PrincipalResolverLive, ShortLivedTestLayer)),
+        Effect.provide(Layer.mergeAll(Credentials.PrincipalResolverLive, ShortLivedTestLayer)),
       ),
   );
 
@@ -284,7 +284,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
           yield* sessions.verify(Redacted.make(rotated.value));
         }),
       ).pipe(
-        Effect.provide(Layer.mergeAll(Authentication.PrincipalResolverLive, ShortLivedTestLayer)),
+        Effect.provide(Layer.mergeAll(Credentials.PrincipalResolverLive, ShortLivedTestLayer)),
       ),
   );
 
@@ -296,12 +296,12 @@ describe("SubjectExtractor (Path B adapter)", () => {
         scopes: [],
       });
     const contributions = Layer.mergeAll(
-      Authentication.contribute("bearer", {
+      Credentials.contribute("bearer", {
         id: "svc-jwt",
         claims: (raw) => raw.startsWith("svc."),
         resolve: () => Effect.succeed(service("from-bearer")),
       }),
-      Authentication.contribute("apiKey", {
+      Credentials.contribute("apiKey", {
         id: "keys",
         claims: (raw) => raw.startsWith("ak_"),
         resolve: () => Effect.succeed(service("from-key")),
@@ -365,7 +365,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
             TestAuth.layer(Auth.make([UserClaims.UserClaims]), {
               services: Layer.mergeAll(
                 SubjectExtractor.SubjectExtractorLive,
-                Authentication.contribute("apiKey", {
+                Credentials.contribute("apiKey", {
                   id: "failing-keys",
                   claims: (raw) => raw.startsWith("ak_"),
                   resolve: () => Effect.fail(new Api.Unauthenticated()),

@@ -37,7 +37,7 @@ import {
 } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
-import { AuthHttp, Authentication, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
+import { AuthHttp, Credentials, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
 import { EvaluationServicesNone, role } from "@qadi/core";
 import { RequirePermissionLive } from "@qadi/http";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -85,7 +85,7 @@ const platformAdmin = role({
 const GuardLive = RequirePermissionLive.pipe(
   Layer.provide(EvaluationServicesNone),
   Layer.provide(SubjectExtractor.SubjectExtractorLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provide(Credentials.PrincipalResolverLive),
   Layer.provide(Roles.Roles.layer),
 );
 
@@ -124,7 +124,7 @@ const Ports = Layer.mergeAll(
   // outside `Auth.make` and whose `Slots.override` requires one.
   Slots.layer,
   ClientAddress.layerDirect,
-  Authentication.CredentialResolversLive,
+  Credentials.CredentialResolversLive,
   // A throwaway key generated at boot: nothing encrypted under it survives a restart, which is exactly
   // what an in-memory server is (`KeyProvider.layerEnv` is the production path).
   Encryption.layer.pipe(Layer.provide(KeyProvider.layerEphemeral)),

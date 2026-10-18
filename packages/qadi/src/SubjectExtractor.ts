@@ -16,7 +16,7 @@
 // and absolute/idle-expiry logic over `Sessions`, per BEH-EA-153's own text).
 import { Api } from "@awthaq/api";
 import { SessionCookie, Sessions } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -78,12 +78,12 @@ const presentedCredentials = (
 export const SubjectExtractorLive: Layer.Layer<
   SubjectExtractor,
   never,
-  Sessions.Sessions | Authentication.PrincipalResolver
+  Sessions.Sessions | Credentials.PrincipalResolver
 > = Layer.effect(
   SubjectExtractor,
   Effect.gen(function* () {
     const sessions = yield* Sessions.Sessions;
-    const principalResolver = yield* Authentication.PrincipalResolver;
+    const principalResolver = yield* Credentials.PrincipalResolver;
     const subjectResolver = yield* SubjectResolver;
     /** One carrier; APS-006: an impersonation cookie counts only for a session carrying `actingAs`, judged on the session. */
     const resolveOne = (candidate: {

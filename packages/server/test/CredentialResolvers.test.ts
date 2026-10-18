@@ -23,6 +23,7 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
 import * as Authentication from "../src/Authentication.ts";
+import * as Credentials from "../src/Credentials.ts";
 import * as Wiring from "./support/Wiring.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
@@ -90,13 +91,13 @@ const userPrincipal = (id: string) =>
  * `User:<id>` when `asUser`) unless the credential ends `-bad`.
  */
 const contribution = (
-  carrier: Authentication.CredentialCarrier,
+  carrier: Credentials.ClaimCarrier,
   id: string,
   prefix: string,
   order?: number,
   asUser = false,
 ) =>
-  Authentication.contribute(carrier, {
+  Credentials.contribute(carrier, {
     id,
     ...(order === undefined ? {} : { order }),
     claims: (raw) => raw.startsWith(prefix),
@@ -108,7 +109,7 @@ const contribution = (
 
 const layerWith = (...contributions: ReadonlyArray<ReturnType<typeof contribution>>) => {
   const registry = Layer.mergeAll(Layer.empty, ...contributions).pipe(
-    Layer.provideMerge(Authentication.CredentialResolversLive),
+    Layer.provideMerge(Credentials.CredentialResolversLive),
   );
   return Handlers.pipe(
     Layer.provideMerge(Authentication.AuthenticationLive),
@@ -309,7 +310,7 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
           Layer.mergeAll(
             contribution("bearer", "dup", "a."),
             contribution("bearer", "dup", "b."),
-          ).pipe(Layer.provide(Authentication.CredentialResolversLive)),
+          ).pipe(Layer.provide(Credentials.CredentialResolversLive)),
         ),
       );
       assert.isTrue(Exit.isFailure(exit));
@@ -321,7 +322,7 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
       const exit = yield* Effect.exit(
         Layer.build(
           Layer.mergeAll(contribution("bearer", "x", "a."), contribution("apiKey", "x", "b.")).pipe(
-            Layer.provide(Authentication.CredentialResolversLive),
+            Layer.provide(Credentials.CredentialResolversLive),
           ),
         ),
       );
@@ -333,7 +334,7 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     "a contribution after the registry was first read is refused (frozen at first read)",
     () =>
       Effect.gen(function* () {
-        const registry = yield* Authentication.CredentialResolvers;
+        const registry = yield* Credentials.CredentialResolvers;
         yield* registry.resolvers("bearer");
         const exit = yield* Effect.exit(
           registry.register("bearer", {
@@ -343,6 +344,6 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
           }),
         );
         assert.isTrue(Exit.isFailure(exit));
-      }).pipe(Effect.provide(Authentication.CredentialResolversLive)),
+      }).pipe(Effect.provide(Credentials.CredentialResolversLive)),
   );
 });

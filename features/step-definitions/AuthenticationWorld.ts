@@ -26,7 +26,7 @@ import {
 } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
+import { Authentication, Credentials, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -210,8 +210,8 @@ const buildApp = (options: AppOptions) => {
   const variant = options.variant ?? "default";
   const ResolverLive =
     variant === "userFacts"
-      ? Authentication.PrincipalResolverWithUserFactsLive
-      : Authentication.PrincipalResolverLive;
+      ? Credentials.PrincipalResolverWithUserFactsLive
+      : Credentials.PrincipalResolverLive;
   const SessionSettings =
     variant === "shortIdle"
       ? Layer.succeed(Sessions.SessionConfig, {
@@ -223,7 +223,7 @@ const buildApp = (options: AppOptions) => {
   // A resolver that claims a shape no scenario presents: registered, consulted, and never claiming.
   const ExtraContribution =
     variant === "claimingResolver"
-      ? Authentication.contribute("bearer", {
+      ? Credentials.contribute("bearer", {
           id: "features.never-claims",
           claims: (raw) => raw.startsWith("never-presented."),
           resolve: () => Effect.fail(new Api.Unauthenticated()),
@@ -241,7 +241,7 @@ const buildApp = (options: AppOptions) => {
       Layer.provideMerge(Jwt.Jwt.layer),
       // The registry sits below every layer that contributes to it.
       Layer.provideMerge(ExtraContribution),
-      Layer.provideMerge(Authentication.CredentialResolversLive),
+      Layer.provideMerge(Credentials.CredentialResolversLive),
       Layer.provideMerge(
         Layer.mergeAll(ApiKeyRecords.layerMemory, ApiKeyClientRecords.layerMemory),
       ),
@@ -567,8 +567,8 @@ export const resolveSessionPrincipal = Effect.fn("features.authentication.resolv
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         // The default resolver, on its own: a session is all it needs.
-        const resolver = yield* Authentication.PrincipalResolver.pipe(
-          Effect.provide(Authentication.PrincipalResolverLive),
+        const resolver = yield* Credentials.PrincipalResolver.pipe(
+          Effect.provide(Credentials.PrincipalResolverLive),
         );
         const { session } = yield* sessions.verify(Redacted.make(token));
         return yield* resolver.resolve(session);
@@ -585,8 +585,8 @@ export const resolveCredentialPrincipal = Effect.fn(
   return yield* app.withServices(
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver.pipe(
-        Effect.provide(Authentication.PrincipalResolverLive),
+      const resolver = yield* Credentials.PrincipalResolver.pipe(
+        Effect.provide(Credentials.PrincipalResolverLive),
       );
       return yield* Authentication.resolvePrincipal(
         sessions,

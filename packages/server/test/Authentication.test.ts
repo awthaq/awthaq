@@ -43,6 +43,7 @@ import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Authentication from "../src/Authentication.ts";
+import * as Credentials from "../src/Credentials.ts";
 import * as Wiring from "./support/Wiring.ts";
 
 // `HttpApiTest.groups` needs these platform services regardless of which
@@ -895,7 +896,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
     () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const resolver = yield* Authentication.PrincipalResolver;
+        const resolver = yield* Credentials.PrincipalResolver;
         const { session } = yield* sessions.issue({ userId, amr: ["pwd", "otp"] });
         const principal = yield* resolver.resolve(session);
         assert.strictEqual(principal._tag, "User");
@@ -909,7 +910,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver;
+      const resolver = yield* Credentials.PrincipalResolver;
       const user = yield* users.create({
         identity: { _tag: "Email", email: "facts@example.com" },
         name: "Facts",
@@ -919,7 +920,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
       assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
     }).pipe(
       Effect.provide(
-        Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+        Credentials.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
       ),
     ),
   );
@@ -929,7 +930,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
     () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const resolver = yield* Authentication.PrincipalResolver;
+        const resolver = yield* Credentials.PrincipalResolver;
         const { session } = yield* sessions.issue({
           userId: Users.UserId("99999999-9999-9999-9999-999999999999"),
         });
@@ -937,7 +938,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
         assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
       }).pipe(
         Effect.provide(
-          Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+          Credentials.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
         ),
       ),
   );

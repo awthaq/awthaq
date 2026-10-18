@@ -44,6 +44,7 @@ import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 import * as Account from "./Account.ts";
 import * as Authentication from "./Authentication.ts";
+import * as Credentials from "./Credentials.ts";
 import * as Csrf from "./Csrf.ts";
 import * as RequestContext from "./RequestContext.ts";
 import * as Session from "./Session.ts";
@@ -137,8 +138,8 @@ export type DeclaredMiddleware<Groups extends HttpApiGroup.Constraint> = Extract
 export interface MiddlewareOptions<CE, CR, PR> {
   /** The CSRF secret and allowed origins (`Csrf.layerConfig` in production, a fixed test config in `TestAuth`). */
   readonly csrf: Layer.Layer<Csrf.CsrfConfig, CE, CR>;
-  /** Defaults to `Authentication.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
-  readonly principalResolver?: Layer.Layer<Authentication.PrincipalResolver, never, PR>;
+  /** Defaults to `Credentials.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
+  readonly principalResolver?: Layer.Layer<Credentials.PrincipalResolver, never, PR>;
 }
 
 /**
@@ -171,7 +172,7 @@ export function middlewareFor(
       for (const service of middleware) declared.add(service.key);
     },
   });
-  const resolver = options.principalResolver ?? Authentication.PrincipalResolverLive;
+  const resolver = options.principalResolver ?? Credentials.PrincipalResolverLive;
   // `Layer.fresh`: the module-level `...Live` constants are memoized by reference, so a host (or a test) that
   // builds one itself, over its own config, in the same composition would otherwise share whichever instance
   // was built first. The derived middleware is its own instance, and what a `services` layer provides wins

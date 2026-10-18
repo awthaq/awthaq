@@ -13,7 +13,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import { RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
+import { Authentication, Credentials, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -98,8 +98,8 @@ describe("AR-003: the admin tier", () => {
       const AuthenticationLive = Authentication.AuthenticationLive.pipe(
         Layer.provide(
           Layer.succeed(
-            Authentication.PrincipalResolver,
-            Authentication.PrincipalResolver.of({ resolve: () => Effect.die("not used") }),
+            Credentials.PrincipalResolver,
+            Credentials.PrincipalResolver.of({ resolve: () => Effect.die("not used") }),
           ),
         ),
       );

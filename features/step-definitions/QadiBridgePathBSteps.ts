@@ -4,7 +4,7 @@
 // asserted here is the bridge's own contract: which subject the extractor resolves (and that it
 // reuses Authentication's session logic), which statuses a missing annotation / outage / denial end
 // in, what the registry route serves. qadi's policy evaluation is real and never stubbed.
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import { Sessions, Users } from "@awthaq/core";
 import { AuthorizedSubject } from "@awthaq/qadi";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -227,7 +227,7 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
         inDomain(
           Effect.gen(function* () {
             const sessions = yield* Sessions.Sessions;
-            const principals = yield* Authentication.PrincipalResolver;
+            const principals = yield* Credentials.PrincipalResolver;
             const extractor = yield* QadiSubjectExtractor;
             const request = HttpServerRequest.fromWeb(
               new Request("http://localhost/x", {

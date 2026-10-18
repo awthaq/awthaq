@@ -19,7 +19,7 @@
 import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Admin } from "@awthaq/admin";
 import type { Api } from "@awthaq/api";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -242,7 +242,7 @@ export const resolvePrincipal: (token: string) => Effect.Effect<Api.Principal, n
       app.run(
         Effect.gen(function* () {
           const sessions = yield* Sessions.Sessions;
-          const resolver = yield* Authentication.PrincipalResolver;
+          const resolver = yield* Credentials.PrincipalResolver;
           return yield* Authentication.resolvePrincipal(
             sessions,
             resolver,

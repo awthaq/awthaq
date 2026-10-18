@@ -2,7 +2,7 @@
 // never builds `Authentication`, `CsrfProtection` or their configuration, and `services` may still override one.
 import { Api } from "@awthaq/api";
 import { Auth, AuthPlugin } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Credentials } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -69,7 +69,7 @@ class MwAdmin extends AuthPlugin.Service<MwAdmin, {}>()("mw", {
   });
 }
 
-const machineKey = Authentication.contribute("apiKey", {
+const machineKey = Credentials.contribute("apiKey", {
   id: "test-key",
   claims: (raw) => raw.startsWith("tk_"),
   resolve: () =>

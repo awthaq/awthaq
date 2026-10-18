@@ -22,7 +22,7 @@ import {
   Sessions,
   Users,
 } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Credentials } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -43,7 +43,7 @@ import type { HeadersLike } from "../src/CookieHeader.ts";
 const TestLayer = Layer.mergeAll(
   Users.layer.pipe(Layer.provide(Persistence.memory)),
   Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Authentication.PrincipalResolverLive,
+  Credentials.PrincipalResolverLive,
   TestClock.layer(),
 ).pipe(
   Layer.provideMerge(NodeCrypto.layer),
@@ -73,7 +73,7 @@ const withRuntime = async <R, A>(
 const ShortTouchLayer = Layer.mergeAll(
   Users.layer.pipe(Layer.provide(Persistence.memory)),
   Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Authentication.PrincipalResolverLive,
+  Credentials.PrincipalResolverLive,
   TestClock.layer(),
 ).pipe(
   Layer.provideMerge(
@@ -349,7 +349,7 @@ describe("getSession (BEH-EA-185)", () => {
         };
       }),
     ).pipe(Layer.provide(Users.layer.pipe(Layer.provide(Persistence.memory))));
-    const GatedResolver = Layer.succeed(Authentication.PrincipalResolver, {
+    const GatedResolver = Layer.succeed(Credentials.PrincipalResolver, {
       resolve: (session) =>
         Deferred.succeed(gate, undefined).pipe(
           Effect.as(

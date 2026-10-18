@@ -13,7 +13,7 @@
 // inferred from the status.
 import { Api } from "@awthaq/api";
 import { Auth, AuthPlugin } from "@awthaq/core";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Authentication, Credentials, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -144,7 +144,7 @@ const makeServices = (
     },
   });
   return Layer.mergeAll(
-    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
+    Authentication.AuthenticationLive.pipe(Layer.provide(Credentials.PrincipalResolverLive)),
     Csrf.CsrfProtectionLive.pipe(
       Layer.provide(
         Layer.succeed(Csrf.CsrfConfig, {

@@ -11,14 +11,14 @@ See [`spec/models/07-api-keys.md`](../../spec/models/07-api-keys.md) and [ADR-EA
 ```ts
 import { Auth } from "@awthaq/core";
 import { Jwt, JwtConfig } from "@awthaq/jwt";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
 
 const auth = Auth.make([Jwt.Jwt, ApiKey.ApiKey]);
 
 const layers = Layer.mergeAll(
   // The registry sits below every plugin that contributes to it.
-  Authentication.CredentialResolversLive,
+  Credentials.CredentialResolversLive,
   ApiKeyRecords.layerSql,
   ApiKeyClientRecords.layerSql,
   ApiKey.config({ prefix: "ak_", defaultExpiresIn: Duration.days(90) }),

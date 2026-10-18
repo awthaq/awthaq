@@ -12,7 +12,7 @@ import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
 import { Auth, AuthPlugin, Sessions, Users } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { Password } from "@awthaq/password";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -229,7 +229,7 @@ export const imperativeMe = async (
   const principal = await runtime.runPromise(
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver;
+      const resolver = yield* Credentials.PrincipalResolver;
       return yield* Authentication.resolvePrincipal(
         sessions,
         resolver,

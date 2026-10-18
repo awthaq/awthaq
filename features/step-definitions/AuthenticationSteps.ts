@@ -3,7 +3,7 @@
 // `AuthenticationWorld.ts` for how "which handler was tried, in what order" is observed.
 import { Api } from "@awthaq/api";
 import type { Sessions } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
@@ -37,7 +37,7 @@ import {
 // compile-time fact, checked by `tsc`: this stops type-checking the day the layer grows a knob.
 type AuthenticationNeeds = Layer.Services<typeof Authentication.AuthenticationLive>;
 const authenticationNeedsOnlySessionsAndResolver: [AuthenticationNeeds] extends [
-  Sessions.Sessions | Authentication.PrincipalResolver,
+  Sessions.Sessions | Credentials.PrincipalResolver,
 ]
   ? true
   : false = true;
@@ -452,8 +452,8 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
     function* (_subjectResolver: string) {
       // The resolver is built from nothing (`PrincipalResolverLive: Layer<PrincipalResolver>`, no
       // requirements) and its whole surface is `resolve` — no authorizer, no qadi service to ask.
-      const resolver = yield* Authentication.PrincipalResolver.pipe(
-        Effect.provide(Authentication.PrincipalResolverLive),
+      const resolver = yield* Credentials.PrincipalResolver.pipe(
+        Effect.provide(Credentials.PrincipalResolverLive),
       );
       assert.deepEqual(Object.keys(resolver), ["resolve"]);
     },

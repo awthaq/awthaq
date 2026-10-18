@@ -51,7 +51,7 @@
 import { Api } from "@awthaq/api";
 import { AuthPlugin, Errors, Migrations, Retention, Sessions, Tenant, Users } from "@awthaq/core";
 import { Defects, type Encryption, RefreshingCache, type SqlTransaction } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import { SealedColumn } from "@awthaq/sql";
 import * as Arr from "effect/Array";
 import * as Crypto from "effect/Crypto";
@@ -435,14 +435,14 @@ const BearerCredentialContributionLive = Layer.unwrap(
     // requirements stay what they were. Opting in without one is a wiring
     // mistake that would otherwise silently leave JWT bearers answering 401,
     // so it fails the build instead.
-    const registry = yield* Effect.serviceOption(Authentication.CredentialResolvers);
+    const registry = yield* Effect.serviceOption(Credentials.CredentialResolvers);
     if (Option.isNone(registry)) {
       return yield* Defects.invalidConfiguration(
         "acceptAsBearer",
-        "awthaq/jwt: acceptAsBearer needs Authentication.CredentialResolversLive in the composition",
+        "awthaq/jwt: acceptAsBearer needs Credentials.CredentialResolversLive in the composition",
       );
     }
-    return Authentication.contribute("bearer", {
+    return Credentials.contribute("bearer", {
       id: "jwt",
       claims: (raw) =>
         Option.exists(JwtCodec.peekTyp(raw), (typ) => typ.toLowerCase() === PRINCIPAL_TYP),
@@ -452,7 +452,7 @@ const BearerCredentialContributionLive = Layer.unwrap(
           Effect.catchTag("JwtInvalidError", () => Effect.fail(new Api.Unauthenticated())),
           Effect.flatMap(claimsToPrincipal),
         ),
-    }).pipe(Layer.provide(Layer.succeed(Authentication.CredentialResolvers, registry.value)));
+    }).pipe(Layer.provide(Layer.succeed(Credentials.CredentialResolvers, registry.value)));
   }),
 );
 

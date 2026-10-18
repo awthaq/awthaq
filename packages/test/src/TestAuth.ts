@@ -91,7 +91,7 @@ import {
   RateLimiter,
   SqlTransaction,
 } from "@awthaq/ports";
-import { AuthHttp, Authentication, Csrf, RequestContext } from "@awthaq/server";
+import { AuthHttp, Credentials, Csrf, RequestContext } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
@@ -195,7 +195,7 @@ const testPorts = (rateLimiter: "permissive" | "enforcing" | undefined) =>
     // AGA-001/NHS-003: the raw-`remoteAddress` passthrough every zero-config app gets by default.
     ClientAddress.layerDirect,
     // ADR-EA-012: the one registry plugins contribute credential resolvers to and `Authentication` reads.
-    Authentication.CredentialResolversLive,
+    Credentials.CredentialResolversLive,
     TestEncryption.layer,
   );
 
@@ -294,9 +294,9 @@ export interface CommonOptions<S, SE, SR, D, DR> {
   readonly taps?: Layer.Layer<never, never, unknown>;
   /** Overrides fields of `TestCsrfConfig`. */
   readonly csrf?: Partial<Csrf.CsrfConfigShape>;
-  /** Defaults to `Authentication.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
+  /** Defaults to `Credentials.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
   readonly principalResolver?: Layer.Layer<
-    Authentication.PrincipalResolver,
+    Credentials.PrincipalResolver,
     never,
     Users.Users | Sessions.Sessions
   >;
@@ -325,7 +325,7 @@ type Provided<P extends ReadonlyArray<AuthPlugin.Any>, M extends "memory" | "sql
   | Layer.Success<typeof HttpServer.layerServices>
   | Layer.Success<typeof HttpRouter.layer>
   | Csrf.CsrfConfig
-  | Authentication.PrincipalResolver
+  | Credentials.PrincipalResolver
   | AuthPlugin.RecordsOut<P[number]>
   | AuthPlugin.HookPointsOut<P[number]>
   | S
@@ -386,7 +386,7 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
     Layer.provide(middleware),
     // The resolver the derived middleware uses is part of the output too, so a test that calls
     // `Authentication.resolvePrincipal` directly reads it instead of hand-building `PrincipalResolverLive`.
-    Layer.provideMerge(options.principalResolver ?? Authentication.PrincipalResolverLive),
+    Layer.provideMerge(options.principalResolver ?? Credentials.PrincipalResolverLive),
     Layer.provideMerge(csrf),
     Layer.provideMerge((options.taps ?? Layer.empty).pipe(Layer.provideMerge(points))),
     Layer.provideMerge(records),

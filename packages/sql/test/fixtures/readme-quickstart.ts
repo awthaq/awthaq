@@ -23,7 +23,7 @@ import {
   RateLimiter,
 } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
+import { Authentication, AuthHttp, BodyLimit, Credentials, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -82,7 +82,7 @@ const CoreLive = Layer.mergeAll(
 );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provide(Credentials.PrincipalResolverLive),
 );
 
 // 5. The rate limiter enforces the limits every plugin registers (the

@@ -17,7 +17,7 @@
 import { Api } from "@awthaq/api";
 import { Auth, Persistence, Sessions, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, Credentials, AuthHttp } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -127,7 +127,7 @@ const buildAuthProbe = () => {
     Layer.provideMerge(ReorderedLive),
     Layer.provideMerge(TracedAuthentication),
     Layer.provideMerge(Authentication.OptionalAuthenticationLive),
-    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provide(Credentials.PrincipalResolverLive),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(TestAuth.memoryFoundation),

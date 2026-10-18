@@ -19,7 +19,7 @@
 // forced `@awthaq/api`'s `Subject.ts`/`@awthaq/qadi`'s
 // `SubjectApi.ts` split.
 //
-// Reuses `@awthaq/server`'s `Authentication.PrincipalResolver` — the
+// Reuses `@awthaq/server`'s `Credentials.PrincipalResolver` — the
 // one place a verified session already maps to a `Principal` — rather than
 // reconstructing that mapping a second time here, which would duplicate a
 // decision an application may have overridden (`spec/overview.md`'s "one
@@ -35,7 +35,7 @@
 
 import type { Api } from "@awthaq/api";
 import { SessionCookie, Sessions, Users } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Credentials } from "@awthaq/server";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
@@ -93,7 +93,7 @@ const resolve = (token: string, kind: SessionCookie.CookieKind) =>
   Effect.gen(function* () {
     const sessions = yield* Sessions.Sessions;
     const users = yield* Users.Users;
-    const resolver = yield* Authentication.PrincipalResolver;
+    const resolver = yield* Credentials.PrincipalResolver;
     const { session, rotated } = yield* sessions.verify(Redacted.make(token));
     // RSC-007: independent of each other once `verify` has succeeded.
     const [user, principal] = yield* Effect.all(
@@ -119,7 +119,7 @@ const resolve = (token: string, kind: SessionCookie.CookieKind) =>
   );
 
 /** The services `getSession` needs; a runtime may carry more (`Extra`). */
-export type SessionServices = Sessions.Sessions | Users.Users | Authentication.PrincipalResolver;
+export type SessionServices = Sessions.Sessions | Users.Users | Credentials.PrincipalResolver;
 
 export type SessionRuntime = ManagedRuntime.ManagedRuntime<SessionServices, never>;
 
