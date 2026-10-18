@@ -5,7 +5,7 @@
 // moved forward, so "older than the grace" is exact and no test waits.
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { SqlTransaction } from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -49,16 +49,7 @@ const Migrated = Layer.effectDiscard(
 
 const SqlLayer = Layer.mergeAll(
   Sessions.layer.pipe(Layer.provide(SqlStores)),
-  Verification.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Repositories.VerificationRepositoryLive,
-          Repositories.VerificationReservationsRepositoryLive,
-        ),
-      ),
-    ),
+  Verification.layer.pipe(Layer.provide(SqlStores)),
   SqlTransaction.layerSql,
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),

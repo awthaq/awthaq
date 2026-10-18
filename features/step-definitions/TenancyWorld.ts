@@ -115,20 +115,9 @@ const buildIdentityStack = () => {
   const Stores = Layer.mergeAll(
     Users.layer.pipe(Layer.provide(SqlStores)),
     Repositories.UsersRepositoryLive,
-    Accounts.layer
-      .pipe(Layer.provide(SqlStores))
-      .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
+    Accounts.layer.pipe(Layer.provide(SqlStores)),
     Sessions.layer.pipe(Layer.provide(SqlStores)),
-    Verification.layer
-      .pipe(Layer.provide(SqlStores))
-      .pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Repositories.VerificationRepositoryLive,
-            Repositories.VerificationReservationsRepositoryLive,
-          ),
-        ),
-      ),
+    Verification.layer.pipe(Layer.provide(SqlStores)),
     SqlTransaction.layerSql,
   );
   return Stores.pipe(

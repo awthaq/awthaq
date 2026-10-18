@@ -25,6 +25,7 @@ import {
   VerificationStoreSql,
 } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as LibsqlClient from "@effect/sql-libsql/LibsqlClient";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -116,6 +117,20 @@ export const walFileClient = Layer.unwrap(
       (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
     ),
     (dir) => SqliteClient.layer({ filename: join(dir, "auth.db") }),
+  ),
+);
+
+/**
+ * A fresh libSQL database file per layer build (a `file:` URL, so no server), removed when the layer's
+ * scope closes: a driver that is not `node:sqlite`, proving the sqlite-dialect branches (ERAS-006).
+ */
+export const libsqlFileClient = Layer.unwrap(
+  Effect.map(
+    Effect.acquireRelease(
+      Effect.sync(() => mkdtempSync(join(tmpdir(), "awthaq-store-contract-libsql-"))),
+      (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
+    ),
+    (dir) => LibsqlClient.layer({ url: `file:${join(dir, "auth.db")}` }),
   ),
 );
 

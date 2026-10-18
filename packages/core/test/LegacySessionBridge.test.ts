@@ -7,7 +7,6 @@
 // `Persistence.sql()`, mirroring `Sessions.test.ts`'s own dual-layer pattern.
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { LegacySessionBridge } from "@awthaq/ports";
-import { Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -93,7 +92,6 @@ const Migrated = Layer.effectDiscard(
 const SqlLayer = Sessions.layer
   .pipe(Layer.provide(SqlStores))
   .pipe(
-    Layer.provide(Repositories.SessionsRepositoryLive),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(AuthEvents.layer),
     Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),

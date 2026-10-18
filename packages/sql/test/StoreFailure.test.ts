@@ -141,3 +141,34 @@ describe("StoreFailure.orConflict", () => {
     }),
   );
 });
+
+describe("StoreFailure.isUniqueViolation", () => {
+  it("accepts a UniqueViolation", () => {
+    assert.isTrue(
+      StoreFailure.isUniqueViolation(
+        sqlError(
+          new UniqueViolation({ cause: new Error("dup"), constraint: "users_email_unique" }),
+        ),
+      ),
+    );
+  });
+
+  it("accepts the libSQL driver's generic ConstraintError that says UNIQUE", () => {
+    const cause = new Error(
+      "SQLITE_CONSTRAINT: UNIQUE constraint failed: index 'users_email_unique'",
+    );
+    assert.isTrue(StoreFailure.isUniqueViolation(sqlError(new ConstraintError({ cause }))));
+  });
+
+  it("refuses other constraint failures and other errors", () => {
+    for (const message of ["FOREIGN KEY constraint failed", "NOT NULL constraint failed: a.b"]) {
+      assert.isFalse(
+        StoreFailure.isUniqueViolation(
+          sqlError(new ConstraintError({ cause: new Error(message) })),
+        ),
+      );
+    }
+    assert.isFalse(StoreFailure.isUniqueViolation(connection()));
+    assert.isFalse(StoreFailure.isUniqueViolation(new Error("UNIQUE constraint failed")));
+  });
+});

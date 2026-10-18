@@ -15,13 +15,12 @@ import {
   Slots,
   Users,
 } from "@awthaq/core";
-import { Encryption, KeyProvider, PasswordHasher, SqlTransaction } from "@awthaq/ports";
+import { PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
 import { BetterAuthScryptVerifier } from "@awthaq/migrate-better-auth";
 import { FirebaseScryptVerifier } from "@awthaq/migrate-firebase";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Migrator from "effect/unstable/sql/Migrator";
@@ -35,33 +34,9 @@ const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
 const adminRole = role({ name: "admin", permissions: [] });
 const editorRole = role({ name: "editor", permissions: [] });
 
-// `AccountsRepositoryLive` encrypts provider tokens at rest, so it needs `Encryption`; a fixed test
-// key read through `ConfigProvider.fromEnv`, isolated from the real process environment.
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 const CoreLive = Layer.mergeAll(
-  Users.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(Layer.provide(Repositories.UsersRepositoryLive), Layer.provide(NodeCrypto.layer)),
-  Accounts.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(
-      Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-      Layer.provide(NodeCrypto.layer),
-    ),
+  Users.layer.pipe(Layer.provide(SqlStores), Layer.provide(NodeCrypto.layer)),
+  Accounts.layer.pipe(Layer.provide(SqlStores), Layer.provide(NodeCrypto.layer)),
   // `UserImport.importUser` runs each user in a `SqlTransaction` (nested inside the CLI's batch one).
   SqlTransaction.layerSql,
   // The imported better-auth / Firebase hashes verify through their legacy verifiers.
@@ -78,12 +53,7 @@ const CoreLive = Layer.mergeAll(
   Layer.provideMerge(
     AuthEvents.layer.pipe(
       Layer.provideMerge(
-        AuditLog.layer
-          .pipe(Layer.provide(SqlStores))
-          .pipe(
-            Layer.provide(Repositories.AuditLogRepositoryLive),
-            Layer.provide(NodeCrypto.layer),
-          ),
+        AuditLog.layer.pipe(Layer.provide(SqlStores), Layer.provide(NodeCrypto.layer)),
       ),
     ),
   ),

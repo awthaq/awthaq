@@ -345,7 +345,7 @@ To rotate: add a new entry, point `AWTHAQ_ENCRYPTION_KEY_ID` at it, and keep the
 
 ### Running more than one replica
 
-Every `layerMemory` in this repository (`Users`, `Accounts`, `Sessions`, `Verification`, `AuditLog`, `RevocationStore`, `SigningKeyRecords`, `ChallengeStore`, `RateLimiter.layerMemory`) is one `Ref` per process, so a second instance behind a load balancer would see a different world. To run replicas, the following must be identical or shared across all of them:
+Every in-memory store in this repository (`Persistence.memory`, which holds the `Users`, `Accounts`, `Sessions`, `Verification` and `AuditLog` stores, plus `RevocationStore`, `SigningKeyRecords`, `ChallengeStore` and `RateLimiter.layerMemory`) is one `Ref` per process, so a second instance behind a load balancer would see a different world. To run replicas, the following must be identical or shared across all of them:
 
 | What | How to share it |
 |---|---|

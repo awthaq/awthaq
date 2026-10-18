@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "@awthaq/password": "workspace:*",
+    "@effect/sql-libsql": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

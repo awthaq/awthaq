@@ -9,7 +9,7 @@
 // spec/decisions/016-verification-sql-claiming.md (ADR-EA-016).
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { SqlTransaction, VerificationStore } from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -916,17 +916,14 @@ describe("Verification infrastructure failures (MA-004)", () => {
 // miss records. The replay event is an attempt event and the spent attempt runs in the unit of work's
 // `afterUnit` lane, so both survive the rollback without the caller doing anything.
 describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () => {
-  const SqlAuditLayer = Verification.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(
-      Layer.provide(Repositories.VerificationRepositoryLive),
-      Layer.provide(Repositories.VerificationReservationsRepositoryLive),
-      Layer.provide(NodeCrypto.layer),
-      Layer.provideMerge(AuthEvents.layer),
-      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
-      Layer.provideMerge(SqlLive),
-      Layer.provideMerge(Migrated),
-    );
+  const SqlAuditLayer = Verification.layer.pipe(
+    Layer.provide(SqlStores),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
 
   const replayRows = Effect.flatMap(AuditLog.AuditLog, (log) =>
     log.list({ eventTag: "auth.token.replay" }),
@@ -983,17 +980,14 @@ describe("Verification miss inside a rolled-back transaction (ADR-EA-037)", () =
 
 // ADR-EA-039: what only a real transaction can prove, on SQLite and (under `pnpm test:pg`) Postgres.
 describe("Verification.redeem over a real transaction", () => {
-  const SqlAuditLayer = Verification.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(
-      Layer.provide(Repositories.VerificationRepositoryLive),
-      Layer.provide(Repositories.VerificationReservationsRepositoryLive),
-      Layer.provide(NodeCrypto.layer),
-      Layer.provideMerge(AuthEvents.layer),
-      Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
-      Layer.provideMerge(SqlLive),
-      Layer.provideMerge(Migrated),
-    );
+  const SqlAuditLayer = Verification.layer.pipe(
+    Layer.provide(SqlStores),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
 
   const replayRows = Effect.flatMap(AuditLog.AuditLog, (log) =>
     log.list({ eventTag: "auth.token.replay" }),

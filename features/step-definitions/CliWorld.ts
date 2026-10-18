@@ -30,10 +30,10 @@ import {
   Slots,
   Users,
 } from "@awthaq/core";
-import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { Roles } from "@awthaq/roles";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -138,38 +138,16 @@ export const widgetOnly = Auth.make([Widget]);
 const adminRole = role({ name: "admin", permissions: [] });
 const editorRole = role({ name: "editor", permissions: [] });
 
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
-
 const CoreLive = Layer.mergeAll(
   Users.layer.pipe(Layer.provide(SqlStores)),
-  Accounts.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
+  Accounts.layer.pipe(Layer.provide(SqlStores)),
   SqlTransaction.layerSql,
   cheapArgon2id.pipe(Layer.provide(NodeCrypto.layer)),
 ).pipe(
   Layer.provideMerge(
     AuthEvents.layer.pipe(
       Layer.provideMerge(
-        AuditLog.layer
-          .pipe(Layer.provide(SqlStores))
-          .pipe(
-            Layer.provide(Repositories.AuditLogRepositoryLive),
-            Layer.provide(NodeCrypto.layer),
-          ),
+        AuditLog.layer.pipe(Layer.provide(SqlStores), Layer.provide(NodeCrypto.layer)),
       ),
     ),
   ),

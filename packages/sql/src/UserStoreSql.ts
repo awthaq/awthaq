@@ -24,11 +24,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { isSqlError, type SqlError } from "effect/unstable/sql/SqlError";
 import type { User } from "./Models.ts";
 import { UsersRepository } from "./Repositories.ts";
 import * as SqlStore from "./SqlStore.ts";
-import { StoreUnavailable } from "./StoreFailure.ts";
+import { isUniqueViolation, StoreUnavailable } from "./StoreFailure.ts";
 
 /** How many times a user insert is retried when the holder it lost to vanished before it could be read. */
 const INSERT_ATTEMPTS = 3;
@@ -72,9 +71,6 @@ const change = <A>(value: UserStore.Change<A>): A | null | undefined => {
       return null;
   }
 };
-
-const isUniqueViolation = (error: unknown): error is SqlError =>
-  isSqlError(error) && error.reason._tag === "UniqueViolation";
 
 const missing: UserStore.CasOutcome = { _tag: "Missing" };
 const taken: UserStore.CasOutcome = { _tag: "Taken" };

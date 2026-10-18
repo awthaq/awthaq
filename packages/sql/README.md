@@ -7,21 +7,17 @@ The persistence stratum: the entities, repositories and migrations behind `@awth
 | Export                | What it is                                                                                                                                                                                                                                                                                                                                                                                               |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Models`              | `makeModels(dialect)` — the `User`, `Account`, `Session`, `VerificationToken`, `VerificationReservation` `Model.Class` entities with the boolean/DateTime wire codec of the given dialect (`"pg"` or `"sqlite"`); `dialectFields(dialect)` / `resolveDialect(sql)` for record stores that declare their own `SqlSchema` structs; the id brands `UserId`, `AccountId`, `SessionId`, `VerificationTokenId` |
-| `Repositories`        | one `Context.Service` + `…Live` layer each: `Users`, `Accounts` (requires `Encryption`), `Sessions`, `Verification`, `VerificationReservations` (one atomic claim), `AuditLog`. Built over the ambient `SqlClient`; none opens its own transaction (BEH-EA-035) — the composing domain service holds the boundary, via `@awthaq/ports`' `SqlTransaction` where it needs one                              |
-| `CoreMigrations`      | `coreMigrations` — 23 forward-only migrations for the tables above, with one `pg` and one `sqlite` branch each                                                                                                                                                                                                                                                                                           |
+| `UserStoreSql`, `AccountStoreSql` (requires `Encryption`), `SessionStoreSql`, `VerificationStoreSql` (tokens and the reservation claim), `AuditLogStoreSql`, `RelayCursorStoreSql` | the SQL adapters of the core store ports (`@awthaq/ports`), built over the ambient `SqlClient`. `Persistence.sql()` composes them; provide a `SqlClient` and `Encryption` |
+| `CoreMigrations`      | `coreMigrations` — 29 forward-only migrations for the tables above, with one `pg` and one `sqlite` branch each                                                                                                                                                                                                                                                                                           |
 | `RateLimiterStoreSql` | an opt-in SQL store for `@awthaq/core`'s rate limiter, with its own migration and tracking table                                                                                                                                                                                                                                                                                                         |
 
-Repositories resolve the dialect once, at layer construction, from the client they are given (`sql.onDialectOrElse`; anything but `pg`/`sqlite` dies), so wiring is just providing a `SqlClient` and, for accounts, `Encryption`:
+Each store adapter resolves the dialect once, at layer construction, from the client it is given (`sql.onDialectOrElse`; anything but `pg`/`sqlite` dies). `Persistence.sql()` composes the core store adapters, so wiring is providing a `SqlClient` and `Encryption`:
 
 ```ts
-const PersistenceLive = Layer.mergeAll(
-  Repositories.UsersRepositoryLive,
-  Repositories.AccountsRepositoryLive, // needs Encryption
-  Repositories.SessionsRepositoryLive,
-  Repositories.VerificationRepositoryLive,
-  Repositories.VerificationReservationsRepositoryLive,
-  Repositories.AuditLogRepositoryLive,
-).pipe(Layer.provideMerge(SqlLive), Layer.provide(EncryptionLive));
+const PersistenceLive = Persistence.sql().pipe(
+  Layer.provideMerge(SqlLive),
+  Layer.provide(EncryptionLive),
+);
 ```
 
 ## Runtimes & drivers

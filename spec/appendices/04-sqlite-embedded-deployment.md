@@ -12,7 +12,7 @@
 > | Change History | 1.0 (2026-09-29): Initial release (SEA-002) |
 ---
 
-This appendix is for an operator running awthaq's `layerSql` compositions over an embedded SQLite database (`@effect/sql-sqlite-node`, backed by `node:sqlite`) — the shape the README's local smoke test and every SQLite-backed test in this repository use. It states what that shape can and cannot carry, so the decision to move to Postgres is made on a signal rather than on an outage. It complements [ADR-EA-014](../decisions/014-session-storage-backend-neutrality.md), which fixes what every session backend must guarantee, and [ADR-EA-004](../decisions/004-database-neutral-models.md), which is why the same `Models`/`Repositories` run on both dialects.
+This appendix is for an operator running awthaq's `Persistence.sql()` compositions over an embedded SQLite database (`@effect/sql-sqlite-node`, backed by `node:sqlite`) — the shape the README's local smoke test and every SQLite-backed test in this repository use. It states what that shape can and cannot carry, so the decision to move to Postgres is made on a signal rather than on an outage. It complements [ADR-EA-014](../decisions/014-session-storage-backend-neutrality.md), which fixes what every session backend must guarantee, and [ADR-EA-004](../decisions/004-database-neutral-models.md), which is why the same `Models`/`Repositories` run on both dialects.
 
 ## What the client does
 
