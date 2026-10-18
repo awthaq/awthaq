@@ -235,7 +235,7 @@ export const contribute = (carrier: ClaimCarrier, contribution: CredentialResolv
  * The claiming contribution for `credential`, or `None` when no contribution claims it (or none are
  * registered). The registry lookup alone; running the contribution is `resolveClaimed`.
  */
-export const findClaim = (carrier: ClaimCarrier, credential: Redacted.Redacted<string>) =>
+const findClaim = (carrier: ClaimCarrier, credential: Redacted.Redacted<string>) =>
   Effect.gen(function* () {
     const raw = Redacted.value(credential);
     const registry = yield* Effect.serviceOption(CredentialResolvers);

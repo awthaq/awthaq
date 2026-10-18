@@ -25,7 +25,7 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
       Then both apply the identical hash-comparison and absolute/idle-expiry logic over Sessions
       And SubjectExtractor's resolution and Authentication's resolution agree on whether the session is valid
 
-    # A source tripwire (the property is structural): SubjectExtractor.ts must resolve every credential through Authentication.resolvePrincipal and carry no comparison or expiry logic of its own. The observable half is REQ-EA-429.
+    # A source tripwire (the property is structural): SubjectExtractor.ts must resolve every credential through the one credential module (Credentials.resolve) and read no cookie or header itself. The observable half is REQ-EA-429.
     @REQ-EA-430
     Scenario: SubjectExtractor must not hand-write its own independent hash-comparison or expiry check
       Given a SubjectExtractor implementation

@@ -385,7 +385,7 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
     Layer.provideMerge(options.services ?? Layer.empty),
     Layer.provide(middleware),
     // The resolver the derived middleware uses is part of the output too, so a test that calls
-    // `Authentication.resolvePrincipal` directly reads it instead of hand-building `PrincipalResolverLive`.
+    // `Credentials.make` directly reads it instead of hand-building `PrincipalResolverLive`.
     Layer.provideMerge(options.principalResolver ?? Credentials.PrincipalResolverLive),
     Layer.provideMerge(csrf),
     Layer.provideMerge((options.taps ?? Layer.empty).pipe(Layer.provideMerge(points))),

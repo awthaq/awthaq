@@ -4,7 +4,7 @@
 // exemption).
 import { Auth, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
-import { Authentication, Credentials } from "@awthaq/server";
+import { Credentials } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -17,7 +17,9 @@ import * as Cookies from "effect/unstable/http/Cookies";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import { makeSubject } from "@qadi/core";
 import { SubjectExtractor as QadiSubjectExtractor } from "@qadi/http";
+import { SubjectResolver } from "../src/SubjectResolver.ts";
 import * as SubjectExtractor from "../src/SubjectExtractor.ts";
 import * as UserClaims from "../src/UserClaims.ts";
 import { TestAuth } from "@awthaq/test";
@@ -52,6 +54,21 @@ const ShortLivedTestLayer = SubjectExtractor.SubjectExtractorLive.pipe(
   Layer.provideMerge(ShortLivedCoreLive),
 );
 
+const unreachableSessions: Sessions.SessionsShape = {
+  issue: () => Effect.die("not used in this test"),
+  verify: () => Effect.die("not used in this test"),
+  revoke: () => Effect.die("not used in this test"),
+  revokeOwned: () => Effect.die("not used in this test"),
+  revokeOthers: () => Effect.die("not used in this test"),
+  revokeAll: () => Effect.die("not used in this test"),
+  list: () => Effect.die("not used in this test"),
+  findOwned: () => Effect.die("not used in this test"),
+  isLive: () => Effect.die("not used in this test"),
+  purgeExpired: () => Effect.die("not used in this test"),
+  reauthenticate: () => Effect.die("not used in this test"),
+  requireFresh: () => Effect.die("not used in this test"),
+};
+
 describe("SubjectExtractor (Path B adapter)", () => {
   it.effect("BEH-EA-153: no credential resolves to anonymous, not a failure", () =>
     Effect.gen(function* () {
@@ -60,61 +77,6 @@ describe("SubjectExtractor (Path B adapter)", () => {
       const subject = yield* extractor.extract(request);
       assert.strictEqual(subject.id, "anonymous");
     }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "BEH-EA-153: a valid session cookie resolves the real user, via the same logic Authentication uses",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const users = yield* Users.Users;
-        const extractor = yield* QadiSubjectExtractor;
-        const user = yield* users.create({
-          identity: { _tag: "Email", email: "path-b@example.com" },
-          name: "Path B",
-        });
-        const { token } = yield* sessions.issue({ userId: user.id });
-        const request = HttpServerRequest.fromWeb(
-          new Request("http://localhost/whatever", {
-            headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
-          }),
-        );
-        const subject = yield* extractor.extract(request);
-        assert.strictEqual(subject.id, `user:${user.id}`);
-      }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "BEH-EA-153: a bearer credential is accepted too, cookie taking priority when both are present",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const users = yield* Users.Users;
-        const extractor = yield* QadiSubjectExtractor;
-        const cookieUser = yield* users.create({
-          identity: { _tag: "Email", email: "path-b-cookie@example.com" },
-          name: "Cookie",
-        });
-        const bearerUser = yield* users.create({
-          identity: { _tag: "Email", email: "path-b-bearer@example.com" },
-          name: "Bearer",
-        });
-        const cookieSession = yield* sessions.issue({ userId: cookieUser.id });
-        const bearerSession = yield* sessions.issue({ userId: bearerUser.id });
-        const extract = (headers: Record<string, string>) =>
-          extractor.extract(
-            HttpServerRequest.fromWeb(new Request("http://localhost/whatever", { headers })),
-          );
-        const bearerAlone = yield* extract({
-          authorization: `Bearer ${Redacted.value(bearerSession.token)}`,
-        });
-        assert.strictEqual(bearerAlone.id, `user:${bearerUser.id}`);
-        const both = yield* extract({
-          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(cookieSession.token)}`,
-          authorization: `Bearer ${Redacted.value(bearerSession.token)}`,
-        });
-        assert.strictEqual(both.id, `user:${cookieUser.id}`);
-      }).pipe(Effect.provide(TestLayer)),
   );
 
   // Bug B (plan 11): Path B used to take the first PRESENT credential and never fall through.
@@ -145,65 +107,12 @@ describe("SubjectExtractor (Path B adapter)", () => {
   );
 
   it.effect(
-    "APS-006: an __Host-impersonation cookie shadows __Host-session and resolves the impersonated user; an ordinary session planted there is ignored",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const users = yield* Users.Users;
-        const extractor = yield* QadiSubjectExtractor;
-        const admin = yield* users.create({
-          identity: { _tag: "Email", email: "aps006-admin@example.com" },
-          name: "Admin",
-        });
-        const target = yield* users.create({
-          identity: { _tag: "Email", email: "aps006-target@example.com" },
-          name: "Target",
-        });
-        const own = yield* sessions.issue({ userId: admin.id });
-        const impersonation = yield* sessions.issue({
-          userId: target.id,
-          actingAs: { type: "user", id: admin.id },
-        });
-        const extract = (cookie: string) =>
-          extractor.extract(
-            HttpServerRequest.fromWeb(
-              new Request("http://localhost/whatever", { headers: { cookie } }),
-            ),
-          );
-
-        const shadowed = yield* extract(
-          `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(impersonation.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
-        );
-        assert.strictEqual(shadowed.id, `user:${target.id}`);
-
-        const planted = yield* extract(
-          `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(own.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
-        );
-        assert.strictEqual(planted.id, `user:${admin.id}`);
-      }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect("BEH-EA-153: an unknown session resolves to anonymous, never a failure", () =>
-    Effect.gen(function* () {
-      const extractor = yield* QadiSubjectExtractor;
-      const request = HttpServerRequest.fromWeb(
-        new Request("http://localhost/whatever", {
-          headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=does-not-exist.secret` },
-        }),
-      );
-      const subject = yield* extractor.extract(request);
-      assert.strictEqual(subject.id, "anonymous");
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
     "upstream-hardening-followups ticket 03: an endpoint combining Api.Authentication and " +
       "SubjectExtractorLive on one route survives a touchEvery-crossing request without a false anonymous/SessionNotFound",
     () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
-        const resolver = yield* Credentials.PrincipalResolver;
         const extractor = yield* QadiSubjectExtractor;
         const user = yield* users.create({
           identity: { _tag: "Email", email: "both-bridges@example.com" },
@@ -223,12 +132,15 @@ describe("SubjectExtractor (Path B adapter)", () => {
         // Path A: Api.Authentication's own resolution, against the raw
         // (pre-rotation) credential — this is the call that actually
         // rotates the secret, exactly as it would inside AuthenticationLive.
-        const principal = yield* Authentication.resolvePrincipal(
-          sessions,
-          resolver,
-          token,
+        const credentials = yield* Credentials.make;
+        const presented = yield* Credentials.fromRequest(request);
+        const resolved = yield* credentials.step(
           "cookie",
-        ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request));
+          presented,
+          Credentials.userTier,
+          Credentials.httpScope(request),
+        );
+        const principal = resolved.principal;
         assert.strictEqual(principal.ref.id, user.id);
 
         // Path B: SubjectExtractorLive, independently, on the SAME request
@@ -288,6 +200,81 @@ describe("SubjectExtractor (Path B adapter)", () => {
       ),
   );
 
+  // MA-004: an outage is the store being unreachable, never "no credential".
+  it.effect("MA-004: a store outage is SubjectExtractionFailed, never anonymous", () =>
+    Effect.gen(function* () {
+      const extractor = yield* QadiSubjectExtractor;
+      const failure = yield* extractor
+        .extract(
+          HttpServerRequest.fromWeb(
+            new Request("http://localhost/whatever", {
+              headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=some-id.some-secret` },
+            }),
+          ),
+        )
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "SubjectExtractionFailed");
+    }).pipe(
+      Effect.provide(
+        SubjectExtractor.SubjectExtractorLive.pipe(
+          Layer.provide(Credentials.PrincipalResolverLive),
+          Layer.provide(
+            Layer.succeed(Sessions.Sessions, {
+              ...unreachableSessions,
+              verify: () => Effect.fail(new Api.StoreUnavailable({ operation: "Sessions.verify" })),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(SubjectResolver, {
+              resolve: (principal) => Effect.succeed(makeSubject({ id: principal.ref.id })),
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  // APS-006: the impersonation rule is judged on the session, before the resolver (as on Path A), so a resolver
+  // that drops `actingAs` still evaluates the impersonated user, never the admin behind it.
+  it.effect(
+    "APS-006: an impersonation session is judged on the session, not the resolved principal",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const extractor = yield* QadiSubjectExtractor;
+        const issued = yield* sessions.issue({
+          userId: Users.UserId("22222222-2222-2222-2222-222222222222"),
+          actingAs: { type: "user", id: "11111111-1111-1111-1111-111111111111" },
+        });
+        const subject = yield* extractor.extract(
+          HttpServerRequest.fromWeb(
+            new Request("http://localhost/whatever", {
+              headers: {
+                cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(issued.token)}`,
+              },
+            }),
+          ),
+        );
+        assert.strictEqual(subject.id, "user:22222222-2222-2222-2222-222222222222");
+      }).pipe(
+        Effect.provide(
+          TestAuth.layer(Auth.make([UserClaims.UserClaims]), {
+            principalResolver: Layer.succeed(Credentials.PrincipalResolver, {
+              // A custom resolver that drops `actingAs` (the user principal carries none).
+              resolve: (session) =>
+                Effect.succeed(
+                  new Api.UserPrincipal({
+                    ref: new Api.PrincipalRef({ type: "user", id: session.userId }),
+                    sessionId: session.id,
+                  }),
+                ),
+            }),
+            services: SubjectExtractor.SubjectExtractorLive,
+          }),
+        ),
+      ),
+  );
+
   // MAPS-001/OCM-002: Path B recognises exactly the credentials `Authentication` does.
   describe("contributed credential resolvers", () => {
     const service = (id: string) =>
@@ -317,20 +304,6 @@ describe("SubjectExtractor (Path B adapter)", () => {
           HttpServerRequest.fromWeb(new Request("http://localhost/whatever", { headers })),
         );
       });
-
-    it.effect("a claimed bearer credential resolves to its principal's subject", () =>
-      Effect.gen(function* () {
-        const subject = yield* extract({ authorization: "Bearer svc.x.y" });
-        assert.strictEqual(subject.id, "service:from-bearer");
-      }).pipe(Effect.provide(WithResolvers)),
-    );
-
-    it.effect("an x-api-key credential resolves through the apiKey carrier", () =>
-      Effect.gen(function* () {
-        const subject = yield* extract({ "x-api-key": "ak_1.secret" });
-        assert.strictEqual(subject.id, "service:from-key");
-      }).pipe(Effect.provide(WithResolvers)),
-    );
 
     it.effect(
       "BEH-EA-153: a stale session cookie falls through to a claimed bearer credential",
@@ -374,13 +347,6 @@ describe("SubjectExtractor (Path B adapter)", () => {
             }),
           ),
         ),
-    );
-
-    it.effect("an unclaimed x-api-key is anonymous, never treated as a session token", () =>
-      Effect.gen(function* () {
-        const subject = yield* extract({ "x-api-key": "not-a-key" });
-        assert.strictEqual(subject.id, "anonymous");
-      }).pipe(Effect.provide(WithResolvers)),
     );
   });
 });

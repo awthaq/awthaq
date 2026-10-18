@@ -37,7 +37,6 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -46,6 +45,7 @@ import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import { CsrfConfigForTests } from "./shared/Csrf.ts";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import { EncryptionLive } from "./shared/TestEncryption.ts";
+import { resolveCredential } from "./shared/ResolveCredential.ts";
 
 /**
  * BEH-EA-072: a *different* declaration of the same two schemes, in the opposite order. Its
@@ -577,29 +577,14 @@ export const resolveSessionPrincipal = Effect.fn("features.authentication.resolv
   },
 );
 
-/** REQ-EA-195: the principal-only wrapper Path B calls, over a machine credential. */
+/** REQ-EA-195: the credential module's `step` Path B runs, over a machine credential. */
 export const resolveCredentialPrincipal = Effect.fn(
   "features.authentication.resolveCredentialPrincipal",
 )(function* (credential: string, scheme: "apiKey" | "bearer") {
   const app = yield* appHandle();
   return yield* app.withServices(
-    Effect.gen(function* () {
-      const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Credentials.PrincipalResolver.pipe(
-        Effect.provide(Credentials.PrincipalResolverLive),
-      );
-      return yield* Authentication.resolvePrincipal(
-        sessions,
-        resolver,
-        Redacted.make(credential),
-        scheme,
-      );
-      // A claiming resolver may read the request (e.g. to rate-limit by address); Path B has one too.
-    }).pipe(
-      Effect.provideService(
-        HttpServerRequest.HttpServerRequest,
-        HttpServerRequest.fromWeb(new Request("http://localhost/")),
-      ),
+    resolveCredential(scheme, credential).pipe(
+      Effect.provide(Credentials.PrincipalResolverLive),
       Effect.orDie,
     ),
   );

@@ -4,7 +4,7 @@
 // asserted here is the bridge's own contract: which subject the extractor resolves (and that it
 // reuses Authentication's session logic), which statuses a missing annotation / outage / denial end
 // in, what the registry route serves. qadi's policy evaluation is real and never stubbed.
-import { Authentication, Credentials } from "@awthaq/server";
+import { Credentials } from "@awthaq/server";
 import { Sessions, Users } from "@awthaq/core";
 import { AuthorizedSubject } from "@awthaq/qadi";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -226,8 +226,7 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
       const resolveBoth = (credential: string) =>
         inDomain(
           Effect.gen(function* () {
-            const sessions = yield* Sessions.Sessions;
-            const principals = yield* Credentials.PrincipalResolver;
+            const credentials = yield* Credentials.make;
             const extractor = yield* QadiSubjectExtractor;
             const request = HttpServerRequest.fromWeb(
               new Request("http://localhost/x", {
@@ -235,14 +234,17 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
               }),
             );
             const viaExtractor = (yield* extractor.extract(request)).id;
-            const viaAuthentication = yield* Authentication.resolvePrincipal(
-              sessions,
-              principals,
-              Redacted.make(credential),
-              "cookie",
-            ).pipe(
-              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-              Effect.map((principal) => `user:${principal.ref.id}`),
+            // Path A's own call: its `cookie` handler runs `step` for that one carrier under the user tier.
+            const viaAuthentication = yield* Credentials.fromRequest(request).pipe(
+              Effect.flatMap((presented) =>
+                credentials.step(
+                  "cookie",
+                  presented,
+                  Credentials.userTier,
+                  Credentials.httpScope(request),
+                ),
+              ),
+              Effect.map((resolved) => `user:${resolved.principal.ref.id}`),
               Effect.catchTag("Unauthenticated", () => Effect.succeed("anonymous")),
             );
             return { viaExtractor, viaAuthentication };
@@ -411,10 +413,13 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("there is only one place a session-validity bug could be fixed, not two", function* () {
     yield* Effect.void;
-    // Every credential kind the extractor reads goes through the one shared function.
+    // Every credential kind the extractor reads goes through the one credential module, exactly once.
     const code = extractorSource();
-    const calls = code.match(/Authentication\.resolve(?:Principal|Session)\(/g) ?? [];
-    assert.ok(calls.length >= 2, "the cookie and impersonation credentials both go through it");
+    const calls = code.match(/credentials\.resolve\(/g) ?? [];
+    assert.equal(calls.length, 1, "the extractor calls credentials.resolve( exactly once");
+    assert.match(code, /import \{[^}]*\bCredentials\b[^}]*\} from "@awthaq\/server"/);
+    assert.doesNotMatch(code, /request\.cookies\[/);
+    assert.doesNotMatch(code, /"authorization"/);
     assert.doesNotMatch(code, /sessions\.verify\(/);
   });
 

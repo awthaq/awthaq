@@ -388,7 +388,7 @@ export interface SessionsShape {
    * calling `verify` a *second time within one request* against the same
    * pre-rotation credential used to be a real architectural risk:
    * `@awthaq/qadi`'s `SubjectExtractorLive` (BEH-EA-153) calls
-   * `resolvePrincipal` — and so `verify` — independent of and potentially
+   * the credential resolution — and so `verify` — independent of and potentially
    * before `Authentication`'s own middleware runs on the same request
    * (spec/behaviors/20-qadi-bridge-path-b.md), so an endpoint wiring both
    * Path A's `Api.Authentication` and Path B's `RequirePermission`
@@ -397,8 +397,8 @@ export interface SessionsShape {
    * session.
    *
    * Resolved (upstream-hardening-followups map, ticket 03):
-   * `@awthaq/server`'s `Authentication.resolveSession` now memoizes its
-   * result per request, single-flight and keyed on the request's
+   * `@awthaq/server`'s `Credentials` (ADR-EA-042) now memoizes its
+   * result per request scope, single-flight and keyed on the request's
    * underlying `source` (TS-003/NHS-006) — both `AuthenticationLive`/
    * `OptionalAuthenticationLive` and `SubjectExtractorLive` funnel through
    * it, so a second call within the same request reuses the first's

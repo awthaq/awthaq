@@ -868,7 +868,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     "no domain logic is duplicated between this path and the HttpRouter-based serving paths",
     function* () {
       // Same store, same answer: the routed path rejects exactly what the imperative one did, and
-      // the imperative program is `Authentication.resolvePrincipal` — the middleware's own function.
+      // the imperative program is `Credentials` (via `resolveCredential`) — the middleware's own module.
       const routed = yield* getOutcome("routedView");
       assert.ok(routed instanceof Response);
       assert.equal(routed.status, 401);

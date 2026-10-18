@@ -14,12 +14,11 @@
 // Several scenarios (BEH-EA-209/210/211/218) need to inspect state no HTTP
 // response ever carries — a session row's own `actingAs`/`idleExpiresAt`,
 // or a resolved `UserPrincipal`'s `actingAs` — so this World also exposes
-// direct domain-level access to `Sessions`/`Authentication.resolvePrincipal`
+// direct domain-level access to `Sessions`/`Credentials`
 // over the same shared `MemoMap` the HTTP handler itself resolves against.
 import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Admin } from "@awthaq/admin";
 import type { Api } from "@awthaq/api";
-import { Authentication, Credentials } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -28,8 +27,8 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import { TestAuth } from "@awthaq/test";
+import { resolveCredential } from "./shared/ResolveCredential.ts";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -227,7 +226,7 @@ export const inspectSession = Effect.fn("features.admin.inspectSession")(functio
 });
 
 /**
- * Domain-level: `Authentication.resolvePrincipal` against a raw token —
+ * Domain-level: `Credentials` resolving a raw session token —
  * BEH-EA-211's own seam. Explicitly typed to `Api.Principal` — a real
  * TS2883 portability error otherwise (two different resolved filesystem
  * paths to the same, real `packages/api` behind the `@awthaq/admin`
@@ -238,29 +237,7 @@ export const inspectSession = Effect.fn("features.admin.inspectSession")(functio
 export const resolvePrincipal: (token: string) => Effect.Effect<Api.Principal, never, World> =
   Effect.fn("features.admin.resolvePrincipal")(function* (token: string) {
     const { app } = yield* appHandle();
-    return yield* Effect.promise(() =>
-      app.run(
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const resolver = yield* Credentials.PrincipalResolver;
-          return yield* Authentication.resolvePrincipal(
-            sessions,
-            resolver,
-            Redacted.make(token),
-            "cookie",
-          ).pipe(
-            // Ticket 03: `resolvePrincipal` keys its per-request verify
-            // memoization off the ambient `HttpServerRequest` — this
-            // helper calls it directly, outside any real HTTP request,
-            // so it provides a synthetic one instead.
-            Effect.provideService(
-              HttpServerRequest.HttpServerRequest,
-              HttpServerRequest.fromWeb(new Request(ORIGIN)),
-            ),
-          );
-        }),
-      ),
-    );
+    return yield* Effect.promise(() => app.run(resolveCredential("cookie", token)));
   });
 
 export const publishedEvents = Effect.fn("features.admin.publishedEvents")(function* () {
