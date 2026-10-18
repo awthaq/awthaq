@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-20 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015, clarified that `SubjectExtractor` reuses `Authentication`'s session-verification logic rather than reimplementing it, and added the INV-EA-013 callout to BEH-EA-156 (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015, clarified that `SubjectExtractor` reuses `Authentication`'s session-verification logic rather than reimplementing it, and added the INV-EA-013 callout to BEH-EA-156 (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-18): BEH-EA-153 *As shipped*: Path B falls through to the next credential exactly as Path A does (plan 11 phase 0) |
 ---
 
 > Implemented in `@awthaq/qadi` (`SubjectExtractor.ts`; tests `packages/qadi/test/SubjectExtractor.test.ts`); the `RequirePermission` refusal itself is `@qadi/http`'s; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -40,6 +40,8 @@ Path B's `RequirePermission` is qadi's middleware, not awthaq's, so it cannot de
 `SubjectExtractor` performing session resolution "directly against the raw HTTP request, independent of `Authentication`'s middleware pipeline" describes *where in the request lifecycle* it runs, not a second implementation of session verification: it MUST reuse the identical hash-comparison and absolute/idle-expiry logic `Authentication`'s own middleware uses over `Sessions` — the same path [BEH-EA-066](09-authentication-middleware.md#beh-ea-066-the-bearer-handler-is-tried-after-the-cookie-handler-fails-over-the-same-session-resolution-logic) already requires the bearer handler to share with the cookie handler, and the same constant-time-compare/expiry mechanics [BEH-EA-050](07-sessions.md#beh-ea-050-only-sha-256secret-is-persisted-the-plaintext-secret-is-never-stored), [BEH-EA-051](07-sessions.md#beh-ea-051-a-session-carries-independent-absolute-and-idle-expiries-idle-refresh-never-extends-the-absolute-deadline), and [BEH-EA-056](07-sessions.md#beh-ea-056-session-secret-verification-is-a-constant-time-comparison-over-a-fixed-length-hash) specify. A `SubjectExtractor` implementation that hand-wrote its own hash comparison or its own expiry check — even one that produced the same answer in the common case — would be exactly the hand-written duplication of contract logic [BEH-EA-169](22-client-effect.md#beh-ea-169-the-client-derives-from-the-merged-contract) forbids: two independent places a session-validity bug could be fixed in only one, leaving awthaq with two sources of truth for what "a valid session" means depending on which of Path A or Path B a given request happened to go through.
 
 Sharing the resolution includes sharing its side effect: when the shared `verify` rotates the session secret (throttled touch, [BEH-EA-052](07-sessions.md#beh-ea-052-idle-window-refresh-is-throttled-to-at-most-one-write-per-touchevery)), the delivery of the new secret is registered on the request itself, so a route served by Path B alone (no `Authentication` middleware) delivers it on its response exactly as a Path A route does (PIL-005).
+
+**As shipped (plan 11).** Path B tries every credential the request presents, in the declaration order of BEH-EA-072 (impersonation cookie, session cookie, `x-api-key`, `Authorization: Bearer`), and a credential that does not resolve falls through to the next one exactly as Path A's security loop does: a stale session cookie beside a valid bearer token is the bearer's subject, not anonymous, and an `x-api-key` that does not resolve falls through to the bearer. Only when every presented credential fails is the subject anonymous; a store outage is `SubjectExtractionFailed`, never anonymous. An impersonation cookie counts only for a session carrying `actingAs`, judged on the session before the `PrincipalResolver`, as on Path A.
 
 _Previous: [BEH-EA-152](19-qadi-bridge-path-a.md#beh-ea-152-bare-httprouter-routes-use-addguardedroute) | Next: [BEH-EA-154](20-qadi-bridge-path-b.md#beh-ea-154-requirepermission-reads-the-requiredpermission-annotation)_
 

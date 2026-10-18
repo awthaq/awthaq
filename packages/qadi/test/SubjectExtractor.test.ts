@@ -91,17 +91,55 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
         const extractor = yield* QadiSubjectExtractor;
-        const user = yield* users.create({
+        const cookieUser = yield* users.create({
+          identity: { _tag: "Email", email: "path-b-cookie@example.com" },
+          name: "Cookie",
+        });
+        const bearerUser = yield* users.create({
           identity: { _tag: "Email", email: "path-b-bearer@example.com" },
-          name: "Path B",
+          name: "Bearer",
+        });
+        const cookieSession = yield* sessions.issue({ userId: cookieUser.id });
+        const bearerSession = yield* sessions.issue({ userId: bearerUser.id });
+        const extract = (headers: Record<string, string>) =>
+          extractor.extract(
+            HttpServerRequest.fromWeb(new Request("http://localhost/whatever", { headers })),
+          );
+        const bearerAlone = yield* extract({
+          authorization: `Bearer ${Redacted.value(bearerSession.token)}`,
+        });
+        assert.strictEqual(bearerAlone.id, `user:${bearerUser.id}`);
+        const both = yield* extract({
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(cookieSession.token)}`,
+          authorization: `Bearer ${Redacted.value(bearerSession.token)}`,
+        });
+        assert.strictEqual(both.id, `user:${cookieUser.id}`);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // Bug B (plan 11): Path B used to take the first PRESENT credential and never fall through.
+  it.effect(
+    "BEH-EA-153: a stale session cookie falls through to a valid bearer session, exactly as Authentication does",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const users = yield* Users.Users;
+        const extractor = yield* QadiSubjectExtractor;
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "path-b-stale@example.com" },
+          name: "Stale",
         });
         const { token } = yield* sessions.issue({ userId: user.id });
-        const request = HttpServerRequest.fromWeb(
-          new Request("http://localhost/whatever", {
-            headers: { authorization: `Bearer ${Redacted.value(token)}` },
-          }),
+        const subject = yield* extractor.extract(
+          HttpServerRequest.fromWeb(
+            new Request("http://localhost/whatever", {
+              headers: {
+                cookie: `${Sessions.SESSION_COOKIE_NAME}=stale.cookie`,
+                authorization: `Bearer ${Redacted.value(token)}`,
+              },
+            }),
+          ),
         );
-        const subject = yield* extractor.extract(request);
         assert.strictEqual(subject.id, `user:${user.id}`);
       }).pipe(Effect.provide(TestLayer)),
   );
@@ -292,6 +330,50 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const subject = yield* extract({ "x-api-key": "ak_1.secret" });
         assert.strictEqual(subject.id, "service:from-key");
       }).pipe(Effect.provide(WithResolvers)),
+    );
+
+    it.effect(
+      "BEH-EA-153: a stale session cookie falls through to a claimed bearer credential",
+      () =>
+        Effect.gen(function* () {
+          const subject = yield* extract({
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=stale.cookie`,
+            authorization: "Bearer svc.x.y",
+          });
+          assert.strictEqual(subject.id, "service:from-bearer");
+        }).pipe(Effect.provide(WithResolvers)),
+    );
+
+    it.effect(
+      "BEH-EA-153/OCM-002: an x-api-key that does not resolve falls through to the bearer",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const users = yield* Users.Users;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "path-b-failing-key@example.com" },
+            name: "Key",
+          });
+          const { token } = yield* sessions.issue({ userId: user.id });
+          const subject = yield* extract({
+            "x-api-key": "ak_bad.secret",
+            authorization: `Bearer ${Redacted.value(token)}`,
+          });
+          assert.strictEqual(subject.id, `user:${user.id}`);
+        }).pipe(
+          Effect.provide(
+            TestAuth.layer(Auth.make([UserClaims.UserClaims]), {
+              services: Layer.mergeAll(
+                SubjectExtractor.SubjectExtractorLive,
+                Authentication.contribute("apiKey", {
+                  id: "failing-keys",
+                  claims: (raw) => raw.startsWith("ak_"),
+                  resolve: () => Effect.fail(new Api.Unauthenticated()),
+                }),
+              ),
+            }),
+          ),
+        ),
     );
 
     it.effect("an unclaimed x-api-key is anonymous, never treated as a session token", () =>

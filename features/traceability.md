@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1305 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1314; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1306 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1315; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1323,3 +1323,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1312 | [BEH-EA-245](../spec/behaviors/29-saml-sp.md#beh-ea-245-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | [13-enterprise-federation/29-saml-sp.feature](features/13-enterprise-federation/29-saml-sp.feature) | Two concurrent first sign-ins for one NameID sign in as one user |
 | REQ-EA-1313 | [BEH-EA-245](../spec/behaviors/29-saml-sp.md#beh-ea-245-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | [13-enterprise-federation/29-saml-sp.feature](features/13-enterprise-federation/29-saml-sp.feature) | A connection that trusts email links only addresses in its own domains |
 | REQ-EA-1314 | [BEH-EA-188](../spec/behaviors/24-nextjs-ssr.md#beh-ea-188-proxyts-is-an-optimistic-redirect-never-the-boundary) | [07-client-integration/24-nextjs-ssr.feature](features/07-client-integration/24-nextjs-ssr.feature) | Under a domain-scoped session cookie proxy.ts checks the configured cookie name |
+| REQ-EA-1315 | [BEH-EA-153](../spec/behaviors/20-qadi-bridge-path-b.md#beh-ea-153-subjectextractor-runs-session-resolution-on-the-raw-request) | [06-roles-and-authorization-bridge/20-qadi-bridge-path-b.feature](features/06-roles-and-authorization-bridge/20-qadi-bridge-path-b.feature) | A stale session cookie beside a valid bearer token resolves the same subject on both paths |

@@ -60,6 +60,7 @@ import {
   setOwner,
   setPlan,
   signIn,
+  app,
 } from "./QadiBridgeWorld.ts";
 
 const denialTrace: Trace = {
@@ -314,6 +315,59 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  // ---- BEH-EA-153: a credential that does not resolve falls through to the next, on both paths ----
+
+  const STALE_COOKIE = `${Sessions.SESSION_COOKIE_NAME}=stale.cookie`;
+
+  Given(
+    "a signed-in user {string} whose browser also presents a stale session cookie",
+    function* (name: string) {
+      yield* configure({ roles: [readerRole, adminRole] });
+      yield* signIn(name, ["reader"]);
+    },
+  );
+
+  When(
+    "{string} sends the stale cookie and her bearer token to a Path-A-gated endpoint and to a Path-B-gated endpoint",
+    function* (name: string) {
+      const world = yield* World;
+      const actor = yield* world.actors.get(name);
+      const token = decodeURIComponent(actor.cookie.slice(actor.cookie.indexOf("=") + 1));
+      const served = yield* app();
+      const send = (path: string) =>
+        Effect.promise(async () => {
+          const response = await served.send(path, {
+            cookie: STALE_COOKIE,
+            headers: { authorization: `Bearer ${token}` },
+          });
+          return { status: response.status, body: await response.text() };
+        });
+      const a = yield* send("/a/whoami");
+      const b = yield* send("/b/whoami");
+      yield* setOutcome("pathA", a);
+      yield* setOutcome("pathB", b);
+    },
+  );
+
+  Then(
+    "both paths resolve {string} as the subject, not anonymous on Path B",
+    function* (name: string) {
+      const world = yield* World;
+      const actor = yield* world.actors.get(name);
+      const a = yield* outcome("pathA");
+      const b = yield* outcome("pathB");
+      assert.ok(typeof a === "object" && a !== null && typeof b === "object" && b !== null);
+      assert.equal(Reflect.get(a, "status"), 200);
+      assert.equal(Reflect.get(b, "status"), 200);
+      for (const response of [a, b]) {
+        assert.equal(
+          JSON.parse(String(Reflect.get(response, "body"))).subjectId,
+          `user:${actor.userId}`,
+        );
+      }
+    },
+  );
+
   // ---- REQ-EA-430: SubjectExtractor has no session-validity logic of its own ----
 
   const extractorSource = () =>
@@ -359,7 +413,7 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* Effect.void;
     // Every credential kind the extractor reads goes through the one shared function.
     const code = extractorSource();
-    const calls = code.match(/Authentication\.resolvePrincipal\(/g) ?? [];
+    const calls = code.match(/Authentication\.resolve(?:Principal|Session)\(/g) ?? [];
     assert.ok(calls.length >= 2, "the cookie and impersonation credentials both go through it");
     assert.doesNotMatch(code, /sessions\.verify\(/);
   });

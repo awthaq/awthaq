@@ -33,6 +33,12 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
       Then it contains no hash-comparison or expiry check distinct from the one Authentication's middleware uses
       And there is only one place a session-validity bug could be fixed, not two
 
+    @REQ-EA-1315
+    Scenario: A stale session cookie beside a valid bearer token resolves the same subject on both paths
+      Given a signed-in user "alice" whose browser also presents a stale session cookie
+      When "alice" sends the stale cookie and her bearer token to a Path-A-gated endpoint and to a Path-B-gated endpoint
+      Then both paths resolve "alice" as the subject, not anonymous on Path B
+
   # BEH-EA-154 — spec/behaviors/20-qadi-bridge-path-b.md. qadi's own policy
   # evaluation is a black box throughout this file: "qadi's evaluator would
   # return an Allow/Deny decision" is a Given, never something derived from
