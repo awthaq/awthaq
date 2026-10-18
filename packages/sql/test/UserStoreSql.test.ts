@@ -1,19 +1,16 @@
 // Plan 02, phase 5: what only the SQL adapter of `UserStore` can show. What every adapter must do is
 // `StoreContract.users` (`packages/test/test/StoreContract.*.test.ts`, also on Postgres under
-// `pnpm test:pg`); this is the sealed metadata column, the holder that vanished between the two
-// statements of an insert, a unique violation inside an enclosing transaction, and the failure mapping.
-import { Encryption, KeyProvider, SqlTransaction, UserStore } from "@awthaq/ports";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+// `pnpm test:pg`); the sealed metadata column is `CoreSealedColumns.test.ts`. This is the holder that
+// vanished between the two statements of an insert, a unique violation inside an enclosing transaction, and the failure mapping.
+import { SqlTransaction, UserStore } from "@awthaq/ports";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
@@ -52,52 +49,6 @@ const Plain = UserStoreSql.layer.pipe(
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
-
-describe("UserStoreSql metadata at rest (CSG-006)", () => {
-  const EncryptionLive = Encryption.layer.pipe(
-    Layer.provide(
-      KeyProvider.layerEnv.pipe(
-        Layer.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({
-              env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-            }),
-          ),
-        ),
-      ),
-    ),
-    Layer.provide(NodeCrypto.layer),
-  );
-  const Sealed = UserStoreSql.layer.pipe(
-    Layer.provide(Repositories.UsersRepositoryEncryptedLive.pipe(Layer.provide(EncryptionLive))),
-    Layer.provideMerge(SqlLive),
-    Layer.provideMerge(Migrated),
-  );
-
-  it.effect("the metadata is ciphertext in the table and plaintext through the port", () =>
-    Effect.gen(function* () {
-      const store = yield* UserStore.UserStore;
-      yield* store.insertOrHolder(newUser("u1", "a@example.com", '{"plan":"pro"}'));
-      const sql = yield* SqlClient.SqlClient;
-      const rows = yield* sql<{
-        readonly metadata: string | null;
-      }>`SELECT metadata FROM users WHERE id = ${"u1"}`;
-      assert.notInclude(rows[0]?.metadata ?? "", "pro");
-      const stored = Option.getOrThrow(yield* store.get(userId("u1")));
-      assert.deepStrictEqual(stored.metadata, Option.some('{"plan":"pro"}'));
-      const updated = Option.getOrThrow(
-        yield* store.updateProfile({
-          id: userId("u1"),
-          name: "u1",
-          image: { _tag: "Keep" },
-          metadata: { _tag: "Set", value: '{"plan":"free"}' },
-          at: at(1),
-        }),
-      );
-      assert.deepStrictEqual(updated.metadata, Option.some('{"plan":"free"}'));
-    }).pipe(Effect.provide(Sealed)),
-  );
-});
 
 describe("UserStoreSql insertOrHolder", () => {
   // A holder deleted between the two statements: the first insert finds a conflict, the holder read

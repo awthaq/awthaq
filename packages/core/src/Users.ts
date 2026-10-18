@@ -6,7 +6,7 @@
 // union, the folding of an email, the verified-flag transitions, the uniqueness errors, the id and
 // the clock, the announcements); the store owns persistence and the atomicity of each primitive.
 
-import { Defects, type Ids, UserStore } from "@awthaq/ports";
+import { Defects, type Ids, Sealed, UserStore } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -16,6 +16,7 @@ import { now } from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 import { relabel, storeUnavailable, StoreUnavailable } from "./Errors.ts";
@@ -510,20 +511,25 @@ const toIdentity = (user: UserStore.StoredUser): Effect.Effect<UserIdentity> => 
   return Effect.succeed({ _tag: "Anonymous" });
 };
 
+// CSG-006 (ADR-EA-019 rev 1.3): `metadata` arrives sealed. An unreadable value degrades to absent with one
+// ids-only warning (`Sealed.optional`); the user is still returned.
 const toUserRecord = (user: UserStore.StoredUser): Effect.Effect<UserRecord> =>
-  Effect.map(toIdentity(user), (identity) => ({
-    id: UserId(user.id),
-    identity,
-    name: user.name,
-    metadata: user.metadata,
-    image: user.image,
-    tenantId: user.tenantId,
-    status: user.status,
-    statusReason: user.statusReason,
-    suspendedUntil: user.suspendedUntil,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-  }));
+  Effect.map(
+    Effect.all({ identity: toIdentity(user), metadata: Sealed.optional(user.metadata) }),
+    ({ identity, metadata }) => ({
+      id: UserId(user.id),
+      identity,
+      name: user.name,
+      metadata: Option.map(metadata, Redacted.value),
+      image: user.image,
+      tenantId: user.tenantId,
+      status: user.status,
+      statusReason: user.statusReason,
+      suspendedUntil: user.suspendedUntil,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    }),
+  );
 
 const toUserRecordOption = (
   user: Option.Option<UserStore.StoredUser>,

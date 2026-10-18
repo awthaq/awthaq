@@ -10,7 +10,7 @@
 // commit together (BEH-EA-058). Every paginated query takes an opaque
 // `(createdAt, id)` cursor, never an offset (BEH-EA-036).
 
-import { Defects, Encryption, SqlTransaction, Tenant } from "@awthaq/ports";
+import { Defects, Encryption, Sealed, SqlTransaction, Tenant } from "@awthaq/ports";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -24,6 +24,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlModel from "effect/unstable/sql/SqlModel";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as CoreSealedColumns from "./CoreSealedColumns.ts";
 import * as ReadRouting from "./ReadRouting.ts";
 import * as SealedColumn from "./SealedColumn.ts";
 import {
@@ -74,54 +75,36 @@ const traced = (name: string, attributes?: Record<string, unknown>) =>
 // ---- Opt-in PII column encryption (CSG-006, option B) -------------------------------
 
 /**
- * How one repository stores a personal-data column. The default repositories
- * store it as given; `Users`/`SessionsRepositoryEncryptedLive` seal it with
- * `@awthaq/ports`' `Encryption` (AES-256-GCM, AAD `<entity>:<id>:<field>`, so a
- * ciphertext cannot be moved to another row or column). Choosing the encrypted
- * layer is the opt-in — and puts `Encryption` in the layer's requirements, so
- * forgetting to provide it is a compile error, not a runtime surprise.
+ * One codec over a sealed column (`SealedColumn.codec`): `seal` for writes, `sealed` wraps a stored
+ * cell for a record. The default repositories build none and hand out `Sealed.plain`; the encrypted
+ * ones (`Users`/`SessionsRepositoryEncryptedLive`) build one per `CoreSealedColumns` declaration, which
+ * puts `Encryption` in the layer's requirements, so forgetting to provide it is a compile error, not a
+ * runtime surprise. Rows leave a repository as stored: the sealed cell is opened where the domain needs it.
  */
-interface PiiCodec {
-  readonly conceal: (aad: string, value: string | null) => Effect.Effect<string | null>;
-  readonly reveal: (
-    aad: string,
-    stored: string | null,
-  ) => Effect.Effect<{
-    readonly plaintext: string | null;
-    /** A sealed value to write back: the stored one was legacy plaintext or under a retired key. */
-    readonly refreshed: Option.Option<string>;
-  }>;
-}
+type ColumnCodec = Effect.Success<ReturnType<typeof SealedColumn.codec<string>>>;
 
-const sealedPii = (encryption: Encryption.EncryptionShape): PiiCodec => ({
-  conceal: (aad, value) =>
-    value === null ? Effect.succeed(null) : encryption.encrypt(Redacted.make(value), aad),
-  // A column that adopted encryption after it held plaintext is read as the plaintext it is and
-  // sealed on this read; an envelope-shaped value that fails authentication is never read as
-  // plaintext (that is tampering, or a retired key).
-  reveal: (aad, stored) =>
-    stored === null
-      ? Effect.succeed({ plaintext: null, refreshed: Option.none() })
-      : SealedColumn.reveal(encryption, { aad, adoptPlaintext: true }, stored).pipe(
-          Effect.map(({ plaintext, refreshed }) => ({
-            plaintext: Redacted.value(plaintext),
-            refreshed,
-          })),
-          // Same policy as the account tokens (SMS-002): one unreadable column
-          // reads as null and is logged (never the ciphertext), it does not
-          // take the fiber down.
-          Effect.catchTags({
-            DecryptionFailed: () =>
-              Effect.logWarning(
-                "awthaq: a personal-data column is undecryptable; reading it as null",
-              ).pipe(Effect.as({ plaintext: null, refreshed: Option.none<string>() })),
-            UnknownKeyId: () =>
-              Effect.logWarning(
-                "awthaq: a personal-data column is under an unknown key; reading it as null",
-              ).pipe(Effect.as({ plaintext: null, refreshed: Option.none<string>() })),
-          }),
-        ),
-});
+const columnCodec = (declared: SealedColumn.Column<string>) =>
+  Effect.flatMap(SealedColumn.sqlSwap(declared), (swap) => SealedColumn.codec(declared, swap));
+
+/** The stored cell of a nullable sealed column, as a `Sealed`: the codec when sealing, `Sealed.plain` otherwise. */
+const sealedCell = (codec: Option.Option<ColumnCodec>, rowKey: string, stored: string | null) =>
+  Option.map(Option.fromNullOr(stored), (cell) =>
+    Option.match(codec, {
+      onNone: () => Sealed.plain(cell),
+      onSome: (c) => c.sealed(rowKey, cell),
+    }),
+  );
+
+/** A value on its way into a nullable sealed column: sealed under the canonical AAD when a codec is present. */
+const sealCell = (codec: Option.Option<ColumnCodec>, rowKey: string, value: string | null) =>
+  Effect.flatMap(Effect.succeed(value), (present) =>
+    present === null
+      ? Effect.succeed(null)
+      : Option.match(codec, {
+          onNone: () => Effect.succeed(present),
+          onSome: (c) => c.seal(rowKey, Redacted.make(present)),
+        }),
+  );
 
 // ---- Users ------------------------------------------------------------
 
@@ -137,6 +120,8 @@ export type UserFieldScalar = string | number | boolean;
 export interface UsersRepositoryShape {
   /** TS-001: the dialect-resolved models this repository decodes with — callers build insert/update inputs from these. */
   readonly models: SqlModels;
+  /** CSG-006: the stored `metadata` cell of a row this repository returned, as a `Sealed` (never opened here). */
+  readonly metadataOf: (row: User) => Option.Option<Sealed.Sealed<string>>;
   /**
    * SAM-004 (BEH-EA-040): reads the named declared-field columns of one user — `None` when there is
    * no such user, else the columns that hold a value (an unset column is absent). Column names come
@@ -244,8 +229,6 @@ export class UsersRepository extends Context.Service<UsersRepository, UsersRepos
   "awthaq/sql/UsersRepository",
 ) {}
 
-const userMetadataAad = (id: string) => `user:${id}:metadata`;
-
 /**
  * SAM-004: a declared-field cell as its column kind says it should look: `null` is unset, a boolean
  * is a boolean on both dialects (SQLite hands back 0/1), and anything else that does not match the
@@ -274,7 +257,7 @@ const userFieldScalar = (
   );
 };
 
-const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
+const makeUsersRepository = (codec: Option.Option<ColumnCodec>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const dialect = yield* resolveDialect(sql);
@@ -315,50 +298,21 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
             traced("Users.readFields", { id }),
           );
 
-    // CSG-006: `users.metadata` is the one free-form personal-data column. With
-    // the default repository these are all no-ops; the encrypted variant seals
-    // it on write and reveals it on every row that comes back.
-    const concealMetadata = (id: string, metadata: string | null) =>
-      Option.match(pii, {
-        onNone: () => Effect.succeed(metadata),
-        onSome: (codec) => codec.conceal(userMetadataAad(id), metadata),
-      });
+    // CSG-006: `users.metadata` is the one free-form personal-data column. With the default
+    // repository these are no-ops; the encrypted variant seals it on write and hands the stored cell
+    // out as a `Sealed` (opened, and lazily re-sealed, where the domain needs the value).
+    const concealMetadata = (id: string, metadata: string | null) => sealCell(codec, id, metadata);
 
-    const revealUser = (row: User): Effect.Effect<User> =>
-      Option.match(pii, {
-        onNone: () => Effect.succeed(row),
-        onSome: (codec) =>
-          Effect.gen(function* () {
-            const revealed = yield* codec.reveal(userMetadataAad(row.id), row.metadata);
-            const config = yield* AccountsRepositoryConfig;
-            if (
-              config.reencryptOnRead &&
-              Option.isSome(revealed.refreshed) &&
-              row.metadata !== null
-            ) {
-              yield* sql`UPDATE users SET metadata = ${revealed.refreshed.value} WHERE id = ${row.id} AND metadata = ${row.metadata}`.pipe(
-                Effect.asVoid,
-                Effect.catchTag("SqlError", (error) =>
-                  Effect.logWarning("awthaq: lazy metadata re-encryption write failed").pipe(
-                    Effect.annotateLogs({ userId: row.id, reason: error.message }),
-                  ),
-                ),
-              );
-            }
-            return models.User.make({ ...row, metadata: revealed.plaintext });
-          }),
-      });
+    const metadataOf = (row: User) => sealedCell(codec, row.id, row.metadata);
 
     const insert: UsersRepositoryShape["insert"] = (input) =>
       concealMetadata(input.id, input.metadata).pipe(
         Effect.flatMap((metadata) =>
           Effect.flatMap(Tenant.stamp(input), (stamped) => repo.insert({ ...stamped, metadata })),
         ),
-        Effect.flatMap(revealUser),
       );
 
-    const findById: UsersRepositoryShape["findById"] = (id) =>
-      repo.findById(id).pipe(Effect.flatMap(revealUser));
+    const findById: UsersRepositoryShape["findById"] = (id) => repo.findById(id);
 
     // ESR-003: JS `toLowerCase()` is the only fold — the bound parameter is
     // normalized here (and stored values already are, by `Users.ts`), while
@@ -372,15 +326,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
     });
 
     const findByEmail: UsersRepositoryShape["findByEmail"] = (email) =>
-      findByEmailQuery(email).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeedNone,
-            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
-          }),
-        ),
-        traced("Users.findByEmail"),
-      );
+      findByEmailQuery(email).pipe(traced("Users.findByEmail"));
 
     const findByPhoneQuery = SqlSchema.findOneOption({
       Request: Schema.String,
@@ -389,15 +335,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
     });
 
     const findByPhone: UsersRepositoryShape["findByPhone"] = (phone) =>
-      findByPhoneQuery(phone).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeedNone,
-            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
-          }),
-        ),
-        traced("Users.findByPhone"),
-      );
+      findByPhoneQuery(phone).pipe(traced("Users.findByPhone"));
 
     const insertIfAbsentQuery = SqlSchema.findAll({
       Request: models.User.insert,
@@ -413,9 +351,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
             insertIfAbsentQuery({ ...stamped, metadata }),
           ),
         ),
-        Effect.flatMap(([row]) =>
-          row === undefined ? Effect.succeedNone : revealUser(row).pipe(Effect.map(Option.some)),
-        ),
+        Effect.map(([row]) => Option.fromNullishOr(row)),
         traced("Users.insertIfAbsent"),
       );
 
@@ -444,11 +380,10 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         cursorId: cursor?.id ?? null,
         limit: effectiveLimit,
       }).pipe(
-        Effect.flatMap((rows) =>
-          Effect.forEach(rows.slice(0, effectiveLimit), revealUser).pipe(
-            Effect.map((items) => ({ items, more: rows.length > effectiveLimit })),
-          ),
-        ),
+        Effect.map((rows) => ({
+          items: rows.slice(0, effectiveLimit),
+          more: rows.length > effectiveLimit,
+        })),
         Effect.map(({ items, more }): Page<User> => {
           const last = items.at(-1);
           return {
@@ -486,7 +421,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         const updatedAt = input.updatedAt ?? (yield* DateTime.now);
         const metadata =
           input.metadata === undefined ? null : yield* concealMetadata(input.id, input.metadata);
-        const row = yield* updateProfileQuery({
+        return yield* updateProfileQuery({
           id: input.id,
           name: input.name,
           setMetadata: input.metadata !== undefined,
@@ -494,10 +429,6 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
           setImage: input.image !== undefined,
           image: input.image ?? null,
           updatedAt,
-        });
-        return yield* Option.match(row, {
-          onNone: () => Effect.succeedNone,
-          onSome: (updated) => revealUser(updated).pipe(Effect.map(Option.some)),
         });
       }).pipe(traced("Users.updateProfile", { id: input.id }));
 
@@ -525,7 +456,6 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
             updatedAt,
           }),
         ),
-        Effect.flatMap(revealUser),
         traced("Users.setStatus", { id }),
       );
 
@@ -577,15 +507,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         phone: input.next.phone,
         phoneVerified: input.next.phoneVerified,
         updatedAt: input.updatedAt,
-      }).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeedNone,
-            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
-          }),
-        ),
-        traced("Users.casIdentity", { id: input.id }),
-      );
+      }).pipe(traced("Users.casIdentity", { id: input.id }));
 
     const encodeDateTime = Schema.encodeSync(models.wire.dateTime);
     const writeFieldsReturning: UsersRepositoryShape["writeFieldsReturning"] = (input) => {
@@ -627,6 +549,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
 
     return {
       models,
+      metadataOf,
       readFields,
       insert,
       findById,
@@ -648,10 +571,10 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
 
 /**
  * CSG-006 (option B, opt-in): `users.metadata` is encrypted at rest through
- * `Encryption` (AAD `user:<id>:metadata`). Swap this in for `UsersRepositoryLive`
- * to enable it. Existing plaintext rows stay readable and are sealed on their
- * next read (`AccountsRepositoryConfig.reencryptOnRead`) or write. `email` and
- * `name` stay plaintext: email is the lookup and uniqueness key.
+ * `Encryption` (AAD `users:<id>:metadata`, the declared `CoreSealedColumns.usersMetadata`).
+ * `Persistence.sql({ encryptPii: true })` chooses this layer. Existing plaintext rows stay readable and
+ * are sealed on their next read (`SealedColumnConfig.resealOnRead`), write, or `SealedColumn.sweepDeployed`.
+ * `email` and `name` stay plaintext: email is the lookup and uniqueness key.
  */
 export const UsersRepositoryEncryptedLive: Layer.Layer<
   UsersRepository,
@@ -659,8 +582,8 @@ export const UsersRepositoryEncryptedLive: Layer.Layer<
   SqlClient.SqlClient | Encryption.Encryption
 > = Layer.effect(
   UsersRepository,
-  Effect.flatMap(Encryption.Encryption, (encryption) =>
-    makeUsersRepository(Option.some(sealedPii(encryption))),
+  Effect.flatMap(columnCodec(CoreSealedColumns.usersMetadata), (codec) =>
+    makeUsersRepository(Option.some(codec)),
   ),
 );
 
@@ -1283,6 +1206,11 @@ export const AccountsRepositoryLive: Layer.Layer<
 export interface SessionsRepositoryShape {
   /** TS-001: the dialect-resolved models this repository decodes with. */
   readonly models: SqlModels;
+  /** CSG-006: the stored `ipAddress`/`userAgent` cells of a row this repository returned, as `Sealed`s (never opened here). */
+  readonly piiOf: (row: Session) => {
+    readonly ipAddress: Option.Option<Sealed.Sealed<string>>;
+    readonly userAgent: Option.Option<Sealed.Sealed<string>>;
+  };
   readonly insert: (input: SessionInsert) => Effect.Effect<Session, RepositoryError>;
   readonly findById: (
     id: SessionId,
@@ -1437,9 +1365,12 @@ const DEFAULT_PAGE_SIZE = 50;
  */
 export const MAX_PAGE_SIZE = 200;
 
-const sessionAad = (id: string, field: "ipAddress" | "userAgent") => `session:${id}:${field}`;
+interface SessionPiiCodecs {
+  readonly ipAddress: ColumnCodec;
+  readonly userAgent: ColumnCodec;
+}
 
-const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
+const makeSessionsRepository = (pii: Option.Option<SessionPiiCodecs>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const models = makeModels(yield* resolveDialect(sql));
@@ -1449,64 +1380,38 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       idColumn: "id",
     });
 
-    // CSG-006: `ipAddress`/`userAgent` are the personal-data columns. With the
-    // default repository these are no-ops; the encrypted variant seals them at
-    // insert (they are immutable afterwards) and reveals them on every row
-    // that comes back, from `SqlModel` or from a hand-written query alike.
+    // CSG-006: `ipAddress`/`userAgent` are the personal-data columns. With the default repository
+    // these are no-ops; the encrypted variant seals them at insert (they are immutable afterwards)
+    // and hands the stored cells out as `Sealed`s, from `SqlModel` or from a hand-written query alike.
     const concealPii = (
       id: string,
       columns: { readonly ipAddress: string | null; readonly userAgent: string | null },
     ) =>
-      Option.match(pii, {
-        onNone: () => Effect.succeed(columns),
-        onSome: (codec) =>
-          Effect.all({
-            ipAddress: codec.conceal(sessionAad(id, "ipAddress"), columns.ipAddress),
-            userAgent: codec.conceal(sessionAad(id, "userAgent"), columns.userAgent),
-          }),
-      });
-
-    const writeBackSealed = (
-      id: string,
-      field: "ipAddress" | "userAgent",
-      stored: string,
-      sealed: string,
-    ) =>
-      (field === "ipAddress"
-        ? sql`UPDATE sessions SET "ipAddress" = ${sealed} WHERE id = ${id} AND "ipAddress" = ${stored}`
-        : sql`UPDATE sessions SET "userAgent" = ${sealed} WHERE id = ${id} AND "userAgent" = ${stored}`
-      ).pipe(
-        Effect.asVoid,
-        Effect.catchTag("SqlError", (error) =>
-          Effect.logWarning("awthaq: lazy session PII re-encryption write failed").pipe(
-            Effect.annotateLogs({ sessionId: id, field, reason: error.message }),
-          ),
+      Effect.all({
+        ipAddress: sealCell(
+          Option.map(pii, (codecs) => codecs.ipAddress),
+          id,
+          columns.ipAddress,
         ),
-      );
-
-    const revealSession = (row: Session): Effect.Effect<Session> =>
-      Option.match(pii, {
-        onNone: () => Effect.succeed(row),
-        onSome: (codec) =>
-          Effect.gen(function* () {
-            const ip = yield* codec.reveal(sessionAad(row.id, "ipAddress"), row.ipAddress);
-            const ua = yield* codec.reveal(sessionAad(row.id, "userAgent"), row.userAgent);
-            const config = yield* AccountsRepositoryConfig;
-            if (config.reencryptOnRead) {
-              if (Option.isSome(ip.refreshed) && row.ipAddress !== null) {
-                yield* writeBackSealed(row.id, "ipAddress", row.ipAddress, ip.refreshed.value);
-              }
-              if (Option.isSome(ua.refreshed) && row.userAgent !== null) {
-                yield* writeBackSealed(row.id, "userAgent", row.userAgent, ua.refreshed.value);
-              }
-            }
-            return models.Session.make({
-              ...row,
-              ipAddress: ip.plaintext,
-              userAgent: ua.plaintext,
-            });
-          }),
+        userAgent: sealCell(
+          Option.map(pii, (codecs) => codecs.userAgent),
+          id,
+          columns.userAgent,
+        ),
       });
+
+    const piiOf: SessionsRepositoryShape["piiOf"] = (row) => ({
+      ipAddress: sealedCell(
+        Option.map(pii, (codecs) => codecs.ipAddress),
+        row.id,
+        row.ipAddress,
+      ),
+      userAgent: sealedCell(
+        Option.map(pii, (codecs) => codecs.userAgent),
+        row.id,
+        row.userAgent,
+      ),
+    });
 
     const insert: SessionsRepositoryShape["insert"] = (input) =>
       concealPii(input.id, input).pipe(
@@ -1519,11 +1424,9 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
             }),
           ),
         ),
-        Effect.flatMap(revealSession),
       );
 
-    const findById: SessionsRepositoryShape["findById"] = (id) =>
-      repo.findById(id).pipe(Effect.flatMap(revealSession));
+    const findById: SessionsRepositoryShape["findById"] = (id) => repo.findById(id);
 
     // RRS-003: `"supersededAt" IS NULL` — load-bearing, not cosmetic. A
     // tombstoned row must never appear in a user's device list, and this
@@ -1587,7 +1490,6 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
             limit: effectiveLimit,
           }),
         ),
-        Effect.flatMap((rows) => Effect.forEach(rows, revealSession)),
         Effect.map((items): Page<Session> => {
           const last = items.at(-1);
           const nextCursor =
@@ -1636,15 +1538,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         ...input,
         previousSecretHash: input.previousSecretHash ?? null,
         previousSecretExpiresAt: input.previousSecretExpiresAt ?? null,
-      }).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeedNone,
-            onSome: (row) => revealSession(row).pipe(Effect.map(Option.some)),
-          }),
-        ),
-        traced("Sessions.touch", { id: input.id }),
-      );
+      }).pipe(traced("Sessions.touch", { id: input.id }));
 
     const deleteAllForUserExceptQuery = SqlSchema.findAll({
       Request: Schema.Struct({ userId: UserId, keep: SessionId }),
@@ -1747,10 +1641,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
     });
 
     const tombstone: SessionsRepositoryShape["tombstone"] = (input) =>
-      tombstoneQuery(input).pipe(
-        Effect.flatMap(revealSession),
-        traced("Sessions.tombstone", { id: input.id }),
-      );
+      tombstoneQuery(input).pipe(traced("Sessions.tombstone", { id: input.id }));
 
     // SEA-005: like every other timestamp write here, `reusedAt` goes
     // through a `Request` schema, so the dialect's own wire codec is the
@@ -1823,10 +1714,11 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         now,
         amr: amr ?? null,
         expectedAmr: expectedAmr ?? null,
-      }).pipe(Effect.flatMap(revealSession), traced("Sessions.reauthenticate", { id }));
+      }).pipe(traced("Sessions.reauthenticate", { id }));
 
     return {
       models,
+      piiOf,
       insert,
       findById,
       delete: repo.delete,
@@ -1849,11 +1741,11 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
 
 /**
  * CSG-006 (option B, opt-in): `sessions.ipAddress` and `sessions.userAgent` are
- * encrypted at rest through `Encryption` (AAD `session:<id>:<field>`). Swap this
- * in for `SessionsRepositoryLive` to enable it. Rows written earlier as
- * plaintext stay readable and are sealed on their next read
- * (`AccountsRepositoryConfig.reencryptOnRead`). The secret hash is unaffected
- * (it is already hash-only), and lookups never filter on these columns.
+ * encrypted at rest through `Encryption` (AAD `sessions:<id>:<field>`, the declared
+ * `CoreSealedColumns.sessionsIpAddress`/`sessionsUserAgent`). `Persistence.sql({ encryptPii: true })`
+ * chooses this layer. Rows written earlier as plaintext stay readable and are sealed on their next
+ * read (`SealedColumnConfig.resealOnRead`) or `SealedColumn.sweepDeployed`. The secret hash is
+ * unaffected (it is already hash-only), and lookups never filter on these columns.
  */
 export const SessionsRepositoryEncryptedLive: Layer.Layer<
   SessionsRepository,
@@ -1861,9 +1753,10 @@ export const SessionsRepositoryEncryptedLive: Layer.Layer<
   SqlClient.SqlClient | Encryption.Encryption
 > = Layer.effect(
   SessionsRepository,
-  Effect.flatMap(Encryption.Encryption, (encryption) =>
-    makeSessionsRepository(Option.some(sealedPii(encryption))),
-  ),
+  Effect.all({
+    ipAddress: columnCodec(CoreSealedColumns.sessionsIpAddress),
+    userAgent: columnCodec(CoreSealedColumns.sessionsUserAgent),
+  }).pipe(Effect.flatMap((codecs) => makeSessionsRepository(Option.some(codecs)))),
 );
 
 // ---- Verification ---------------------------------------------------------

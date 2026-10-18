@@ -9,7 +9,14 @@
 // atomicity of each primitive.
 
 import { Api } from "@awthaq/api";
-import { Hmac, type Ids, LegacySessionBridge, SessionStore, type Store } from "@awthaq/ports";
+import {
+  Hmac,
+  type Ids,
+  LegacySessionBridge,
+  Sealed,
+  SessionStore,
+  type Store,
+} from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -601,34 +608,43 @@ const traceVerify =
 // `SessionView`'s own doc comment ("never the secret, never the stored hash"). One careless prop pass of
 // a `SessionView` to a Client Component (e.g. `@awthaq/next`'s `getSession`) would otherwise serialize
 // the stored hash into the RSC flight payload.
-const toView = (row: SessionStore.SessionRecord): SessionView => ({
-  id: SessionId(row.id),
-  userId: UserId(row.userId),
-  createdAt: row.createdAt,
-  authenticatedAt: row.authenticatedAt,
-  lastActiveAt: row.lastActiveAt,
-  absoluteExpiresAt: row.absoluteExpiresAt,
-  idleExpiresAt: row.idleExpiresAt,
-  ipAddress: row.ipAddress,
-  userAgent: row.userAgent,
-  actingAs: row.actingAs,
-  amr: row.amr.filter(isAuthMethod),
-  tenantId: row.tenantId,
-});
+//
+// CSG-006 (ADR-EA-019 rev 1.3): `ipAddress`/`userAgent` arrive sealed and are opened here, after the verdict
+// (the verdict never decrypts them). An unreadable value degrades to absent with one ids-only warning
+// (`Sealed.optional`); the session is still returned.
+const toView = (row: SessionStore.SessionRecord) =>
+  Effect.map(
+    Effect.all({
+      ipAddress: Sealed.optional(row.ipAddress),
+      userAgent: Sealed.optional(row.userAgent),
+    }),
+    ({ ipAddress, userAgent }): SessionView => ({
+      id: SessionId(row.id),
+      userId: UserId(row.userId),
+      createdAt: row.createdAt,
+      authenticatedAt: row.authenticatedAt,
+      lastActiveAt: row.lastActiveAt,
+      absoluteExpiresAt: row.absoluteExpiresAt,
+      idleExpiresAt: row.idleExpiresAt,
+      ipAddress: Option.map(ipAddress, Redacted.value),
+      userAgent: Option.map(userAgent, Redacted.value),
+      actingAs: row.actingAs,
+      amr: row.amr.filter(isAuthMethod),
+      tenantId: row.tenantId,
+    }),
+  );
 
-const toItem = (
-  row: SessionStore.SessionRecord,
-  current: SessionId | undefined,
-): SessionListItem => ({
-  id: SessionId(row.id),
-  createdAt: row.createdAt,
-  authenticatedAt: row.authenticatedAt,
-  lastActiveAt: row.lastActiveAt,
-  expiresAt: row.absoluteExpiresAt,
-  userAgent: row.userAgent,
-  amr: row.amr.filter(isAuthMethod),
-  current: row.id === current,
-});
+const toItem = (row: SessionStore.SessionRecord, current: SessionId | undefined) =>
+  Effect.map(Sealed.optional(row.userAgent), (userAgent): SessionListItem => ({
+    id: SessionId(row.id),
+    createdAt: row.createdAt,
+    authenticatedAt: row.authenticatedAt,
+    lastActiveAt: row.lastActiveAt,
+    expiresAt: row.absoluteExpiresAt,
+    userAgent: Option.map(userAgent, Redacted.value),
+    amr: row.amr.filter(isAuthMethod),
+    current: row.id === current,
+  }));
 
 const notFound = (id?: SessionId) =>
   new SessionNotFound({
@@ -715,7 +731,7 @@ export const layer = Layer.effect(
             reason: "limitEvicted",
           });
         }
-        const view = toView(inserted);
+        const view = yield* toView(inserted);
         yield* publishIssued(events, view, inserted.familyId, view.actingAs);
         return { session: view, token: Redacted.make(SessionVerdict.format(id, secret)) };
       },
@@ -762,10 +778,11 @@ export const layer = Layer.effect(
           ),
         );
 
-    const accepted = (row: SessionStore.SessionRecord) => ({
-      session: toView(row),
-      rotated: Option.none<Redacted.Redacted<string>>(),
-    });
+    const accepted = (row: SessionStore.SessionRecord) =>
+      Effect.map(toView(row), (session) => ({
+        session,
+        rotated: Option.none<Redacted.Redacted<string>>(),
+      }));
 
     const bridgedOr = (raw: string, otherwise: SessionNotFound) =>
       bridgeLegacySession(raw).pipe(
@@ -809,7 +826,7 @@ export const layer = Layer.effect(
         return yield* Match.valueTags(SessionVerdict.afterLostRotation(outcome.current, now), {
           Gone: () => Effect.fail(notFound(id)),
           Expired: ({ kind, row }) => expire(id, row, kind),
-          Accepted: ({ row }) => Effect.succeed(accepted(row)),
+          Accepted: ({ row }) => accepted(row),
         });
       }
       // RRS-008: only the call that won the rotation announces it.
@@ -821,7 +838,7 @@ export const layer = Layer.effect(
         ...(verdict.viaGrace ? { viaGrace: true } : {}),
       });
       return {
-        session: toView(outcome.session),
+        session: yield* toView(outcome.session),
         rotated: Option.some(Redacted.make(SessionVerdict.format(id, secret))),
       };
     });
@@ -849,7 +866,7 @@ export const layer = Layer.effect(
                 Effect.andThen(Effect.fail(notFound(id))),
               ),
             Expired: ({ kind, row }) => expire(id, row, kind),
-            Accepted: ({ row }) => Effect.succeed(accepted(row)),
+            Accepted: ({ row }) => accepted(row),
             Rotate: (verdict) => rotate(id, verdict, now),
           },
         );
@@ -935,15 +952,19 @@ export const layer = Layer.effect(
           `awthaq: Sessions.list stopped at ${LIST_LIMIT} live sessions for user ${userId}`,
         );
       }
-      return newestActivityFirst(listing.items.map((row) => toItem(row, current)));
+      return newestActivityFirst(
+        yield* Effect.forEach(listing.items, (row) => toItem(row, current)),
+      );
     }, relabel("Sessions.list"));
 
     const findOwned: SessionsShape["findOwned"] = Effect.fnUntraced(function* (userId, id) {
       const row = yield* store.get(id);
       const now = yield* DateTime.now;
-      return Option.filter(row, (r) => r.userId === userId && SessionStore.isLive(r, now)).pipe(
-        Option.map((r) => toItem(r, undefined)),
-      );
+      const owned = Option.filter(row, (r) => r.userId === userId && SessionStore.isLive(r, now));
+      return yield* Option.match(owned, {
+        onNone: () => Effect.succeedNone,
+        onSome: (r) => Effect.map(toItem(r, undefined), Option.some),
+      });
     }, relabel("Sessions.findOwned"));
 
     const isLive: SessionsShape["isLive"] = (userId, id) =>
@@ -964,7 +985,7 @@ export const layer = Layer.effect(
         addAmr: amr ?? [],
       });
       if (Option.isNone(updated)) return yield* notFound(id);
-      return toView(updated.value);
+      return yield* toView(updated.value);
     }, relabel("Sessions.reauthenticate"));
 
     return {

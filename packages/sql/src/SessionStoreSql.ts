@@ -2,7 +2,7 @@
 //
 // Plan 02 (ADR-EA-041, ADR-EA-014): the SQL adapter of `@awthaq/ports`' `SessionStore`, built over
 // `SessionsRepository` (so `SessionsRepositoryEncryptedLive`, which seals `ipAddress` and `userAgent`
-// at rest (CSG-006), still swaps in). It owns what used to leak into the domain: the model's insert
+// at rest (CSG-006), still swaps in). Plan 17: both cross the port as `Sealed` cells, opened by `Sessions`. It owns what used to leak into the domain: the model's insert
 // and its `Model.Override`s, the `actingAsType`/`actingAsId` columns and the JSON text of `amr`.
 //
 // Atomicity, per primitive:
@@ -26,7 +26,7 @@
 // - Writes that change what `listLive` returns capture the causal token (ADR-EA-024), so the writing
 //   fiber's next eventual read sees its own write.
 
-import { SessionStore, SqlTransaction } from "@awthaq/ports";
+import { Sealed, SessionStore, SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -52,7 +52,11 @@ const parseAmr = (text: string): ReadonlyArray<string> => {
   }
 };
 
-const toRecord = (row: Session): SessionStore.SessionRecord => ({
+/** A row as the port carries it. `pii` holds the stored `ipAddress`/`userAgent` cells, unopened (CSG-006). */
+const toRecord = (
+  row: Session,
+  pii: Pick<SessionStore.SessionRecord, "ipAddress" | "userAgent">,
+): SessionStore.SessionRecord => ({
   id: row.id,
   userId: row.userId,
   secretHash: row.secretHash,
@@ -61,8 +65,8 @@ const toRecord = (row: Session): SessionStore.SessionRecord => ({
   lastActiveAt: row.lastActiveAt,
   absoluteExpiresAt: row.absoluteExpiresAt,
   idleExpiresAt: row.idleExpiresAt,
-  ipAddress: Option.fromNullOr(row.ipAddress),
-  userAgent: Option.fromNullOr(row.userAgent),
+  ipAddress: pii.ipAddress,
+  userAgent: pii.userAgent,
   actingAs:
     row.actingAsType === null || row.actingAsId === null
       ? Option.none()
@@ -84,6 +88,8 @@ export const layer = Layer.effect(
     const repo = yield* SessionsRepository;
     const sql = yield* SqlClient.SqlClient;
     const { write, read, once } = SqlStore.make(sql);
+
+    const stored = (row: Session) => toRecord(row, repo.piiOf(row));
 
     const insert: SessionStore.SessionStoreShape["insert"] = ({ session, supersedes, maxLive }) => {
       const persist = Effect.gen(function* () {
@@ -150,8 +156,12 @@ export const layer = Layer.effect(
               );
         for (const id of evicted) yield* repo.delete(id);
         const outcome: SessionStore.InsertOutcome = {
-          inserted: toRecord(inserted),
-          superseded: Option.map(ancestor, toRecord),
+          // What was just written is handed back as written, never reopened (and never decrypted).
+          inserted: toRecord(inserted, {
+            ipAddress: Option.map(session.ipAddress, Sealed.plain),
+            userAgent: Option.map(session.userAgent, Sealed.plain),
+          }),
+          superseded: Option.map(ancestor, stored),
           evicted,
         };
         return outcome;
@@ -166,7 +176,7 @@ export const layer = Layer.effect(
 
     const get: SessionStore.SessionStoreShape["get"] = (id) =>
       repo.findById(id).pipe(
-        Effect.map((row) => Option.some(toRecord(row))),
+        Effect.map((row) => Option.some(stored(row))),
         Effect.catchTag("NoSuchElementError", () =>
           Effect.succeed(Option.none<SessionStore.SessionRecord>()),
         ),
@@ -191,13 +201,13 @@ export const layer = Layer.effect(
         if (Option.isSome(touched)) {
           const rotated: SessionStore.RotateOutcome = {
             _tag: "Rotated",
-            session: toRecord(touched.value),
+            session: stored(touched.value),
           };
           return rotated;
         }
         // Lost the swap (or the row is tombstoned or gone): say what is there now, authoritatively.
         const current = yield* repo.findById(input.id).pipe(
-          Effect.map((row) => Option.some(toRecord(row))),
+          Effect.map((row) => Option.some(stored(row))),
           Effect.catchTag("NoSuchElementError", () =>
             Effect.succeed(Option.none<SessionStore.SessionRecord>()),
           ),
@@ -249,7 +259,7 @@ export const layer = Layer.effect(
           if (Option.isNone(page.nextCursor)) break;
           cursor = page.nextCursor;
         }
-        return { items: rows.slice(0, limit).map(toRecord), truncated: rows.length > limit };
+        return { items: rows.slice(0, limit).map(stored), truncated: rows.length > limit };
       }).pipe(read("SessionStore.listLive"));
 
     const reauthenticate: SessionStore.SessionStoreShape["reauthenticate"] = (input) =>
@@ -300,7 +310,7 @@ export const layer = Layer.effect(
               Effect.map(Option.some),
               Effect.catchTag("NoSuchElementError", () => Effect.succeed(Option.none<Session>())),
             );
-            if (Option.isSome(updated)) return Option.some(toRecord(updated.value));
+            if (Option.isSome(updated)) return Option.some(stored(updated.value));
           }
           return yield* Effect.fail(
             new StoreUnavailable({ operation: "SessionStore.reauthenticate" }),

@@ -31,6 +31,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type { SessionId, UserId } from "./Ids.ts";
 import * as PruneExpired from "./PruneExpired.ts";
+import * as Sealed from "./Sealed.ts";
 import type { Consistency, StoreUnavailable } from "./Store.ts";
 import * as Tenant from "./Tenant.ts";
 
@@ -51,8 +52,9 @@ export interface SessionRecord {
   readonly lastActiveAt: DateTime.Utc;
   readonly absoluteExpiresAt: DateTime.Utc;
   readonly idleExpiresAt: DateTime.Utc;
-  readonly ipAddress: Option.Option<string>;
-  readonly userAgent: Option.Option<string>;
+  /** CSG-006: sealed by the adapter where it encrypts, `Sealed.plain` where it does not. Opened where the domain needs it. */
+  readonly ipAddress: Option.Option<Sealed.Sealed<string>>;
+  readonly userAgent: Option.Option<Sealed.Sealed<string>>;
   readonly actingAs: Option.Option<ActingAs>;
   readonly amr: ReadonlyArray<string>;
   /** Stamped by the adapter from the ambient tenant (BEH-EA-231). */
@@ -293,8 +295,8 @@ export const layerMemory = Layer.effect(
             lastActiveAt: session.at,
             absoluteExpiresAt: session.absoluteExpiresAt,
             idleExpiresAt: session.idleExpiresAt,
-            ipAddress: session.ipAddress,
-            userAgent: session.userAgent,
+            ipAddress: Option.map(session.ipAddress, Sealed.plain),
+            userAgent: Option.map(session.userAgent, Sealed.plain),
             actingAs: session.actingAs,
             amr: session.amr,
             tenantId,

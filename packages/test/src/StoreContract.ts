@@ -23,6 +23,7 @@ import {
   AuditLogStore,
   Ids,
   RelayCursorStore,
+  Sealed,
   SessionStore,
   SqlTransaction,
   Tenant,
@@ -75,6 +76,10 @@ export const run = <R>(framework: TestFramework, config: RunConfig<R>): void => 
 // ---- auditLog -------------------------------------------------------------------------------
 
 type AuditCase = Case<AuditLogStore.AuditLogStore>;
+
+/** A sealed optional cell opened to its plaintext (plan 17: the sealed columns cross the ports unopened). */
+const opened = (value: Option.Option<Sealed.Sealed<string>>) =>
+  Effect.map(Sealed.openOption(value), Option.map(Redacted.value));
 
 const at = (minutes: number) => DateTime.makeUnsafe(1_700_000_000_000 + minutes * 60_000);
 
@@ -1159,7 +1164,7 @@ export const users: ReadonlyArray<UserCase> = [
       const afterSet = Option.getOrThrow(set);
       assert.equal(afterSet.name, "Renamed");
       assert.deepEqual(afterSet.image, Option.some("https://img"));
-      assert.deepEqual(afterSet.metadata, Option.some("{}"));
+      assert.deepEqual(yield* opened(afterSet.metadata), Option.some("{}"));
       assert.deepEqual(afterSet.updatedAt, at(3));
       assert.deepEqual(afterSet.email, Option.some("a@example.com"));
       const kept = Option.getOrThrow(
@@ -1172,7 +1177,7 @@ export const users: ReadonlyArray<UserCase> = [
         }),
       );
       assert.deepEqual(kept.image, Option.some("https://img"));
-      assert.deepEqual(kept.metadata, Option.some("{}"));
+      assert.deepEqual(yield* opened(kept.metadata), Option.some("{}"));
       const cleared = Option.getOrThrow(
         yield* store.updateProfile({
           id: makeUserId("u1"),
@@ -1468,8 +1473,8 @@ export const sessions: ReadonlyArray<SessionCase> = [
       assert.deepEqual(row.tenantId, Option.some("tenant-a"));
       assert.deepEqual(row.amr, ["pwd", "otp"]);
       assert.deepEqual(row.actingAs, Option.some({ type: "user", id: "admin-1" }));
-      assert.deepEqual(row.ipAddress, Option.some("203.0.113.9"));
-      assert.deepEqual(row.userAgent, Option.some("agent/1.0"));
+      assert.deepEqual(yield* opened(row.ipAddress), Option.some("203.0.113.9"));
+      assert.deepEqual(yield* opened(row.userAgent), Option.some("agent/1.0"));
       assert.deepEqual(row.createdAt, at(0));
       assert.deepEqual(row.authenticatedAt, at(0));
       assert.deepEqual(row.lastActiveAt, at(0));

@@ -2,7 +2,8 @@
 //
 // Plan 02 (ADR-EA-041): the SQL adapter of `@awthaq/ports`' `UserStore`, over `UsersRepository` (so
 // the unique indexes on `lower(email)` and `phone`, the sealed `metadata` column (CSG-006) and the
-// declared-field columns (ADR-EA-035) are unchanged).
+// declared-field columns (ADR-EA-035) are unchanged). Plan 17: `metadata` crosses the port as a
+// `Sealed` cell (opened, and lazily re-sealed, by `Users`); what an insert wrote is handed back as written.
 //
 // - `insertOrHolder`: `INSERT ... ON CONFLICT DO NOTHING RETURNING *`, then the holder's read. A
 //   holder deleted between the two statements retries the insert (a bounded number of times), and is
@@ -17,7 +18,7 @@
 //   `delete`, `writeFields`: each writes a fixed value). `insertOrHolder` and `casIdentity` are not:
 //   repeating either after a success whose answer was lost would change it.
 
-import { SqlTransaction, UserStore } from "@awthaq/ports";
+import { Sealed, SqlTransaction, UserStore } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -32,7 +33,11 @@ import { StoreUnavailable } from "./StoreFailure.ts";
 /** How many times a user insert is retried when the holder it lost to vanished before it could be read. */
 const INSERT_ATTEMPTS = 3;
 
-const toStored = (row: User): UserStore.StoredUser => ({
+/** A row as the port carries it. `metadata` is the stored cell, unopened (CSG-006). */
+const toStored = (
+  row: User,
+  metadata: Option.Option<Sealed.Sealed<string>>,
+): UserStore.StoredUser => ({
   id: row.id,
   email: Option.fromNullOr(row.email),
   emailVerified: row.emailVerified,
@@ -40,7 +45,7 @@ const toStored = (row: User): UserStore.StoredUser => ({
   phoneVerified: row.phoneVerified,
   name: row.name,
   image: Option.fromNullOr(row.image),
-  metadata: Option.fromNullOr(row.metadata),
+  metadata,
   status: row.status,
   statusReason: Option.fromNullOr(row.statusReason),
   suspendedUntil: Option.fromNullOr(row.suspendedUntil),
@@ -48,8 +53,6 @@ const toStored = (row: User): UserStore.StoredUser => ({
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
-
-const toOption = (row: Option.Option<User>) => Option.map(row, toStored);
 
 const columnsOf = (identity: UserStore.IdentityColumns) => ({
   email: Option.getOrNull(identity.email),
@@ -84,6 +87,9 @@ export const layer = Layer.effect(
     const sql = yield* SqlClient.SqlClient;
     const { write, read, once } = SqlStore.make(sql);
 
+    const stored = (row: User) => toStored(row, repo.metadataOf(row));
+    const storedOption = (row: Option.Option<User>) => Option.map(row, stored);
+
     const insertOrHolder: UserStore.UserStoreShape["insertOrHolder"] = (row) =>
       Effect.gen(function* () {
         const insert = yield* repo.models.User.insert
@@ -106,7 +112,8 @@ export const layer = Layer.effect(
           if (Option.isSome(inserted)) {
             const outcome: UserStore.InsertOutcome = {
               _tag: "Inserted",
-              user: toStored(inserted.value),
+              // What was just written is handed back as written, never reopened (and never decrypted).
+              user: toStored(inserted.value, Option.map(row.metadata, Sealed.plain)),
             };
             return outcome;
           }
@@ -118,7 +125,7 @@ export const layer = Layer.effect(
           if (Option.isSome(holder)) {
             const outcome: UserStore.InsertOutcome = {
               _tag: "Held",
-              holder: toStored(holder.value),
+              holder: stored(holder.value),
             };
             return outcome;
           }
@@ -129,7 +136,7 @@ export const layer = Layer.effect(
 
     const get: UserStore.UserStoreShape["get"] = (id) =>
       repo.findById(id).pipe(
-        Effect.map((row) => Option.some(toStored(row))),
+        Effect.map((row) => Option.some(stored(row))),
         Effect.catchTag("NoSuchElementError", () =>
           Effect.succeed(Option.none<UserStore.StoredUser>()),
         ),
@@ -137,10 +144,10 @@ export const layer = Layer.effect(
       );
 
     const getByEmail: UserStore.UserStoreShape["getByEmail"] = (lowercased) =>
-      repo.findByEmail(lowercased).pipe(Effect.map(toOption), read("UserStore.getByEmail"));
+      repo.findByEmail(lowercased).pipe(Effect.map(storedOption), read("UserStore.getByEmail"));
 
     const getByPhone: UserStore.UserStoreShape["getByPhone"] = (phone) =>
-      repo.findByPhone(phone).pipe(Effect.map(toOption), read("UserStore.getByPhone"));
+      repo.findByPhone(phone).pipe(Effect.map(storedOption), read("UserStore.getByPhone"));
 
     const updateProfile: UserStore.UserStoreShape["updateProfile"] = (input) =>
       repo
@@ -151,7 +158,7 @@ export const layer = Layer.effect(
           image: change(input.image),
           updatedAt: input.at,
         })
-        .pipe(Effect.map(toOption), write("UserStore.updateProfile"));
+        .pipe(Effect.map(storedOption), write("UserStore.updateProfile"));
 
     const casIdentity: UserStore.UserStoreShape["casIdentity"] = (input) =>
       SqlTransaction.transactional(sql)(
@@ -166,13 +173,13 @@ export const layer = Layer.effect(
           Option.isSome(applied)
             ? Effect.succeed<UserStore.CasOutcome>({
                 _tag: "Updated",
-                user: toStored(applied.value),
+                user: stored(applied.value),
               })
             : // Zero rows: the user is gone, or one of the four columns moved since the caller read.
               repo.findById(input.id).pipe(
                 Effect.map((current): UserStore.CasOutcome => ({
                   _tag: "Stale",
-                  current: toStored(current),
+                  current: stored(current),
                 })),
                 Effect.catchTag("NoSuchElementError", () => Effect.succeed(missing)),
               ),
@@ -191,7 +198,7 @@ export const layer = Layer.effect(
           updatedAt: input.at,
         })
         .pipe(
-          Effect.map((row) => Option.some(toStored(row))),
+          Effect.map((row) => Option.some(stored(row))),
           Effect.catchTag("NoSuchElementError", () =>
             Effect.succeed(Option.none<UserStore.StoredUser>()),
           ),
@@ -204,7 +211,7 @@ export const layer = Layer.effect(
     const listPage: UserStore.UserStoreShape["listPage"] = ({ after, limit }) =>
       repo.listPage(Option.getOrUndefined(after), limit).pipe(
         Effect.map((page) => ({
-          items: page.items.map(toStored),
+          items: page.items.map(stored),
           next: page.nextCursor,
         })),
         read("UserStore.listPage"),

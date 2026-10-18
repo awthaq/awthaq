@@ -8,7 +8,7 @@
 // (`pnpm test:pg`) Postgres adapters; the SQL adapter's own retry and failure mapping are
 // `packages/sql/test/SessionStoreSql.test.ts`.
 import { Api } from "@awthaq/api";
-import { SessionStore } from "@awthaq/ports";
+import { Sealed, SessionStore } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -24,6 +24,7 @@ import * as LayerMap from "effect/LayerMap";
 import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -1660,5 +1661,73 @@ describe("Sessions.list bound (S-8)", () => {
       }).pipe(Effect.provide(Layer.mergeAll(layer, Logger.layer([logger]))));
       assert.isTrue(warnings.some((warning) => warning.includes("Sessions.list stopped at")));
     }),
+  );
+});
+
+// Plan 17 (ADR-EA-019 rev 1.3, CSG-006): `ipAddress`/`userAgent` cross the store port sealed. A value that
+// does not open degrades to absent with one ids-only warning each; the session is still returned, listed
+// and verified. The verdict never opens them.
+describe("Sessions: an unreadable sealed ipAddress/userAgent", () => {
+  const unreadable = (column: string) =>
+    new Sealed.Unreadable({
+      table: "sessions",
+      column,
+      rowKey: "s-broken",
+      reason: "UnknownKeyId",
+    });
+  const brokenRecord = (row: SessionStore.SessionRecord): SessionStore.SessionRecord => ({
+    ...row,
+    ipAddress: Option.map(row.ipAddress, () => ({ open: Effect.fail(unreadable("ipAddress")) })),
+    userAgent: Option.map(row.userAgent, () => ({ open: Effect.fail(unreadable("userAgent")) })),
+  });
+  const UnreadableStore = Layer.effect(
+    SessionStore.SessionStore,
+    Effect.map(SessionStore.SessionStore, (store) =>
+      SessionStore.SessionStore.of({
+        ...store,
+        get: (id) => Effect.map(store.get(id), Option.map(brokenRecord)),
+        listLive: (input) =>
+          Effect.map(store.listLive(input), (listing) => ({
+            ...listing,
+            items: listing.items.map(brokenRecord),
+          })),
+      }),
+    ),
+  ).pipe(Layer.provide(SessionStore.layerMemory));
+  const UnreadableLayer = Sessions.layer.pipe(
+    Layer.provide(UnreadableStore),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+  );
+
+  it.effect(
+    "is absent in the view and the device list, with warnings, and verify still succeeds",
+    () => {
+      const warnings: Array<string> = [];
+      const logger = Logger.make<unknown, void>((entry) => {
+        if (entry.logLevel === "Warn") {
+          warnings.push(JSON.stringify(entry.fiber.getRef(References.CurrentLogAnnotations)));
+        }
+      });
+      return Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const userId = Users.UserId("77777777-7777-7777-7777-777777777777");
+        const issued = yield* sessions.issue({
+          userId,
+          request: { ip: "203.0.113.9", userAgent: "Agent/1.0" },
+        });
+        // `issue` hands back what it wrote (nothing to open); verify reads the stored row.
+        const verified = yield* sessions.verify(issued.token);
+        assert.isTrue(Option.isNone(verified.session.ipAddress));
+        assert.isTrue(Option.isNone(verified.session.userAgent));
+        const listed = yield* sessions.list(userId);
+        assert.strictEqual(listed.length, 1);
+        assert.isTrue(Option.isNone(listed[0]?.userAgent ?? Option.some("x")));
+        assert.isTrue(warnings.length >= 3);
+        assert.isTrue(warnings.every((entry) => entry.includes('"table":"sessions"')));
+        assert.isFalse(warnings.some((entry) => entry.includes("Agent/1.0")));
+      }).pipe(Effect.provide(Layer.merge(UnreadableLayer, Logger.layer([logger]))));
+    },
   );
 });
