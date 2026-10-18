@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-16 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-015 callout to BEH-EA-125 (CCR-EA-002) <br> 1.2 (2026-09-29): BEH-EA-128 gains the native return leg — exchange code, `POST /oauth/token`, native redirect allowlist (MNA-003/MNA-004) <br> 1.3 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.4 (2026-10-18): BEH-EA-123/124/125: the account-linking decision is core's `FederatedIdentity` (BEH-EA-338): an explicit link of an identity linked to another account is refused, a lost race resolves to the anchor's user, a returning sign-in whose account vanished is resolved again (architecture plan 14 phase 2) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-015 callout to BEH-EA-125 (CCR-EA-002) <br> 1.2 (2026-09-29): BEH-EA-128 gains the native return leg — exchange code, `POST /oauth/token`, native redirect allowlist (MNA-003/MNA-004) <br> 1.3 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.4 (2026-10-18): BEH-EA-123/124/125: the account-linking decision is core's `FederatedIdentity` (BEH-EA-338): an explicit link of an identity linked to another account is refused, a lost race resolves to the anchor's user, a returning sign-in whose account vanished is resolved again (architecture plan 14 phase 2) <br> 1.5 (2026-10-18): BEH-EA-122: `callback` and `exchange` decode their state with the shared purpose codec before `consume`, so a state naming another purpose's token spends nothing of it (BEH-EA-057, plan 18) |
 ---
 
 > Implemented in `@awthaq/oauth` (`packages/oauth/src`; tests `packages/oauth/test`, wired scenarios in `features/`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -46,6 +46,8 @@ REQUIREMENT: The `state` parameter and its associated PKCE verifier and nonce
              only an opaque correlation cookie, never the verifier or nonce
              itself.
 ```
+
+`callback` and `exchange` decode their state with the shared purpose codec (`VerificationLink.decode` for `oauth.flow` and `oauth.exchange`) before `consume`; a state naming another purpose's identifier (an email-OTP row, say) is `state-malformed` and spends nothing, so a crafted state cannot burn another token's attempts (BEH-EA-057).
 
 Reusing core Verification (file 08) rather than inventing separate OAuth flow-state storage gives `state` single-use and replay semantics for free, and keeps the security property in one place instead of two. research/05-oauth-oidc.md recommends exactly this generalization of better-auth's `"database"` `storeStateStrategy`, and RFC 9700 §10.12 requires `state` to defend against CSRF and code-injection on the callback; single-use consumption is what makes a replayed callback fail rather than silently re-run the exchange.
 

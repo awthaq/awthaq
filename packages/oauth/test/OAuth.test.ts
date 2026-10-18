@@ -336,6 +336,46 @@ describe("OAuth", () => {
     );
   });
 
+  describe("BEH-EA-057: a callback state names only this flow's tokens", () => {
+    it.effect(
+      "BEH-EA-057: a callback state naming another purpose's token is refused before consume, and spends nothing of it",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const verification = yield* Verification.Verification;
+          // The victim requested an email code: a budgeted row under `email-otp:<address>`.
+          const identifier = "email-otp:victim@example.com";
+          const { value } = yield* verification.issue({
+            identifier,
+            ttl: Duration.minutes(5),
+            format: { _tag: "Numeric", digits: 6 },
+            maxAttempts: 3,
+          });
+          // The attacker knows only the address; both the state and the cookie are theirs to choose.
+          const state = `${identifier}.wrong0`;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const failure = yield* oauth
+              .callback("acme", { code: "x", state, iss: undefined, cookieState: state })
+              .pipe(Effect.flip);
+            assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+          }
+          // None of the three misses reached the victim's row: the right code still redeems.
+          const consumed = yield* verification.consume(identifier, value);
+          assert.strictEqual(consumed.identifier, identifier);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": { id: "acme-user-3", email: "cy@example.com" },
+              },
+            }),
+          ),
+        ),
+    );
+  });
+
   describe("Ticket 19: PKCE verifier/nonce are encrypted at rest", () => {
     it.effect(
       "the persisted FlowPayload's codeVerifier/nonce are ciphertext envelopes, not the raw PKCE values",

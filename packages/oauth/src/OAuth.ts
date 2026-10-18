@@ -38,6 +38,7 @@ import {
   Tenant,
   Users,
   Verification,
+  VerificationLink,
 } from "@awthaq/core";
 import {
   ClientAddress,
@@ -137,34 +138,15 @@ const bouncePage = (location: string) => {
 };
 
 const FLOW_TTL = Duration.minutes(10);
-const FLOW_PREFIX = "oauth.flow:";
+// BEH-EA-057/122: codec-only purposes. Flow state and exchange codes are burn-first (`consume`, ADR-EA-039
+// decision 6), minted and spent by hand here, so they need only the shared purpose-checked codec, not a redeemer.
+const FLOW = { name: "oauth.flow" } as const;
+const EXCHANGE = { name: "oauth.exchange" } as const;
 
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-};
-
-/**
- * BEH-EA-122: the same `${identifier}.${secret}` round trip
- * `@awthaq/password`'s `Password.ts` uses for its mailed tokens,
- * reproduced here rather than shared — the two callers travel through
- * different transports (a mailed link vs. an OAuth provider's own `state`
- * round trip) and duplicating six lines was judged simpler than a shared
- * abstraction two call sites don't yet justify.
- */
-const encodeState = (identifier: string, value: Redacted.Redacted<string>): string =>
-  `${identifier}.${Redacted.value(value)}`;
-
-const decodeState = (
-  raw: string,
-): Option.Option<{ readonly identifier: string; readonly value: Redacted.Redacted<string> }> => {
-  const separator = raw.lastIndexOf(".");
-  if (separator === -1) return Option.none();
-  return Option.some({
-    identifier: raw.slice(0, separator),
-    value: Redacted.make(raw.slice(separator + 1)),
-  });
 };
 
 /**
@@ -190,8 +172,6 @@ const FlowPayloadSchema = Schema.Struct({
 });
 type FlowPayload = typeof FlowPayloadSchema.Type;
 const decodeFlowPayload = Schema.decodeUnknownOption(FlowPayloadSchema);
-
-const EXCHANGE_PREFIX = "oauth.exchange:";
 
 /**
  * MNA-003: what a native exchange code stands for, held in `Verification`
@@ -880,7 +860,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           provider.kind === "oidc"
             ? toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie))
             : undefined;
-        const identifier = `${FLOW_PREFIX}${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+        const flowId = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+        const identifier = VerificationLink.identifierOf(FLOW.name, flowId);
         // Ticket 19: encrypted at rest inside `VerificationToken.payload` —
         // `identifier` (this flow's own unique correlation id, generated
         // just above) is the AAD, binding each ciphertext to the one flow
@@ -913,7 +894,9 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const { value } = yield* verification
           .issue({ identifier, ttl: FLOW_TTL, payload })
           .pipe(Effect.orDie);
-        const state = encodeState(identifier, value);
+        const state = Redacted.value(
+          VerificationLink.encode({ purpose: FLOW.name, publicId: flowId, value }),
+        );
         const redirectUri = `${baseOrigin}/oauth/${providerId}/callback`;
         const location = buildAuthorizeUrl(provider, {
           state,
@@ -935,7 +918,10 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         // fails here, since the victim's browser never held that cookie.
         // TSS-003: compared in constant time over fixed-length digests, so
         // neither where the values differ nor how long they are is observable.
-        const decoded = decodeState(input.state);
+        // Decoded for exactly this flow's purpose (BEH-EA-057): a state naming another purpose's
+        // identifier (an email-OTP row, an exchange code) is malformed here, so it never reaches
+        // `consume` and spends none of that token's attempts.
+        const decoded = VerificationLink.decode(input.state, FLOW);
         const digest = (value: string) =>
           crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.orDie);
         const cookieMatches =
@@ -1150,7 +1136,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         // the session goes into a short-lived, single-use exchange record and the
         // redirect carries that record's code: never the session token itself,
         // which would land in OS-level URL history and logs.
-        const exchangeIdentifier = `${EXCHANGE_PREFIX}${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+        const exchangeId = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+        const exchangeIdentifier = VerificationLink.identifierOf(EXCHANGE.name, exchangeId);
         // MW-008: the DTO holds `DateTime.Utc`; the stored snapshot is its wire (ISO string) form.
         const dto = yield* Schema.encodeEffect(SessionContract.SessionDto)(
           Session.toSessionDto(issued.session),
@@ -1179,7 +1166,13 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           callbackURL: withExchangeCode(
             flow.callbackURL,
             baseOrigin,
-            encodeState(exchangeIdentifier, exchange.value),
+            Redacted.value(
+              VerificationLink.encode({
+                purpose: EXCHANGE.name,
+                publicId: exchangeId,
+                value: exchange.value,
+              }),
+            ),
           ),
           session: undefined,
           native: true,
@@ -1213,11 +1206,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       const exchange: OAuthShape["exchange"] = Effect.fnUntraced(function* (input) {
         yield* limits.spend("token", { ip: input.ip });
-        const decoded = decodeState(input.code);
-        // The prefix is checked BEFORE `consume`: consuming is destructive, and
-        // this endpoint must never burn (or redeem) a `Verification` value issued
-        // for another purpose, such as an in-flight OAuth flow's own `state`.
-        if (Option.isNone(decoded) || !decoded.value.identifier.startsWith(EXCHANGE_PREFIX)) {
+        // The purpose is checked BEFORE `consume`: consuming is destructive, and this endpoint
+        // must never burn (or redeem) a `Verification` value issued for another purpose, such as
+        // an in-flight OAuth flow's own `state`.
+        const decoded = VerificationLink.decode(input.code, EXCHANGE);
+        if (Option.isNone(decoded)) {
           return yield* CallbackFailure.callbackFailed("exchange-malformed");
         }
         const { identifier, value } = decoded.value;

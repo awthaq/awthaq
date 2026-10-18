@@ -44,6 +44,7 @@ import {
   Tenant,
   Users,
   Verification,
+  VerificationLink,
 } from "@awthaq/core";
 import {
   ClientAddress,
@@ -106,7 +107,8 @@ export type { SamlConfigShape, SamlConfigInput } from "./SamlConfig.ts";
 
 export const REQUEST_COOKIE = "__Host-saml-request";
 export const LOGOUT_COOKIE = SamlSlo.LOGOUT_COOKIE;
-const REQUEST_PREFIX = "saml-request:";
+// BEH-EA-057: a codec-only purpose (the request state is burn-first, ADR-EA-039 decision 6).
+const REQUEST = { name: "saml-request" } as const;
 const ASSERTION_PREFIX = "saml-assertion:";
 
 /** The `providerId` accounts link under: `saml:<organizationId>:<connectionId>` (BEH-EA-245). */
@@ -901,7 +903,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           const uuid = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
           // The AuthnRequest id is an NCName: a letter or underscore first.
           const requestId = `_${uuid}`;
-          const identifier = `${REQUEST_PREFIX}${uuid}`;
+          const identifier = VerificationLink.identifierOf(REQUEST.name, uuid);
           const { value } = yield* verification.issue({
             identifier,
             ttl: settings.requestTtl,
@@ -938,7 +940,10 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
               : undefined,
           });
           // The cookie carries `<identifier>.<secret>`: the browser proves it is the one that started this login.
-          return { location, state: Redacted.make(`${identifier}.${Redacted.value(value)}`) };
+          return {
+            location,
+            state: VerificationLink.encode({ purpose: REQUEST.name, publicId: uuid, value }),
+          };
         },
       );
 
@@ -949,16 +954,14 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         // Unsolicited (IdP-initiated) responses, and any browser that did not start this login, stop here.
         if (cookieState === undefined)
           return yield* Effect.fail(new AssertionInvalid({ reason: "noRequestState" }));
-        const dot = cookieState.indexOf(".");
-        const identifier = dot < 0 ? "" : cookieState.slice(0, dot);
-        const secret = dot < 0 ? "" : cookieState.slice(dot + 1);
-        if (!identifier.startsWith(REQUEST_PREFIX) || secret === "") {
+        const decoded = VerificationLink.decode(cookieState, REQUEST);
+        if (Option.isNone(decoded)) {
           return yield* Effect.fail(new AssertionInvalid({ reason: "requestStateMalformed" }));
         }
         // ADR-EA-039: burn-first on purpose (BEH-EA-244: the ACS consumes the request state exactly once;
         // the assertion id is reserved separately, so giving the request back would not let a response be reused).
         const consumed = yield* verification
-          .consume(identifier, Redacted.make(secret))
+          .consume(decoded.value.identifier, decoded.value.value)
           .pipe(
             Effect.catchTag("Verification/TokenConsumed", () =>
               Effect.fail(new AssertionInvalid({ reason: "requestUnknownOrConsumed" })),
