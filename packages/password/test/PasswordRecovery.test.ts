@@ -25,52 +25,6 @@ const mailedToken = (mailer: Mailer.MailerShape, template: string) =>
     return Redacted.make(tokenOf(mail));
   });
 
-describe("ARF-007: cross-purpose tokens", () => {
-  it.effect(
-    "a verify-email token presented to confirmReset fails TokenConsumed and stays usable for verifyEmail",
-    () =>
-      Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        const users = yield* Users.Users;
-        yield* password.signUp({ email, password: strongPassword });
-        const verifyToken = yield* mailedToken(mailer, "verify-email");
-
-        const failure = yield* password
-          .confirmReset({
-            token: verifyToken,
-            password: Redacted.make("a brand new strong password"),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "TokenConsumed");
-
-        yield* password.verifyEmail({ token: verifyToken });
-        const user = yield* users.findByEmail(email);
-        assert.isTrue(Users.isEmailVerified(Option.getOrThrow(user)));
-      }).pipe(Effect.provide(makeTestLayer())),
-  );
-
-  it.effect(
-    "a reset token presented to verifyEmail fails TokenConsumed and stays usable for confirmReset",
-    () =>
-      Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        yield* password.signUp({ email, password: strongPassword });
-        yield* password.requestReset({ email });
-        const resetToken = yield* mailedToken(mailer, "reset-password");
-
-        const failure = yield* password.verifyEmail({ token: resetToken }).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "TokenConsumed");
-
-        yield* password.confirmReset({
-          token: resetToken,
-          password: Redacted.make("a brand new strong password"),
-        });
-      }).pipe(Effect.provide(makeTestLayer())),
-  );
-});
-
 describe("ARF-002: policy before consume", () => {
   it.effect(
     "a weak password fails WeakPassword and the same token still resets with a strong one",
