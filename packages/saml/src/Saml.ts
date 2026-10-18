@@ -1141,6 +1141,16 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         const providerId = providerIdOf(connection.organizationId, connection.id);
         const subject = assertion.nameId.value;
         const email = emailOf(assertion);
+        /** Plan 14 phase 0: a lost race is not a conflict. The anchor the winner wrote names the user. */
+        const anchoredOr = (fallback: AssertionInvalid) =>
+          accounts.findByProviderSubject(providerId, subject, connection.idpEntityId).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.fail(fallback),
+                onSome: (account) => Effect.succeed(account.userId),
+              }),
+            ),
+          );
         const linked = yield* accounts.findByProviderSubject(
           providerId,
           subject,
@@ -1157,17 +1167,22 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
                 // BEH-EA-245: never linked by email alone. An explicitly trusted connection may link to a local
                 // account whose own address is already verified; every other case is the uniform rejection.
                 if (!connection.trustsEmail || !Users.isEmailVerified(existing.value)) {
-                  return yield* Effect.fail(new AssertionInvalid({ reason: "emailInUse" }));
+                  // The "holder" may be the user a concurrent first sign-in for this very NameID just created.
+                  return yield* anchoredOr(new AssertionInvalid({ reason: "emailInUse" }));
                 }
-                yield* accounts
+                return yield* accounts
                   .link({
                     userId: existing.value.id,
                     providerId,
                     subject,
                     issuer: connection.idpEntityId,
                   })
-                  .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
-                return existing.value.id;
+                  .pipe(
+                    Effect.as(existing.value.id),
+                    Effect.catchTag("AccountAlreadyLinked", () =>
+                      anchoredOr(new AssertionInvalid({ reason: "emailInUse" })),
+                    ),
+                  );
               }
               const name = attributeOf(assertion, NAME_ATTRIBUTES) ?? email ?? subject;
               // ADR-EA-038: `SignUp` vets (`BeforeSignUp`, `strategy` is the provider id), then creates and
@@ -1177,19 +1192,20 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
                 name,
                 strategy: providerId,
               });
-              const created = yield* creation
+              return yield* creation
                 .create(vetted, {
                   link: { providerId, subject, issuer: connection.idpEntityId },
                 })
                 .pipe(
+                  Effect.map((created) => created.id),
                   Effect.catchTag("SignUp/IdentityTaken", (taken) =>
-                    taken.kind === "Email"
-                      ? Effect.fail(new AssertionInvalid({ reason: "emailInUse" }))
-                      : // A fresh user has no phone, and a fresh user's subject is not yet linked.
-                        Defects.invariantViolation("SamlSignUpConflict", taken.message),
+                    taken.kind === "Phone"
+                      ? // A fresh user has no phone.
+                        Defects.invariantViolation("SamlSignUpConflict", taken.message)
+                      : // The address or the anchor was claimed by a concurrent first sign-in: the anchor names the user.
+                        anchoredOr(new AssertionInvalid({ reason: "emailInUse" })),
                   ),
                 );
-              return created.id;
             }),
         });
 

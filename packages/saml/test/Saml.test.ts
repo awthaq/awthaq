@@ -1,7 +1,7 @@
 // BEH-EA-238 through 245 (spec/behaviors/29-saml-sp.md), through the service: SP-initiated login, then the ACS
 // chain against signed responses the fixtures' IdP produces — and against every way of getting one wrong. The
 // invariant asserted throughout: every rejection is the SAME `SamlAssertionRejected`, and never a session.
-import { Auth, AuthEvents, RateLimits, Users } from "@awthaq/core";
+import { Accounts, Auth, AuthEvents, RateLimits, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { OrganizationRecords } from "@awthaq/organization/records";
 import { RateLimiter } from "@awthaq/ports";
@@ -41,6 +41,7 @@ import {
   type Started,
 } from "./support.ts";
 import { TenantScoped } from "@awthaq/sql";
+import { Rendezvous } from "@awthaq/test";
 
 /** The witness these tests present where a cross-organization caller would. */
 const grant = TenantScoped.crossTenant("test: a cross-organization caller");
@@ -655,6 +656,86 @@ describe("account linking (BEH-EA-245)", () => {
       });
       assert.isTrue(Option.isNone(outcome.session.session.tenantId));
     }).pipe(Effect.provide(SamlLive({ tenantScoped: false }))),
+  );
+});
+
+describe("concurrent first sign-ins for one NameID (plan 14)", () => {
+  /** Two ACS requests, each with its own AuthnRequest and assertion id, both past the anchor read before either writes. */
+  const twoAcs = (
+    connectionId: string,
+    options: {
+      readonly nameId: string;
+      readonly attributes: Readonly<Record<string, ReadonlyArray<string>>>;
+    },
+  ) =>
+    Effect.gen(function* () {
+      const saml = yield* Saml.Saml;
+      const left = yield* startLogin(connectionId);
+      const right = yield* startLogin(connectionId);
+      return yield* Effect.all(
+        [
+          saml.acs({
+            samlResponse: idpResponse(left, connectionId, { assertionId: "_race-a", ...options }),
+            cookieState: left.state,
+          }),
+          saml.acs({
+            samlResponse: idpResponse(right, connectionId, { assertionId: "_race-b", ...options }),
+            cookieState: right.state,
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+    });
+
+  it.effect("an anonymous NameID (no email): both ACS succeed as one user", () =>
+    Effect.gen(function* () {
+      yield* atNow;
+      const { connection } = yield* seedConnection();
+      const [a, b] = yield* twoAcs(connection.id, {
+        nameId: "opaque-123",
+        attributes: { groups: ["eng"] },
+      });
+      assert.strictEqual(a.session.session.userId, b.session.session.userId);
+      const accounts = yield* Accounts.Accounts;
+      assert.strictEqual((yield* accounts.listByUser(a.session.session.userId)).length, 1);
+    }).pipe(Effect.provide(SamlLive({}, undefined, undefined, Rendezvous.anchorReadsMeet(2)))),
+  );
+
+  it.effect("an email NameID: both ACS succeed as one user, one user row", () =>
+    Effect.gen(function* () {
+      yield* atNow;
+      const { connection } = yield* seedConnection();
+      const [a, b] = yield* twoAcs(connection.id, {
+        nameId: "ada@acme.example",
+        attributes: { email: ["ada@acme.example"] },
+      });
+      assert.strictEqual(a.session.session.userId, b.session.session.userId);
+      const accounts = yield* Accounts.Accounts;
+      assert.strictEqual((yield* accounts.listByUser(a.session.session.userId)).length, 1);
+    }).pipe(Effect.provide(SamlLive({}, undefined, undefined, Rendezvous.anchorReadsMeet(2)))),
+  );
+
+  it.effect(
+    "a trustsEmail connection: both ACS sign in as the verified local user, one account",
+    () =>
+      Effect.gen(function* () {
+        yield* atNow;
+        const users = yield* Users.Users;
+        const { connection } = yield* seedConnection({ trustsEmail: true });
+        const local = yield* users.create({
+          identity: { _tag: "Email", email: "ada@acme.example" },
+          name: "Ada",
+        });
+        yield* users.verifyEmail(local.id);
+        const [a, b] = yield* twoAcs(connection.id, {
+          nameId: "ada@acme.example",
+          attributes: { email: ["ada@acme.example"] },
+        });
+        assert.strictEqual(a.session.session.userId, local.id);
+        assert.strictEqual(b.session.session.userId, local.id);
+        const accounts = yield* Accounts.Accounts;
+        assert.strictEqual((yield* accounts.listByUser(local.id)).length, 1);
+      }).pipe(Effect.provide(SamlLive({}, undefined, undefined, Rendezvous.anchorReadsMeet(2)))),
   );
 });
 

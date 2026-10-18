@@ -18,3 +18,4 @@ export * as RedactionGuard from "./RedactionGuard.ts";
 export * as SignInProbe from "./SignInProbe.ts";
 export * as StoreContract from "./StoreContract.ts";
 export * as TestSql from "./TestSql.ts";
+export * as Rendezvous from "./Rendezvous.ts";

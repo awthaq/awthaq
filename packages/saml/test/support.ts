@@ -3,7 +3,7 @@
 // same layer graph an application builds — plus helpers that play the two other parties: the IdP (a signed
 // response for a given AuthnRequest) and the browser (the state cookie).
 import { Api } from "@awthaq/api";
-import { Auth, type Sessions, type Users } from "@awthaq/core";
+import { Auth, type Accounts, type Sessions, type Users } from "@awthaq/core";
 import { Organization, type OrganizationHooks } from "@awthaq/organization";
 import { RateLimiter } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
@@ -70,7 +70,9 @@ export const fakeFetcher = (
  * (`TestAuth.layer`'s `decorate`) the plugin captures at construction (for example to simulate a store outage);
  * `taps` are application taps on the organization hook points (an observer that records the actor of a role mapping).
  */
-export const SamlLive = <Wrapped extends Sessions.Sessions | Users.Users = never>(
+export const SamlLive = <
+  Wrapped extends Sessions.Sessions | Users.Users | Accounts.Accounts = never,
+>(
   samlConfig: Partial<Omit<Saml.SamlConfigInput, "baseUrl">> = {},
   limiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
   fetcher: Layer.Layer<SamlMetadataFetcher.SamlMetadataFetcher> = fakeFetcher({}).layer,
