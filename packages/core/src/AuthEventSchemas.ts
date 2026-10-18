@@ -460,17 +460,23 @@ export const AdminImpersonationDeniedEvent = defineEvent(
 export type AdminImpersonationDeniedEvent = typeof AdminImpersonationDeniedEvent.Type;
 
 /**
- * BAM-005: published by `@awthaq/admin` when an admin capability other than
- * impersonation (`AdminConfig.canManageUsers`) resolves `false` — the same
+ * BAM-005: published by `@awthaq/admin` when a user- or tenant-administration
+ * predicate (`canManageUsers`, `canBanUsers`, `canDeleteUsers`,
+ * `canManageCredentials`, `canAdministerTenants`) resolves `false` — the same
  * "genuine authorization rejection, never input-validation noise" signal
  * `auth.admin.impersonationDenied` is for impersonation. `action` names the
- * endpoint (`"listUsers"`, `"updateUser"`, ...).
+ * endpoint (`"listUsers"`, `"updateUser"`, ...). Like IDS-006, `targetUserId`
+ * (user administration) or `organizationId` (tenant administration) is carried
+ * when the call named one. `@awthaq/saml` and `@awthaq/webhooks` publish it too
+ * (with a prefixed `action`), without either key.
  */
 export const AdminActionDeniedEvent = defineEvent(
   "auth.admin.actionDenied",
   {
     adminUserId: UserIdSchema,
     action: Schema.String,
+    targetUserId: Schema.optionalKey(UserIdSchema),
+    organizationId: Schema.optionalKey(Schema.String),
   },
   {
     actor: Actor.field("adminUserId"),

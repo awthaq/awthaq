@@ -341,6 +341,53 @@ describe("the admin gate (plan 13)", () => {
       }),
   );
 
+  it.effect("BEH-EA-224: a denial names the target or organization the call named", () =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+      yield* events.stream.pipe(
+        Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const env: Env = {
+        admin: yield* Admin.Admin,
+        accounts: yield* AdminAccounts.AdminAccounts,
+        tenants: yield* AdminTenants.AdminTenants,
+        ghostUser: Users.UserId("ghost-user"),
+        ghostOrg: "ghost-org",
+        seedEpisode: Effect.succeed("unused"),
+      };
+      const names = [
+        "listUsers",
+        "getUser",
+        "banUser",
+        "deleteUser",
+        "listOrganizations",
+        "getOrganization",
+      ];
+      for (const name of names) {
+        const row = rows.find((candidate) => candidate.name === name);
+        assert.isDefined(row, name);
+        yield* row?.run(env) ?? Effect.void;
+      }
+      yield* TestClock.adjust(Duration.millis(10));
+      const denied = (yield* Ref.get(seen)).flatMap((event) =>
+        event._tag === "auth.admin.actionDenied" ? [event] : [],
+      );
+      assert.deepStrictEqual(
+        denied.map((event) => [event.action, event.targetUserId, event.organizationId]),
+        [
+          ["listUsers", undefined, undefined],
+          ["getUser", "ghost-user", undefined],
+          ["banUser", "ghost-user", undefined],
+          ["deleteUser", "ghost-user", undefined],
+          ["listOrganizations", undefined, undefined],
+          ["getOrganization", undefined, "ghost-org"],
+        ],
+      );
+    }).pipe(Effect.scoped, Effect.provide(buildLayer({}))),
+  );
+
   it.effect(
     "BEH-EA-212/218: a denied impersonate issues no session; IDS-006 names the target",
     () =>

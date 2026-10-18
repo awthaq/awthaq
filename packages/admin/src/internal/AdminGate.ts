@@ -275,11 +275,16 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())));
 
   /** BEH-EA-224: a genuine refusal, never validation noise. An attempt event (ADR-EA-037): it survives a rollback. */
-  const refuse = Effect.fnUntraced(function* (caller: Api.UserPrincipal, action: string) {
+  const refuse = Effect.fnUntraced(function* (
+    caller: Api.UserPrincipal,
+    action: string,
+    named: { readonly targetUserId?: Users.UserId; readonly organizationId?: string },
+  ) {
     yield* events.publish({
       _tag: "auth.admin.actionDenied",
       adminUserId: Users.UserId(caller.ref.id),
       action,
+      ...named,
     });
     return yield* Effect.fail(new AdminApi.AdminActionDenied());
   });
@@ -299,7 +304,19 @@ export const make = Effect.gen(function* () {
             target: Option.map(target, subject),
             tenantId: yield* Tenant.TenantContext,
           });
-    if (!allowed) return yield* refuse(caller, action);
+    if (!allowed) {
+      return yield* Option.match(target, {
+        onNone: () => refuse(caller, action, {}),
+        onSome: (id) =>
+          refuse(
+            caller,
+            action,
+            entry.on === "organization"
+              ? { organizationId: id }
+              : { targetUserId: Users.UserId(id) },
+          ),
+      });
+    }
     return config;
   });
 
