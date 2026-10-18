@@ -202,69 +202,6 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
       }).pipe(Effect.provide(RepositoriesLive)),
   );
 
-  it.effect(
-    "Verification.findByIdentifier/upsertLive/tryConsume all resolve the quoted valueHash/expiresAt/consumedAt/createdAt columns",
-    () =>
-      Effect.gen(function* () {
-        const verification = yield* Repositories.VerificationRepository;
-        const now = yield* DateTime.now;
-        const expiresAt = DateTime.add(now, { minutes: 15 });
-
-        const issued = yield* verification.upsertLive(
-          yield* M.VerificationToken.insert.makeEffect({
-            identifier: "verify-email:pg-user",
-            valueHash: "hash-1",
-            expiresAt,
-            consumedAt: null,
-          }),
-        );
-        assert.strictEqual(issued.valueHash, "hash-1");
-
-        const found = yield* verification.findByIdentifier("verify-email:pg-user");
-        assert.isTrue(Option.isSome(found));
-
-        const consumed = yield* verification.tryConsume({
-          identifier: "verify-email:pg-user",
-          valueHash: "hash-1",
-          now,
-        });
-        assert.isTrue(Option.isSome(consumed));
-        // PPS-003: a consumed token is history, not the live row.
-        assert.isTrue(Option.isNone(yield* verification.findByIdentifier("verify-email:pg-user")));
-
-        const replay = yield* verification.tryConsume({
-          identifier: "verify-email:pg-user",
-          valueHash: "hash-1",
-          now,
-        });
-        assert.isTrue(Option.isNone(replay));
-      }).pipe(Effect.provide(RepositoriesLive)),
-  );
-
-  it.effect(
-    "VerificationReservations.claim resolves the quoted expiresAt column in its upsert",
-    () =>
-      Effect.gen(function* () {
-        const reservations = yield* Repositories.VerificationReservationsRepository;
-        const now = yield* DateTime.now;
-        const expiresAt = DateTime.add(now, { minutes: 5 });
-
-        const first = yield* reservations.claim({
-          identifier: "reserve:pg-user",
-          expiresAt,
-          now,
-        });
-        assert.isTrue(first);
-
-        const second = yield* reservations.claim({
-          identifier: "reserve:pg-user",
-          expiresAt,
-          now,
-        });
-        assert.isFalse(second);
-      }).pipe(Effect.provide(RepositoriesLive)),
-  );
-
   // RRC-001: the default `ReplicationPosition` speaks Postgres LSNs. The
   // "replica" here is the primary itself (there is no streaming replica in
   // this environment), which is never in recovery, so `pg_last_wal_replay_lsn()`

@@ -7,6 +7,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { VerificationStore } from "@awthaq/ports";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
@@ -20,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Models from "../src/Models.ts";
 import * as Repositories from "../src/Repositories.ts";
+import * as VerificationStoreSql from "../src/VerificationStoreSql.ts";
 import { contractCases, repositoriesLayer } from "./contract.ts";
 
 const M = Models.makeModels("sqlite");
@@ -54,7 +56,7 @@ describe("SQLite file database (SEA-004)", () => {
       Layer.mergeAll(
         Repositories.UsersRepositoryLive,
         Repositories.SessionsRepositoryLive,
-        Repositories.VerificationReservationsRepositoryLive,
+        VerificationStoreSql.layer,
       ).pipe(Layer.provideMerge(SqliteClient.layer({ filename }))),
     );
     return { first, second };
@@ -112,11 +114,11 @@ describe("SQLite file database (SEA-004)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { first, second } = yield* twoConnections;
-        const a = Context.get(first, Repositories.VerificationReservationsRepository);
-        const b = Context.get(second, Repositories.VerificationReservationsRepository);
+        const a = Context.get(first, VerificationStore.VerificationStore);
+        const b = Context.get(second, VerificationStore.VerificationStore);
         const now = yield* DateTime.now;
-        const claim = (repo: Repositories.VerificationReservationsRepositoryShape) =>
-          repo.claim({
+        const claim = (store: VerificationStore.VerificationStoreShape) =>
+          store.reserve({
             identifier: "wal-claim",
             expiresAt: DateTime.addDuration(now, Duration.minutes(1)),
             now,

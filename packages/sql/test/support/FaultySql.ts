@@ -19,6 +19,16 @@ export interface Faults {
     readonly reason: SqlErrorReason;
     readonly matching?: RegExp;
   }) => Effect.Effect<void>;
+  /**
+   * Runs `run` once, just before the next statement matching `matching` executes, on the same fiber.
+   * It is how a test lands a concurrent writer between two statements of one primitive. `run` must not
+   * use this client (its connection is held while the hook runs): build a second client on the same
+   * database file for it.
+   */
+  readonly beforeNext: (input: {
+    readonly matching: RegExp;
+    readonly run: Effect.Effect<void>;
+  }) => Effect.Effect<void>;
   /** How many statements matching `pattern` were attempted since the last `reset`. */
   readonly attempts: (pattern: RegExp) => Effect.Effect<number>;
   /** Forgets every pending fault and every recorded attempt. */
@@ -35,12 +45,18 @@ interface Plan {
   readonly matching: RegExp | undefined;
 }
 
+interface Hook {
+  readonly matching: RegExp;
+  readonly run: Effect.Effect<void>;
+}
+
 interface State {
   readonly plans: ReadonlyArray<Plan>;
+  readonly hooks: ReadonlyArray<Hook>;
   readonly seen: ReadonlyArray<string>;
 }
 
-const empty: State = { plans: [], seen: [] };
+const empty: State = { plans: [], hooks: [], seen: [] };
 
 /**
  * Wraps a real SQLite client: `SqlClient.make` over `real.reserve`, every `Connection.execute*`
@@ -54,20 +70,34 @@ export const layer = <E, R>(real: Layer.Layer<SqlClient.SqlClient, E, R>) =>
       const state = yield* Ref.make(empty);
 
       const gate = (sql: string): Effect.Effect<void, SqlError> =>
-        Ref.modify(state, (current): readonly [SqlErrorReason | undefined, State] => {
-          const seen = [...current.seen, sql];
-          const hit = current.plans.find(
-            (plan) =>
-              plan.remaining > 0 && (plan.matching === undefined || plan.matching.test(sql)),
-          );
-          if (hit === undefined) {
-            return [undefined, { plans: current.plans, seen }];
-          }
-          hit.remaining -= 1;
-          return [hit.reason, { plans: current.plans.filter((p) => p.remaining > 0), seen }];
-        }).pipe(
-          Effect.flatMap((reason) =>
-            reason === undefined ? Effect.void : Effect.fail(new SqlError({ reason })),
+        Ref.modify(
+          state,
+          (current): readonly [readonly [SqlErrorReason | undefined, Hook | undefined], State] => {
+            const seen = [...current.seen, sql];
+            const hook = current.hooks.find((candidate) => candidate.matching.test(sql));
+            const hit = current.plans.find(
+              (plan) =>
+                plan.remaining > 0 && (plan.matching === undefined || plan.matching.test(sql)),
+            );
+            if (hit !== undefined) {
+              hit.remaining -= 1;
+            }
+            return [
+              [hit?.reason, hook],
+              {
+                plans: current.plans.filter((plan) => plan.remaining > 0),
+                hooks: current.hooks.filter((candidate) => candidate !== hook),
+                seen,
+              },
+            ];
+          },
+        ).pipe(
+          Effect.flatMap(([reason, hook]) =>
+            (hook === undefined ? Effect.void : hook.run).pipe(
+              Effect.andThen(
+                reason === undefined ? Effect.void : Effect.fail(new SqlError({ reason })),
+              ),
+            ),
           ),
         );
 
@@ -94,8 +124,13 @@ export const layer = <E, R>(real: Layer.Layer<SqlClient.SqlClient, E, R>) =>
       const faults = FaultControl.of({
         failNext: ({ count, reason, matching }) =>
           Ref.update(state, (current) => ({
+            ...current,
             plans: [...current.plans, { remaining: count, reason, matching }],
-            seen: current.seen,
+          })),
+        beforeNext: ({ matching, run }) =>
+          Ref.update(state, (current) => ({
+            ...current,
+            hooks: [...current.hooks, { matching, run }],
           })),
         attempts: (pattern) =>
           Effect.map(

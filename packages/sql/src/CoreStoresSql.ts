@@ -74,8 +74,6 @@ export const layer = (options?: Options) => {
           ? Repositories.SessionsRepositoryEncryptedLive
           : Repositories.SessionsRepositoryLive,
         Repositories.AccountsRepositoryLive,
-        Repositories.VerificationRepositoryLive,
-        Repositories.VerificationReservationsRepositoryLive,
       ),
     ),
   );

@@ -4,9 +4,10 @@
 // `Verification` service directly (under `TestClock`) where it is about expiry or races, and
 // raw row reads where the claim is about what is persisted.
 import { AuditLog, AuthEvents, Hooks, Persistence, Verification } from "@awthaq/core";
-import { Repositories, VerificationStoreSql } from "@awthaq/sql";
+import { CoreMigrations, VerificationStoreSql } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as Duration from "effect/Duration";
@@ -16,7 +17,8 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
+import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { direct, directExit, World, type HeldToken } from "./DomainWorld.ts";
 import {
   awaitMail,
@@ -877,29 +879,28 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Given("a store implementation that cannot guarantee atomic reservation", function* () {
-    // A reservations repository whose conditional claim (the atomic step) is unavailable.
+    // A reservation store whose conditional claim (the atomic step) is unavailable.
     const { strings } = yield* World;
     yield* strings.set("store", "cannot-claim-atomically");
   });
 
   When("a caller attempts to reserve an identifier against that store", function* () {
     const { exits } = yield* World;
-    const DownReservations = Layer.effect(
-      Repositories.VerificationReservationsRepository,
+    // The claim is unavailable at the database: the reservation table is gone, so the conditional
+    // upsert (the atomic step) fails exactly as an outage would, one layer below the adapter.
+    const DownSql = Layer.effectDiscard(
       Effect.gen(function* () {
-        const real = yield* Repositories.VerificationReservationsRepository;
-        return {
-          ...real,
-          claim: () =>
-            Effect.fail(
-              new SqlError({ reason: new UnknownError({ cause: new Error("claim unavailable") }) }),
-            ),
-        };
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`ALTER TABLE verification_reservations RENAME TO verification_reservations_down`;
       }),
-    ).pipe(Layer.provide(Repositories.VerificationReservationsRepositoryLive));
-    const DownStore = VerificationStoreSql.layer.pipe(
-      Layer.provide(Layer.mergeAll(Repositories.VerificationRepositoryLive, DownReservations)),
+    ).pipe(
+      Layer.provideMerge(
+        Layer.effectDiscard(Migrator.make({})({ loader: CoreMigrations.coreMigrations })).pipe(
+          Layer.provideMerge(SqliteClient.layer({ filename: ":memory:" })),
+        ),
+      ),
     );
+    const DownStore = VerificationStoreSql.layer.pipe(Layer.provide(DownSql));
     const DownVerification = Verification.layer.pipe(
       Layer.provide(DownStore),
       Layer.provide(NodeCrypto.layer),

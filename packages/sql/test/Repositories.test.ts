@@ -8,7 +8,7 @@
 // in-memory stand-in. The dialect-neutral cases live in `contract.ts` (shared
 // with the file-backed and Postgres suites, ESR-009); the cases below are
 // SQLite-specific or cheap enough to keep on the in-memory database only.
-import { AuditLogStore } from "@awthaq/ports";
+import { AuditLogStore, VerificationStore } from "@awthaq/ports";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -84,7 +84,7 @@ describe("Repositories (SQLite specifics)", () => {
       const { spans, tracer } = collectSpans();
       const users = yield* Repositories.UsersRepository;
       const sessions = yield* Repositories.SessionsRepository;
-      const verification = yield* Repositories.VerificationRepository;
+      const verification = yield* VerificationStore.VerificationStore;
       const now = yield* DateTime.now;
       const user = yield* insertUser("spans@example.com");
       const session = yield* insertSession(user.id, "hash-1", now);
@@ -99,7 +99,7 @@ describe("Repositories (SQLite specifics)", () => {
             lastActiveAt: now,
             idleExpiresAt: now,
           });
-          yield* verification.tryConsume({ identifier: "x:y", valueHash: "h", now });
+          yield* verification.present({ identifier: "x:y", valueHash: "h", now, hold: false });
         }),
         Tracer.Tracer,
         tracer,
@@ -122,7 +122,7 @@ describe("Repositories (SQLite specifics)", () => {
       const { spans, tracer } = collectSpans();
       const users = yield* Repositories.UsersRepository;
       const accounts = yield* Repositories.AccountsRepository;
-      const verification = yield* Repositories.VerificationRepository;
+      const verification = yield* VerificationStore.VerificationStore;
       const now = yield* DateTime.now;
       const user = yield* insertUser("secret-email@example.com");
 
@@ -131,11 +131,11 @@ describe("Repositories (SQLite specifics)", () => {
           yield* users.findByEmail("secret-email@example.com");
           yield* accounts.findIdentityByKey("github", "subject-secret", "");
           yield* accounts.listIdentitiesByUser(user.id);
-          yield* verification.findByIdentifier("verify-email:identifier-secret");
-          yield* verification.tryConsume({
+          yield* verification.present({
             identifier: "verify-email:identifier-secret",
             valueHash: "hash-secret",
             now,
+            hold: false,
           });
         }),
         Tracer.Tracer,
@@ -219,8 +219,7 @@ describe("Repositories (SQLite specifics)", () => {
         const users = yield* Repositories.UsersRepository;
         const sessions = yield* Repositories.SessionsRepository;
         const accounts = yield* Repositories.AccountsRepository;
-        const verification = yield* Repositories.VerificationRepository;
-        const reservations = yield* Repositories.VerificationReservationsRepository;
+        const verification = yield* VerificationStore.VerificationStore;
         const now = yield* DateTime.now;
 
         // Every write path that encodes a timestamp.
@@ -282,20 +281,20 @@ describe("Repositories (SQLite specifics)", () => {
         yield* verification.upsertLive({
           id: Schema.decodeUnknownSync(Models.VerificationTokenId)("t1"),
           identifier: "verify-email:sea005",
-          userId: null,
+          userId: Option.none(),
           valueHash: "vh",
           expiresAt: DateTime.add(now, { minutes: 5 }),
           createdAt: now,
-          payload: "null",
-          maxAttempts: null,
-          attempts: 0,
+          payloadJson: Option.none(),
+          maxAttempts: Option.none(),
         });
-        yield* verification.tryConsume({
+        yield* verification.present({
           identifier: "verify-email:sea005",
           valueHash: "vh",
           now,
+          hold: false,
         });
-        yield* reservations.claim({
+        yield* verification.reserve({
           identifier: "sea005",
           expiresAt: DateTime.add(now, { minutes: 1 }),
           now,
@@ -399,22 +398,5 @@ describe("Repositories (SQLite specifics)", () => {
       assert.include(detail, "sessions_user_created_live");
       assert.notInclude(detail, "USE TEMP B-TREE FOR ORDER BY");
     }).pipe(Effect.provide(RepositoriesLive)),
-  );
-
-  // PPS-003: `findByIdentifier` is served by the partial unique live-identifier
-  // index with no temp b-tree.
-  it.effect(
-    "PPS-003: findByIdentifier's query plan uses the partial unique live-identifier index",
-    () =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const plan = yield* sql.unsafe<{ readonly detail: string }>(
-          `EXPLAIN QUERY PLAN SELECT * FROM verification_tokens WHERE identifier = ? AND "consumedAt" IS NULL`,
-          ["verify-email:user-1"],
-        );
-        const detail = plan.map((row) => row.detail).join(" | ");
-        assert.include(detail, "verification_tokens_live_identifier");
-        assert.notInclude(detail, "TEMP B-TREE");
-      }).pipe(Effect.provide(RepositoriesLive)),
   );
 });

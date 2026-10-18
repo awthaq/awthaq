@@ -24,6 +24,7 @@ import * as AuditLogStoreSql from "../src/AuditLogStoreSql.ts";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
 import * as Repositories from "../src/Repositories.ts";
+import * as VerificationStoreSql from "../src/VerificationStoreSql.ts";
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 18:
 // `Repositories.AccountsRepositoryLive` requires `Encryption` — a
@@ -64,10 +65,9 @@ export const repositoriesLayer = <E>(
     Repositories.UsersRepositoryLive,
     Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
     Repositories.SessionsRepositoryLive,
-    Repositories.VerificationRepositoryLive,
-    Repositories.VerificationReservationsRepositoryLive,
-    // Plan 16: the audit log is an adapter without a repository; suites that need a row use the port.
+    // Plan 16: the audit log and verification stores are adapters without a repository; suites that need a row use the port.
     AuditLogStoreSql.layer,
+    VerificationStoreSql.layer,
   ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 };
 
@@ -535,73 +535,9 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect(
-      "BEH-EA-057/060: VerificationToken repository hashes at rest and is looked up by identifier",
-      () =>
-        Effect.gen(function* () {
-          const verification = yield* Repositories.VerificationRepository;
-          const now = yield* DateTime.now;
-          const token = yield* verification.insert(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "verify-email:user-1",
-              valueHash: "hashed-token-value",
-              expiresAt: DateTime.addDuration(now, Duration.days(1)),
-              consumedAt: null,
-            }),
-          );
-          assert.strictEqual(token.valueHash, "hashed-token-value");
-          const found = yield* verification.findByIdentifier("verify-email:user-1");
-          assert.isTrue(Option.isSome(found));
-
-          const consumed = yield* verification.tryConsume({
-            identifier: "verify-email:user-1",
-            valueHash: "hashed-token-value",
-            now,
-          });
-          assert.isNotNull(Option.getOrThrow(consumed).consumedAt);
-
-          // PPS-003: the lookup is scoped to the *live* row, so a consumed
-          // token (kept as history) is no longer "the token for this identifier".
-          const afterConsume = yield* verification.findByIdentifier("verify-email:user-1");
-          assert.isTrue(Option.isNone(afterConsume));
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "BEH-EA-122: VerificationToken.payload stores the JSON text it is given, defaulting to the literal null",
-      () =>
-        Effect.gen(function* () {
-          const verification = yield* Repositories.VerificationRepository;
-          const now = yield* DateTime.now;
-          const withPayload = yield* verification.insert(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "oauth.flow:1",
-              valueHash: "hash-1",
-              expiresAt: now,
-              consumedAt: null,
-              payload: JSON.stringify({ codeVerifier: "abc", nonce: "xyz" }),
-            }),
-          );
-          assert.strictEqual(
-            withPayload.payload,
-            JSON.stringify({ codeVerifier: "abc", nonce: "xyz" }),
-          );
-
-          const withoutPayload = yield* verification.insert(
-            yield* M.VerificationToken.insert.makeEffect({
-              identifier: "verify-email:user-2",
-              valueHash: "hash-2",
-              expiresAt: now,
-              consumedAt: null,
-            }),
-          );
-          assert.strictEqual(withoutPayload.payload, "null");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    // The verification repository cases (the atomic claim, the live-row replacement, the reservation
-    // claim and its boundary) are `StoreContract.verification`, which runs on every adapter (plan 02,
-    // ADR-EA-041).
+    // The verification cases (the atomic claim, the live-row replacement, the reservation claim and its
+    // boundary, the hash at rest, the payload round trip) are `StoreContract.verification` and
+    // `VerificationStoreSql.test.ts` (plan 16).
 
     // ESR-009: the RETURNING-decoded session writes of RRS-003/ticket 15 —
     // a timestamp/nullable-timestamp round trip through each dialect's codec.
@@ -704,12 +640,10 @@ export const contractCases = (
     // retention deletes) are `StoreContract.auditLog`, which runs on every adapter (plan 02, ADR-EA-041).
 
     it.effect(
-      "CSG-003: deleteExpiredBefore removes expired sessions, tokens and reservations, bounded by limit, and reports the count",
+      "CSG-003: deleteExpiredBefore removes expired sessions, bounded by limit, and reports the count",
       () =>
         Effect.gen(function* () {
           const sessions = yield* Repositories.SessionsRepository;
-          const verification = yield* Repositories.VerificationRepository;
-          const reservations = yield* Repositories.VerificationReservationsRepository;
           const users = yield* Repositories.UsersRepository;
           const user = yield* users.insert(
             yield* M.User.insert.makeEffect({ email: "retention@example.com", name: "R" }),
@@ -746,35 +680,6 @@ export const contractCases = (
             (yield* sessions.findById(old1.id).pipe(Effect.flip))._tag,
             "NoSuchElementError",
           );
-
-          const token = (
-            identifier: string,
-            expiresAt: DateTime.Utc,
-            consumedAt: DateTime.Utc | null,
-          ) =>
-            verification.insert(
-              M.VerificationToken.insert.make({
-                identifier,
-                valueHash: `hash-${identifier}`,
-                expiresAt,
-                consumedAt,
-              }),
-            );
-          yield* token("expired", at(1), null);
-          yield* token("consumed-long-ago", at(30), at(2));
-          yield* token("consumed-recently", at(30), at(20));
-          yield* token("live", at(30), null);
-          assert.strictEqual(yield* verification.deleteExpiredBefore(cutoff, 100), 2);
-          assert.strictEqual(yield* verification.deleteExpiredBefore(cutoff, 100), 0);
-
-          assert.isTrue(
-            yield* reservations.claim({ identifier: "r-old", expiresAt: at(1), now: t0 }),
-          );
-          assert.isTrue(
-            yield* reservations.claim({ identifier: "r-live", expiresAt: at(30), now: t0 }),
-          );
-          assert.strictEqual(yield* reservations.deleteExpiredBefore(cutoff, 100), 1);
-          assert.strictEqual(yield* reservations.deleteExpiredBefore(cutoff, 100), 0);
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
@@ -962,8 +867,6 @@ export const contractCases = (
       Effect.gen(function* () {
         const users = yield* Repositories.UsersRepository;
         const accounts = yield* Repositories.AccountsRepository;
-        const verification = yield* Repositories.VerificationRepository;
-        const reservations = yield* Repositories.VerificationReservationsRepository;
         const now = yield* DateTime.now;
         const future = DateTime.addDuration(now, Duration.days(1));
         const user = yield* users.insert(
@@ -987,42 +890,11 @@ export const contractCases = (
           absoluteExpiresAt: future,
           idleExpiresAt: future,
         });
-        const token = yield* verification.insert(
-          yield* M.VerificationToken.insert.makeEffect({
-            identifier: `verify-email:${label}`,
-            valueHash: "h",
-            expiresAt: future,
-            consumedAt: null,
-          }),
-        );
-        const live = yield* verification.upsertLive({
-          id: Schema.decodeUnknownSync(Models.VerificationTokenId)(`${label}-live`),
-          identifier: `reset-password:${label}`,
-          userId: null,
-          valueHash: "h",
-          expiresAt: future,
-          createdAt: now,
-          payload: "null",
-          maxAttempts: null,
-          attempts: 0,
-        });
-        yield* reservations.claim({ identifier: `signup:${label}`, expiresAt: future, now });
         return {
           users: [user.tenantId, ...(Option.isSome(orphan) ? [orphan.value.tenantId] : [])],
           accounts: [account.tenantId],
           sessions: [session.tenantId],
-          verification: [token.tenantId, live.tenantId],
         };
-      });
-
-    /** `tenantId` of the reservation row, which no repository reads back. */
-    const rawTenantOf = (table: "verification_reservations", label: string) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const rows = yield* sql.unsafe<{ readonly tenantId: string | null }>(
-          `SELECT "tenantId" FROM ${table} WHERE identifier = 'signup:${label}'`,
-        );
-        return rows.map((row) => row.tenantId);
       });
 
     it.effect("DRS-001: every insert path stamps the ambient tenantId, NULL when none", () =>
@@ -1032,9 +904,7 @@ export const contractCases = (
           users: ["tenant-1", "tenant-1"],
           accounts: ["tenant-1"],
           sessions: ["tenant-1"],
-          verification: ["tenant-1", "tenant-1"],
         });
-        assert.deepStrictEqual(yield* rawTenantOf("verification_reservations", "t1"), ["tenant-1"]);
 
         // Single-tenant behaviour is untouched: nothing provides the context, so NULL.
         const plain = yield* insertEveryTable("plain");
@@ -1042,9 +912,7 @@ export const contractCases = (
           users: [null, null],
           accounts: [null],
           sessions: [null],
-          verification: [null, null],
         });
-        assert.deepStrictEqual(yield* rawTenantOf("verification_reservations", "plain"), [null]);
 
         // An explicit tenant on the input wins over the ambient one.
         const users = yield* Repositories.UsersRepository;

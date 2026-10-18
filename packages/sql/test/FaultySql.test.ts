@@ -4,6 +4,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ConnectionError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as FaultySql from "./support/FaultySql.ts";
@@ -64,6 +65,20 @@ describe("FaultySql", () => {
         .pipe(Effect.flip);
       const rows = yield* sql`SELECT label FROM probe`;
       assert.deepStrictEqual(rows, [{ label: "kept" }]);
+    }).pipe(Effect.provide(withTable)),
+  );
+
+  it.effect("beforeNext runs once, just before the next matching statement", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const faults = yield* FaultySql.FaultControl;
+      const ran = yield* Ref.make(0);
+      yield* faults.beforeNext({ matching: /SELECT label/, run: Ref.update(ran, (n) => n + 1) });
+      yield* sql`SELECT 1 AS one`;
+      assert.strictEqual(yield* Ref.get(ran), 0);
+      yield* sql`SELECT label FROM probe`;
+      yield* sql`SELECT label FROM probe`;
+      assert.strictEqual(yield* Ref.get(ran), 1);
     }).pipe(Effect.provide(withTable)),
   );
 });

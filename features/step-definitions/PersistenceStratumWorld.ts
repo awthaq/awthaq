@@ -53,7 +53,6 @@ export const RepositoriesLive = Layer.mergeAll(
   Repositories.UsersRepositoryLive,
   Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
   Repositories.SessionsRepositoryLive,
-  Repositories.VerificationRepositoryLive,
 ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 
 /** Runs `effect` against a brand-new migrated database that is thrown away afterwards. */
