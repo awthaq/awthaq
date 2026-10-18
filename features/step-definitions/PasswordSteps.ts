@@ -727,6 +727,36 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* setActor(name, { ...actor, password: NEW_PASSWORD });
   });
 
+  // APS-003 (plan 18): the per-source rule is spent before the token is decoded.
+  Given("the password application enforces the real rate limits", function* () {
+    yield* configureApp({ realLimits: true });
+  });
+
+  When(
+    "{int} reset confirmations bearing forged tokens arrive from one source",
+    function* (count: number) {
+      const statuses: Array<number> = [];
+      for (let i = 0; i < count; i++) {
+        // Well-formed, never issued, a distinct public id each time (so no per-token bucket trips first).
+        const response = yield* request("/password/confirm-reset", {
+          token: `reset-password:forged-${i}.wrong`,
+          password: NEW_PASSWORD,
+        });
+        statuses.push(response.status);
+      }
+      yield* setNote("forgedConfirmStatuses", statuses.join(","));
+    },
+  );
+
+  Then("only the last one is answered {string}", function* (status: string) {
+    const statuses = (yield* getNote("forgedConfirmStatuses")).split(",");
+    assert.equal(statuses.at(-1), status);
+    assert.ok(
+      statuses.slice(0, -1).every((each) => each === "410"),
+      `every earlier confirmation must be a dead token (410), got ${statuses.join(",")}`,
+    );
+  });
+
   Then("the token is consumed", function* () {
     const actor = yield* currentActor();
     const name = actor.email.split("@")[0] ?? actor.email;

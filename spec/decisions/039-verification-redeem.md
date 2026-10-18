@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-039 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-10-13 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 07) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 07) <br> 1.1 (2026-10-18): decision 9, mailed links redeem through `VerificationLink.redeemer` (plan 18) |
 
 ---
 
@@ -41,6 +41,8 @@
 
 **8. A rule inside `use`.** Never recover from a constraint violation by catching it: on Postgres a failed statement aborts the transaction, and a `"commit"` settlement would turn into a silent rollback. Use `ON CONFLICT` forms (`Users.createOrGet`, `SignUp`). Enforce rate limits before `redeem`, not inside `use`, because a limiter charge on the ambient client is refunded by a rollback.
 
+**9. A presented link redeems through `VerificationLink.redeemer`.** A purpose is a value; the redeemer is bound once per purpose with a declared per-source and per-token budget, and owns the order source budget, decode, token budget, `beforeClaim`, claim, the foreign-row refusal (spent), and the one `VerificationLink/Refused`. A link's `use` receives `Link<Name, User, Payload>`, never a raw `VerificationTokenView`. `Verification.redeem` is called directly only for a value that is not a link (an emailed code). Decision 7's link callers (`confirmReset`, `verifyEmail`, `confirmEmailChange`, `MagicLink.verify`, `SecondFactor.redeemChallenge`) all redeem this way; burn-first callers (decision 6) share only the codec.
+
 ## Consequences
 
 **Positive**: one place writes the protocol; a failed completion gives the token back identically over memory and SQL (the shared contract suite proves it for both); magic links and email codes survive an outage; Password loses three hand-written transaction blocks and three `SqlError -> die` sites; the interface cannot regress because `consume` takes no options and has no `recordMiss` (a type gate in `CompileTimeGates.ts`).
@@ -54,6 +56,10 @@
 - **(c) A `"burn"` settlement (spend the token, roll back `use`'s writes) via a savepoint.** Deferred: no caller needs it. For magic link and email OTP the refusals that spend the link follow writes that should stand (a user created before a veto), so `"commit"` is the match.
 - **(d) A runtime guard that dies when `consume` runs inside a transaction.** Rejected: the RLS tenant middleware wraps every tenanted request in one.
 - **(e) Retrying the redeem transaction on a transient `SqlError`.** Rejected: it re-runs `use` and its hooks; the caller gets `StoreUnavailable` and the token is given back.
+
+- **(f) A `redeemLink` member of `VerificationShape`.** Rejected: the link is a codec and a budget over the interface, it needs no store primitive, and a member would give every `Verification` test double a link concern.
+- **(g) Purpose names as a declaration-merged registry interface (a compile-time collision check).** Rejected for now: the repo has no module-augmentation precedent and no collision has a caller; a purpose name is a global namespace (prefix third-party purposes with the plugin id).
+- **(h) Budgets passed per call.** Rejected: the binding is where a missing budget is visible in review; the per-call `ip` is the only request fact it needs.
 
 ## Related
 

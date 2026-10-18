@@ -7,7 +7,14 @@
 // block (up to the next blank line).
 // @effect-diagnostics missingEffectContext:off
 import { Api } from "@awthaq/api";
-import { HookPoint, RateLimits, Verification } from "@awthaq/core";
+import {
+  EmailChange,
+  HookPoint,
+  RateLimits,
+  type Users,
+  Verification,
+  VerificationLink,
+} from "@awthaq/core";
 import { TwoFactor } from "@awthaq/two-factor";
 import { OAuthProvider } from "@awthaq/oauth";
 import { Password } from "@awthaq/password";
@@ -93,6 +100,36 @@ export const unknownSettlement = (verification: Verification.VerificationShape) 
     // @ts-expect-error - a settlement is "rollback" or "commit"
     onFailure: () => "burn",
   });
+
+// ---- 08-verification-tokens.feature: BEH-EA-057 (REQ-EA-1317) ----
+
+type LinkDeps = Parameters<typeof VerificationLink.issue>[0];
+const GateReset = VerificationLink.forUser({ name: "reset-password" });
+const GateVerify = VerificationLink.forUser({ name: "verify-email" });
+
+// type-gate: verification-link-purpose
+export const mintWithoutUser = (deps: LinkDeps) =>
+  // @ts-expect-error - a `forUser` purpose requires the `userId` its row names
+  VerificationLink.issue(deps, GateReset, { ttl: Duration.hours(1) });
+export const mintWithAnotherPayload = (deps: LinkDeps, userId: Users.UserId) =>
+  VerificationLink.issue(deps, EmailChange.Link, {
+    ttl: Duration.hours(1),
+    userId,
+    // @ts-expect-error - the change-email payload is `{ newEmail }`, not another purpose's shape
+    payload: { email: "x" },
+  });
+export const redeemAnotherPurposesToken = (
+  verification: Verification.VerificationShape,
+  minted: VerificationLink.IssuedLink<"reset-password">,
+) =>
+  VerificationLink.redeemer(GateVerify, {
+    verification,
+    budget: { source: "caller", token: "none" },
+  })(
+    // @ts-expect-error - a token minted for "reset-password" is not accepted by the "verify-email" redeemer
+    { token: minted.token },
+    Effect.succeed,
+  );
 
 // ---- 14-rate-limiting.feature: BEH-EA-108 (REQ-EA-292) ----
 

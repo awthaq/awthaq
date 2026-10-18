@@ -193,6 +193,26 @@ export const verificationRedeemTypeSteps = defineSteps(({ When, Then }) => {
   );
 });
 
+/** BEH-EA-057 (08-verification-tokens.feature). */
+export const verificationLinkTypeSteps = defineSteps(({ When, Then }) => {
+  When(
+    "a caller mints a link without its user or with another purpose's payload, or hands a minted token to another purpose's redeemer",
+    function* () {
+      yield* Effect.void;
+    },
+  );
+
+  Then(
+    "the compiler rejects each",
+    gate("verification-link-purpose", [
+      "@ts-expect-error",
+      "GateReset, { ttl: Duration.hours(1) }",
+      "payload: { email",
+      "minted.token",
+    ]),
+  );
+});
+
 /** BEH-EA-108 (14-rate-limiting.feature). */
 export const rateLimitKeyTypeSteps = defineSteps(({ Given, When, Then }) => {
   Given(

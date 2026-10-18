@@ -96,6 +96,8 @@ export interface AppOptions {
   readonly storage?: "memory" | "sqlite";
   /** REQ-EA-306: a mail provider that never answers a `send`: any latency the caller sees is not the provider's. */
   readonly slowMailer?: boolean;
+  /** APS-003: enforce the plugin's production rate limits (the default is permissive, so an ordinary scenario never trips one). */
+  readonly realLimits?: boolean;
 }
 
 export interface AppHandle {
@@ -158,6 +160,7 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
       faultInjectingSessions(fault),
       options.hasher === undefined ? Layer.empty : Layer.orDie(Layer.fresh(options.hasher)),
     ),
+    rateLimiter: options.realLimits === true ? ("enforcing" as const) : ("permissive" as const),
     openapiPath: "/openapi.json" as const,
     docsPath: "/docs" as const,
   };

@@ -171,6 +171,14 @@ Feature: Password Authentication
       When "alice" confirms a password reset
       Then session "s-attacker" is no longer valid
 
+    # APS-003 (plan 18): confirmReset is throttled per source before its token is decoded, so a flood of
+    # forged tokens never reaches the breach check or the store.
+    @REQ-EA-1319
+    Scenario: Confirming resets is throttled per source
+      Given the password application enforces the real rate limits
+      When 31 reset confirmations bearing forged tokens arrive from one source
+      Then only the last one is answered "429"
+
   # BEH-EA-118 — spec/behaviors/15-password.md
   @BEH-EA-118
   Rule: Verification and replay

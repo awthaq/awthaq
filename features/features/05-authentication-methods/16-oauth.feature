@@ -73,6 +73,14 @@ Feature: OAuth and OIDC
       When the callback is presented
       Then the callback fails as invalid
 
+    # BEH-EA-057: the state is decoded for exactly this flow's purpose before `consume`.
+    @REQ-EA-1318
+    Scenario: A callback state naming another purpose's token is refused before anything is consumed
+      Given a live "email-otp" Verification entry for "victim@example.com" that allows 3 attempts
+      When a callback names that entry as its state 3 times
+      Then every callback fails
+      And the entry's right value still redeems
+
   # BEH-EA-123 — spec/behaviors/16-oauth.md
   @BEH-EA-123
   Rule: Linking is explicit by default

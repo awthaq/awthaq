@@ -1,6 +1,9 @@
 import { describeFeature, loadFeature } from "@effect-cucumber/vitest";
 import { fileURLToPath } from "node:url";
-import { verificationRedeemTypeSteps } from "../../step-definitions/CompileTimeSteps.ts";
+import {
+  verificationLinkTypeSteps,
+  verificationRedeemTypeSteps,
+} from "../../step-definitions/CompileTimeSteps.ts";
 import { WorldLive } from "../../step-definitions/DomainWorld.ts";
 import { verificationSteps } from "../../step-definitions/VerificationSteps.ts";
 
@@ -11,4 +14,5 @@ const feature = await loadFeature(
 describeFeature(feature, WorldLive, ({ use }) => {
   use(verificationSteps);
   use(verificationRedeemTypeSteps);
+  use(verificationLinkTypeSteps);
 });

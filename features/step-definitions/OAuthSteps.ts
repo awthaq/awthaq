@@ -427,6 +427,53 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.strictEqual(failure._tag, "OAuthCallbackFailed");
   });
 
+  // ---- REQ-EA-1318: a state naming another purpose's token is refused before consume ----
+
+  Given(
+    'a live "email-otp" Verification entry for {string} that allows 3 attempts',
+    Effect.fn(function* (address: string) {
+      yield* configure({ providers: [google()] });
+      const verification = yield* verificationService();
+      const identifier = `email-otp:${address}`;
+      const issued = yield* verification.issue({
+        identifier,
+        ttl: Duration.minutes(5),
+        format: { _tag: "Numeric", digits: 6 },
+        maxAttempts: 3,
+      });
+      yield* setOutcome("otpIdentifier", identifier);
+      yield* setOutcome("otpValue", issued.value);
+    }),
+  );
+
+  When("a callback names that entry as its state {int} times", function* (times: number) {
+    const oauth = yield* oauthService();
+    const identifier = (yield* getOutcome("otpIdentifier")) as string;
+    const state = `${identifier}.wrong0`;
+    const failures: Array<string> = [];
+    for (let i = 0; i < times; i++) {
+      const failure = yield* oauth
+        .callback("google", { code: "x", state, iss: undefined, cookieState: state })
+        .pipe(Effect.flip);
+      failures.push(failure._tag);
+    }
+    yield* setOutcome("otpCallbackFailures", failures);
+  });
+
+  Then("every callback fails", function* () {
+    const failures = (yield* getOutcome("otpCallbackFailures")) as ReadonlyArray<string>;
+    assert.ok(failures.length > 0);
+    assert.ok(failures.every((tag) => tag === "OAuthCallbackFailed"));
+  });
+
+  Then("the entry's right value still redeems", function* () {
+    const verification = yield* verificationService();
+    const identifier = (yield* getOutcome("otpIdentifier")) as string;
+    const value = (yield* getOutcome("otpValue")) as Redacted.Redacted<string>;
+    const consumed = yield* verification.consume(identifier, value);
+    assert.strictEqual(consumed.identifier, identifier);
+  });
+
   // ---- REQ-EA-335/336/338/339/340: linking rules ----
   //
   // One fixed identity (subject "matching-sub", email "alice@example.com")
