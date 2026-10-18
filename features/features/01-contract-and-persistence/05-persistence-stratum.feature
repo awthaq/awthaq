@@ -87,20 +87,20 @@ Feature: The Persistence Stratum
 
     @REQ-EA-093
     Scenario: A paginated query accepts an opaque cursor instead of an offset
-      Given a "listByUser" query for a user's sessions
+      Given a "listPage" query over the users
       When the query is called with a cursor derived from a prior page's last (createdAt, id)
       Then the query accepts the cursor
       And the query's interface has no offset parameter
 
     @REQ-EA-094
     Scenario: A paginated query returns the next cursor alongside its page
-      Given a "listByUser" query for a user's sessions with more rows beyond the requested limit
+      Given a "listPage" query over the users with more rows beyond the requested limit
       When the query is called
       Then the returned page is accompanied by a next cursor derived from the page's last (createdAt, id)
 
     @REQ-EA-095
     Scenario: Rows sharing the same createdAt millisecond are still ordered deterministically
-      Given two session rows with an identical createdAt timestamp down to the millisecond
+      Given two user rows with an identical createdAt timestamp down to the millisecond
       When a paginated query orders by (createdAt, id)
       Then the "id" tiebreaker produces one deterministic order between the two rows
 

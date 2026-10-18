@@ -16,7 +16,8 @@ import { Passkey } from "@awthaq/passkey";
 import { Roles } from "@awthaq/roles";
 import { Scim } from "@awthaq/scim";
 import { TestAuth } from "@awthaq/test";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { UserStore } from "@awthaq/ports";
+import { CoreMigrations } from "@awthaq/sql";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -28,7 +29,7 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { assertTypeGate, cell, isObject, put, take, type World } from "./FoundationsWorld.ts";
 import { MigOauth, MigPassword, migrateSqlite } from "./MigrationFixtures.ts";
-import { insertSession, insertUser, withDatabase } from "./PersistenceStratumWorld.ts";
+import { insertUser, withDatabase } from "./PersistenceStratumWorld.ts";
 import { layerEvaluations, PasswordFixture } from "./PluginFixtures.ts";
 import { Profile, fieldKey } from "./UserFieldsFixture.ts";
 
@@ -53,8 +54,6 @@ const ledger = cell(
 const composeLinked = () => Auth.make([MigPassword, MigOauth]);
 
 const BASE = DateTime.makeUnsafe("2026-03-01T00:00:00.000Z");
-/** Each fixture session expires at its own `createdAt`, so list from just before the first. */
-const before = DateTime.subtract(BASE, { seconds: 1 });
 
 /** Every shipped plugin class that owns migrations, in an order where cross-plugin reads find their tables. */
 const SHIPPED = [
@@ -67,40 +66,33 @@ const SHIPPED = [
   Scim.Scim,
 ];
 
-/** Five sessions a second apart, listed two at a time; the pages and cursors that came back. */
+/** Five users a second apart, listed two at a time; the pages and cursors that came back. */
 const paginate = withDatabase(
   Effect.gen(function* () {
-    const sessions = yield* Repositories.SessionsRepository;
-    const user = yield* insertUser("pages@example.com");
+    const users = yield* UserStore.UserStore;
     for (let i = 0; i < 5; i++) {
-      yield* insertSession(user.id, `h${i}`, DateTime.add(BASE, { seconds: i }));
+      yield* insertUser(`pages${i}@example.com`, DateTime.add(BASE, { seconds: i }));
     }
-    const first = yield* sessions.listByUser(user.id, before, undefined, 2);
-    const cursor = Option.getOrUndefined(first.nextCursor);
-    const second = yield* sessions.listByUser(user.id, before, cursor, 2);
-    const third = yield* sessions.listByUser(
-      user.id,
-      before,
-      Option.getOrUndefined(second.nextCursor),
-      2,
-    );
-    return { first, cursor, second, third };
+    const first = yield* users.listPage({ after: Option.none(), limit: 2 });
+    const second = yield* users.listPage({ after: first.next, limit: 2 });
+    const third = yield* users.listPage({ after: second.next, limit: 2 });
+    return { first, cursor: Option.getOrUndefined(first.next), second, third };
   }),
 );
 
 export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-036: keyset pagination ----
 
-  Given("a {string} query for a user's sessions", function* (query: string) {
+  Given("a {string} query over the users", function* (query: string) {
     yield* Effect.void; // an assertion-only step: nothing to await
-    assert.equal(query, "listByUser");
+    assert.equal(query, "listPage");
   });
 
   Given(
-    "a {string} query for a user's sessions with more rows beyond the requested limit",
+    "a {string} query over the users with more rows beyond the requested limit",
     function* (query: string) {
       yield* Effect.void; // an assertion-only step: nothing to await
-      assert.equal(query, "listByUser");
+      assert.equal(query, "listPage");
     },
   );
 
@@ -136,7 +128,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   When("the query is called", function* () {
     const { first, third } = yield* paginate;
     const last = first.items.at(-1);
-    const cursor = Option.getOrUndefined(first.nextCursor);
+    const cursor = Option.getOrUndefined(first.next);
     yield* put(strings, [
       cursor === undefined ? "none" : "some",
       String(last !== undefined && cursor?.id === last.id),
@@ -145,7 +137,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
           cursor !== undefined &&
           DateTime.Equivalence(cursor.createdAt, last.createdAt),
       ),
-      Option.isSome(third.nextCursor) ? "some" : "none",
+      Option.isSome(third.next) ? "some" : "none",
     ]);
   });
 
@@ -162,7 +154,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   );
 
   Given(
-    "two session rows with an identical createdAt timestamp down to the millisecond",
+    "two user rows with an identical createdAt timestamp down to the millisecond",
     function* () {
       yield* Effect.void; // an assertion-only step: nothing to await
       // Arranged in the When, which needs the rows and the queries on one database.
@@ -172,21 +164,15 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   When("a paginated query orders by \\(createdAt, id\\)", function* () {
     const outcome = yield* withDatabase(
       Effect.gen(function* () {
-        const sessions = yield* Repositories.SessionsRepository;
-        const user = yield* insertUser("ties@example.com");
+        const users = yield* UserStore.UserStore;
         const sameInstant = DateTime.add(BASE, { seconds: 30 });
-        yield* insertSession(user.id, "tie-a", sameInstant);
-        yield* insertSession(user.id, "tie-b", sameInstant);
-        const all = yield* sessions.listByUser(user.id, before, undefined, 10);
-        const again = yield* sessions.listByUser(user.id, before, undefined, 10);
+        yield* insertUser("tie-a@example.com", sameInstant);
+        yield* insertUser("tie-b@example.com", sameInstant);
+        const all = yield* users.listPage({ after: Option.none(), limit: 10 });
+        const again = yield* users.listPage({ after: Option.none(), limit: 10 });
         // One row at a time, following cursors: neither tied row is skipped or repeated.
-        const one = yield* sessions.listByUser(user.id, before, undefined, 1);
-        const two = yield* sessions.listByUser(
-          user.id,
-          before,
-          Option.getOrUndefined(one.nextCursor),
-          1,
-        );
+        const one = yield* users.listPage({ after: Option.none(), limit: 1 });
+        const two = yield* users.listPage({ after: one.next, limit: 1 });
         return {
           ids: all.items.map((row) => row.id),
           again: again.items.map((row) => row.id),

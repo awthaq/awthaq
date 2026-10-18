@@ -7,7 +7,13 @@
 // whole flow against one database inside a single `withDatabase`, and the Then reads the result
 // back from the scratch (`FoundationsWorld`).
 import { Persistence, Users } from "@awthaq/core";
-import { AccountStoreSql, Models, Repositories, CoreMigrations, UserStoreSql } from "@awthaq/sql";
+import {
+  AccountStoreSql,
+  Models,
+  CoreMigrations,
+  SessionStoreSql,
+  UserStoreSql,
+} from "@awthaq/sql";
 import { AccountStore, Encryption, KeyProvider, UserStore } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -19,13 +25,12 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { TestAuth } from "@awthaq/test";
 
-/** The SQLite-dialect models: what `Repositories` decodes with on this database. */
+/** The SQLite-dialect models: what the store adapters decode with on this database. */
 export const M = Models.makeModels("sqlite");
 
 /** A fixed test key, isolated from the real `process.env` (the same one `packages/sql`'s own suite uses). */
@@ -50,17 +55,16 @@ const Migrated = Layer.effectDiscard(
   Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provide(SqlLive));
 
-/** Every repository over one migrated in-memory database. */
-export const RepositoriesLive = Layer.mergeAll(
+/** Every core store adapter over one migrated in-memory database. */
+export const StoresLive = Layer.mergeAll(
   UserStoreSql.layer,
   AccountStoreSql.layer.pipe(Layer.provide(EncryptionLive)),
-  Repositories.SessionsRepositoryLive,
+  SessionStoreSql.layer,
 ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 
 /** Runs `effect` against a brand-new migrated database that is thrown away afterwards. */
-export const withDatabase = <A, E>(
-  effect: Effect.Effect<A, E, Layer.Success<typeof RepositoriesLive>>,
-) => Effect.provide(effect, RepositoriesLive);
+export const withDatabase = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof StoresLive>>) =>
+  Effect.provide(effect, StoresLive);
 
 /** An in-memory tracer collecting every span the effect it is provided to starts. */
 export const collectSpans = () => {
@@ -79,12 +83,12 @@ export const collectSpans = () => {
  * One user stored through the `UserStore` port, read back as the `User` model entity (the row exactly
  * as the database holds it). The id is the model's supplier-assigned UuidV7 default.
  */
-export const insertUser = (email: string) =>
+export const insertUser = (email: string, createdAt?: DateTime.Utc) =>
   Effect.gen(function* () {
     const users = yield* UserStore.UserStore;
     const sql = yield* SqlClient.SqlClient;
     const { id } = yield* M.User.insert.makeEffect({ email, name: email });
-    const at = yield* DateTime.now;
+    const at = createdAt ?? (yield* DateTime.now);
     yield* users.insertOrHolder({
       id,
       email: Option.some(email),
@@ -147,31 +151,6 @@ export const insertAccount = (input: {
       Result: M.Account,
       execute: (accountId) => sql`SELECT * FROM accounts WHERE id = ${accountId}`,
     })(id);
-  });
-
-/** One session row with an explicit `createdAt`; every fixture row expires at its own `createdAt`, so list from before the first. */
-export const insertSession = (userId: Models.UserId, secretHash: string, createdAt: DateTime.Utc) =>
-  Effect.gen(function* () {
-    const sessions = yield* Repositories.SessionsRepository;
-    return yield* sessions.insert(
-      M.Session.insert.make({
-        userId,
-        secretHash,
-        ipAddress: null,
-        userAgent: null,
-        absoluteExpiresAt: createdAt,
-        idleExpiresAt: Model.Override(createdAt),
-        createdAt: Model.Override(createdAt),
-        authenticatedAt: Model.Override(createdAt),
-        lastActiveAt: Model.Override(createdAt),
-        actingAsType: null,
-        actingAsId: null,
-        familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
-        supersededBy: null,
-        supersededAt: null,
-        reusedAt: null,
-      }),
-    );
   });
 
 export const optionValue = <A>(option: Option.Option<A>): A | undefined =>

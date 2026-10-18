@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { Accounts, AuthEvents, Persistence, Users } from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
 import { Ids, Sealed, SessionStore, UserStore, AccountStore } from "@awthaq/ports";
-import { Repositories, SealedColumn, UserStoreSql } from "@awthaq/sql";
+import { SealedColumn, UserStoreSql } from "@awthaq/sql";
 import { RedactionGuard } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
@@ -31,11 +31,10 @@ import { cell, put, take, type World } from "./FoundationsWorld.ts";
 import {
   collectSpans,
   insertAccount,
-  insertSession,
   insertUser,
   M,
   MemoryUsersLive,
-  RepositoriesLive,
+  StoresLive,
   sealedStack,
   withDatabase,
 } from "./PersistenceStratumWorld.ts";
@@ -219,7 +218,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     );
     const appLayer = AuthHttp.routes(LeakApi).pipe(
       Layer.provide(Handlers),
-      Layer.provideMerge(RepositoriesLive),
+      Layer.provideMerge(StoresLive),
       Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
     );
@@ -248,11 +247,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   When("the entity passes through logging, tracing spans, and emitted events", function* () {
     const layer = Accounts.layer
       .pipe(Layer.provide(SqlStores))
-      .pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(RepositoriesLive, RedactionGuard.layer, NodeCrypto.layer),
-        ),
-      );
+      .pipe(Layer.provideMerge(Layer.mergeAll(StoresLive, RedactionGuard.layer, NodeCrypto.layer)));
     const outcome = yield* Effect.gen(function* () {
       const guard = yield* RedactionGuard.RedactionGuard;
       yield* guard.watch("accessToken", CANARY);
@@ -338,7 +333,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   Then("it is provided as a Context.Service", function* () {
     const [key] = yield* take(strings);
     assert.equal(typeof key, "string");
-    // Resolved by `yield* Repository` from a Layer needing nothing but the ambient `SqlClient`.
+    // Resolved by `yield* UserStore` from a Layer needing nothing but the ambient `SqlClient`.
     assert.equal(key, UserStore.UserStore.key);
   });
 
@@ -350,24 +345,35 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   When("the method executes", function* () {
     const transactionSpans = (spans: ReadonlyArray<{ readonly name: string }>) =>
       spans.filter((span) => span.name === "sql.transaction").length;
-    const plain = collectSpans();
+    const single = collectSpans();
+    const multi = collectSpans();
     const wrapped = collectSpans();
     yield* withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const users = yield* UserStore.UserStore;
-        const sessions = yield* Repositories.SessionsRepository;
+        const accounts = yield* AccountStore.AccountStore;
+        const user = yield* insertUser("plain@example.com");
+        const account = yield* insertAccount({
+          userId: user.id,
+          providerId: "github",
+          subject: "plain-subject",
+          passwordHash: null,
+          accessToken: null,
+        });
+        // A single-statement primitive opens no transaction of its own...
         yield* Effect.provideService(
-          Effect.gen(function* () {
-            const user = yield* insertUser("plain@example.com");
-            yield* users.getByEmail("plain@example.com");
-            yield* insertSession(user.id, "h0", DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"));
-            yield* sessions.listByUser(user.id, DateTime.makeUnsafe("2025-01-01T00:00:00.000Z"));
-          }),
+          users.getByEmail("plain@example.com"),
           Tracer.Tracer,
-          plain.tracer,
+          single.tracer,
         );
-        // Control: the same kind of call inside an explicit transaction *does* open the span.
+        // ...a multi-statement one opens exactly one unit...
+        yield* Effect.provideService(
+          accounts.deleteUnlessLast(account.id, true),
+          Tracer.Tracer,
+          multi.tracer,
+        );
+        // ...and the control: the same kind of call inside an explicit transaction *does* open the span.
         yield* Effect.provideService(
           sql.withTransaction(insertUser("wrapped@example.com")),
           Tracer.Tracer,
@@ -376,18 +382,22 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
       }),
     );
     yield* put(numbers, [
-      transactionSpans(plain.spans),
+      transactionSpans(single.spans),
+      transactionSpans(multi.spans),
       transactionSpans(wrapped.spans),
-      plain.spans.filter((span) => /^(Users|Sessions)\./.test(span.name)).length,
+      single.spans.filter((span) => span.name.startsWith("Users.")).length,
     ]);
   });
 
   Then("it does not call SqlClient.withTransaction itself", function* () {
-    const [ownTransactions, controlTransactions, repositorySpans] = yield* take(numbers);
-    assert.equal(ownTransactions, 0, "repository methods opened no transaction of their own");
+    const [singleTransactions, multiTransactions, controlTransactions, storeSpans] =
+      yield* take(numbers);
+    assert.equal(singleTransactions, 0, "a single-statement primitive opened no transaction");
+    assert.equal(multiTransactions, 1, "a multi-statement primitive opened exactly one unit");
     assert.ok((controlTransactions ?? 0) > 0, "an explicit withTransaction is visible as a span");
-    assert.ok((repositorySpans ?? 0) > 0, "the repository methods really ran under the tracer");
+    assert.ok((storeSpans ?? 0) > 0, "the primitive really ran under the tracer");
   });
+
   // ---- BEH-EA-339: a composition's sealed columns are swept as one list (plan 17) ----
 
   const rotation = cell(

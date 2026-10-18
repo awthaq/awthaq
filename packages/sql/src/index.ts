@@ -27,7 +27,6 @@ export * as Models from "./Models.ts";
 export * as RateLimiterStoreSql from "./RateLimiterStoreSql.ts";
 export * as RelayCursorStoreSql from "./RelayCursorStoreSql.ts";
 export * as ReadRouting from "./ReadRouting.ts";
-export * as Repositories from "./Repositories.ts";
 export * as SealedColumn from "./SealedColumn.ts";
 export * as SessionStoreSql from "./SessionStoreSql.ts";
 export * as SqlStore from "./SqlStore.ts";

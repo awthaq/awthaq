@@ -24,7 +24,6 @@ import * as AccountStoreSql from "./AccountStoreSql.ts";
 import * as AuditLogStoreSql from "./AuditLogStoreSql.ts";
 import * as CoreSealedColumns from "./CoreSealedColumns.ts";
 import * as RelayCursorStoreSql from "./RelayCursorStoreSql.ts";
-import * as Repositories from "./Repositories.ts";
 import * as SealedColumn from "./SealedColumn.ts";
 import * as SessionStoreSql from "./SessionStoreSql.ts";
 import * as UserStoreSql from "./UserStoreSql.ts";
@@ -60,19 +59,11 @@ export const layer = (options?: Options) => {
   return Layer.mergeAll(
     encryptPii ? UserStoreSql.layerSealedPii : UserStoreSql.layer,
     AccountStoreSql.layer,
-    SessionStoreSql.layer,
+    encryptPii ? SessionStoreSql.layerSealedPii : SessionStoreSql.layer,
     VerificationStoreSql.layer,
     AuditLogStoreSql.layer,
     RelayCursorStoreSql.layer,
     SqlTransaction.layerSql,
     Layer.succeed(SealedColumn.Deployed, { columns: CoreSealedColumns.deployed({ encryptPii }) }),
-  ).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        encryptPii
-          ? Repositories.SessionsRepositoryEncryptedLive
-          : Repositories.SessionsRepositoryLive,
-      ),
-    ),
   );
 };

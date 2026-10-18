@@ -12,7 +12,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Migrator from "effect/unstable/sql/Migrator";
-import { EncryptionLive } from "../../sql/test/contract.ts";
 import * as TestSql from "../../test/src/TestSql.ts";
 import * as Persistence from "../src/Persistence.ts";
 import * as Accounts from "../src/Accounts.ts";
@@ -42,7 +41,7 @@ const SqlDomain = Layer.mergeAll(
   SqlTransaction.layerSql,
 ).pipe(
   Layer.provide(Hooks.HooksLive),
-  Layer.provide(EncryptionLive),
+  Layer.provide(TestEncryption.layer),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

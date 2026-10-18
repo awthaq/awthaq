@@ -18,7 +18,8 @@ set -euo pipefail
 
 suites=(
   packages/cli/test/Migration.postgres.test.ts
-  packages/sql/test/Repositories.postgres.test.ts
+  packages/sql/test/ReadRouting.postgres.test.ts
+  packages/sql/test/CoreMigrations.postgres.test.ts
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
   packages/sql/test/TenantScope.postgres.test.ts
   packages/sql/test/TenantScoped.test.ts

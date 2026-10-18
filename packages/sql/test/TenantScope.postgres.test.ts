@@ -1,23 +1,28 @@
 // Plan 05, phase 1: the Postgres row-level-security backstop, in one place. The first block is the
-// core-table RLS suite moved here unchanged from `Repositories.postgres.test.ts`; the second adds
-// the plugin-table policies per tenancy kind and `TenantScoped.lift`.
+// core-table RLS suite (over `CoreStoresSql.layer()`, plan 16); the second adds the plugin-table
+// policies per tenancy kind and `TenantScoped.lift`.
 //
 // Skips (not fails) without `AWTHAQ_POSTGRES_URL`. The suite connects as a superuser, which
 // bypasses RLS by definition, so each probe drops to a plain non-owner role (`SET LOCAL ROLE`)
 // inside the tenant transaction.
+import { Encryption, KeyProvider, SessionStore } from "@awthaq/ports";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Model from "effect/unstable/schema/Model";
+import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as CoreMigrations from "../src/CoreMigrations.ts";
+import * as CoreStoresSql from "../src/CoreStoresSql.ts";
 import * as Models from "../src/Models.ts";
-import * as Repositories from "../src/Repositories.ts";
 import * as TenantScope from "../src/TenantScope.ts";
 import * as TenantScoped from "../src/TenantScoped.ts";
-import { repositoriesLayer } from "./contract.ts";
 
 const M = Models.makeModels("pg");
 
@@ -25,20 +30,42 @@ const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
 
 const skip = postgresUrl === undefined;
 
-// Its own schema: see Repositories.postgres.test.ts (parallel files must not share `public`).
+// Its own schema: parallel files must not share `public`.
 const schema = "t_sql_tenant_scope_postgres";
 const SqlLive = PgClient.layer({
   url: Redacted.make(postgresUrl ?? ""),
   startupParameters: { search_path: schema },
 });
 
-const RepositoriesLive = repositoriesLayer(
-  SqlLive,
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
-  }),
+const EncryptionLive = Encryption.layer.pipe(
+  Layer.provide(
+    KeyProvider.layerEnv.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+          }),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
+/** Every core store over a fresh schema with the core migrations applied. */
+const StoresLive = CoreStoresSql.layer().pipe(
+  Layer.provide(EncryptionLive),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(
+    Layer.effectDiscard(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+        yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
+        yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+      }),
+    ).pipe(Layer.provide(SqlLive)),
+  ),
 );
 
 // DRS-001/SAM-006 (ADR-EA-018): the opt-in RLS backstop. The suite connects as a
@@ -48,21 +75,18 @@ const RepositoriesLive = repositoriesLayer(
 describe.skipIf(skip)("Tenant RLS (real Postgres)", () => {
   const probeRole = "awthaq_rls_probe";
 
-  const sessionFor = (userId: Models.UserId) =>
-    M.Session.insert.make({
-      userId,
-      secretHash: "h",
-      ipAddress: null,
-      userAgent: null,
-      absoluteExpiresAt: DateTime.makeUnsafe("2099-01-01T00:00:00.000Z"),
-      idleExpiresAt: Model.Override(DateTime.makeUnsafe("2099-01-01T00:00:00.000Z")),
-      actingAsType: null,
-      actingAsId: null,
-      familyId: Schema.decodeUnknownSync(Models.SessionId)("rls-family"),
-      supersededBy: null,
-      supersededAt: null,
-      reusedAt: null,
-    });
+  const sessionFor = (id: string, user: Models.UserId): SessionStore.NewSession => ({
+    id: Schema.decodeUnknownSync(Models.SessionId)(id),
+    userId: user,
+    secretHash: "h",
+    at: DateTime.makeUnsafe("2098-01-01T00:00:00.000Z"),
+    absoluteExpiresAt: DateTime.makeUnsafe("2099-01-01T00:00:00.000Z"),
+    idleExpiresAt: DateTime.makeUnsafe("2099-01-01T00:00:00.000Z"),
+    ipAddress: Option.none(),
+    userAgent: Option.none(),
+    actingAs: Option.none(),
+    amr: [],
+  });
 
   /** Runs `body` with RLS on, and always turns it off again (the tables are shared with other cases). */
   const withRls = <A, E, R>(body: Effect.Effect<A, E, R>) =>
@@ -84,13 +108,20 @@ describe.skipIf(skip)("Tenant RLS (real Postgres)", () => {
     withRls(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const sessions = yield* Repositories.SessionsRepository;
+        const sessions = yield* SessionStore.SessionStore;
         // `sessions` has no foreign key: the owner need not exist.
         const user = yield* M.User.insert.makeEffect({ email: "rls@example.com", name: "RLS" });
-        const one = yield* sessions.insert(sessionFor(user.id)).pipe(TenantScope.withTenant("t1"));
-        const two = yield* sessions.insert(sessionFor(user.id)).pipe(TenantScope.withTenant("t2"));
-        assert.strictEqual(one.tenantId, "t1");
-        assert.strictEqual(two.tenantId, "t2");
+        const insert = (id: string) => ({
+          session: sessionFor(id, user.id),
+          supersedes: Option.none<Models.SessionId>(),
+          maxLive: Option.none<number>(),
+        });
+        const one = (yield* sessions.insert(insert("rls-one")).pipe(TenantScope.withTenant("t1")))
+          .inserted;
+        const two = (yield* sessions.insert(insert("rls-two")).pipe(TenantScope.withTenant("t2")))
+          .inserted;
+        assert.deepStrictEqual(one.tenantId, Option.some("t1"));
+        assert.deepStrictEqual(two.tenantId, Option.some("t2"));
 
         const visibleTo = (tenant: string) =>
           Effect.andThen(
@@ -139,7 +170,7 @@ describe.skipIf(skip)("Tenant RLS (real Postgres)", () => {
         ).pipe(TenantScope.withTenant("t1"), Effect.flip);
         assert.strictEqual(forgedInsert._tag, "SqlError");
       }),
-    ).pipe(Effect.provide(RepositoriesLive)),
+    ).pipe(Effect.provide(StoresLive)),
   );
 
   it.effect("enableRls and disableRls are idempotent, and the directory tables are opt-in", () =>
@@ -160,7 +191,7 @@ describe.skipIf(skip)("Tenant RLS (real Postgres)", () => {
       yield* TenantScope.disableRls;
       assert.isFalse(yield* rlsOn("sessions"));
       assert.isFalse(yield* rlsOn("users"));
-    }).pipe(Effect.provide(RepositoriesLive)),
+    }).pipe(Effect.provide(StoresLive)),
   );
 });
 
@@ -238,7 +269,7 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
           assert.deepStrictEqual(yield* idsIn("t1", "rls_keyed"), ["k1", "k2"]);
           assert.deepStrictEqual(yield* idsIn("t1", "rls_global"), ["g1"]);
         }),
-      ).pipe(Effect.provide(RepositoriesLive)),
+      ).pipe(Effect.provide(StoresLive)),
   );
 
   it.effect("Keyed tables are covered on request", () =>
@@ -249,7 +280,7 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
         assert.deepStrictEqual(yield* idsIn("t2", "rls_keyed"), ["k2"]);
         assert.deepStrictEqual(yield* idsIn("t1", "rls_global"), ["g1"]);
       }),
-    ).pipe(Effect.provide(RepositoriesLive)),
+    ).pipe(Effect.provide(StoresLive)),
   );
 
   it.effect("with no tenant in scope the policies stay fail-open", () =>
@@ -268,7 +299,7 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
           ["p0", "p1", "p2"],
         );
       }),
-    ).pipe(Effect.provide(RepositoriesLive)),
+    ).pipe(Effect.provide(StoresLive)),
   );
 
   it.effect("an INSERT for another tenant is refused as an authorization error", () =>
@@ -283,7 +314,7 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
         assert.strictEqual(refused._tag, "SqlError");
         assert.strictEqual(refused.reason._tag, "AuthorizationError");
       }),
-    ).pipe(Effect.provide(RepositoriesLive)),
+    ).pipe(Effect.provide(StoresLive)),
   );
 
   it.effect("lift shows every tenant to one witnessed statement and restores the scope after", () =>
@@ -312,7 +343,7 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
           ["p1"],
         );
       }),
-    ).pipe(Effect.provide(RepositoriesLive)),
+    ).pipe(Effect.provide(StoresLive)),
   );
 
   it.effect(
@@ -332,7 +363,7 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
             ["p1"],
           );
         }),
-      ).pipe(Effect.provide(RepositoriesLive)),
+      ).pipe(Effect.provide(StoresLive)),
   );
 
   it.effect("lift outside a tenant scope is a plain statement", () =>
@@ -344,7 +375,7 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
         }>`SELECT id FROM rls_parent ORDER BY id`.pipe(TenantScoped.lift(grant));
         assert.strictEqual(rows.length, 3);
       }),
-    ).pipe(Effect.provide(RepositoriesLive)),
+    ).pipe(Effect.provide(StoresLive)),
   );
 
   it.effect(
@@ -366,6 +397,6 @@ describe.skipIf(skip)("Plugin-table RLS (real Postgres)", () => {
           assert.strictEqual(yield* policyCount, 0);
           assert.deepStrictEqual(yield* idsIn("t1", "rls_parent"), ["p0", "p1", "p2"]);
         }),
-      ).pipe(Effect.provide(RepositoriesLive)),
+      ).pipe(Effect.provide(StoresLive)),
   );
 });

@@ -4,8 +4,8 @@
 // that only changes when the test calls `catchUp` (`LaggingReplica`).
 import * as TestEncryption from "../src/TestEncryption.ts";
 import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
-import { AuditLogStore } from "@awthaq/ports";
-import { AuditLogStoreSql, CoreMigrations, Models, ReadRouting, Repositories } from "@awthaq/sql";
+import { AuditLogStore, Ids, SessionStore } from "@awthaq/ports";
+import { AuditLogStoreSql, CoreMigrations, ReadRouting, SessionStoreSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -15,15 +15,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as LaggingReplica from "../src/LaggingReplica.ts";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
-
-const M = Models.makeModels("sqlite");
 
 /** A fresh in-memory SQLite database with the core schema applied. */
 const MigratedSqlite = Layer.unwrap(
@@ -47,42 +44,35 @@ const newReplica = Effect.gen(function* () {
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
 
-const insertSession = (sessions: Repositories.SessionsRepositoryShape) =>
+const insertSession = (sessions: SessionStore.SessionStoreShape) =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
     const later = DateTime.add(now, { hours: 1 });
-    return yield* sessions.insert(
-      M.Session.insert.make({
+    const outcome = yield* sessions.insert({
+      session: {
+        id: Ids.SessionId.make("sess-1"),
         userId,
         secretHash: "h",
-        ipAddress: null,
-        userAgent: null,
+        at: now,
         absoluteExpiresAt: later,
-        idleExpiresAt: Model.Override(later),
-        actingAsType: null,
-        actingAsId: null,
-        familyId: Schema.decodeUnknownSync(Models.SessionId)("fam"),
-        supersededBy: null,
-        supersededAt: null,
-        reusedAt: null,
-      }),
-    );
+        idleExpiresAt: later,
+        ipAddress: Option.none(),
+        userAgent: Option.none(),
+        actingAs: Option.none(),
+        amr: [],
+      },
+      supersedes: Option.none(),
+      maxLive: Option.none(),
+    });
+    return outcome.inserted;
   });
 
 const listCount = (
-  sessions: Repositories.SessionsRepositoryShape,
-  consistency?: ReadRouting.Consistency,
+  sessions: SessionStore.SessionStoreShape,
+  consistency: ReadRouting.Consistency = "authoritative",
 ) =>
   DateTime.now.pipe(
-    Effect.flatMap((now) =>
-      sessions.listByUser(
-        userId,
-        now,
-        undefined,
-        undefined,
-        consistency === undefined ? undefined : { consistency },
-      ),
-    ),
+    Effect.flatMap((now) => sessions.listLive({ userId, now, limit: 100, consistency })),
     Effect.map((page) => page.items.length),
   );
 
@@ -91,14 +81,12 @@ describe("ReadRouting (RRC-001)", () => {
     Effect.gen(function* () {
       const router = yield* ReadRouting.makeRouter;
       assert.strictEqual(yield* router.target("eventual"), "primary");
-      const sessions = yield* Repositories.SessionsRepository;
+      const sessions = yield* SessionStore.SessionStore;
       yield* insertSession(sessions);
       // An eventual read with no replica configured is simply the primary.
       assert.strictEqual(yield* listCount(sessions, "eventual"), 1);
       assert.strictEqual(yield* listCount(sessions), 1);
-    }).pipe(
-      Effect.provide(Repositories.SessionsRepositoryLive.pipe(Layer.provideMerge(MigratedSqlite))),
-    ),
+    }).pipe(Effect.provide(SessionStoreSql.layer.pipe(Layer.provideMerge(MigratedSqlite)))),
   );
 
   it.effect(
@@ -107,10 +95,8 @@ describe("ReadRouting (RRC-001)", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const lag = yield* newReplica;
-          const context = yield* Layer.build(
-            Repositories.SessionsRepositoryLive.pipe(Layer.provide(lag.layer)),
-          );
-          const sessions = Context.get(context, Repositories.SessionsRepository);
+          const context = yield* Layer.build(SessionStoreSql.layer.pipe(Layer.provide(lag.layer)));
+          const sessions = Context.get(context, SessionStore.SessionStore);
           const session = yield* insertSession(sessions);
 
           // The replica has not caught up: it does not have the row yet.
@@ -118,7 +104,7 @@ describe("ReadRouting (RRC-001)", () => {
           // The default is authoritative, and point reads are primary-pinned.
           assert.strictEqual(yield* listCount(sessions), 1);
           assert.strictEqual(yield* listCount(sessions, "authoritative"), 1);
-          assert.strictEqual((yield* sessions.findById(session.id)).id, session.id);
+          assert.strictEqual(Option.getOrThrow(yield* sessions.get(session.id)).id, session.id);
 
           yield* lag.catchUp;
           assert.strictEqual(yield* listCount(sessions, "eventual"), 1);
@@ -166,15 +152,13 @@ describe("ReadRouting (RRC-001)", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const lag = yield* newReplica;
-          const context = yield* Layer.build(
-            Repositories.SessionsRepositoryLive.pipe(Layer.provide(lag.layer)),
-          );
-          const sessions = Context.get(context, Repositories.SessionsRepository);
+          const context = yield* Layer.build(SessionStoreSql.layer.pipe(Layer.provide(lag.layer)));
+          const sessions = Context.get(context, SessionStore.SessionStore);
           const session = yield* insertSession(sessions);
           yield* lag.catchUp; // the replica now has the session
 
-          // A write on the primary, wrapped by its caller in `captureToken`.
-          const revokedInFiber = ReadRouting.captureToken(sessions.delete(session.id)).pipe(
+          // A write on the primary: `remove` captures the causal token itself (ADR-EA-024).
+          const revokedInFiber = sessions.remove(session.id, Option.none()).pipe(
             Effect.andThen(
               Effect.all({
                 eventual: listCount(sessions, "eventual"),
@@ -203,10 +187,8 @@ describe("ReadRouting (RRC-001)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const lag = yield* newReplica;
-        const context = yield* Layer.build(
-          Repositories.SessionsRepositoryLive.pipe(Layer.provide(lag.layer)),
-        );
-        const sessions = Context.get(context, Repositories.SessionsRepository);
+        const context = yield* Layer.build(SessionStoreSql.layer.pipe(Layer.provide(lag.layer)));
+        const sessions = Context.get(context, SessionStore.SessionStore);
         yield* insertSession(sessions);
         const ahead = Schema.decodeUnknownSync(ReadRouting.CausalToken)("5");
         // Replica position 0 < 5: primary, so the row is visible.
@@ -225,10 +207,8 @@ describe("ReadRouting (RRC-001)", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const lag = yield* newReplica;
-          const context = yield* Layer.build(
-            Repositories.SessionsRepositoryLive.pipe(Layer.provide(lag.layer)),
-          );
-          const sessions = Context.get(context, Repositories.SessionsRepository);
+          const context = yield* Layer.build(SessionStoreSql.layer.pipe(Layer.provide(lag.layer)));
+          const sessions = Context.get(context, SessionStore.SessionStore);
           // The write reaches the primary only; the replica stays empty.
           yield* insertSession(sessions);
           assert.strictEqual(yield* listCount(sessions, "eventual"), 0);
@@ -259,7 +239,6 @@ const sessionsUnderLag = Effect.gen(function* () {
     Sessions.layer
       .pipe(Layer.provide(SqlStores))
       .pipe(
-        Layer.provide(Repositories.SessionsRepositoryLive),
         Layer.provide(lag.layer),
         Layer.provide(Layer.mergeAll(NodeCrypto.layer, AuthEvents.layer)),
         Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
