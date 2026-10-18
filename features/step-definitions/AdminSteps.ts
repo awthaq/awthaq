@@ -8,7 +8,7 @@ import {
   inspectSession,
   publishedEvents,
   request,
-  resolvePrincipal,
+  principalOfToken,
   setOutcome,
   signIn,
   tokenFromCookie,
@@ -80,7 +80,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
-  // ---- BEH-EA-211: resolvePrincipal closes the loop (402) ----
+  // ---- BEH-EA-211: principalOfToken closes the loop (402) ----
 
   Given(
     "a signed-in admin actively impersonating a target user",
@@ -99,7 +99,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the impersonation session's own token is resolved to a principal",
     Effect.fn(function* () {
       const impersonatingCookie = (yield* getOutcome("impersonatingCookie")) as string;
-      const principal = yield* resolvePrincipal(tokenFromCookie(impersonatingCookie));
+      const principal = yield* principalOfToken(tokenFromCookie(impersonatingCookie));
       yield* setOutcome("resolvedPrincipal", principal);
     }),
   );

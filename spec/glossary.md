@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.7 |
+> | Revision | 1.8 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) |
 
 ---
 
@@ -46,9 +46,17 @@ The caller's verdict on an asserting party's email claims: untrusted, or trusted
 
 Deciding which local User an External identity is: the Account anchored at `(provider, subject, issuer)`, else a trusted email match, else a sign-up through `SignUp`. A request that loses a race for the same identity reads the anchor again and signs in as the winner's User. See: [ADR-EA-043](decisions/043-federated-identity-resolution.md).
 
+### Credential carrier
+
+One of the four places a request may present a credential: the `impersonation` and `cookie` cookies, the `x-api-key` header and `Authorization: Bearer`. A middleware's security declaration lists its carriers in order; that list is the strategy chain (BEH-EA-072). See: [ADR-EA-042](decisions/042-credential-resolution-module.md).
+
+### Tier
+
+Which principals an authentication middleware admits: the user tier (`Authentication`, `OptionalAuthentication`, `AdminAuthentication`) only a `User`, the machine tier (`MachineAuthentication`) any. `Credentials` applies the rule to every resolved principal, claimed or session-derived. See: [BEH-EA-066](behaviors/09-authentication-middleware.md#beh-ea-066-the-bearer-handler-is-tried-after-the-cookie-handler-fails-over-the-same-session-resolution-logic).
+
 ### CurrentPrincipal
 
-The `Context.Reference` (or middleware-provided environment value) carrying the current request's resolved `Principal`, put in place by `Authentication` middleware before a handler runs. `AuthorizedSubject` (Path A) requires `CurrentPrincipal` and derives qadi's `CurrentSubject` from it — a handler is never expected to resolve a Principal itself. See: [BEH-EA-145](behaviors/19-qadi-bridge-path-a.md#beh-ea-145-authorizedsubject-bridges-currentprincipal-to-currentsubject).
+The `Context.Reference` (or middleware-provided environment value) carrying the current request's resolved `Principal`, put in place by `Authentication` middleware before a handler runs. `AuthorizedSubject` (Path A) requires `CurrentPrincipal` and derives qadi's `CurrentSubject` from it — a handler is never expected to resolve a Principal itself. A handler behind the user tier reads its caller (re-branded into the domain) with `CurrentUser.current`. See: [BEH-EA-145](behaviors/19-qadi-bridge-path-a.md#beh-ea-145-authorizedsubject-bridges-currentprincipal-to-currentsubject).
 
 ### CurrentSubject
 

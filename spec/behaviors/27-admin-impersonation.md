@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-27 |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, IDS-009, CCR-EA-006) <br> 1.2 (2026-10-13): `deleteUser` passes an `ErasureInitiator.Admin({ adminUserId })` to `eraseAccount` (architecture plan 03) <br> 1.3 (2026-10-13): the ban note is declared personal data of its event: blanked when the banned person is erased and never delivered in a webhook (architecture plan 09) <br> 1.4 (2026-10-13): IDS-002: a CrossTenant witness replaces the anyTenant boolean; the store filters and fails with StoreUnavailable (plan 05 phase 5) <br> 1.5 (2026-10-18): BEH-EA-221: every predicate receives `tenantId` and each operation names its one predicate; BEH-EA-221 no longer says `BeforeCredentialReset` is unconsulted; BEH-EA-224: `actionDenied` covers all five predicates and names its target; BEH-EA-212: predicates are read per request (plan 13) |
+> | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, IDS-009, CCR-EA-006) <br> 1.2 (2026-10-13): `deleteUser` passes an `ErasureInitiator.Admin({ adminUserId })` to `eraseAccount` (architecture plan 03) <br> 1.3 (2026-10-13): the ban note is declared personal data of its event: blanked when the banned person is erased and never delivered in a webhook (architecture plan 09) <br> 1.4 (2026-10-13): IDS-002: a CrossTenant witness replaces the anyTenant boolean; the store filters and fails with StoreUnavailable (plan 05 phase 5) <br> 1.5 (2026-10-18): BEH-EA-221: every predicate receives `tenantId` and each operation names its one predicate; BEH-EA-221 no longer says `BeforeCredentialReset` is unconsulted; BEH-EA-224: `actionDenied` covers all five predicates and names its target; BEH-EA-212: predicates are read per request (plan 13) <br> 1.6 (2026-10-18): BEH-EA-211 is titled after `Credentials`' session resolution, not the removed `resolvePrincipal` (plan 11) |
 ---
 
 > Implemented in `@awthaq/admin` (`Admin.ts`, `AdminApi.ts`, `ImpersonationRecords.ts`, `AdminTenants.ts`; tests `packages/admin/test`); BEH-EA-209 through 211 also extend `@awthaq/core`'s `Sessions` (`packages/core/test/Sessions.test.ts`) and `@awthaq/server`'s `Authentication`; the Gherkin scenarios in `features/features/09-admin-and-impersonation/27-admin-impersonation.feature` are wired; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -50,14 +50,14 @@ REQUIREMENT: `Sessions.issue` MUST set `idleExpiresAt` equal to
 
 This is [INV-EA-014](../invariants.md#inv-ea-014-an-impersonation-session-carries-a-hard-expiry-with-no-sliding-refresh)'s enforcement point, now backed by a real requirement instead of a planned one. `actingAs` being non-null is the complete signal — no separate "is this an impersonation session" flag exists or is needed, since the two facts (dual identity, hard expiry) always travel together for this plugin. Without this rule, an admin impersonating a user during an active support session could remain impersonating indefinitely simply by continuing to act, a materially worse blast radius than an ordinary session outliving its own absolute expiry.
 
-_Previous: [BEH-EA-209](27-admin-impersonation.md#beh-ea-209-actingas-becomes-a-real-generic-field-on-session-issuance) | Next: [BEH-EA-211](27-admin-impersonation.md#beh-ea-211-resolveprincipal-closes-the-loop-to-userprincipalactingas)_
+_Previous: [BEH-EA-209](27-admin-impersonation.md#beh-ea-209-actingas-becomes-a-real-generic-field-on-session-issuance) | Next: [BEH-EA-211](27-admin-impersonation.md#beh-ea-211-credentials-session-resolution-closes-the-loop-to-userprincipalactingas)_
 
-## BEH-EA-211: `resolvePrincipal` closes the loop to `UserPrincipal.actingAs`
+## BEH-EA-211: `Credentials`' session resolution closes the loop to `UserPrincipal.actingAs`
 
 ```text
-REQUIREMENT: `Authentication`'s `resolvePrincipal` MUST place a session
-             row's `actingAs` (when present) onto the `UserPrincipal` it
-             builds, unconditionally — the same row-to-principal mapping
+REQUIREMENT: `@awthaq/server`'s `Credentials` (through the
+             `PrincipalResolver`) MUST place a session row's `actingAs`
+             (when present) onto the `UserPrincipal` it builds, unconditionally — the same row-to-principal mapping
              that already happens for `userId`/`sessionId`.
 ```
 
@@ -92,7 +92,7 @@ A hard dependency on `@awthaq/roles` specifically would force every consumer ont
 
 **IDS-001/MTI-006**: a caller-only predicate cannot refuse impersonating a more privileged (or another tenant's) account — the one decision an impersonation gate most needs to make — so the predicate receives the target too. Because stopping and listing episodes is the same privilege over the same target, they reuse that decision per episode (`canManageEpisode`, overridable) instead of a second, drift-prone predicate. `list` therefore filters rows rather than rejecting the call: a caller who may manage no episode sees an empty history (fail-closed without an existence oracle).
 
-_Previous: [BEH-EA-211](27-admin-impersonation.md#beh-ea-211-resolveprincipal-closes-the-loop-to-userprincipalactingas) | Next: [BEH-EA-213](27-admin-impersonation.md#beh-ea-213-impersonate-issues-a-new-dual-identity-session-for-the-target)_
+_Previous: [BEH-EA-211](27-admin-impersonation.md#beh-ea-211-credentials-session-resolution-closes-the-loop-to-userprincipalactingas) | Next: [BEH-EA-213](27-admin-impersonation.md#beh-ea-213-impersonate-issues-a-new-dual-identity-session-for-the-target)_
 
 ## BEH-EA-213: `impersonate` issues a new, dual-identity session for the target
 

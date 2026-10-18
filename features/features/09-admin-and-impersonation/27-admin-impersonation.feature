@@ -37,7 +37,7 @@ Feature: Admin and Impersonation
 
   # BEH-EA-211 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-211
-  Rule: resolvePrincipal closes the loop to UserPrincipal.actingAs
+  Rule: Credentials' session resolution closes the loop to UserPrincipal.actingAs
 
     @REQ-EA-605
     Scenario: Resolving the principal for an impersonation session's own token surfaces actingAs on the principal

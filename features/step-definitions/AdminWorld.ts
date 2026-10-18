@@ -234,8 +234,8 @@ export const inspectSession = Effect.fn("features.admin.inspectSession")(functio
  * layer-composition bug this time (see `OAuthWorld.ts`'s own comment,
  * ticket 22, for a case where the identical error *was* a real bug).
  */
-export const resolvePrincipal: (token: string) => Effect.Effect<Api.Principal, never, World> =
-  Effect.fn("features.admin.resolvePrincipal")(function* (token: string) {
+export const principalOfToken: (token: string) => Effect.Effect<Api.Principal, never, World> =
+  Effect.fn("features.admin.principalOfToken")(function* (token: string) {
     const { app } = yield* appHandle();
     return yield* Effect.promise(() => app.run(resolveCredential("cookie", token)));
   });

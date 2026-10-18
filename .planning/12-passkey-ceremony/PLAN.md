@@ -1181,7 +1181,7 @@ Open questions took the plan's recommended default:
 
 Implementation notes and deviations:
 
-- **Anything depending on plan 11 was skipped.** `currentUserPrincipal` and `IssuedSession` in `Passkey.ts` are untouched (plan 11 is not implemented yet).
+- **Anything depending on plan 11 was skipped.** `currentUserPrincipal` and `IssuedSession` in `Passkey.ts` are untouched (plan 11 is not implemented yet). Done afterwards in plan 11 phase 1: `Passkey.ts` now reads its caller through `CurrentUser.current`, uses `Sessions.IssuedSession` and `ClientAddress.facts`.
 - **Phase boundaries.** Phase 0 (hotfix, tests, BDD, spec text, changeset) and Phase 1 (`PasskeyConfig.ts`) and Phase 2 (module and test migration) and Phase 3 (spec, glossary, traceability, README) are four commits. The `PasskeyCeremony` sentence of BEH-EA-132 and the glossary and traceability rows landed in Phase 3. `17-passkey.md` is therefore at revision 1.5 (1.4 from Phase 0, 1.5 from Phase 3), the glossary at 1.6, `spec/traceability.md` at 1.35.
 - **New REQ id.** The Phase 0 BDD scenario was allocated `REQ-EA-1309` (1307 and 1308 went to plan 13). `spec/traceability.md` crosswalk: `55 / 55`.
 - **TS2883.** The inferred type of `PasskeyCeremony.make` could not name `StoreUnavailable` from `@awthaq/api`. Fixed without an annotation by an exported `CeremonyFailure<Refused> = Refused | Api.StoreUnavailable` (type-imported `Api`), which the test suite's `reasonFrom` uses (knip counts it, and `RegistrationRefused`/`AssertionRefused`/`VerifiedAssertion`, as used only through the tests).

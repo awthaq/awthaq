@@ -1289,3 +1289,28 @@ New REQ ids are the next free ones at execution time (above `REQ-EA-1306` today;
 4. **Delivery of a planted session's rotation.** On HTTP, keep delivering the rotation of an ordinary session planted in the impersonation cookie, as today? Recommended: yes, the sink is unchanged. The web adapter renders only the resolved session's rotation either way. Alternatively, deliver only the resolved session's rotation on HTTP too, which makes a planted cookie die after `rotationGrace` everywhere.
 5. **Bearer in the web adapter.** Should `getSession` also read `Authorization: Bearer`, so a Route Handler serving a native client resolves it? Recommended: no (BEH-EA-185 is cookie-only, and rotation then has no jar to land in). If yes, the presented source gains `header: (name) => headers.get(name)` and the rotation needs a header sink.
 6. **Plugin `IssuedSession` names.** Delete them in favour of `Sessions.IssuedSession` (recommended: one name), or keep one-line `export type IssuedSession = Sessions.IssuedSession` aliases per plugin for discoverability?
+
+---
+
+## Decisions taken (implementation, 2026-10-18)
+
+Open questions took the plan's recommended default:
+
+1. **Q1, `hasSessionCookie`'s signature: (a)** a required second argument, the cookie mode (the partial given to `SessionCookie.config`; `{}` for the default). Edge-safe through `Api.sessionCookieName`; also exported from `@awthaq/web/cookies`.
+2. **Q2, Path B's tier: (a)** the machine tier's declaration and admission, as before.
+3. **Q3, stricter admission for session-derived principals: accepted** (table row T23). A custom `PrincipalResolver` returning a non-`User` from a session is `Unauthenticated` on the user tier.
+4. **Q4, delivery of a planted session's rotation: unchanged on HTTP** (the sink delivers it); the web adapter renders only the resolved session's rotation.
+5. **Q5, bearer in the web adapter: no.** `getSession` stays cookie-only.
+6. **Q6, plugin `IssuedSession` names: deleted** in favour of `Sessions.IssuedSession` (no per-plugin aliases; `magic-link/Channel.ts`'s alias is gone too).
+
+Implementation notes and deviations from the plan:
+
+- **Commits.** Phase 0.1, Phase 0.2, Phase 1, plan 13 phase 4, Phase 2, **Phases 3 and 4 together**, Phase 5, Phase 6. The plan deletes `Authentication.resolvePrincipal`/`resolveSession` in Phase 3 while Path B (Phase 4) still called them, so the two could not be separately green. A temporary `Credentials.findClaim` export carried the old claim-outage behaviour through Phase 2 and is module-private from Phase 3.
+- **Phase 0.2** fixed Path B in place with an ordered candidate list folded over `Authentication.resolveSession` (the interim the plan describes); Phase 4 replaced it.
+- **Plan 13 phase 4 and the other skipped helper deletions.** After Phase 1 exported `CurrentUser.current`, the three admin `currentUserPrincipal` copies were deleted in their own commit (`(plan 13 phase 4)`). Plan 12's skipped `Passkey.ts` `currentUserPrincipal`, `IssuedSession` and request-facts sites were migrated in Phase 1. Plan 14 left nothing (OAuth/SAML request-facts sites were migrated in Phase 1). Nothing depending on plans 16 to 24 was needed.
+- **Tests.** `Credentials.test.ts` holds 88 cases (T1 to T23 x 3 tiers plus T17, groups M, O, D, P, C). Its fixtures and the table live in `test/support/CredentialTable.ts`, shared with group A (the same 69 rows served through Path A in `Authentication.test.ts`, with the post-auth hook recording the carrier). The expectations name the principal uniformly (`A@cookie`, `svc@bearer`, `key@apiKey`) instead of the plan's `Service@bearer` so both harnesses compare the same string. 30 scattered tests were deleted (14 in `Authentication.test.ts`, 8 in `CredentialResolvers.test.ts`, 7 in `SubjectExtractor.test.ts`, 1 in the web suite). The two BEH-EA-211 mapping tests stay in `Authentication.test.ts` (they exercise the resolver through the served middleware); the `PrincipalResolverWithUserFactsLive` tests stay there too. Group P3 cannot test API-key whitespace (the `Request` headers trim it): it pins "read as sent" and "empty is absent". Tests for Credentials were written after the extraction from `Authentication.ts`, so there was no red run for Phase 2 (Phase 0's and Phase 1's tests were red first).
+- **Next dedupe test.** `React.cache` only memoizes inside a React server render, so `GetSessionCache.test.ts` mocks `react`'s `cache` with a memoizing stand-in and pins that two `getSession` calls in one render share one result.
+- **TS2883.** `OrganizationHandlers.ts` keeps its `@awthaq/api` import alive through a typed `currentCaller` helper (`Api.UserPrincipal`), so declaration emit can still name the middleware requirements; no return-type annotation was added.
+- **Greps.** The Goal 1 grep also finds `Csrf.ts` (it reads `authorization` and the CSRF cookie to decide the cookie-less exemption: CSRF, not credential resolution) and `Credentials.ts`'s own reader; nothing else. `server/src/RequestContext.ts` and `web/src/InProcessClient.ts` keep their `user-agent` reads as the plan lists. The BDD helper `AdminWorld.resolvePrincipal` was renamed `principalOfToken` so the acceptance grep is clean.
+- **Not done.** `TestAuth.signInAs`'s hard-coded `__Host-session` cookie (plan 20 owns it); `AliasLegacyCookieMiddleware` (untouched, as the plan says). `pnpm test:pg` was not run: no SQL adapter changed.
+- **Gates run** at the last code phase: typecheck, lint, circular, format:check, check:error-tags, check:readmes, spec:verify:strict, package:smoke, test (full), test:bdd, knip (only the 101 `.reports/` files).
