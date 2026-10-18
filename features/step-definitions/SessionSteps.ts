@@ -226,10 +226,12 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(SecretHash.equals(`${sha256Hex(secret).slice(0, -1)}0`, stored), false);
       // The verifier: every comparison of a presented digest goes through it, and none uses `===`.
       const sessions = readFileSync(
-        fileURLToPath(new URL("../../packages/core/src/Sessions.ts", import.meta.url)),
+        fileURLToPath(
+          new URL("../../packages/core/src/internal/sessionVerdict.ts", import.meta.url),
+        ),
         "utf8",
       );
-      assert.ok((sessions.match(/secretMatches\(presentedHash, /g) ?? []).length >= 2);
+      assert.ok((sessions.match(/SecretHash\.equals\(presentedHash, /g) ?? []).length >= 2);
       assert.doesNotMatch(sessions, /presentedHash\s*[!=]==|[!=]==\s*presentedHash/);
       // ...and `SecretHash.equals` is the shared constant-time comparator, not an ordinary equality.
       const recipe = readFileSync(

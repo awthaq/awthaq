@@ -666,3 +666,18 @@ No scenario changes: `07-sessions.feature` (34 scenarios), the rotation-delivery
 4. **Rotation loser semantics.** Recommended: unchanged (authenticate the winner's row without re-checking the secret and without a rotation of its own). Alternative: re-classify the winner's row fully, which would rotate again via the grace window and multiply rotations under concurrency; listed only so the choice is explicit.
 5. **Where the concurrency integration tests run.** Recommended: over the memory store only, as today (`StoreContract.sessions` already proves the primitives' atomicity on SQLite, WAL and Postgres). Alternative: also run `:1012`, `:1225` and `:1648` over SQLite through `Persistence.sql()`, for an end-to-end race on a real adapter at the cost of a slower suite.
 6. **Fold `SessionToken.property.test.ts` into the verdict suite?** Recommended: keep it as is (it is the end-to-end witness that any presented string is a typed `NotFound`, never a defect, through the real layer); the verdict's P8 covers the codec in isolation. Alternative: replace its first and third properties with P8 and keep only the two that need the layer.
+
+---
+
+## Decisions taken
+
+Defaults for the six open questions (§10), all the recommended ones:
+
+1. **Lost-race expiry**: published (`auth.session.expired` with its kind; the message is "idle-expired" for an idle expiry).
+2. **A token starting with `.`**: opaque (bridge, then `SessionNotFound` without an id).
+3. **Visibility**: package-private (`internal/sessionVerdict.ts`); `DEFAULT_ROTATION_GRACE` is re-exported from `Sessions.ts`.
+4. **Rotation loser**: unchanged (authenticates the winner's row, no rotation of its own).
+5. **Concurrency tests**: memory store only, as before.
+6. **`SessionToken.property.test.ts`**: kept unchanged.
+
+Divergences: phases 0, 1 and 2 landed as one commit (a red test cannot be committed alone, and knip flags the module until `verify` calls it, as §4 allows). `Sessions.test.ts` has 68 cases and 28 `TestClock.adjust` calls as planned; the `viaGrace` and family-revoked assertions were folded into the grace recovery test and the reuse test. `Rotation` is not exported (knip). `pnpm test:pg` was not run: no SQL adapter changed (`isLive`'s body is meaning-preserving and `StoreContract.sessions` passes on the memory and SQLite runners).
