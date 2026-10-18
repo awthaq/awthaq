@@ -28,10 +28,10 @@
 
 import { Api } from "@awthaq/api";
 import {
-  Accounts,
   AuthEvents,
   AuthPlugin,
   Errors,
+  FederatedIdentity,
   HookPoint,
   Hooks,
   Migrations,
@@ -40,7 +40,6 @@ import {
   SessionCookie,
   Sessions,
   SignIn,
-  SignUp,
   Tenant,
   Users,
   Verification,
@@ -113,6 +112,16 @@ const ASSERTION_PREFIX = "saml-assertion:";
 /** The `providerId` accounts link under: `saml:<organizationId>:<connectionId>` (BEH-EA-245). */
 export const providerIdOf = (organizationId: string, connectionId: string): string =>
   `saml:${organizationId}:${connectionId}`;
+
+/**
+ * BEH-EA-245: a connection that trusts email is trusted only for the domains it claims (BEH-EA-317), so a
+ * trusting connection can never link or verify an address that belongs to another organization. An empty
+ * list links nothing.
+ */
+const emailTrustOf = (connection: SamlRecords.ConnectionRecord) =>
+  connection.trustsEmail
+    ? FederatedIdentity.trusted(connection.emailDomains)
+    : FederatedIdentity.untrusted;
 
 const RequestPayload = Schema.Struct({
   connectionId: Schema.String,
@@ -830,8 +839,6 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
     contributes: Layer.mergeAll(samlOrganizationDeletion, samlSessionRetention),
     handlers: Layer.mergeAll(SamlHandlers, SamlAccountHandlers, SamlAdminHandlers),
     make: Effect.gen(function* () {
-      const users = yield* Users.Users;
-      const accounts = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
@@ -844,7 +851,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const xmlSignature = yield* XmlSignature.XmlSignature;
       const crypto = yield* Crypto.Crypto;
       const settings = yield* SamlConfig.SamlConfig;
-      const creation = yield* SignUp.make;
+      const federation = yield* FederatedIdentity.make;
       const completion = yield* SignIn.make;
 
       const acsUrl = SamlConfig.acsUrl(settings);
@@ -1139,75 +1146,37 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         input: { readonly ip?: string | undefined; readonly userAgent?: string | undefined },
       ) {
         const providerId = providerIdOf(connection.organizationId, connection.id);
-        const subject = assertion.nameId.value;
-        const email = emailOf(assertion);
-        /** Plan 14 phase 0: a lost race is not a conflict. The anchor the winner wrote names the user. */
-        const anchoredOr = (fallback: AssertionInvalid) =>
-          accounts.findByProviderSubject(providerId, subject, connection.idpEntityId).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(fallback),
-                onSome: (account) => Effect.succeed(account.userId),
-              }),
-            ),
-          );
-        const linked = yield* accounts.findByProviderSubject(
-          providerId,
-          subject,
-          connection.idpEntityId,
-        );
-
-        const targetUserId: Users.UserId = yield* Option.match(linked, {
-          onSome: (account) => Effect.succeed(account.userId),
-          onNone: () =>
-            Effect.gen(function* () {
-              const existing =
-                email === undefined ? Option.none() : yield* users.findByEmail(email);
-              if (Option.isSome(existing)) {
-                // BEH-EA-245: never linked by email alone. An explicitly trusted connection may link to a local
-                // account whose own address is already verified; every other case is the uniform rejection.
-                if (!connection.trustsEmail || !Users.isEmailVerified(existing.value)) {
-                  // The "holder" may be the user a concurrent first sign-in for this very NameID just created.
-                  return yield* anchoredOr(new AssertionInvalid({ reason: "emailInUse" }));
-                }
-                return yield* accounts
-                  .link({
-                    userId: existing.value.id,
-                    providerId,
-                    subject,
-                    issuer: connection.idpEntityId,
-                  })
-                  .pipe(
-                    Effect.as(existing.value.id),
-                    Effect.catchTag("AccountAlreadyLinked", () =>
-                      anchoredOr(new AssertionInvalid({ reason: "emailInUse" })),
-                    ),
-                  );
-              }
-              const name = attributeOf(assertion, NAME_ATTRIBUTES) ?? email ?? subject;
-              // ADR-EA-038: `SignUp` vets (`BeforeSignUp`, `strategy` is the provider id), then creates and
-              // links in one unit and announces after it commits.
-              const vetted = yield* creation.vet({
-                identity: email === undefined ? { _tag: "Anonymous" } : { _tag: "Email", email },
-                name,
-                strategy: providerId,
-              });
-              return yield* creation
-                .create(vetted, {
-                  link: { providerId, subject, issuer: connection.idpEntityId },
-                })
-                .pipe(
-                  Effect.map((created) => created.id),
-                  Effect.catchTag("SignUp/IdentityTaken", (taken) =>
-                    taken.kind === "Phone"
-                      ? // A fresh user has no phone.
-                        Defects.invariantViolation("SamlSignUpConflict", taken.message)
-                      : // The address or the anchor was claimed by a concurrent first sign-in: the anchor names the user.
-                        anchoredOr(new AssertionInvalid({ reason: "emailInUse" })),
-                  ),
-                );
+        // ADR-EA-043: which local user is this NameID is core's `FederatedIdentity` (the anchor, a trusted email
+        // match within the connection's claimed domains, or a sign-up through `SignUp`); a lost race signs in
+        // as the user the winner linked. Both refusals stay the uniform rejection.
+        const resolved = yield* federation
+          .resolve(
+            {
+              providerId,
+              subject: assertion.nameId.value,
+              issuer: Option.some(connection.idpEntityId),
+              // A signed assertion has no per-claim verified flag: the IdP's directory is speaking, and whether
+              // that directory is believed is the connection's `trustsEmail` verdict.
+              email: Option.map(Option.fromNullishOr(emailOf(assertion)), (address) => ({
+                address,
+                verified: true,
+              })),
+              name: Option.fromNullishOr(attributeOf(assertion, NAME_ATTRIBUTES)),
+              image: Option.none(),
+              tokens: Option.none(),
+            },
+            emailTrustOf(connection),
+          )
+          .pipe(
+            Effect.catchTags({
+              // BEH-EA-245: never linked by email alone; the reason is logged, not revealed.
+              "FederatedIdentity/EmailInUse": () =>
+                Effect.fail(new AssertionInvalid({ reason: "emailInUse" })),
+              "FederatedIdentity/Contended": () =>
+                Effect.fail(new AssertionInvalid({ reason: "identityContended" })),
             }),
-        });
+          );
+        const targetUserId = resolved.userId;
 
         // ADR-EA-038: the IdP proved the identity, so core's sign-in takes over (gate, veto, MFA divert, session,
         // announcement). The role mapping and the Single Logout record ride as a continuation, so they also

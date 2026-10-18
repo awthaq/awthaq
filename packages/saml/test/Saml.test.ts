@@ -564,31 +564,8 @@ describe("the chain refuses, uniformly", () => {
 });
 
 describe("account linking (BEH-EA-245)", () => {
-  it.effect("an assertion never links to an existing account by email alone", () =>
-    Effect.gen(function* () {
-      yield* atNow;
-      const users = yield* Users.Users;
-      const { connection } = yield* seedConnection();
-      const existing = yield* users.create({
-        identity: { _tag: "Email", email: "ada@acme.example" },
-        name: "Ada (password user)",
-      });
-      yield* users.verifyEmail(existing.id);
-      const started = yield* startLogin(connection.id);
-      assert.strictEqual(
-        yield* rejectedAs(idpResponse(started, connection.id), started.state),
-        "SamlAssertionRejected",
-      );
-      // The existing account was neither taken over nor changed.
-      assert.strictEqual(
-        Option.getOrThrow(yield* users.findByEmail("ada@acme.example")).id,
-        existing.id,
-      );
-    }).pipe(Effect.provide(SamlLive())),
-  );
-
   it.effect(
-    "a connection that trusts email links to a local account whose own address is verified — and only then",
+    "a connection that trusts email links a verified local account inside its domains, and only there (BEH-EA-245, BEH-EA-317)",
     () =>
       Effect.gen(function* () {
         yield* atNow;
@@ -599,23 +576,63 @@ describe("account linking (BEH-EA-245)", () => {
           identity: { _tag: "Email", email: "ada@acme.example" },
           name: "Ada",
         });
-        // The local address is not verified yet: squatting is refused.
-        const first_ = yield* startLogin(connection.id);
+        yield* users.verifyEmail(local.id);
+        // An address outside the connection's claimed domains is another organization's: refused, never linked.
+        const outsider = yield* users.create({
+          identity: { _tag: "Email", email: "ceo@other.example" },
+          name: "CEO",
+        });
+        yield* users.verifyEmail(outsider.id);
+        const refused = yield* startLogin(connection.id);
         assert.strictEqual(
           yield* rejectedAs(
-            idpResponse(first_, connection.id, { assertionId: "_u1" }),
-            first_.state,
+            idpResponse(refused, connection.id, {
+              assertionId: "_d1",
+              nameId: "ceo@other.example",
+              attributes: { email: ["ceo@other.example"] },
+            }),
+            refused.state,
           ),
           "SamlAssertionRejected",
         );
-        yield* users.verifyEmail(local.id);
+        const accounts = yield* Accounts.Accounts;
+        assert.strictEqual((yield* accounts.listByUser(outsider.id)).length, 0);
+        // Inside the domains the verified local account is linked.
         const second = yield* startLogin(connection.id);
         const outcome = yield* saml.acs({
           samlResponse: idpResponse(second, connection.id, { assertionId: "_u2" }),
           cookieState: second.state,
         });
         assert.strictEqual(outcome.session.session.userId, local.id);
+        assert.strictEqual((yield* accounts.listByUser(local.id)).length, 1);
       }).pipe(Effect.provide(SamlLive())),
+  );
+
+  const firstSignInVerified = (trustsEmail: boolean) =>
+    Effect.gen(function* () {
+      yield* atNow;
+      const saml = yield* Saml.Saml;
+      const users = yield* Users.Users;
+      const { connection } = yield* seedConnection({ trustsEmail });
+      const started = yield* startLogin(connection.id);
+      const outcome = yield* saml.acs({
+        samlResponse: idpResponse(started, connection.id, {
+          nameId: "new@acme.example",
+          attributes: { email: ["new@acme.example"] },
+        }),
+        cookieState: started.state,
+      });
+      return Users.isEmailVerified(yield* users.findById(outcome.session.session.userId));
+    }).pipe(Effect.provide(SamlLive()));
+
+  it.effect(
+    "a connection that trusts email creates its first-time user with the address verified (BEH-EA-245)",
+    () => Effect.map(firstSignInVerified(true), (verified) => assert.isTrue(verified)),
+  );
+
+  it.effect(
+    "a connection that does not trust email leaves its first-time user's address unverified (BEH-EA-245)",
+    () => Effect.map(firstSignInVerified(false), (verified) => assert.isFalse(verified)),
   );
 
   it.effect(
@@ -699,43 +716,6 @@ describe("concurrent first sign-ins for one NameID (plan 14)", () => {
       const accounts = yield* Accounts.Accounts;
       assert.strictEqual((yield* accounts.listByUser(a.session.session.userId)).length, 1);
     }).pipe(Effect.provide(SamlLive({}, undefined, undefined, Rendezvous.anchorReadsMeet(2)))),
-  );
-
-  it.effect("an email NameID: both ACS succeed as one user, one user row", () =>
-    Effect.gen(function* () {
-      yield* atNow;
-      const { connection } = yield* seedConnection();
-      const [a, b] = yield* twoAcs(connection.id, {
-        nameId: "ada@acme.example",
-        attributes: { email: ["ada@acme.example"] },
-      });
-      assert.strictEqual(a.session.session.userId, b.session.session.userId);
-      const accounts = yield* Accounts.Accounts;
-      assert.strictEqual((yield* accounts.listByUser(a.session.session.userId)).length, 1);
-    }).pipe(Effect.provide(SamlLive({}, undefined, undefined, Rendezvous.anchorReadsMeet(2)))),
-  );
-
-  it.effect(
-    "a trustsEmail connection: both ACS sign in as the verified local user, one account",
-    () =>
-      Effect.gen(function* () {
-        yield* atNow;
-        const users = yield* Users.Users;
-        const { connection } = yield* seedConnection({ trustsEmail: true });
-        const local = yield* users.create({
-          identity: { _tag: "Email", email: "ada@acme.example" },
-          name: "Ada",
-        });
-        yield* users.verifyEmail(local.id);
-        const [a, b] = yield* twoAcs(connection.id, {
-          nameId: "ada@acme.example",
-          attributes: { email: ["ada@acme.example"] },
-        });
-        assert.strictEqual(a.session.session.userId, local.id);
-        assert.strictEqual(b.session.session.userId, local.id);
-        const accounts = yield* Accounts.Accounts;
-        assert.strictEqual((yield* accounts.listByUser(local.id)).length, 1);
-      }).pipe(Effect.provide(SamlLive({}, undefined, undefined, Rendezvous.anchorReadsMeet(2)))),
   );
 });
 
