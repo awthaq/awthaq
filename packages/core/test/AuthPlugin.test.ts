@@ -635,7 +635,7 @@ class Twice extends AuthPlugin.Service<Twice, PingShape>()("ping", {
 }
 
 describe("Auth.make migration names (BEH-EA-038)", () => {
-  it.fails("refuses a plugin that declares one migration name twice", () => {
+  it("refuses a plugin that declares one migration name twice", () => {
     assert.throws(() => Auth.make([Twice]), /declares migration "create_twice" twice/);
   });
 });

@@ -22,6 +22,7 @@
 import { Defects, Ids } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Model from "effect/unstable/schema/Model";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -135,6 +136,8 @@ const sqliteFields = {
   wireDateTime: Schema.DateTimeUtcFromString,
   wireNullableDateTime: Schema.NullOr(Schema.DateTimeUtcFromString),
   wireBoolean: Schema.BooleanFromBit,
+  // SQLite's INTEGER is 64-bit and node:sqlite hands it back as a number.
+  wireInt64: Schema.Number.pipe(Schema.check(Schema.isInt())),
 };
 
 const pgFields = {
@@ -159,6 +162,17 @@ const pgFields = {
   wireDateTime: Schema.DateTimeUtcFromDate,
   wireNullableDateTime: Schema.NullOr(Schema.DateTimeUtcFromDate),
   wireBoolean: Schema.Boolean,
+  // `@effect/sql-pg` decodes and binds OID 20 (int8) as a `bigint` only (`PgTypes`), so the wire is a
+  // `bigint` that the record sees as an integer `number` (a WebAuthn signCount is a uint32, far below 2^53).
+  wireInt64: Schema.BigInt.pipe(
+    Schema.decodeTo(
+      Schema.Number.pipe(Schema.check(Schema.isInt())),
+      SchemaTransformation.transform({
+        decode: (value: bigint) => Number(value),
+        encode: (value: number) => BigInt(value),
+      }),
+    ),
+  ),
 };
 
 /**
@@ -166,7 +180,8 @@ const pgFields = {
  * `SqlSchema` request/result structs rather than a `Model.Class`
  * (admin/jwt/organization/passkey/migrate-better-auth): `dateTime` is
  * `DateTimeUtcFromString` on SQLite and `DateTimeUtcFromDate` on Postgres,
- * `boolean` is `BooleanFromBit` / `Boolean`.
+ * `boolean` is `BooleanFromBit` / `Boolean`, `int64` is `Number` / a `bigint`-wire `Number` (plan 22, D2: pair with
+ * `SqlDdl`'s `int64` column type).
  */
 export const dialectFields = (dialect: Dialect) =>
   dialect === "pg"
@@ -174,11 +189,13 @@ export const dialectFields = (dialect: Dialect) =>
         dateTime: pgFields.wireDateTime,
         nullableDateTime: pgFields.wireNullableDateTime,
         boolean: pgFields.wireBoolean,
+        int64: pgFields.wireInt64,
       }
     : {
         dateTime: sqliteFields.wireDateTime,
         nullableDateTime: sqliteFields.wireNullableDateTime,
         boolean: sqliteFields.wireBoolean,
+        int64: sqliteFields.wireInt64,
       };
 
 export type DialectWire = ReturnType<typeof dialectFields>;

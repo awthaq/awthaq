@@ -127,6 +127,18 @@ export class SealedColumnDeclarationInvalid extends Data.TaggedError(
 }> {}
 
 /**
+ * Plan 22 (BEH-EA-038): a plugin declares one migration name twice. A migration's name and position are its
+ * identity in both ledgers and in `awthaq migration status`, so a repeat could later collide silently.
+ */
+export class MigrationDeclarationInvalid extends Data.TaggedError(
+  "Auth/MigrationDeclarationInvalid",
+)<{
+  readonly pluginId: string;
+  readonly migration: string;
+  readonly message: string;
+}> {}
+
+/**
  * A loop invariant `linkPlugins`/`findCycle` rely on (e.g. "a queue drained
  * one non-undefined element at a time never returns undefined while
  * non-empty") did not hold. Reachable only if one of those invariants is
@@ -708,6 +720,23 @@ const checkSealedColumns = (order: ReadonlyArray<AuthPlugin.Any>): void => {
   }
 };
 
+/** Plan 22 (BEH-EA-038): refuses a plugin that declares one migration name twice. */
+const checkMigrationNames = (order: ReadonlyArray<AuthPlugin.Any>): void => {
+  for (const plugin of order) {
+    const seen = new Set<string>();
+    for (const migration of plugin.migrations) {
+      if (seen.has(migration.name)) {
+        throw new MigrationDeclarationInvalid({
+          pluginId: plugin.id,
+          migration: migration.name,
+          message: `awthaq: plugin "${plugin.id}" declares migration "${migration.name}" twice`,
+        });
+      }
+      seen.add(migration.name);
+    }
+  }
+};
+
 /** BEH-EA-328: refuses a malformed tenancy declaration. */
 const checkTenancy = (order: ReadonlyArray<AuthPlugin.Any>): void => {
   const declared = declaredTenancy(order);
@@ -1114,6 +1143,7 @@ export function make(
   checkTableDependencies(order);
   checkTenancy(order);
   checkSealedColumns(order);
+  checkMigrationNames(order);
   const extraGroups = options?.extraGroups ?? [];
   return {
     plugins,

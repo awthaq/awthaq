@@ -24,6 +24,7 @@ suites=(
   packages/sql/test/TenantScope.postgres.test.ts
   packages/sql/test/TenantScoped.test.ts
   packages/sql/test/SealedColumn.test.ts
+  packages/sql/test/SqlDdl.test.ts
   packages/sql/test/UnitOfWork.test.ts
   packages/test/test/CoreSealedColumns.test.ts
   packages/test/test/StoreContract.sql.test.ts

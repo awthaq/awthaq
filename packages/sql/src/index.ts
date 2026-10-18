@@ -19,6 +19,8 @@
 // StoreFailure.ts (plus CoreSealedColumns.ts, core's six sealed columns declared on it, plan 17): the plugin-table substrate (plan 05): tenant scoping and the cross-tenant
 // witness, sealed columns with lazy re-seal, and the `StoreUnavailable` mapping. See README.md for operations (drivers, pool configuration,
 // migrations, encryption boundary, replicas).
+// SqlDdl.ts: the dialect-specific DDL tokens as fragments, an always-IF-NOT-EXISTS index builder and
+// `only` (plan 22, ADR-EA-004 rev 1.3), which a plugin's migrations are written with.
 // See spec/overview.md for the full package map.
 
 export * as AccountStoreSql from "./AccountStoreSql.ts";
@@ -32,6 +34,7 @@ export * as RelayCursorStoreSql from "./RelayCursorStoreSql.ts";
 export * as ReadRouting from "./ReadRouting.ts";
 export * as SealedColumn from "./SealedColumn.ts";
 export * as SessionStoreSql from "./SessionStoreSql.ts";
+export * as SqlDdl from "./SqlDdl.ts";
 export * as SqlStore from "./SqlStore.ts";
 export * as StoreFailure from "./StoreFailure.ts";
 export * as TenantScope from "./TenantScope.ts";

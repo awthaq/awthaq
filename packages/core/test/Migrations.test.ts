@@ -68,3 +68,55 @@ describe("Migrations.run", () => {
     }).pipe(Effect.provide(SqlLive)),
   );
 });
+
+// BEH-EA-037/038 (plan 22): `group` keys a records module's migrations by their ledger name and resolves the
+// dialect once per migration; `ledger` returns them in the order it names.
+const accounts = Migrations.group({
+  create_t: ({ sql, timestamp }) =>
+    sql`CREATE TABLE t (id TEXT PRIMARY KEY, "at" ${timestamp} NOT NULL)`,
+  create_t_at_index: ({ index }) => index("t_at", "t", ["at"]),
+});
+const extras = Migrations.group({
+  add_t_note: ({ sql }) => sql`ALTER TABLE t ADD COLUMN note TEXT`,
+});
+
+describe("Migrations.group / Migrations.ledger", () => {
+  it("group keys each migration by its name", () => {
+    assert.deepStrictEqual(Object.keys(accounts), ["create_t", "create_t_at_index"]);
+    assert.strictEqual(accounts.create_t.name, "create_t");
+  });
+
+  it("ledger returns the migrations in the order it names, across groups", () => {
+    const ledger = Migrations.ledger(
+      [accounts, extras],
+      ["create_t", "add_t_note", "create_t_at_index"],
+    );
+    assert.deepStrictEqual(
+      ledger.map((m) => m.name),
+      ["create_t", "add_t_note", "create_t_at_index"],
+    );
+    assert.strictEqual(ledger[1], extras.add_t_note);
+  });
+
+  it.effect(
+    "a ledger runs through Migrations.run and builds the schema, idempotent on the second run",
+    () =>
+      Effect.gen(function* () {
+        const ledger = Migrations.ledger(
+          [accounts, extras],
+          ["create_t", "add_t_note", "create_t_at_index"],
+        );
+        const first = yield* Migrations.run(ledger);
+        assert.strictEqual(first.length, 3);
+        assert.strictEqual((yield* Migrations.run(ledger)).length, 0);
+        const sql = yield* SqlClient.SqlClient;
+        const columns = yield* sql<{
+          readonly name: string;
+        }>`SELECT name FROM pragma_table_info('t')`;
+        assert.deepStrictEqual(
+          columns.map((c) => c.name),
+          ["id", "at", "note"],
+        );
+      }).pipe(Effect.provide(SqlLive)),
+  );
+});
