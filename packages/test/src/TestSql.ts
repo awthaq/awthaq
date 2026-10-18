@@ -21,6 +21,7 @@ import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 
 const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
 
@@ -136,3 +137,241 @@ export const prepareRlsProbe = (role: string) =>
     yield* sql.unsafe(`GRANT USAGE ON SCHEMA "${schema}" TO ${role}`);
     yield* sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA "${schema}" TO ${role}`);
   });
+
+// ---- the structural schema of the ambient database (plan 22 section 3.5) ---------------------
+
+/** The declared type, reduced to what both dialects can be compared on. */
+export type LogicalType = "text" | "timestamp" | "boolean" | "integer" | "other";
+
+export interface ColumnShape {
+  readonly name: string;
+  readonly type: LogicalType;
+  readonly notNull: boolean;
+  readonly hasDefault: boolean;
+  readonly primaryKey: boolean;
+}
+
+export interface IndexShape {
+  readonly name: string;
+  readonly table: string;
+  /** An expression column reads as `"<expr>"`. */
+  readonly columns: ReadonlyArray<string>;
+  readonly unique: boolean;
+  readonly partial: boolean;
+}
+
+export interface TriggerShape {
+  readonly name: string;
+  readonly table: string;
+}
+
+export interface SchemaShape {
+  readonly tables: Readonly<Record<string, ReadonlyArray<ColumnShape>>>;
+  readonly indexes: ReadonlyArray<IndexShape>;
+  readonly triggers: ReadonlyArray<TriggerShape>;
+}
+
+const ledgers = ["effect_sql_migrations", "awthaq_plugin_migrations"];
+
+const logicalType = (declared: string): LogicalType => {
+  switch (declared.toLowerCase()) {
+    case "text":
+    case "character varying":
+      return "text";
+    case "timestamp with time zone":
+      return "timestamp";
+    case "boolean":
+      return "boolean";
+    case "integer":
+    case "bigint":
+    case "smallint":
+      return "integer";
+    default:
+      return "other";
+  }
+};
+
+const byName = <A extends { readonly name: string }>(rows: ReadonlyArray<A>) =>
+  [...rows].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+const sqliteSchema = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    const tableRows = yield* sql<{ readonly name: string }>`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ${sql.in(ledgers)}`;
+    const tables: Record<string, ReadonlyArray<ColumnShape>> = {};
+    const indexes: Array<IndexShape> = [];
+    for (const { name: table } of byName(tableRows)) {
+      const columns = yield* sql<{
+        readonly name: string;
+        readonly type: string;
+        readonly notnull: number;
+        readonly dflt_value: string | null;
+        readonly pk: number;
+      }>`SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(${table})`;
+      tables[table] = columns.map((column) => ({
+        name: column.name,
+        type: logicalType(column.type),
+        notNull: column.notnull === 1 || column.pk > 0,
+        hasDefault: column.dflt_value !== null,
+        primaryKey: column.pk > 0,
+      }));
+      const list = yield* sql<{
+        readonly name: string;
+        readonly unique: number;
+        readonly origin: string;
+        readonly partial: number;
+      }>`SELECT name, "unique", origin, partial FROM pragma_index_list(${table})`;
+      for (const index of list) {
+        if (index.origin !== "c") continue;
+        const parts = yield* sql<{ readonly name: string | null }>`
+          SELECT name FROM pragma_index_info(${index.name}) ORDER BY seqno`;
+        indexes.push({
+          name: index.name,
+          table,
+          columns: parts.map((part) => part.name ?? "<expr>"),
+          unique: index.unique === 1,
+          partial: index.partial === 1,
+        });
+      }
+    }
+    const triggers = yield* sql<{ readonly name: string; readonly table: string }>`
+      SELECT name, tbl_name AS "table" FROM sqlite_master WHERE type = 'trigger'`;
+    return { tables, indexes: byName(indexes), triggers: byName(triggers) } satisfies SchemaShape;
+  });
+
+const postgresSchema = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    const columns = yield* sql<{
+      readonly table: string;
+      readonly name: string;
+      readonly type: string;
+      readonly nullable: string;
+      readonly dflt: string | null;
+      readonly pk: boolean;
+    }>`
+      SELECT c.table_name AS "table", c.column_name AS name, c.data_type AS type,
+             c.is_nullable AS nullable, c.column_default AS dflt,
+             EXISTS (
+               SELECT 1 FROM pg_index ix
+               JOIN pg_class t ON t.oid = ix.indrelid
+               JOIN pg_namespace n ON n.oid = t.relnamespace
+               JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY (ix.indkey)
+               WHERE ix.indisprimary AND n.nspname = c.table_schema
+                 AND t.relname = c.table_name AND a.attname = c.column_name
+             ) AS pk
+      FROM information_schema.columns c
+      JOIN information_schema.tables t
+        ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+      WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE'
+        AND c.table_name NOT IN ${sql.in(ledgers)}
+      ORDER BY c.table_name, c.ordinal_position`;
+    const tables: Record<string, Array<ColumnShape>> = {};
+    for (const column of columns) {
+      const list = tables[column.table] ?? [];
+      list.push({
+        name: column.name,
+        type: logicalType(column.type),
+        notNull: column.nullable === "NO",
+        hasDefault: column.dflt !== null,
+        primaryKey: column.pk,
+      });
+      tables[column.table] = list;
+    }
+    const indexRows = yield* sql<{
+      readonly table: string;
+      readonly name: string;
+      readonly unique: boolean;
+      readonly partial: boolean;
+      readonly columns: ReadonlyArray<string>;
+    }>`
+      SELECT t.relname AS "table", i.relname AS name, ix.indisunique AS "unique",
+             (ix.indpred IS NOT NULL) AS partial,
+             ARRAY(
+               SELECT CASE WHEN u.k = 0 THEN '<expr>' ELSE a.attname::text END
+               FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS u(k, ord)
+               LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.k
+               ORDER BY u.ord
+             ) AS columns
+      FROM pg_index ix
+      JOIN pg_class t ON t.oid = ix.indrelid
+      JOIN pg_class i ON i.oid = ix.indexrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE n.nspname = current_schema() AND NOT ix.indisprimary
+        AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = ix.indexrelid)
+        AND t.relname NOT IN ${sql.in(ledgers)}`;
+    const triggers = yield* sql<{ readonly name: string; readonly table: string }>`
+      SELECT g.tgname AS name, t.relname AS "table"
+      FROM pg_trigger g
+      JOIN pg_class t ON t.oid = g.tgrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE NOT g.tgisinternal AND n.nspname = current_schema()`;
+    return {
+      tables,
+      indexes: byName(indexRows),
+      triggers: byName(triggers),
+    } satisfies SchemaShape;
+  });
+
+/**
+ * The structural schema of the ambient database (tables, columns, plain indexes, triggers; no
+ * ledger, no SQLite internals), sorted so two shapes compare by value. Statement text is not part
+ * of it: `"id"` versus `id` or whitespace in a trigger body is not a schema difference.
+ */
+export const schemaOf: Effect.Effect<SchemaShape, SqlError, SqlClient.SqlClient> = Effect.gen(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql.onDialectOrElse({
+      pg: () => postgresSchema(sql),
+      orElse: () => sqliteSchema(sql),
+    });
+  },
+);
+
+/**
+ * Where two shapes (Postgres, then SQLite) disagree under the parity rule: a Postgres `timestamp`
+ * matches SQLite `text`, `boolean` matches `integer`; a primary key's default (a sequence) is not
+ * compared, and triggers are compared by the tables they guard. Empty when the logical schemas agree; each entry names table, column and aspect.
+ */
+export const parityDifferences = (pg: SchemaShape, sqlite: SchemaShape): ReadonlyArray<string> => {
+  const out: Array<string> = [];
+  const comparable = (type: LogicalType): LogicalType =>
+    type === "timestamp" ? "text" : type === "boolean" ? "integer" : type;
+  const names = new Set([...Object.keys(pg.tables), ...Object.keys(sqlite.tables)]);
+  for (const table of [...names].sort()) {
+    const left = pg.tables[table];
+    const right = sqlite.tables[table];
+    if (left === undefined || right === undefined) {
+      out.push(`table ${table}: only on ${left === undefined ? "SQLite" : "Postgres"}`);
+      continue;
+    }
+    const columns = new Set([...left.map((c) => c.name), ...right.map((c) => c.name)]);
+    for (const name of [...columns].sort()) {
+      const a = left.find((c) => c.name === name);
+      const b = right.find((c) => c.name === name);
+      if (a === undefined || b === undefined) {
+        out.push(`${table}.${name}: only on ${a === undefined ? "SQLite" : "Postgres"}`);
+        continue;
+      }
+      if (comparable(a.type) !== comparable(b.type))
+        out.push(`${table}.${name}: type ${a.type} (Postgres) vs ${b.type} (SQLite)`);
+      if (a.notNull !== b.notNull) out.push(`${table}.${name}: nullability differs`);
+      if (a.primaryKey !== b.primaryKey) out.push(`${table}.${name}: primary key differs`);
+      if (!a.primaryKey && a.hasDefault !== b.hasDefault)
+        out.push(`${table}.${name}: default differs`);
+    }
+  }
+  const key = (i: IndexShape) =>
+    `${i.name} on ${i.table} (${i.columns.join(", ")}) unique=${i.unique} partial=${i.partial}`;
+  const left = new Set(pg.indexes.map(key));
+  const right = new Set(sqlite.indexes.map(key));
+  for (const k of [...left].sort()) if (!right.has(k)) out.push(`index ${k}: only on Postgres`);
+  for (const k of [...right].sort()) if (!left.has(k)) out.push(`index ${k}: only on SQLite`);
+  // Triggers are the one place the dialects differ in shape (plpgsql functions versus SQLite trigger bodies),
+  // so their names differ: what must agree is which tables are guarded by at least one.
+  const tl = new Set(pg.triggers.map((i) => i.table));
+  const tr = new Set(sqlite.triggers.map((i) => i.table));
+  for (const k of [...tl].sort()) if (!tr.has(k)) out.push(`triggers on ${k}: only on Postgres`);
+  for (const k of [...tr].sort()) if (!tl.has(k)) out.push(`triggers on ${k}: only on SQLite`);
+  return out;
+};

@@ -1,0 +1,97 @@
+{
+  "migrations": [
+    "create_two_factor_secret",
+    "create_two_factor_recovery_code",
+    "create_two_factor_recovery_code_user_id_index"
+  ],
+  "schema": {
+    "tables": {
+      "two_factor_recovery_code": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "userId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "codeHash",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "usedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "two_factor_secret": [
+        {
+          "name": "userId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "secret",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "confirmedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "lastUsedStep",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "two_factor_recovery_code_user_id",
+        "table": "two_factor_recovery_code",
+        "columns": [
+          "userId"
+        ],
+        "unique": false,
+        "partial": false
+      }
+    ],
+    "triggers": []
+  }
+}

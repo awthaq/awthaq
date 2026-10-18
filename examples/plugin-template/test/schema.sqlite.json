@@ -1,0 +1,59 @@
+{
+  "migrations": [
+    "create_notes_note",
+    "add_notes_note_tenant_id"
+  ],
+  "schema": {
+    "tables": {
+      "notes_note": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "owner",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "created",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "tenantId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "notes_note_tenant_id",
+        "table": "notes_note",
+        "columns": [
+          "tenantId"
+        ],
+        "unique": false,
+        "partial": false
+      }
+    ],
+    "triggers": []
+  }
+}

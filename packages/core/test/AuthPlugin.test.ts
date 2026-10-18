@@ -620,6 +620,26 @@ describe("Auth.make", () => {
   });
 });
 
+// BEH-EA-038 (plan 22): a migration's name and position are its identity; one name twice is refused.
+class Twice extends AuthPlugin.Service<Twice, PingShape>()("ping", {
+  apiVersion: 1,
+  contract: PingApi,
+  migrations: [
+    { name: "create_twice", up: Effect.void },
+    { name: "create_twice", up: Effect.void },
+  ],
+}) {
+  static readonly layer = AuthPlugin.layer(Twice, {
+    make: Effect.succeed({ ping: () => Effect.succeed("pong") }),
+  });
+}
+
+describe("Auth.make migration names (BEH-EA-038)", () => {
+  it.fails("refuses a plugin that declares one migration name twice", () => {
+    assert.throws(() => Auth.make([Twice]), /declares migration "create_twice" twice/);
+  });
+});
+
 // BEH-EA-005 (plan 05): `tables` is a record of tenancy declarations keyed by the plugin's own prefix.
 describe("AuthPlugin.Service tables (BEH-EA-005)", () => {
   const Api = HttpApi.make("auth").add(

@@ -1,0 +1,100 @@
+{
+  "migrations": [
+    "create_jwt_signing_key",
+    "create_jwt_token_revocation",
+    "create_jwt_signing_key_active_index",
+    "create_jwt_signing_key_single_current_index"
+  ],
+  "schema": {
+    "tables": {
+      "jwt_signing_key": [
+        {
+          "name": "kid",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "alg",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "publicKeyJwk",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "privateKeyJwk",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "rotatedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "retiresAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "jwt_token_revocation": [
+        {
+          "name": "jti",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "expiresAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "jwt_signing_key_active_idx",
+        "table": "jwt_signing_key",
+        "columns": [
+          "createdAt"
+        ],
+        "unique": false,
+        "partial": true
+      },
+      {
+        "name": "jwt_signing_key_single_current",
+        "table": "jwt_signing_key",
+        "columns": [
+          "<expr>"
+        ],
+        "unique": true,
+        "partial": true
+      }
+    ],
+    "triggers": []
+  }
+}

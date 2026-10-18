@@ -1,0 +1,172 @@
+{
+  "migrations": [
+    "create_device_authorization_grant",
+    "create_device_authorization_client"
+  ],
+  "schema": {
+    "tables": {
+      "device_authorization_client": [
+        {
+          "name": "clientId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "scopes",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "revokedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "device_authorization_grant": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "deviceCodeHash",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "userCodeHash",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "clientId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "scopes",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "userId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "amr",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "pollInterval",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "expiresAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "lastPolledAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "device_authorization_grant_device_idx",
+        "table": "device_authorization_grant",
+        "columns": [
+          "deviceCodeHash"
+        ],
+        "unique": true,
+        "partial": false
+      },
+      {
+        "name": "device_authorization_grant_expiry_idx",
+        "table": "device_authorization_grant",
+        "columns": [
+          "expiresAt"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "device_authorization_grant_user_code_idx",
+        "table": "device_authorization_grant",
+        "columns": [
+          "userCodeHash"
+        ],
+        "unique": true,
+        "partial": false
+      },
+      {
+        "name": "device_authorization_grant_user_idx",
+        "table": "device_authorization_grant",
+        "columns": [
+          "userId"
+        ],
+        "unique": false,
+        "partial": false
+      }
+    ],
+    "triggers": []
+  }
+}

@@ -27,7 +27,21 @@ suites=(
   packages/sql/test/UnitOfWork.test.ts
   packages/test/test/CoreSealedColumns.test.ts
   packages/test/test/StoreContract.sql.test.ts
+  packages/admin/test/Contract.test.ts
+  packages/api-key/test/Contract.test.ts
+  packages/device-authorization/test/Contract.test.ts
+  packages/jwt/test/Contract.test.ts
+  packages/organization/test/Contract.test.ts
+  packages/passkey/test/Contract.test.ts
+  packages/qadi/test/Contract.test.ts
+  packages/roles/test/Contract.test.ts
+  packages/saml/test/Contract.test.ts
+  packages/scim/test/Contract.test.ts
+  packages/two-factor/test/Contract.test.ts
+  packages/webhooks/test/Contract.test.ts
+  examples/plugin-template/test/Contract.test.ts
   packages/test/test/TestAuthRecords.test.ts
+  packages/test/test/TestSqlSchema.test.ts
   examples/plugin-template/test/Template.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts

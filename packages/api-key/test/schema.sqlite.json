@@ -1,0 +1,262 @@
+{
+  "migrations": [
+    "create_apikey_key",
+    "create_apikey_client"
+  ],
+  "schema": {
+    "tables": {
+      "apikey_client": [
+        {
+          "name": "clientId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "ownerId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "scopes",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "secretHash",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "previousSecretHash",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "previousExpiresAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "revokedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "apikey_key": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "ownerId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "start",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "secretHash",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "scopes",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "expiresAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "revokedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "lastUsedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "rotatedFrom",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "jwt_signing_key": [
+        {
+          "name": "kid",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "alg",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "publicKeyJwk",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "privateKeyJwk",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "rotatedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "retiresAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "jwt_token_revocation": [
+        {
+          "name": "jti",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "expiresAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "apikey_client_owner_idx",
+        "table": "apikey_client",
+        "columns": [
+          "ownerId",
+          "createdAt"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "apikey_key_owner_idx",
+        "table": "apikey_key",
+        "columns": [
+          "ownerId",
+          "createdAt"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "jwt_signing_key_active_idx",
+        "table": "jwt_signing_key",
+        "columns": [
+          "createdAt"
+        ],
+        "unique": false,
+        "partial": true
+      },
+      {
+        "name": "jwt_signing_key_single_current",
+        "table": "jwt_signing_key",
+        "columns": [
+          "<expr>"
+        ],
+        "unique": true,
+        "partial": true
+      }
+    ],
+    "triggers": []
+  }
+}

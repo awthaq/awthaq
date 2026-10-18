@@ -827,17 +827,35 @@ export type { TestFramework } from "./TestFramework.ts";
  * the two ledgers) so two independent applications can be compared.
  */
 const applyMigrations = (migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"]) =>
+  applyMigrationsOn(migrations, SqliteClient.layer({ filename: ":memory:" }));
+
+const applyMigrationsOn = <E>(
+  migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"],
+  client: Layer.Layer<SqlClient.SqlClient, E>,
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const readSchema = sql<{
-      readonly type: string;
-      readonly name: string;
-      readonly tbl_name: string;
-      readonly sql: string;
-    }>`
+    // The statement text ownership check below is SQLite's; on Postgres only the structural shape is read.
+    const readSchema = sql.onDialectOrElse({
+      pg: () =>
+        Effect.succeed<
+          ReadonlyArray<{
+            readonly type: string;
+            readonly name: string;
+            readonly tbl_name: string;
+            readonly sql: string;
+          }>
+        >([]),
+      orElse: () => sql<{
+        readonly type: string;
+        readonly name: string;
+        readonly tbl_name: string;
+        readonly sql: string;
+      }>`
       SELECT type, name, tbl_name, sql FROM sqlite_master
       WHERE name NOT LIKE 'sqlite_%' AND name NOT IN ('effect_sql_migrations', ${Migrations.pluginMigrationsTable})
-      ORDER BY name`;
+      ORDER BY name`,
+    });
     yield* Migrator.make({})({
       loader: CoreMigrations.coreMigrations,
       table: "effect_sql_migrations",
@@ -847,8 +865,75 @@ const applyMigrations = (migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["
     yield* Migrations.run(migrations);
     const reapplied = yield* Migrations.run(migrations);
     const schema = yield* readSchema;
-    return { schema, coreSchema, reapplied: reapplied.length };
-  }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
+    const shape = yield* TestSql.schemaOf;
+    return { schema, coreSchema, shape, reapplied: reapplied.length };
+  }).pipe(Effect.provide(client), Effect.scoped);
+
+/**
+ * Plan 22 (schema lock): the structural schema core plus `plugin`'s dependency closure and the plugin
+ * itself build on a fresh SQLite database, with the plugin's own migration names in ledger order.
+ */
+export const migratedSchema = (plugin: AuthPlugin.Any) => {
+  const closure = dependencyClosure(plugin);
+  const [first = plugin, ...rest] = closure.length === 0 ? [] : [...closure, plugin];
+  return Effect.runPromise(
+    Effect.all([applyMigrations([]), applyMigrations(Auth.make([first, ...rest]).migrations)]).pipe(
+      Effect.map(([core, composed]) => ({
+        migrations: plugin.migrations.map((migration) => migration.name),
+        // What the plugins add: core's own tables, indexes and triggers are core's lock to keep.
+        schema: {
+          tables: Object.fromEntries(
+            Object.entries(composed.shape.tables).filter(
+              ([name]) => core.shape.tables[name] === undefined,
+            ),
+          ),
+          indexes: composed.shape.indexes.filter(
+            (index) => !core.shape.indexes.some((own) => own.name === index.name),
+          ),
+          triggers: composed.shape.triggers.filter(
+            (trigger) => !core.shape.triggers.some((own) => own.name === trigger.name),
+          ),
+        },
+      })),
+    ),
+  );
+};
+
+/** Every declared table exists, and so does every column a tenancy declaration names (plan 22, D3). */
+const declarationProblems = (
+  plugin: AuthPlugin.Any,
+  shape: TestSql.SchemaShape,
+): ReadonlyArray<string> => {
+  const problems: Array<string> = [];
+  const has = (table: string, column: string) =>
+    shape.tables[table]?.some((candidate) => candidate.name === column) === true;
+  for (const [table, { tenancy }] of Object.entries(plugin.tenancy ?? {})) {
+    if (shape.tables[table] === undefined) {
+      problems.push(`table "${table}" is declared but no migration creates it`);
+      continue;
+    }
+    switch (tenancy._tag) {
+      case "Partitioned":
+      case "Keyed":
+        if (!has(table, tenancy.column))
+          problems.push(
+            `${tenancy._tag.toLowerCase()} column "${table}.${tenancy.column}" does not exist`,
+          );
+        break;
+      case "Derived":
+        if (!has(table, tenancy.via))
+          problems.push(`derived column "${table}.${tenancy.via}" does not exist`);
+        if (!has(tenancy.parent, tenancy.parentKey))
+          problems.push(
+            `derived parent key "${tenancy.parent}.${tenancy.parentKey}" does not exist`,
+          );
+        break;
+      case "Global":
+        break;
+    }
+  }
+  return problems;
+};
 
 /**
  * PV-252/INV-EA-016: what the plugins' migrations did to the schema core created. A core table
@@ -1123,7 +1208,7 @@ export const runPluginContractTests = <O, R = never>(
           return;
         }
         const [a, b] = outcome.value;
-        if (JSON.stringify(a.schema) !== JSON.stringify(b.schema)) {
+        if (JSON.stringify(a.shape) !== JSON.stringify(b.shape)) {
           framework.fail(
             `plugin "${plugin.id}"'s migrations produced different schemas on two fresh databases — an \`up\` is not deterministic`,
           );
@@ -1134,6 +1219,63 @@ export const runPluginContractTests = <O, R = never>(
           );
         }
       });
+
+      // Plan 22 (D3, BEH-EA-198): the tables and tenancy columns a plugin declares exist after its migrations.
+      framework.it(`${label}: every declared table and tenancy column exists`, async () => {
+        const [first, ...rest] = [...host, plugin];
+        if (first === undefined) {
+          framework.fail("runPluginContractTests: host plus plugin under test was empty");
+          return;
+        }
+        const outcome = await Effect.runPromise(
+          Effect.exit(applyMigrations(Auth.make([first, ...rest]).migrations)),
+        );
+        if (Exit.isFailure(outcome)) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migrations failed to apply: ${Cause.pretty(outcome.cause)}`,
+          );
+          return;
+        }
+        const problems = declarationProblems(plugin, outcome.value.shape);
+        if (problems.length > 0) {
+          framework.fail(
+            `plugin "${plugin.id}" declares tenancy its schema does not have: ${problems.join("; ")}`,
+          );
+        }
+      });
+
+      // Plan 22 (BEH-EA-198): under `AWTHAQ_POSTGRES_URL`, Postgres and SQLite build the same logical schema.
+      if (process.env["AWTHAQ_POSTGRES_URL"] !== undefined) {
+        framework.it(`${label}: Postgres and SQLite build the same logical schema`, async () => {
+          const [first, ...rest] = [...host, plugin];
+          if (first === undefined) {
+            framework.fail("runPluginContractTests: host plus plugin under test was empty");
+            return;
+          }
+          const migrations = Auth.make([first, ...rest]).migrations;
+          const outcome = await Effect.runPromise(
+            Effect.exit(
+              Effect.all([
+                applyMigrationsOn(migrations, TestSql.layer(`schema_parity_${plugin.id}`)),
+                applyMigrations(migrations),
+              ]),
+            ),
+          );
+          if (Exit.isFailure(outcome)) {
+            framework.fail(
+              `plugin "${plugin.id}"'s migrations failed to apply: ${Cause.pretty(outcome.cause)}`,
+            );
+            return;
+          }
+          const [onPostgres, onSqlite] = outcome.value;
+          const differences = TestSql.parityDifferences(onPostgres.shape, onSqlite.shape);
+          if (differences.length > 0) {
+            framework.fail(
+              `plugin "${plugin.id}" builds different logical schemas: ${differences.join("; ")}`,
+            );
+          }
+        });
+      }
 
       // PV-252/INV-EA-016: a plugin migration may create its own tables and nothing else. A shared
       // (core-owned) table is extended only through a declared extension point, never by an ALTER.
