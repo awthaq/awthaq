@@ -6,7 +6,7 @@
 // the rules (the uniqueness error, the issuer convention, the last-account policy, the credential
 // hash brand, the id and the clock); the store owns persistence and the atomicity of each primitive.
 
-import { AccountStore, type Ids, PasswordHasher } from "@awthaq/ports";
+import { AccountStore, type Ids, PasswordHasher, type Sealed } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -95,9 +95,12 @@ export const config = (partial: Partial<AccountsPolicyShape>) =>
  */
 export class ProviderTokensUnreadable extends Data.TaggedError("ProviderTokensUnreadable")<{
   readonly id: AccountId;
-  readonly field: "accessToken" | "refreshToken" | "idToken";
-  readonly reason: "DecryptionFailed" | "UnknownKeyId";
+  readonly field: ProviderTokenField;
+  readonly reason: Sealed.Unreadable["reason"];
 }> {}
+
+/** The token columns of an account, as `ProviderTokensUnreadable` names them. */
+export type ProviderTokenField = "accessToken" | "refreshToken" | "idToken";
 
 /**
  * BE-002 (.issues/high): a federated provider's exchanged token pair, kept
@@ -334,19 +337,38 @@ export const layer = Layer.effect(
       relabel("Accounts.updateCredentialHash"),
     );
 
+    // ADR-EA-019 rev 1.3, treatment 3: the tokens arrive sealed and a token that does not open is the
+    // domain's own typed failure, "re-consent required" (not `orDie`: a defect for an outage of trust in
+    // one row; not `option`: a silent "no tokens"). Any one unreadable token fails the read (plan 17 Q3).
+    const openToken = (id: AccountId, field: ProviderTokenField, sealed: Sealed.Sealed<string>) =>
+      sealed.open.pipe(
+        Effect.mapError(
+          (unreadable) => new ProviderTokensUnreadable({ id, field, reason: unreadable.reason }),
+        ),
+      );
+    const openOptionalToken = (
+      id: AccountId,
+      field: ProviderTokenField,
+      sealed: Option.Option<Sealed.Sealed<string>>,
+    ) =>
+      Option.match(sealed, {
+        onNone: () => Effect.succeedNone,
+        onSome: (value) => Effect.map(openToken(id, field, value), Option.some),
+      });
+
     const findProviderTokens: AccountsShape["findProviderTokens"] = Effect.fnUntraced(function* (
       id,
     ) {
       const read = yield* store.readProviderTokens(id);
       if (Option.isNone(read)) return yield* notFound(id);
-      if (read.value._tag === "Undecryptable") {
-        return yield* new ProviderTokensUnreadable({
-          id,
-          field: read.value.field,
-          reason: read.value.reason,
-        });
-      }
-      return read.value.tokens;
+      if (Option.isNone(read.value)) return Option.none();
+      const sealed = read.value.value;
+      const opened = yield* Effect.all({
+        accessToken: openToken(id, "accessToken", sealed.accessToken),
+        refreshToken: openOptionalToken(id, "refreshToken", sealed.refreshToken),
+        idToken: openOptionalToken(id, "idToken", sealed.idToken),
+      });
+      return Option.some({ ...sealed, ...opened });
     }, relabel("Accounts.findProviderTokens"));
 
     // SMS-002/RRS-006: a targeted write of the whole token group; the store reads no old token.

@@ -112,26 +112,6 @@ const kidOf = (envelope: string | null | undefined) =>
     : JSON.parse(Buffer.from(envelope, "base64url").toString("utf8")).kid;
 
 describe("AccountStoreSql tokens at rest (BE-002, SMS-002)", () => {
-  it.effect("the tokens are ciphertext in the table and plaintext through the port", () =>
-    Effect.gen(function* () {
-      yield* seed("a1");
-      const raw = yield* rawTokens("a1");
-      for (const stored of [raw.accessToken, raw.refreshToken, raw.idToken]) {
-        assert.isNotNull(stored);
-        assert.notInclude(stored ?? "", "secret");
-      }
-      const store = yield* AccountStore.AccountStore;
-      const read = Option.getOrThrow(yield* store.readProviderTokens(accountId("a1")));
-      assert.strictEqual(read._tag, "Tokens");
-      if (read._tag === "Tokens") {
-        assert.strictEqual(
-          Redacted.value(Option.getOrThrow(read.tokens).accessToken),
-          "access-secret",
-        );
-      }
-    }).pipe(Effect.provide(over(storeLayer([k1], "k1")))),
-  );
-
   // A5/A-4: an identity read selects only the identity columns, so it neither decrypts a token nor
   // re-encrypts one under a newer key (a write on the sign-in hot path).
   it.effect("identity reads never decrypt or re-encrypt a token; the strict token read may", () =>
@@ -150,10 +130,17 @@ describe("AccountStoreSql tokens at rest (BE-002, SMS-002)", () => {
       }).pipe(Effect.provide(storeLayer([k1, k2], "k2")));
       assert.deepStrictEqual(rotated, before);
 
-      // The strict read decrypts, and lazily re-encrypts the stale envelope under the current key.
-      yield* Effect.flatMap(AccountStore.AccountStore, (store) =>
-        store.readProviderTokens(accountId("a1")),
-      ).pipe(Effect.provide(storeLayer([k1, k2], "k2")));
+      // The strict read hands the tokens over sealed; opening one lazily re-seals the stale envelope
+      // under the current key.
+      yield* Effect.gen(function* () {
+        const store = yield* AccountStore.AccountStore;
+        const read = Option.getOrThrow(
+          Option.getOrThrow(yield* store.readProviderTokens(accountId("a1"))),
+        );
+        const unopened = yield* rawTokens("a1");
+        assert.strictEqual(kidOf(unopened.accessToken), "k1", "reading does not decrypt");
+        assert.strictEqual(Redacted.value(yield* read.accessToken.open), "access-secret");
+      }).pipe(Effect.provide(storeLayer([k1, k2], "k2")));
       assert.strictEqual(kidOf((yield* rawTokens("a1")).accessToken), "k2");
     }).pipe(Effect.provide(sharedDatabase)),
   );
@@ -166,8 +153,11 @@ describe("AccountStoreSql tokens at rest (BE-002, SMS-002)", () => {
         const sql = yield* SqlClient.SqlClient;
         yield* sql`UPDATE accounts SET "accessToken" = 'garbage' WHERE id = ${"a1"}`;
         const store = yield* AccountStore.AccountStore;
-        const read = Option.getOrThrow(yield* store.readProviderTokens(accountId("a1")));
-        assert.deepStrictEqual(read._tag, "Undecryptable");
+        const read = Option.getOrThrow(
+          Option.getOrThrow(yield* store.readProviderTokens(accountId("a1"))),
+        );
+        const unreadable = yield* read.accessToken.open.pipe(Effect.flip);
+        assert.strictEqual(unreadable.reason, "DecryptionFailed");
         // The identity and the credential hash are readable regardless.
         assert.isTrue(Option.isSome(yield* store.get(accountId("a1"))));
         const hash = Option.getOrThrow(
@@ -176,8 +166,10 @@ describe("AccountStoreSql tokens at rest (BE-002, SMS-002)", () => {
         assert.strictEqual(Redacted.value(hash), "$argon2id$hash");
         // A fresh write overwrites the unreadable value without reading it.
         assert.isTrue(yield* store.writeProviderTokens(accountId("a1"), tokens, at(5)));
-        const healed = Option.getOrThrow(yield* store.readProviderTokens(accountId("a1")));
-        assert.strictEqual(healed._tag, "Tokens");
+        const healed = Option.getOrThrow(
+          Option.getOrThrow(yield* store.readProviderTokens(accountId("a1"))),
+        );
+        assert.strictEqual(Redacted.value(yield* healed.accessToken.open), "access-secret");
       }).pipe(Effect.provide(over(storeLayer([k1], "k1")))),
   );
 });
@@ -197,7 +189,7 @@ describe("AccountStoreSql failure mapping (MA-004)", () => {
         findIdentityByKey: () => Effect.fail(outage()),
         listIdentitiesByUser: () => Effect.fail(outage()),
         findPasswordHash: () => Effect.fail(outage()),
-        findTokensById: () => Effect.fail(outage()),
+        findSealedTokensById: () => Effect.fail(outage()),
         writePasswordHash: () => Effect.fail(outage()),
         writeTokens: () => Effect.fail(outage()),
         deleteAllByUser: () => Effect.fail(outage()),

@@ -123,7 +123,7 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
   );
 
   it.effect(
-    "Accounts.findIdentityByKey/listByUser/deleteAllByUser all resolve the quoted providerId/userId columns",
+    "Accounts.findIdentityByKey/listIdentitiesByUser/deleteAllByUser all resolve the quoted providerId/userId columns",
     () =>
       Effect.gen(function* () {
         const users = yield* Repositories.UsersRepository;
@@ -146,11 +146,11 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
         const found = yield* accounts.findIdentityByKey("password", user.id, "");
         assert.isTrue(Option.isSome(found));
 
-        const listed = yield* accounts.listByUser(user.id);
+        const listed = yield* accounts.listIdentitiesByUser(user.id);
         assert.strictEqual(listed.length, 1);
 
         yield* accounts.deleteAllByUser(user.id);
-        const afterDelete = yield* accounts.listByUser(user.id);
+        const afterDelete = yield* accounts.listIdentitiesByUser(user.id);
         assert.strictEqual(afterDelete.length, 0);
       }).pipe(Effect.provide(RepositoriesLive)),
   );

@@ -682,6 +682,14 @@ const sampleTokens: AccountStore.ProviderTokens = {
   tokenType: Option.some("Bearer"),
 };
 
+/** The stored token set opened to plaintext tokens (plan 17: `readProviderTokens` hands them over sealed). */
+const openTokens = (sealed: AccountStore.SealedProviderTokens) =>
+  Effect.all({
+    accessToken: sealed.accessToken.open,
+    refreshToken: Sealed.openOption(sealed.refreshToken),
+    idToken: Sealed.openOption(sealed.idToken),
+  }).pipe(Effect.map((opened) => ({ ...sealed, ...opened })));
+
 const accountIds = (rows: ReadonlyArray<AccountStore.AccountIdentity>) => rows.map((row) => row.id);
 
 /** The `AccountStore` contract (plan 02, ADR-EA-041; BEH-EA-043 to 045, BEH-EA-125, BE-002, SMS-002). */
@@ -791,19 +799,16 @@ export const accounts: ReadonlyArray<AccountCase> = [
       yield* store.insertIfAbsent(newAccount("without", "u1"));
       assert.equal(Option.isNone(yield* store.readProviderTokens(makeAccountId("missing"))), true);
       const empty = Option.getOrThrow(yield* store.readProviderTokens(makeAccountId("without")));
-      assert.deepEqual(empty, { _tag: "Tokens", tokens: Option.none() });
+      assert.deepEqual(empty, Option.none());
       const read = Option.getOrThrow(yield* store.readProviderTokens(makeAccountId("with")));
-      assert.equal(read._tag, "Tokens");
-      if (read._tag === "Tokens") {
-        const tokens = Option.getOrThrow(read.tokens);
-        assert.equal(Redacted.value(tokens.accessToken), "access-1");
-        assert.equal(Redacted.value(Option.getOrThrow(tokens.refreshToken)), "refresh-1");
-        assert.equal(Redacted.value(Option.getOrThrow(tokens.idToken)), "id-1");
-        assert.deepEqual(tokens.accessTokenExpiresAt, Option.some(at(60)));
-        assert.deepEqual(tokens.refreshTokenExpiresAt, Option.some(at(600)));
-        assert.deepEqual(tokens.scope, Option.some("openid email"));
-        assert.deepEqual(tokens.tokenType, Option.some("Bearer"));
-      }
+      const tokens = yield* openTokens(Option.getOrThrow(read));
+      assert.equal(Redacted.value(tokens.accessToken), "access-1");
+      assert.equal(Redacted.value(Option.getOrThrow(tokens.refreshToken)), "refresh-1");
+      assert.equal(Redacted.value(Option.getOrThrow(tokens.idToken)), "id-1");
+      assert.deepEqual(tokens.accessTokenExpiresAt, Option.some(at(60)));
+      assert.deepEqual(tokens.refreshTokenExpiresAt, Option.some(at(600)));
+      assert.deepEqual(tokens.scope, Option.some("openid email"));
+      assert.deepEqual(tokens.tokenType, Option.some("Bearer"));
     }),
   },
   {
@@ -831,11 +836,9 @@ export const accounts: ReadonlyArray<AccountCase> = [
         true,
       );
       const read = Option.getOrThrow(yield* store.readProviderTokens(makeAccountId("a")));
-      if (read._tag === "Tokens") {
-        const tokens = Option.getOrThrow(read.tokens);
-        assert.equal(Redacted.value(tokens.accessToken), "rotated");
-        assert.equal(Option.isNone(tokens.refreshToken), true);
-      }
+      const tokens = yield* openTokens(Option.getOrThrow(read));
+      assert.equal(Redacted.value(tokens.accessToken), "rotated");
+      assert.equal(Option.isNone(tokens.refreshToken), true);
       const identity = Option.getOrThrow(yield* store.get(makeAccountId("a")));
       assert.deepEqual(identity.updatedAt, at(20));
       assert.deepEqual(identity.createdAt, at(0));

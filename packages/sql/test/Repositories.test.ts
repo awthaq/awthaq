@@ -129,7 +129,7 @@ describe("Repositories (SQLite specifics)", () => {
         Effect.gen(function* () {
           yield* users.findByEmail("secret-email@example.com");
           yield* accounts.findIdentityByKey("github", "subject-secret", "");
-          yield* accounts.listByUser(user.id);
+          yield* accounts.listIdentitiesByUser(user.id);
           yield* verification.findByIdentifier("verify-email:identifier-secret");
           yield* verification.tryConsume({
             identifier: "verify-email:identifier-secret",

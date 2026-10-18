@@ -14,6 +14,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Statement from "effect/unstable/sql/Statement";
 import { rotatingKeys } from "../../sql/test/support/RotatingKeys.ts";
 import * as TestAuth from "../src/TestAuth.ts";
 import * as TestSql from "../src/TestSql.ts";
@@ -158,26 +159,30 @@ describe("core sealed columns: the bugs plan 17 fixes", () => {
     },
   );
 
-  it.effect.fails(
-    "a token moved to another account of the same user and provider does not open",
-    () => {
-      const { layer } = environment("core_sealed_moved_token");
-      return Effect.gen(function* () {
-        const users = yield* UserStore.UserStore;
-        const accounts = yield* AccountStore.AccountStore;
-        const sql = yield* SqlClient.SqlClient;
-        yield* users.insertOrHolder(newUser("u3", Option.none()));
-        yield* accounts.insertIfAbsent(newAccount("a1", "u3", "one"));
-        yield* accounts.insertIfAbsent(newAccount("a2", "u3", "two"));
-        const rows = yield* sql<{ readonly accessToken: string }>`
-          SELECT "accessToken" FROM accounts WHERE id = ${"a1"}`;
-        const first = rows[0]?.accessToken ?? "";
-        yield* sql`UPDATE accounts SET "accessToken" = ${first} WHERE id = ${"a2"}`;
-        const read = Option.getOrThrow(yield* accounts.readProviderTokens(makeAccountId("a2")));
-        assert.strictEqual(read._tag, "Undecryptable");
-      }).pipe(Effect.provide(layer));
-    },
-  );
+  it.effect("a token moved to another account of the same user and provider does not open", () => {
+    const { layer } = environment("core_sealed_moved_token");
+    return Effect.gen(function* () {
+      const users = yield* UserStore.UserStore;
+      const accounts = yield* AccountStore.AccountStore;
+      const sql = yield* SqlClient.SqlClient;
+      yield* users.insertOrHolder(newUser("u3", Option.none()));
+      yield* accounts.insertIfAbsent(newAccount("a1", "u3", "one"));
+      yield* accounts.insertIfAbsent(newAccount("a2", "u3", "two"));
+      const rows = yield* sql<{
+        readonly accessToken: string;
+      }>`SELECT "accessToken" FROM accounts WHERE id = ${"a1"}`;
+      const first = rows[0]?.accessToken ?? "";
+      yield* sql`UPDATE accounts SET "accessToken" = ${first} WHERE id = ${"a2"}`;
+      const read = Option.getOrThrow(
+        Option.getOrThrow(yield* accounts.readProviderTokens(makeAccountId("a2"))),
+      );
+      const reason = yield* read.accessToken.open.pipe(
+        Effect.flip,
+        Effect.map((unreadable) => unreadable.reason),
+      );
+      assert.strictEqual(reason, "DecryptionFailed");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect.fails(
     "key retirement: after rotating and sweeping every deployed column, the retired key can be dropped and every core value still opens",
@@ -202,8 +207,12 @@ describe("core sealed columns: the bugs plan 17 fixes", () => {
         const session = Option.getOrThrow(yield* sessions.get(makeSessionId("s4")));
         assert.deepStrictEqual(yield* openText(session.ipAddress), Option.some("203.0.113.9"));
         assert.deepStrictEqual(yield* openText(session.userAgent), Option.some("Agent/1.0"));
-        const read = Option.getOrThrow(yield* accounts.readProviderTokens(makeAccountId("a4")));
-        assert.strictEqual(read._tag, "Tokens");
+        const read = Option.getOrThrow(
+          Option.getOrThrow(yield* accounts.readProviderTokens(makeAccountId("a4"))),
+        );
+        assert.strictEqual(Redacted.value(yield* read.accessToken.open), "access-four");
+        assert.deepStrictEqual(yield* openText(read.refreshToken), Option.some("refresh-four"));
+        assert.deepStrictEqual(yield* openText(read.idToken), Option.some("id-four"));
       }).pipe(Effect.provide(layer));
     },
   );
@@ -304,6 +313,60 @@ const sessionColumn = (declared: SealedColumn.Column<string>, field: "ipAddress"
 
 sessionColumn(CoreSealedColumns.sessionsIpAddress, "ipAddress");
 sessionColumn(CoreSealedColumns.sessionsUserAgent, "userAgent");
+
+const tokenColumn = (
+  declared: SealedColumn.Column<string>,
+  field: "accessToken" | "refreshToken" | "idToken",
+) =>
+  TestAuth.runSealedColumnTests(framework, {
+    column: declared,
+    sample: `token-for-${field}`,
+    adapters: [
+      {
+        name: "Persistence.sql()",
+        layer: storesOver("core_sealed_wiring", { encryptPii: false }),
+        raw: rawColumn("accounts", field),
+        plant: plantColumn("accounts", field),
+      },
+    ],
+    write: (rowKey, value) =>
+      Effect.gen(function* () {
+        const users = yield* UserStore.UserStore;
+        const accounts = yield* AccountStore.AccountStore;
+        // Every row belongs to one user and one provider: a moved ciphertext is the sibling-account case.
+        yield* users.insertOrHolder(newUser("u-wiring-accounts", Option.none()));
+        const base = newAccount(rowKey, "u-wiring-accounts", `subject-${rowKey}`);
+        const tokens = Option.getOrThrow(base.tokens);
+        yield* accounts.insertIfAbsent({
+          ...base,
+          tokens: Option.some({
+            ...tokens,
+            [field]:
+              field === "accessToken" ? Redacted.make(value) : Option.some(Redacted.make(value)),
+          }),
+        });
+      }),
+    read: (rowKey) =>
+      Effect.flatMap(AccountStore.AccountStore, (accounts) =>
+        accounts.readProviderTokens(makeAccountId(rowKey)),
+      ).pipe(
+        Effect.flatMap(
+          Option.match({ onNone: () => Effect.die("no such account"), onSome: Effect.succeed }),
+        ),
+        Effect.flatMap(
+          Option.match({ onNone: () => Effect.die("no tokens"), onSome: Effect.succeed }),
+        ),
+        Effect.flatMap((tokens) =>
+          field === "accessToken"
+            ? Effect.succeed(tokens.accessToken)
+            : sealedOrFail(tokens[field]),
+        ),
+      ),
+  });
+
+tokenColumn(CoreSealedColumns.accountsAccessToken, "accessToken");
+tokenColumn(CoreSealedColumns.accountsRefreshToken, "refreshToken");
+tokenColumn(CoreSealedColumns.accountsIdToken, "idToken");
 
 // ---- what only core can show ---------------------------------------------------------------------
 
@@ -423,6 +486,66 @@ describe("core sealed columns: what only core can show", () => {
         Option.some("203.0.113.9"),
       );
       assert.strictEqual(decrypts.count, 0);
+    }).pipe(Effect.provide(layer));
+  });
+  it.effect(
+    "writeProviderTokens heals an unreadable token without reading it, in one statement",
+    () => {
+      const { layer } = environment("core_sealed_heal");
+      return Effect.gen(function* () {
+        const users = yield* UserStore.UserStore;
+        const accounts = yield* AccountStore.AccountStore;
+        yield* users.insertOrHolder(newUser("u8", Option.none()));
+        yield* accounts.insertIfAbsent(newAccount("a8", "u8", "eight"));
+        yield* plantColumn("accounts", "accessToken")("a8", "not-an-envelope");
+        // The statements the write issues, as the client compiles them.
+        const statements: Array<string> = [];
+        const written = yield* accounts
+          .writeProviderTokens(
+            makeAccountId("a8"),
+            Option.getOrThrow(newAccount("a8", "u8", "eight-b").tokens),
+            at(3),
+          )
+          .pipe(
+            Effect.provideService(Statement.CurrentTransformer, (statement) =>
+              Effect.sync(() => {
+                statements.push(statement.compile()[0]);
+                return statement;
+              }),
+            ),
+          );
+        assert.isTrue(written);
+        assert.strictEqual(statements.length, 1);
+        assert.match(statements[0] ?? "", /^\s*UPDATE\s+"?accounts"?/i);
+        const read = Option.getOrThrow(
+          Option.getOrThrow(yield* accounts.readProviderTokens(makeAccountId("a8"))),
+        );
+        assert.strictEqual(Redacted.value(yield* read.accessToken.open), "access-eight-b");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("writeCredentialHash never touches the token columns", () => {
+    const { layer } = environment("core_sealed_hash");
+    return Effect.gen(function* () {
+      const users = yield* UserStore.UserStore;
+      const accounts = yield* AccountStore.AccountStore;
+      yield* users.insertOrHolder(newUser("u9", Option.none()));
+      yield* accounts.insertIfAbsent(newAccount("a9", "u9", "nine"));
+      const before = [
+        yield* rawColumn("accounts", "accessToken")("a9"),
+        yield* rawColumn("accounts", "refreshToken")("a9"),
+        yield* rawColumn("accounts", "idToken")("a9"),
+      ];
+      yield* accounts.writeCredentialHash(makeAccountId("a9"), Redacted.make("new-hash"), at(4));
+      assert.deepStrictEqual(
+        [
+          yield* rawColumn("accounts", "accessToken")("a9"),
+          yield* rawColumn("accounts", "refreshToken")("a9"),
+          yield* rawColumn("accounts", "idToken")("a9"),
+        ],
+        before,
+      );
     }).pipe(Effect.provide(layer));
   });
 });

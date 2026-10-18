@@ -1,10 +1,12 @@
 // @awthaq/sql — AccountStoreSql
 //
 // Plan 02 (ADR-EA-041): the SQL adapter of `@awthaq/ports`' `AccountStore`, over `AccountsRepository`
-// (so token encryption, its AAD `providerId:userId:field` and lazy re-encryption are unchanged).
+// (so token encryption is unchanged except its AAD, `accounts:<id>:<field>` since plan 17, which binds the
+// account row; the tokens are handed to the domain sealed, and lazily re-sealed when it opens them).
 //
 // - Identity reads (`get`, `getByKey`, `listByUser`) select the identity columns only: no token is
-//   decrypted and nothing is written on the read path. `readProviderTokens` is the one strict path.
+//   decrypted and nothing is written on the read path. `readProviderTokens` is the one strict path,
+//   and it decrypts nothing itself (the tokens leave sealed).
 // - `insertIfAbsent` is one `INSERT ... ON CONFLICT ("providerId", subject, issuer) DO NOTHING`, so a
 //   taken key is `None`, never a unique violation, and never aborts an enclosing Postgres transaction.
 // - `deleteUnlessLast` is one transaction (a savepoint inside a caller's): it locks the user's account
@@ -16,7 +18,6 @@
 //   whose answer was lost would change it.
 
 import { AccountStore, SqlTransaction } from "@awthaq/ports";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -26,6 +27,7 @@ import {
   AccountsRepository,
   type AccountIdentityRow,
   type AccountTokenColumns,
+  type SealedTokenRow,
 } from "./Repositories.ts";
 import * as SqlStore from "./SqlStore.ts";
 
@@ -63,20 +65,12 @@ const toColumns = (tokens: Option.Option<AccountStore.ProviderTokens>): AccountT
     }),
   });
 
-/** The inverse of `toColumns`: `None` when the row has no stored access token. */
-const toTokens = (row: {
-  readonly accessToken: string | null;
-  readonly refreshToken: string | null;
-  readonly idToken: string | null;
-  readonly accessTokenExpiresAt: DateTime.Utc | null;
-  readonly refreshTokenExpiresAt: DateTime.Utc | null;
-  readonly scope: string | null;
-  readonly tokenType: string | null;
-}): Option.Option<AccountStore.ProviderTokens> =>
-  Option.map(Option.fromNullOr(row.accessToken), (accessToken) => ({
-    accessToken: Redacted.make(accessToken),
-    refreshToken: Option.map(Option.fromNullOr(row.refreshToken), Redacted.make),
-    idToken: Option.map(Option.fromNullOr(row.idToken), Redacted.make),
+/** The stored token group as the port carries it: `None` when the row has no stored access token. */
+const toTokens = (row: SealedTokenRow): Option.Option<AccountStore.SealedProviderTokens> =>
+  Option.map(row.accessToken, (accessToken) => ({
+    accessToken,
+    refreshToken: row.refreshToken,
+    idToken: row.idToken,
     accessTokenExpiresAt: Option.fromNullOr(row.accessTokenExpiresAt),
     refreshTokenExpiresAt: Option.fromNullOr(row.refreshTokenExpiresAt),
     scope: Option.fromNullOr(row.scope),
@@ -132,23 +126,9 @@ export const layer = Layer.effect(
         );
 
     const readProviderTokens: AccountStore.AccountStoreShape["readProviderTokens"] = (id) =>
-      repo.findTokensById(id).pipe(
-        Effect.map((row): Option.Option<AccountStore.TokensRead> =>
-          Option.some({ _tag: "Tokens", tokens: toTokens(row) }),
-        ),
-        Effect.catchTags({
-          NoSuchElementError: () => Effect.succeed(Option.none<AccountStore.TokensRead>()),
-          AccountTokenUndecryptable: (error) =>
-            Effect.succeed(
-              Option.some<AccountStore.TokensRead>({
-                _tag: "Undecryptable",
-                field: error.field,
-                reason: error.reason,
-              }),
-            ),
-        }),
-        read("AccountStore.readProviderTokens"),
-      );
+      repo
+        .findSealedTokensById(id)
+        .pipe(Effect.map(Option.map(toTokens)), read("AccountStore.readProviderTokens"));
 
     const writeCredentialHash: AccountStore.AccountStoreShape["writeCredentialHash"] = (
       id,

@@ -12,8 +12,10 @@
 // - `deleteUnlessLast` is atomic against a concurrent unlink of a sibling (BEH-EA-045), including on
 //   Postgres' default isolation.
 //
-// The tokens and the credential hash cross the seam as plaintext (`Redacted`): an adapter that
-// stores them encrypted (SQL, `Encryption`) encrypts and decrypts them itself.
+// The tokens and the credential hash are written as plaintext (`Redacted`): an adapter that stores
+// them encrypted (SQL, `Encryption`) encrypts them itself. The tokens are READ unopened, as `Sealed`
+// values (plan 17): `Accounts.findProviderTokens` opens them and turns one that does not open into
+// `ProviderTokensUnreadable` ("re-consent"), so that meaning lives in the domain, not in an adapter.
 //
 // The `Ref` adapter here is single-process and test-grade (TRBS-005). Production composes the SQL
 // adapter (`@awthaq/sql` `AccountStoreSql`) through `Persistence.sql()`.
@@ -27,6 +29,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import type { AccountId, UserId } from "./Ids.ts";
+import * as Sealed from "./Sealed.ts";
 import type { StoreUnavailable } from "./Store.ts";
 import * as Tenant from "./Tenant.ts";
 
@@ -68,14 +71,18 @@ export interface NewAccount {
   readonly updatedAt: DateTime.Utc;
 }
 
-export type TokensRead =
-  | { readonly _tag: "Tokens"; readonly tokens: Option.Option<ProviderTokens> }
-  /** SMS-002: the stored tokens cannot be decrypted (a retired key, a corrupt ciphertext). Only an adapter that encrypts can answer this. */
-  | {
-      readonly _tag: "Undecryptable";
-      readonly field: "accessToken" | "refreshToken" | "idToken";
-      readonly reason: "DecryptionFailed" | "UnknownKeyId";
-    };
+/**
+ * BE-002: the stored token set, unopened. An adapter that encrypts hands each token as the `Sealed`
+ * its codec made; a `Ref` adapter hands `Sealed.plain`. Opening one may lazily re-seal a stale envelope.
+ */
+export interface SealedProviderTokens extends Omit<
+  ProviderTokens,
+  "accessToken" | "refreshToken" | "idToken"
+> {
+  readonly accessToken: Sealed.Sealed<string>;
+  readonly refreshToken: Option.Option<Sealed.Sealed<string>>;
+  readonly idToken: Option.Option<Sealed.Sealed<string>>;
+}
 
 export type DeleteOutcome =
   | { readonly _tag: "Deleted" }
@@ -107,10 +114,13 @@ export interface AccountStoreShape {
   readonly readCredentialHash: (
     id: AccountId,
   ) => Effect.Effect<Option.Option<Option.Option<Redacted.Redacted<string>>>, StoreUnavailable>;
-  /** The strict token read (BE-002). `None` = no such account. A lazy re-encryption write is allowed here. */
+  /**
+   * The strict token read (BE-002), unopened. Outer `None` = no such account; inner `None` = the account
+   * holds no tokens. Nothing is decrypted here; opening a token may lazily re-seal a stale envelope.
+   */
   readonly readProviderTokens: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<TokensRead>, StoreUnavailable>;
+  ) => Effect.Effect<Option.Option<Option.Option<SealedProviderTokens>>, StoreUnavailable>;
   /** BEH-EA-116: replaces the credential hash and sets `updatedAt = at`. `false` = no such account. Never reads a token. */
   readonly writeCredentialHash: (
     id: AccountId,
@@ -143,6 +153,14 @@ export class AccountStore extends Context.Service<AccountStore, AccountStoreShap
 ) {}
 
 // ---- the pure contract helpers every adapter and the domain share ---------------------------
+
+/** The `Ref` adapter holds tokens in plaintext (TRBS-005): they always open. */
+const sealedPlain = (tokens: ProviderTokens): SealedProviderTokens => ({
+  ...tokens,
+  accessToken: Sealed.plain(Redacted.value(tokens.accessToken)),
+  refreshToken: Option.map(tokens.refreshToken, (token) => Sealed.plain(Redacted.value(token))),
+  idToken: Option.map(tokens.idToken, (token) => Sealed.plain(Redacted.value(token))),
+});
 
 /** `(createdAt, id)` ascending, the order `listByUser` answers in. */
 export const byCreation = (a: AccountIdentity, b: AccountIdentity): number =>
@@ -235,10 +253,7 @@ export const layerMemory = Layer.effect(
 
     const readProviderTokens: AccountStoreShape["readProviderTokens"] = (id) =>
       Effect.map(Ref.get(state), (s) =>
-        Option.map(HashMap.get(s.byId, id), (stored): TokensRead => ({
-          _tag: "Tokens",
-          tokens: stored.tokens,
-        })),
+        Option.map(HashMap.get(s.byId, id), (stored) => Option.map(stored.tokens, sealedPlain)),
       );
 
     const update =

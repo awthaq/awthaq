@@ -6,7 +6,7 @@
 // `Repositories.file.test.ts` on a WAL file, `Repositories.postgres.test.ts`
 // on a real server) calls with its own migrated `SqlClient` layer, so a new
 // case lands on every dialect at once.
-import { Encryption, KeyProvider, Tenant } from "@awthaq/ports";
+import { Encryption, KeyProvider, Sealed, Tenant } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -15,6 +15,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
@@ -237,7 +238,7 @@ export const contractCases = (
     );
 
     it.effect(
-      "Ticket 18: accessToken/refreshToken round-trip through the repository, but the raw persisted bytes are not the plaintext",
+      "Ticket 18: accessToken/refreshToken are written sealed and read back sealed, and the raw persisted bytes are not the plaintext",
       () =>
         Effect.gen(function* () {
           const accounts = yield* Repositories.AccountsRepository;
@@ -257,18 +258,22 @@ export const contractCases = (
               refreshToken: "plaintext-refresh-token",
             }),
           );
-          // Transparent to this repository's own interface: `insert` handed
-          // back the original plaintext, decrypted.
-          assert.strictEqual(account.accessToken, "plaintext-access-token");
-          assert.strictEqual(account.refreshToken, "plaintext-refresh-token");
+          // Plan 17: `insert` returns the row as stored, never re-reading the envelope it just wrote.
+          assert.notInclude(account.accessToken ?? "", "plaintext-access-token");
 
-          // `findById` decrypts too, not just `insert`'s own return value.
-          const reread = yield* accounts.findById(account.id);
-          assert.strictEqual(reread.accessToken, "plaintext-access-token");
-          assert.strictEqual(reread.refreshToken, "plaintext-refresh-token");
+          // The strict read hands the tokens over sealed; opening them yields the plaintext.
+          const reread = Option.getOrThrow(yield* accounts.findSealedTokensById(account.id));
+          assert.strictEqual(
+            Redacted.value(yield* Sealed.orDie(Option.getOrThrow(reread.accessToken).open)),
+            "plaintext-access-token",
+          );
+          assert.strictEqual(
+            Redacted.value(yield* Sealed.orDie(Option.getOrThrow(reread.refreshToken).open)),
+            "plaintext-refresh-token",
+          );
 
-          // But the actual bytes on disk are demonstrably not the plaintext —
-          // a raw query bypassing this repository's own decrypt step.
+          // But the actual bytes on disk are demonstrably not the plaintext — a raw query bypassing
+          // this repository.
           const rows = yield* sql<{
             readonly accessToken: string;
             readonly refreshToken: string;
@@ -277,49 +282,6 @@ export const contractCases = (
           assert.isDefined(row);
           assert.notInclude(row?.accessToken, "plaintext-access-token");
           assert.notInclude(row?.refreshToken, "plaintext-refresh-token");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    // PPS-001 / SMS-002: `writeTokens` takes the row's AAD from its own token-free read, so a
-    // real (non-null) token proves the AAD genuinely round-trips through re-encryption; a null
-    // token cannot tell a correct AAD from a wrong one.
-    it.effect(
-      "AccountsRepository.writeTokens re-encrypts a real accessToken/refreshToken under the row's AAD",
-      () =>
-        Effect.gen(function* () {
-          const accounts = yield* Repositories.AccountsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "aad-update@example.com", name: "Aad" }),
-          );
-          const account = yield* accounts.insert(
-            yield* M.Account.insert.makeEffect({
-              userId: user.id,
-              providerId: "github",
-              subject: "gh-aad-update",
-              issuer: "",
-              passwordHash: null,
-              accessToken: null,
-              refreshToken: null,
-            }),
-          );
-          const written = yield* accounts.writeTokens(
-            account.id,
-            {
-              accessToken: "plaintext-access-token",
-              refreshToken: "plaintext-refresh-token",
-              idToken: null,
-              accessTokenExpiresAt: null,
-              refreshTokenExpiresAt: null,
-              scope: null,
-              tokenType: null,
-            },
-            yield* DateTime.now,
-          );
-          assert.isTrue(written);
-          const reread = yield* accounts.findTokensById(account.id);
-          assert.strictEqual(reread.accessToken, "plaintext-access-token");
-          assert.strictEqual(reread.refreshToken, "plaintext-refresh-token");
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
@@ -814,37 +776,42 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect("BAM-008: idToken round-trips through the repository and is ciphertext at rest", () =>
-      Effect.gen(function* () {
-        const accounts = yield* Repositories.AccountsRepository;
-        const users = yield* Repositories.UsersRepository;
-        const sql = yield* SqlClient.SqlClient;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "idtoken@example.com", name: "Id" }),
-        );
-        const account = yield* accounts.insert(
-          yield* M.Account.insert.makeEffect({
-            userId: user.id,
-            providerId: "google",
-            subject: "gh-id-token",
-            issuer: "",
-            passwordHash: null,
-            accessToken: "access",
-            refreshToken: null,
-            idToken: "plaintext.id.token",
-          }),
-        );
-        assert.strictEqual(account.idToken, "plaintext.id.token");
-        assert.strictEqual((yield* accounts.findById(account.id)).idToken, "plaintext.id.token");
-        const rows = yield* sql<{
-          readonly idToken: string;
-        }>`SELECT "idToken" FROM accounts WHERE id = ${account.id}`;
-        assert.isDefined(rows[0]);
-        assert.notInclude(rows[0]?.idToken, "plaintext.id.token");
-        // Never in the JSON variant.
-        const json = yield* Schema.encodeUnknownEffect(M.Account.json)(account);
-        assert.notProperty(json, "idToken");
-      }).pipe(Effect.provide(RepositoriesLive)),
+    it.effect(
+      "BAM-008: idToken is sealed on write, opens from the sealed read, and is ciphertext at rest",
+      () =>
+        Effect.gen(function* () {
+          const accounts = yield* Repositories.AccountsRepository;
+          const users = yield* Repositories.UsersRepository;
+          const sql = yield* SqlClient.SqlClient;
+          const user = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "idtoken@example.com", name: "Id" }),
+          );
+          const account = yield* accounts.insert(
+            yield* M.Account.insert.makeEffect({
+              userId: user.id,
+              providerId: "google",
+              subject: "gh-id-token",
+              issuer: "",
+              passwordHash: null,
+              accessToken: "access",
+              refreshToken: null,
+              idToken: "plaintext.id.token",
+            }),
+          );
+          const reread = Option.getOrThrow(yield* accounts.findSealedTokensById(account.id));
+          assert.strictEqual(
+            Redacted.value(yield* Sealed.orDie(Option.getOrThrow(reread.idToken).open)),
+            "plaintext.id.token",
+          );
+          const rows = yield* sql<{
+            readonly idToken: string;
+          }>`SELECT "idToken" FROM accounts WHERE id = ${account.id}`;
+          assert.isDefined(rows[0]);
+          assert.notInclude(rows[0]?.idToken, "plaintext.id.token");
+          // Never in the JSON variant.
+          const json = yield* Schema.encodeUnknownEffect(M.Account.json)(account);
+          assert.notProperty(json, "idToken");
+        }).pipe(Effect.provide(RepositoriesLive)),
     );
 
     // SMS-002/ESR-010/GC-005/ESR-002: the session device-list page query and owned delete.

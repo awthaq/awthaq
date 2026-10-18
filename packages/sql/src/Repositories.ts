@@ -13,7 +13,6 @@
 import { Defects, Encryption, Sealed, SqlTransaction, Tenant } from "@awthaq/ports";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -592,29 +591,20 @@ export const UsersRepositoryEncryptedLive: Layer.Layer<
 export interface AccountsRepositoryShape {
   /** TS-001: the dialect-resolved models this repository decodes with. */
   readonly models: SqlModels;
+  /**
+   * Seals the token columns under the canonical AAD (`accounts:<id>:<field>`, plan 17) and returns the
+   * row as stored: nothing is decrypted, so an insert never reads back the envelope it just wrote.
+   */
   readonly insert: (input: AccountInsert) => Effect.Effect<Account, RepositoryError>;
   /**
-   * Identity read (SMS-002): a token column that can no longer be decrypted
-   * (retired key, tampered ciphertext) is degraded to `null` and logged
-   * rather than killing the fiber, so one bad row never takes down sign-in
-   * or a device list. Use `findTokensById` when the tokens themselves are
-   * the point of the read.
+   * SMS-002: the strict token read. The token group as stored, each present cell wrapped as a `Sealed`
+   * (`CoreSealedColumns.accounts*`): an unreadable cell is `Sealed.Unreadable` when the domain opens it
+   * (`Accounts.findProviderTokens` maps it to `ProviderTokensUnreadable`, "re-consent required"), not here.
+   * `None` = no such account.
    */
-  readonly findById: (
+  readonly findSealedTokensById: (
     id: AccountId,
-  ) => Effect.Effect<Account, Cause.NoSuchElementError | RepositoryError>;
-  /**
-   * SMS-002: the strict token read — an undecryptable column surfaces as the
-   * typed `AccountTokenUndecryptable` so the caller can treat it as "re-consent
-   * required" instead of a defect or a silent `null`.
-   */
-  readonly findTokensById: (
-    id: AccountId,
-  ) => Effect.Effect<
-    Account,
-    Cause.NoSuchElementError | RepositoryError | AccountTokenUndecryptable
-  >;
-  readonly listByUser: (userId: UserId) => Effect.Effect<ReadonlyArray<Account>, RepositoryError>;
+  ) => Effect.Effect<Option.Option<SealedTokenRow>, RepositoryError>;
   readonly delete: (id: AccountId) => Effect.Effect<void, RepositoryError>;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 09/10: whole-user
@@ -653,7 +643,7 @@ export interface AccountsRepositoryShape {
   /**
    * `INSERT ... ON CONFLICT ("providerId", subject, issuer) DO NOTHING RETURNING <identity>`: `None`
    * when the key is taken, and a taken key never aborts an enclosing Postgres transaction (BEH-EA-043).
-   * The tokens are encrypted here (AAD `providerId:userId:field`); the ambient tenant is stamped.
+   * The tokens are encrypted here (AAD `accounts:<id>:<field>`); the ambient tenant is stamped.
    */
   readonly insertIdentityIfAbsent: (input: {
     readonly id: AccountId;
@@ -707,34 +697,16 @@ export interface AccountTokenColumns {
   readonly tokenType: string | null;
 }
 
-type TokenField = "accessToken" | "refreshToken" | "idToken";
-
-/**
- * SMS-002: a stored token ciphertext that `Encryption` could not open — the
- * key was retired from the keyset (`UnknownKeyId`) or the envelope failed
- * authentication (`DecryptionFailed`). Carries no ciphertext or plaintext.
- */
-export class AccountTokenUndecryptable extends Data.TaggedError("AccountTokenUndecryptable")<{
-  readonly accountId: string;
-  readonly field: TokenField;
-  readonly reason: "DecryptionFailed" | "UnknownKeyId";
-}> {}
-
-/**
- * SMS-002 / KRS-002: `reencryptOnRead` (default on) makes every read that
- * finds a token written under a retired key or the legacy v1 envelope
- * re-encrypt it under the current key and compare-and-swap it back, so a
- * retired key can eventually be dropped from the keyset. Best-effort: a
- * failed write is logged and the read still succeeds.
- */
-export interface AccountsRepositoryConfig {
-  readonly reencryptOnRead: boolean;
+/** The token group of one account row as stored: each present token cell is a `Sealed`, never opened here. */
+export interface SealedTokenRow {
+  readonly accessToken: Option.Option<Sealed.Sealed<string>>;
+  readonly refreshToken: Option.Option<Sealed.Sealed<string>>;
+  readonly idToken: Option.Option<Sealed.Sealed<string>>;
+  readonly accessTokenExpiresAt: DateTime.Utc | null;
+  readonly refreshTokenExpiresAt: DateTime.Utc | null;
+  readonly scope: string | null;
+  readonly tokenType: string | null;
 }
-
-export const AccountsRepositoryConfig: Context.Reference<AccountsRepositoryConfig> =
-  Context.Reference<AccountsRepositoryConfig>("awthaq/sql/AccountsRepositoryConfig", {
-    defaultValue: () => ({ reencryptOnRead: true }),
-  });
 
 export class AccountsRepository extends Context.Service<
   AccountsRepository,
@@ -742,21 +714,12 @@ export class AccountsRepository extends Context.Service<
 >()("awthaq/sql/AccountsRepository") {}
 
 /**
- * Shipping-gap map (.scratch/shipping-gaps), ticket 18: `accessToken`/
- * `refreshToken` are encrypted at rest via `@awthaq/ports`'
- * `Encryption`, transparently to every caller of this repository —
- * `AccountsRepositoryShape` itself is unchanged, still taking/returning
- * the same plain nullable strings `Model.Sensitive` already types them
- * as; only the bytes actually written to `accounts.accessToken`/
- * `accounts.refreshToken` differ. AAD binds each ciphertext to the
- * specific row *and* column it belongs to (`providerId:userId:field`),
- * per ticket 18's own requirement that ciphertext can't be silently
- * swapped between rows (or between the access- and refresh-token columns
- * of the very same row) undetected.
+ * Shipping-gap map (.scratch/shipping-gaps), ticket 18: the three token columns are encrypted at rest
+ * via `@awthaq/ports`' `Encryption`, always, transparently to every writer of this repository. Plan 17:
+ * each is a declared `SealedColumn` (`CoreSealedColumns.accounts*`), so the AAD is the one canonical
+ * `accounts:<id>:<field>`: it binds the ciphertext to the account row and column, so a token cannot be
+ * copied to another account (even of the same user and provider) or to another token column.
  */
-const tokenAad = (providerId: string, userId: string, field: TokenField): string =>
-  `${providerId}:${userId}:${field}`;
-
 export const AccountsRepositoryLive: Layer.Layer<
   AccountsRepository,
   never,
@@ -765,7 +728,6 @@ export const AccountsRepositoryLive: Layer.Layer<
   AccountsRepository,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const encryption = yield* Encryption.Encryption;
     const dialect = yield* resolveDialect(sql);
     const models = makeModels(dialect);
     const repo = yield* SqlModel.makeRepository(models.Account, {
@@ -773,165 +735,62 @@ export const AccountsRepositoryLive: Layer.Layer<
       spanPrefix: "Accounts",
       idColumn: "id",
     });
-
-    const encryptToken = (
-      providerId: string,
-      userId: string,
-      field: TokenField,
-      value: string | null,
-    ): Effect.Effect<string | null> =>
-      value === null
-        ? Effect.succeed(null)
-        : encryption.encrypt(Redacted.make(value), tokenAad(providerId, userId, field));
-
-    interface ColumnRead {
-      readonly plaintext: string | null;
-      readonly stored: string | null;
-      /** The ciphertext re-encrypted under the current key when the stored one was stale (KRS-002). */
-      readonly refreshed: Option.Option<string>;
-    }
-
-    const readColumn = (row: Account, field: TokenField) => {
-      const stored = row[field];
-      if (stored === null) {
-        return Effect.succeed<ColumnRead>({ plaintext: null, stored, refreshed: Option.none() });
-      }
-      const aad = tokenAad(row.providerId, row.userId, field);
-      return SealedColumn.reveal(encryption, { aad }, stored).pipe(
-        Effect.map(({ plaintext, refreshed }): ColumnRead => ({
-          plaintext: Redacted.value(plaintext),
-          stored,
-          refreshed,
-        })),
-        Effect.catchTags({
-          DecryptionFailed: () =>
-            Effect.fail(
-              new AccountTokenUndecryptable({
-                accountId: row.id,
-                field,
-                reason: "DecryptionFailed",
-              }),
-            ),
-          UnknownKeyId: () =>
-            Effect.fail(
-              new AccountTokenUndecryptable({ accountId: row.id, field, reason: "UnknownKeyId" }),
-            ),
-        }),
-      );
+    const codecs = {
+      accessToken: yield* columnCodec(CoreSealedColumns.accountsAccessToken),
+      refreshToken: yield* columnCodec(CoreSealedColumns.accountsRefreshToken),
+      idToken: yield* columnCodec(CoreSealedColumns.accountsIdToken),
     };
 
-    // `degrade`: null just the unreadable column and log (never ciphertext).
-    const readColumnDegraded = (row: Account, field: TokenField) =>
-      readColumn(row, field).pipe(
-        Effect.catchTag("AccountTokenUndecryptable", (error) =>
-          Effect.logWarning("awthaq: account token is undecryptable; reading it as null").pipe(
-            Effect.annotateLogs({
-              accountId: error.accountId,
-              field: error.field,
-              reason: error.reason,
-            }),
-            Effect.as<ColumnRead>({
-              plaintext: null,
-              stored: row[field],
-              refreshed: Option.none(),
-            }),
-          ),
-        ),
-      );
-
-    const persistRefreshed = (row: Account, field: TokenField, old: string, fresh: string) =>
-      (field === "accessToken"
-        ? sql`UPDATE accounts SET "accessToken" = ${fresh} WHERE id = ${row.id} AND "accessToken" = ${old}`
-        : field === "refreshToken"
-          ? sql`UPDATE accounts SET "refreshToken" = ${fresh} WHERE id = ${row.id} AND "refreshToken" = ${old}`
-          : sql`UPDATE accounts SET "idToken" = ${fresh} WHERE id = ${row.id} AND "idToken" = ${old}`
-      ).pipe(
-        Effect.asVoid,
-        Effect.catchTag("SqlError", (error) =>
-          Effect.logWarning("awthaq: lazy token re-encryption write failed").pipe(
-            Effect.annotateLogs({ accountId: row.id, field, reason: error.message }),
-          ),
-        ),
-      );
-
-    const decryptRowWith = <E>(
-      row: Account,
-      read: (row: Account, field: TokenField) => Effect.Effect<ColumnRead, E>,
-    ) =>
-      Effect.gen(function* () {
-        const config = yield* AccountsRepositoryConfig;
-        const access = yield* read(row, "accessToken");
-        const refresh = yield* read(row, "refreshToken");
-        const idTok = yield* read(row, "idToken");
-        if (config.reencryptOnRead) {
-          if (Option.isSome(access.refreshed) && access.stored !== null) {
-            yield* persistRefreshed(row, "accessToken", access.stored, access.refreshed.value);
-          }
-          if (Option.isSome(refresh.refreshed) && refresh.stored !== null) {
-            yield* persistRefreshed(row, "refreshToken", refresh.stored, refresh.refreshed.value);
-          }
-          if (Option.isSome(idTok.refreshed) && idTok.stored !== null) {
-            yield* persistRefreshed(row, "idToken", idTok.stored, idTok.refreshed.value);
-          }
-        }
-        return models.Account.make({
-          ...row,
-          accessToken: access.plaintext,
-          refreshToken: refresh.plaintext,
-          idToken: idTok.plaintext,
-        });
-      });
-
-    // Identity reads degrade; `findTokensById` is the one strict path.
-    const decryptRow = (row: Account) => decryptRowWith(row, readColumnDegraded);
-    const decryptRowStrict = (row: Account) => decryptRowWith(row, readColumn);
+    const encryptToken = (
+      id: string,
+      field: "accessToken" | "refreshToken" | "idToken",
+      value: string | null,
+    ) => sealCell(Option.some(codecs[field]), id, value);
 
     const insert: AccountsRepositoryShape["insert"] = (input) =>
       Effect.gen(function* () {
-        const accessToken = yield* encryptToken(
-          input.providerId,
-          input.userId,
-          "accessToken",
-          input.accessToken,
-        );
-        const refreshToken = yield* encryptToken(
-          input.providerId,
-          input.userId,
-          "refreshToken",
-          input.refreshToken,
-        );
-        const idToken = yield* encryptToken(
-          input.providerId,
-          input.userId,
-          "idToken",
-          input.idToken,
-        );
+        const accessToken = yield* encryptToken(input.id, "accessToken", input.accessToken);
+        const refreshToken = yield* encryptToken(input.id, "refreshToken", input.refreshToken);
+        const idToken = yield* encryptToken(input.id, "idToken", input.idToken);
         const stamped = yield* Tenant.stamp(input);
-        const row = yield* repo.insert({ ...stamped, accessToken, refreshToken, idToken });
-        return yield* decryptRow(row);
+        return yield* repo.insert({ ...stamped, accessToken, refreshToken, idToken });
       });
 
-    const findById: AccountsRepositoryShape["findById"] = (id) =>
-      repo.findById(id).pipe(Effect.flatMap(decryptRow));
-
-    const findTokensById: AccountsRepositoryShape["findTokensById"] = (id) =>
-      repo
-        .findById(id)
-        .pipe(Effect.flatMap(decryptRowStrict), traced("Accounts.findTokensById", { id }));
-
-    // SMS-002: targeted writes — neither reads (or decrypts) the old token
-    // columns, so an undecryptable row can still be repaired by a fresh write.
-    const findAadQuery = SqlSchema.findOne({
+    const TokenRow = Schema.Struct({
+      accessToken: Schema.NullOr(Schema.String),
+      refreshToken: Schema.NullOr(Schema.String),
+      idToken: Schema.NullOr(Schema.String),
+      accessTokenExpiresAt: models.wire.nullableDateTime,
+      refreshTokenExpiresAt: models.wire.nullableDateTime,
+      scope: Schema.NullOr(Schema.String),
+      tokenType: Schema.NullOr(Schema.String),
+    });
+    const tokensByIdQuery = SqlSchema.findOneOption({
       Request: AccountId,
-      Result: Schema.Struct({ providerId: Schema.String, userId: Schema.String }),
-      execute: (id) => sql`SELECT "providerId", "userId" FROM accounts WHERE id = ${id}`,
+      Result: TokenRow,
+      execute: (id) => sql`
+        SELECT "accessToken", "refreshToken", "idToken", "accessTokenExpiresAt",
+               "refreshTokenExpiresAt", scope, "tokenType"
+        FROM accounts WHERE id = ${id}`,
     });
 
-    const listByUser = SqlSchema.findAll({
-      Request: UserId,
-      Result: models.Account,
-      execute: (userId) => sql`SELECT * FROM accounts WHERE "userId" = ${userId}`,
-    });
+    // SMS-002: the strict read. Nothing is opened here: the domain opens (and the codec lazily re-seals)
+    // the cells it needs, and decides what an unreadable one means.
+    const findSealedTokensById: AccountsRepositoryShape["findSealedTokensById"] = (id) =>
+      tokensByIdQuery(id).pipe(
+        Effect.map(
+          Option.map((row): SealedTokenRow => ({
+            accessToken: sealedCell(Option.some(codecs.accessToken), id, row.accessToken),
+            refreshToken: sealedCell(Option.some(codecs.refreshToken), id, row.refreshToken),
+            idToken: sealedCell(Option.some(codecs.idToken), id, row.idToken),
+            accessTokenExpiresAt: row.accessTokenExpiresAt,
+            refreshTokenExpiresAt: row.refreshTokenExpiresAt,
+            scope: row.scope,
+            tokenType: row.tokenType,
+          })),
+        ),
+        traced("Accounts.findSealedTokensById", { id }),
+      );
 
     const deleteAllByUserQuery = SqlSchema.findAll({
       Request: UserId,
@@ -1030,24 +889,9 @@ export const AccountsRepositoryLive: Layer.Layer<
     const insertIdentityIfAbsent: AccountsRepositoryShape["insertIdentityIfAbsent"] = (input) =>
       Effect.gen(function* () {
         const { tokens } = input;
-        const accessToken = yield* encryptToken(
-          input.providerId,
-          input.userId,
-          "accessToken",
-          tokens.accessToken,
-        );
-        const refreshToken = yield* encryptToken(
-          input.providerId,
-          input.userId,
-          "refreshToken",
-          tokens.refreshToken,
-        );
-        const idToken = yield* encryptToken(
-          input.providerId,
-          input.userId,
-          "idToken",
-          tokens.idToken,
-        );
+        const accessToken = yield* encryptToken(input.id, "accessToken", tokens.accessToken);
+        const refreshToken = yield* encryptToken(input.id, "refreshToken", tokens.refreshToken);
+        const idToken = yield* encryptToken(input.id, "idToken", tokens.idToken);
         const tenantId = yield* Effect.map(Tenant.TenantContext, Option.getOrNull);
         return yield* insertIdentityQuery({
           id: input.id,
@@ -1123,51 +967,23 @@ export const AccountsRepositoryLive: Layer.Layer<
         RETURNING id
       `,
     });
-    // The AAD (`providerId`, `userId`) is immutable and read token-free, so the old ciphertext is
-    // never decrypted: a row whose old tokens are unreadable heals on this write.
+    // The AAD is the account id the caller already holds, so this is one `UPDATE` and the old ciphertext
+    // is never read or decrypted: a row whose old tokens are unreadable heals on this write.
     const writeTokens: AccountsRepositoryShape["writeTokens"] = (id, tokens, updatedAt) =>
-      findAadQuery(id).pipe(
-        Effect.map(Option.some),
-        Effect.catchTag("NoSuchElementError", () =>
-          Effect.succeed(Option.none<{ readonly providerId: string; readonly userId: string }>()),
-        ),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeed(false),
-            onSome: (aad) =>
-              Effect.gen(function* () {
-                const accessToken = yield* encryptToken(
-                  aad.providerId,
-                  aad.userId,
-                  "accessToken",
-                  tokens.accessToken,
-                );
-                const refreshToken = yield* encryptToken(
-                  aad.providerId,
-                  aad.userId,
-                  "refreshToken",
-                  tokens.refreshToken,
-                );
-                const idToken = yield* encryptToken(
-                  aad.providerId,
-                  aad.userId,
-                  "idToken",
-                  tokens.idToken,
-                );
-                const rows = yield* writeTokensQuery({
-                  ...tokens,
-                  id,
-                  accessToken,
-                  refreshToken,
-                  idToken,
-                  updatedAt,
-                });
-                return rows.length > 0;
-              }),
-          }),
-        ),
-        traced("Accounts.writeTokens", { id }),
-      );
+      Effect.gen(function* () {
+        const accessToken = yield* encryptToken(id, "accessToken", tokens.accessToken);
+        const refreshToken = yield* encryptToken(id, "refreshToken", tokens.refreshToken);
+        const idToken = yield* encryptToken(id, "idToken", tokens.idToken);
+        const rows = yield* writeTokensQuery({
+          ...tokens,
+          id,
+          accessToken,
+          refreshToken,
+          idToken,
+          updatedAt,
+        });
+        return rows.length > 0;
+      }).pipe(traced("Accounts.writeTokens", { id }));
 
     const lockByUser: AccountsRepositoryShape["lockByUser"] = (userId) =>
       dialect === "pg"
@@ -1180,8 +996,7 @@ export const AccountsRepositoryLive: Layer.Layer<
     return {
       models,
       insert,
-      findById,
-      findTokensById,
+      findSealedTokensById,
       lockByUser,
       findIdentityById,
       findIdentityByKey,
@@ -1191,11 +1006,6 @@ export const AccountsRepositoryLive: Layer.Layer<
       writePasswordHash,
       writeTokens,
       delete: repo.delete,
-      listByUser: (userId) =>
-        listByUser(userId).pipe(
-          Effect.flatMap((rows) => Effect.forEach(rows, decryptRow)),
-          traced("Accounts.listByUser", { userId }),
-        ),
       deleteAllByUser,
     };
   }),

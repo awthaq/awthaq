@@ -287,8 +287,8 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
           refreshToken: null,
         }),
       );
-      yield* accounts.findById(account.id);
-      yield* accounts.listByUser(user.id);
+      yield* accounts.findSealedTokensById(account.id);
+      yield* accounts.listIdentitiesByUser(user.id);
       // ...and the domain service a real sign-in reaches it through.
       yield* domain.link({
         userId: Users.UserId(user.id),
