@@ -489,3 +489,15 @@ Cases fix `at` themselves (`StoreContract`'s `at(minutes)`), never the ambient c
 2. **A lease per relay name.** Should a relay take a lease (`claim(name, holder, ttl)`) so only one process delivers per name, instead of every replica delivering and the transport deduplicating? It is a real capability for multi-replica webhooks, but a new primitive, a heartbeat and a failover story. Default: no lease in this plan; ADR-EA-030 decision 4 ("run one per name, or accept the duplicates") stands, and a lease is its own plan if wanted.
 3. **An operator rewind.** Add `reset(name, to: Option<string>)` for replaying from an earlier event? No caller exists. Default: not added (an operator can `DELETE FROM auth_relay_cursor WHERE name = …` and restart with `startAfter`).
 4. **A deprecation alias.** Keep `EventRelay.RelayCursorStore` as a re-export of the port for one release? Default: no (pre-1.0, ADR-EA-034 allows the break; the `Migration:` line covers it).
+
+---
+
+## Decisions taken (implementation, 2026-10-18)
+
+- **Open questions, defaults taken.** Q1 monotonic `advance`: yes. Q2 no lease per relay name. Q3 no `reset` primitive. Q4 no deprecation alias: `EventRelay.RelayCursorStore`, `layerCursorMemory` and `layerCursorSql` are removed (the changeset's `Migration:` line covers it).
+- **Phases and commits.** Phase 1 (port, `Ref` adapter, `StoreContract.relayCursor`), Phase 2 (`RelayCursorStoreSql`, both bundles) and Phase 3 (`EventRelay` onto the port, repository and old store deleted, `TestAuth`, docs, spec) are three commits. Phase 0's failing outage test was written and seen red first, and ships with Phase 3 (no red commit); it asserts `operation === "RelayCursorStore.get"` and `Store.StoreUnavailable`.
+- **Changesets.** `relay-cursor-store-port.md` with Phase 1; `relay-cursor-store-bundles.md` with Phase 3 (the `Migration:` text is only true once the old store is gone).
+- **`TestAuth` exposes the cursor store** by merging `RelayCursorStore.layerMemory` (memory base) and `RelayCursorStoreSql.layer` (SQL base) beside `SqlTransaction` in the base's output; they are the same layer values the bundles contain, so the build shares one instance. `WebhooksWorld` drops its own cursor layer.
+- **Tests.** The cursor's own behaviour is tested once, at the port (`StoreContract.relayCursor`, 6 cases, on `Ref`, SQLite `:memory:`, WAL file, Postgres); `contract.ts`'s repository case was deleted. `EventRelay.test.ts` gains the outage case, a late-finishing-older-batch case (over memory and SQLite, via `suite`) and the bundle-only composition type check.
+- **Spec revisions.** BEH 13-events 1.10, ADR-EA-030 1.2, ADR-EA-041 1.2, ADR-EA-028 1.7 (the plan said 1.6; 1.6 was taken by plan 11), overview 1.11 (Ports row, Phase 1) and 1.12 (core row, Phase 3), traceability 1.42.
+- **Not done.** The per-phase tickets under `.scratch/relay-cursor-store/issues/` were not written.

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-041 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-10-13 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 02) <br> 1.1 (2026-10-13): Status flipped to Accepted, implemented: every phase of plan 02 shipped; `layerMemory` and `layerSql` removed from the five modules in favour of `Persistence.memory`/`Persistence.sql()` |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 02) <br> 1.1 (2026-10-13): Status flipped to Accepted, implemented: every phase of plan 02 shipped; `layerMemory` and `layerSql` removed from the five modules in favour of `Persistence.memory`/`Persistence.sql()` <br> 1.2 (2026-10-18): the bundles provide `RelayCursorStore` too and `StoreContract.relayCursor` is its bar: the relay's position joins the seam, closing plan 02's non-goal (architecture plan 23) |
 
 ---
 
@@ -28,11 +28,11 @@ The drift lives in the I/O sequencing around persistence, not in the pure rules,
 
 **3. Placement.** The ports, the pure contract helpers (`isLive`, `evictionOrder`, `unionMethods`) and the `Ref` adapters live in `@awthaq/ports` (stratum 2, beside `RateLimiter`'s store, the precedent); the SQL adapters, over the existing repositories, live in `@awthaq/sql` (stratum 3); the domain services and the matched bundles live in `@awthaq/core` (stratum 4). The identifier brands move to `@awthaq/ports` (`Ids`), re-exported by `@awthaq/sql`'s `Models`, so a port and its adapters share one type.
 
-**4. Matched bundles.** `Persistence.memory` provides every `Ref` store plus `SqlTransaction.layerNoop`; `Persistence.sql(options)` provides every SQL store plus `SqlTransaction.layerSql` over one `SqlClient`. A composition cannot pair a memory store with a SQL transaction by accident, and the README quickstart drops from six repositories and five layers to one call. One store may still be swapped (ADR-EA-014): it then sits outside the `SqlTransaction`, so its participation in erasure (ADR-EA-031) must be idempotent and retry-safe.
+**4. Matched bundles.** `Persistence.memory` provides every `Ref` store (the five domain stores and the event relay's `RelayCursorStore`) plus `SqlTransaction.layerNoop`; `Persistence.sql(options)` provides every SQL store plus `SqlTransaction.layerSql` over one `SqlClient`. A composition cannot pair a memory store with a SQL transaction by accident, and the README quickstart drops from six repositories and five layers to one call. One store may still be swapped (ADR-EA-014): it then sits outside the `SqlTransaction`, so its participation in erasure (ADR-EA-031) must be idempotent and retry-safe.
 
 **5. One adapter substrate.** `@awthaq/sql`'s `SqlStore.write`/`read` wrap `StoreFailure` (plan 05): an outage is `StoreUnavailable`, a decode failure is a defect, a transient failure is retried at the top level only (never inside a caller's transaction), and a primitive that changes what a replica-eligible listing returns captures the causal token (ADR-EA-024). The tenant-stamp rule is `Tenant.stamp`/`Tenant.resolve` in `@awthaq/ports`, used by both adapter families.
 
-**6. The contract suite is the adapter bar.** `@awthaq/test`'s `StoreContract` holds each port's cases as data, concurrency cases included, and runs on the `Ref` adapters, SQLite `:memory:`, SQLite WAL file and Postgres (`pnpm test:pg`). An adapter, including a third party's KV `SessionStore`, is acceptable when it passes. Domain tests run once, on the `Ref` adapters.
+**6. The contract suite is the adapter bar.** `@awthaq/test`'s `StoreContract` holds each port's cases as data (`auditLog`, `verification`, `accounts`, `users`, `sessions`, `relayCursor`), concurrency cases included, and runs on the `Ref` adapters, SQLite `:memory:`, SQLite WAL file and Postgres (`pnpm test:pg`). An adapter, including a third party's KV `SessionStore`, is acceptable when it passes. Domain tests run once, on the `Ref` adapters.
 
 **7. Operation labels stay at the service level.** `StoreUnavailable.operation` is visible on the wire and asserted by tests. Adapters log the precise primitive (`SessionStore.flagReuse`); the domain relabels the failure to the service operation (`Sessions.verify`), so wire labels do not change.
 

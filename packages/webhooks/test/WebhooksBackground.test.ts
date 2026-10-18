@@ -1,8 +1,8 @@
 // BEH-EA-279 (spec/behaviors/34-webhooks.md): `Webhooks.background()` end to end, running for real —
 // the relay tailing the audit log into the queue and the worker sending it, driven by the test clock,
 // with an endpoint that fails once (retry).
-import { AuthEvents, EventRelay, Retention, Users } from "@awthaq/core";
-import { Tenant } from "@awthaq/ports";
+import { AuthEvents, Retention, Users } from "@awthaq/core";
+import { RelayCursorStore, Tenant } from "@awthaq/ports";
 import { StoreFailure } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -73,7 +73,7 @@ describe("Webhooks.background: relay + worker", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.merge(deliveryLayer({ receiver: flaky.layer }), EventRelay.layerCursorMemory),
+          Layer.merge(deliveryLayer({ receiver: flaky.layer }), RelayCursorStore.layerMemory),
         ),
       ),
   );
@@ -184,7 +184,7 @@ describe("Webhooks.background: tenants", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.merge(deliveryLayer({ receiver: receiver.layer }), EventRelay.layerCursorMemory),
+          Layer.merge(deliveryLayer({ receiver: receiver.layer }), RelayCursorStore.layerMemory),
         ),
       );
     },

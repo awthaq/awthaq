@@ -89,10 +89,11 @@ import {
   Mailer,
   PasswordHasher,
   RateLimiter,
+  RelayCursorStore,
   SqlTransaction,
 } from "@awthaq/ports";
 import { AuthHttp, Credentials, Csrf, RequestContext } from "@awthaq/server";
-import { CoreMigrations } from "@awthaq/sql";
+import { CoreMigrations, RelayCursorStoreSql } from "@awthaq/sql";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
 import * as TestSql from "./TestSql.ts";
@@ -219,9 +220,13 @@ const coreServices = Layer.mergeAll(
 const memoryBase = (rateLimiter: "permissive" | "enforcing" | undefined) =>
   Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
     Layer.provideMerge(
-      Layer.mergeAll(coreServices, testPorts(rateLimiter), SqlTransaction.layerNoop).pipe(
-        Layer.provide(Persistence.memory),
-      ),
+      Layer.mergeAll(
+        coreServices,
+        testPorts(rateLimiter),
+        SqlTransaction.layerNoop,
+        // Plan 23: the relay's position is an application layer's input, so the base exposes it.
+        RelayCursorStore.layerMemory,
+      ).pipe(Layer.provide(Persistence.memory)),
     ),
     // RRS-003: `Sessions.layer` also needs `AuthEvents`.
     Layer.provideMerge(memoryFoundation),
@@ -249,9 +254,12 @@ const sqlBase = (
   ).pipe(Layer.provideMerge(TestSql.layer(suite)));
   return Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
     Layer.provideMerge(
-      Layer.mergeAll(coreServices, testPorts(rateLimiter), SqlTransaction.layerSql).pipe(
-        Layer.provide(SqlStores),
-      ),
+      Layer.mergeAll(
+        coreServices,
+        testPorts(rateLimiter),
+        SqlTransaction.layerSql,
+        RelayCursorStoreSql.layer,
+      ).pipe(Layer.provide(SqlStores)),
     ),
     Layer.provideMerge(sqlFoundation),
     Layer.provideMerge(Ready),

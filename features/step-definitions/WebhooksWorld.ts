@@ -8,8 +8,8 @@
 // backoff schedule, the rotation grace window, leases, retention) goes through the scenario's
 // `TestClock`. A second, HTTP-served composition is built only by the scenarios about the admin tier.
 import { Api } from "@awthaq/api";
-import { Auth, AuditLog, AuthEvents, DataExport, Erasure, EventRelay, Users } from "@awthaq/core";
-import { Encryption, HostResolver, RateLimiter, Tenant } from "@awthaq/ports";
+import { Auth, AuditLog, AuthEvents, DataExport, Erasure, Users } from "@awthaq/core";
+import { Encryption, HostResolver, RateLimiter, RelayCursorStore, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import { WebhookDelivery, WebhookRecords, WebhookTransport, Webhooks } from "@awthaq/webhooks";
 import * as Context from "effect/Context";
@@ -196,7 +196,6 @@ const composition = (
       resolver.layer,
       Webhooks.config({ canManageWebhooks: gateFor(options.gate), ...options.config }),
       WebhookRecords.layerMemory,
-      EventRelay.layerCursorMemory,
     ),
   });
 
@@ -207,7 +206,7 @@ export type AppServices =
   | Encryption.Encryption
   | AuthEvents.AuthEvents
   | AuditLog.AuditLog
-  | EventRelay.RelayCursorStore
+  | RelayCursorStore.RelayCursorStore
   | Crypto.Crypto
   | Erasure.ErasureRegistry
   | DataExport.DataExportRegistry

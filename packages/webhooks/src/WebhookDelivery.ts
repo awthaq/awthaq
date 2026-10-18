@@ -25,7 +25,7 @@
 // to lapse and the delivery is sent again, with the same `webhook-id`. Receivers deduplicate on it.
 
 import { type AuditLog, EventRelay } from "@awthaq/core";
-import { HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
+import { HostResolver, OutboundUrl, RateLimiter, type RelayCursorStore } from "@awthaq/ports";
 import { type StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -144,7 +144,10 @@ export const relayLayer = (
 ): Layer.Layer<
   never,
   never,
-  AuditLog.AuditLog | EventRelay.RelayCursorStore | WebhookRecords.WebhookRecords | Crypto.Crypto
+  | AuditLog.AuditLog
+  | RelayCursorStore.RelayCursorStore
+  | WebhookRecords.WebhookRecords
+  | Crypto.Crypto
 > => EventRelay.layer({ name: RELAY_NAME, ...options }).pipe(Layer.provide(transportLayer));
 
 // ---- one attempt -------------------------------------------------------------------------------

@@ -854,7 +854,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
 
   /**
    * Opt-in delivery machinery: the relay that tails the audit log into the delivery queue, and the worker
-   * that sends what is queued. Requires `AuditLog`, a `RelayCursorStore`, the records, `Encryption`,
+   * that sends what is queued. Requires `AuditLog`, a `RelayCursorStore` (both `Persistence` bundles provide one), the records, `Encryption`,
    * `RateLimiter`, `HostResolver`, a `WebhookTransport` (`WebhookTransport.layerNodePinned` connects to the
    * address the host was pinned to; `layerHttpClient` wraps any `HttpClient` and cannot pin) and `Crypto`;
    * run one per deployment.

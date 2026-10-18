@@ -1,19 +1,24 @@
-// CWM-004/MAPS-010 (ADR-EA-032): `EventRelay`, the outbox relay that tails the durable audit log into an
+// CWM-004/MAPS-010 (ADR-EA-030): `EventRelay`, the outbox relay that tails the durable audit log into an
 // application-provided `EventTransport`. One suite over memory and over SQLite (audit log and cursor both in
 // `CoreMigrations`' tables); time is `TestClock`'s, so the settle delay and the poll interval cost nothing.
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { RelayCursorStore, Store } from "@awthaq/ports";
+import { CoreMigrations } from "@awthaq/sql";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
@@ -52,9 +57,8 @@ const publishN = (events: AuthEvents.AuthEventsShape, count: number, prefix = "i
     { discard: true },
   );
 
-const MemoryBase = Layer.mergeAll(EventRelay.layerCursorMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+const MemoryBase = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provideMerge(Persistence.memory))),
 );
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
@@ -62,10 +66,8 @@ const Migrated = Layer.effectDiscard(
   Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provide(SqlLive));
 
-const SqlBase = EventRelay.layerCursorSql.pipe(
-  Layer.provide(Repositories.RelayCursorRepositoryLive),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
+const SqlBase = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layer.pipe(Layer.provideMerge(SqlStores))),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
@@ -90,7 +92,7 @@ const options = (name = "test", extra: Partial<EventRelay.EventRelayOptions> = {
 const suite = (
   name: string,
   base: Layer.Layer<
-    AuthEvents.AuthEvents | AuditLog.AuditLog | EventRelay.RelayCursorStore,
+    AuthEvents.AuthEvents | AuditLog.AuditLog | RelayCursorStore.RelayCursorStore,
     unknown
   >,
 ) =>
@@ -226,6 +228,43 @@ const suite = (
     );
 
     it.effect(
+      "a relay that finishes an older batch late (a second relay of the same name) does not pull the position back",
+      () =>
+        Effect.gen(function* () {
+          const events = yield* AuthEvents.AuthEvents;
+          const store = yield* RelayCursorStore.RelayCursorStore;
+          const auditLog = yield* AuditLog.AuditLog;
+          yield* publishN(events, 3);
+          yield* TestClock.adjust(SETTLE);
+          const ids = (yield* auditLog.list()).map((row) => row.id).toSorted();
+
+          const started = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const slow = EventRelay.EventTransport.of({
+            deliver: () =>
+              Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          });
+          const fast = EventRelay.EventTransport.of({ deliver: () => Effect.void });
+
+          // The slow relay has read the first two events and is stuck handing them over ...
+          const late = yield* EventRelay.drainOnce(options("shared", { batchSize: 2 })).pipe(
+            Effect.provideService(EventRelay.EventTransport, slow),
+            Effect.forkChild,
+          );
+          yield* Deferred.await(started);
+          // ... while another relay of the same name delivers all three and moves the position to the last.
+          yield* EventRelay.drainOnce(options("shared")).pipe(
+            Effect.provideService(EventRelay.EventTransport, fast),
+          );
+          assert.deepStrictEqual(yield* store.get("shared"), Option.some(ids[2]));
+
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(late);
+          assert.deepStrictEqual(yield* store.get("shared"), Option.some(ids[2]));
+        }).pipe(Effect.provide(base)),
+    );
+
+    it.effect(
       "the layer delivers in the background, backs off while the transport is down, and catches up",
       () =>
         withTransport((t) =>
@@ -274,7 +313,7 @@ describe("EventRelay over SQLite: the position is durable", () => {
       withTransport((t) =>
         Effect.gen(function* () {
           const events = yield* AuthEvents.AuthEvents;
-          const store = yield* EventRelay.RelayCursorStore;
+          const store = yield* RelayCursorStore.RelayCursorStore;
           yield* publishN(events, 3);
           yield* TestClock.adjust(SETTLE);
           assert.strictEqual(yield* EventRelay.drainOnce(options("durable")), 3);
@@ -284,5 +323,51 @@ describe("EventRelay over SQLite: the position is durable", () => {
           assert.isTrue(Option.isNone(yield* store.get("someone-else")));
         }).pipe(Effect.provide(SqlBase)),
       ),
+  );
+});
+
+describe("EventRelay over SQLite: a cursor-store outage (ADR-EA-028)", () => {
+  it.effect("drainOnce fails with StoreUnavailable naming the cursor read, never a defect", () =>
+    withTransport(() =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`ALTER TABLE auth_relay_cursor RENAME TO auth_relay_cursor_down`;
+        const exit = yield* Effect.exit(EventRelay.drainOnce(options("down")));
+        assert.isTrue(Exit.isFailure(exit));
+        if (Exit.isFailure(exit)) {
+          assert.isFalse(Cause.hasDies(exit.cause));
+          const failure = Cause.squash(exit.cause);
+          assert.instanceOf(failure, Store.StoreUnavailable);
+          if (failure instanceof Store.StoreUnavailable) {
+            assert.strictEqual(failure.operation, "RelayCursorStore.get");
+          }
+        }
+      }).pipe(Effect.provide(SqlBase)),
+    ),
+  );
+});
+
+describe("EventRelay composes over the bundles alone (plan 23)", () => {
+  // The documented composition: `Persistence.sql()` carries the position, so the relay needs the client and
+  // nothing else. This did not compile while `layerCursorSql` also needed a repository no bundle provided.
+  const relayOverBundle = EventRelay.layer({ name: "x" }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        AuditLog.layer,
+        Layer.succeed(
+          EventRelay.EventTransport,
+          EventRelay.EventTransport.of({ deliver: () => Effect.void }),
+        ),
+      ),
+    ),
+    Layer.provide(SqlStores),
+  );
+  const needsOnlyTheClient = (layer: Layer.Layer<never, unknown, SqlClient.SqlClient>) => layer;
+
+  it.effect("EventRelay.layer builds over Persistence.sql() and a SqlClient", () =>
+    Effect.scoped(Layer.build(needsOnlyTheClient(relayOverBundle))).pipe(
+      Effect.asVoid,
+      Effect.provide(Layer.mergeAll(Migrated, SqlLive)),
+    ),
   );
 });
