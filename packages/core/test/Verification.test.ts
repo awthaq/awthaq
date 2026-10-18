@@ -52,7 +52,7 @@ const SqlLive = TestSql.layer("core_Verification");
 
 // BCR-003 (.issues/high): run against the real framework `Migrator` over
 // `CoreMigrations.coreMigrations` — the same `packages/sql/test/
-// Repositories.test.ts` precedent — rather than a hand-maintained fixture,
+// CoreMigrations.test.ts` precedent — rather than a hand-maintained fixture,
 // so this suite also proves the real `verification_tokens` migration
 // (including its own `userId` column) produces a working schema.
 const Migrated = Layer.effectDiscard(

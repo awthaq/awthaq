@@ -29,7 +29,7 @@
 // version, not a scoping choice).
 // `Users`/`Accounts`/`Sessions`/`Verification`/`AuditLog` are each written once, as `layer`, over a store
 // port (ADR-EA-041); `Persistence.memory` and `Persistence.sql(options)` provide the five stores and the
-// matching `SqlTransaction` (the SQL adapters are over `@awthaq/sql`'s repositories, BEH-EA-033/034;
+// matching `SqlTransaction` (the SQL adapters are `@awthaq/sql`'s `CoreStoresSql`, each owning its statements, BEH-EA-033/034;
 // `Verification` per spec/decisions/016-verification-sql-claiming.md, ADR-EA-016).
 // See spec/overview.md for the full package map.
 

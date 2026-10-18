@@ -2,7 +2,7 @@
 //
 // spec/behaviors/07-sessions.md, BEH-EA-049 through BEH-EA-056.
 // Plan 02 (ADR-EA-041, ADR-EA-014): written once, over `@awthaq/ports`' `SessionStore` (a `Ref`
-// adapter there, a SQL adapter over `@awthaq/sql`'s repository, BEH-EA-033-036; a KV backend is an
+// adapter there, a SQL adapter in `@awthaq/sql` that owns its statements, BEH-EA-033-036; a KV backend is an
 // implementation of the same nine primitives). The service owns the rules (the token and its hash, the
 // proof-before-state order, the expiries, the throttled touch, rotation and its grace window, reuse
 // detection, the concurrent-session policy, the events); the store owns persistence and the
@@ -437,7 +437,7 @@ export interface SessionsShape {
    * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
    * (`lastActiveAt` descending), identically in both layers (ESS-005/
    * SMS-002). `current` is set on whichever row's id equals `current`.
-   * Exhaustive: `layerSql` drains every repository page rather than silently
+   * Exhaustive: `layerSql` drains every store page rather than silently
    * truncating (TIR-003), bounded by `LIST_LIMIT` with a logged warning if a
    * user somehow exceeds it. Not for keyed lookups — use `findOwned`.
    *

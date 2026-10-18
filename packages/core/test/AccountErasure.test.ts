@@ -392,7 +392,7 @@ describe("AccountErasure over SQLite: atomicity", () => {
       const layer = sqlLayer(
         probe,
         Layer.mergeAll(
-          // Deletes the user's accounts, through the real repository, inside the transaction...
+          // Deletes the user's accounts, through the real store, inside the transaction...
           Erasure.contribute({
             id: "sweeps-accounts",
             order: 1,

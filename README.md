@@ -280,14 +280,14 @@ curl -i -X DELETE $BASE/user \
 
 The session cookie is `SameSite=Strict` (BEH-EA-055), so a browser does not send it on a cross-site top-level navigation. The provider's redirect back to the OAuth callback is exactly such a navigation, so the OAuth plugin correlates it with its own ten-minute `SameSite=Lax` `__Host-oauth-state` cookie (`packages/oauth/src/OAuth.ts`; an opaque correlation value, the flow state itself lives server-side) rather than with the session cookie.
 
-This exact composition was run end to end against an in-memory SQLite `SqlClient` while writing this section (sign-up, verify, sign-in, profile update, export and delete all answered as shown; with `AWTHAQ_EXPOSE_DOCS` unset, `/openapi.json` and `/docs` answered `404`). `packages/sql`'s domain layers are dialect-agnostic, so swapping `PgClient.layerConfig({ url })` for `SqliteClient.layer({ filename })` is the only change between the two; CI's `postgres:16` service (`.github/workflows/check.yml`) is the signal against Postgres itself, the same caveat `packages/sql/test/Repositories.postgres.test.ts` documents. Nothing here has been run against a real Postgres by hand.
+This exact composition was run end to end against an in-memory SQLite `SqlClient` while writing this section (sign-up, verify, sign-in, profile update, export and delete all answered as shown; with `AWTHAQ_EXPOSE_DOCS` unset, `/openapi.json` and `/docs` answered `404`). `packages/sql`'s store adapters are dialect-agnostic, so swapping `PgClient.layerConfig({ url })` for `SqliteClient.layer({ filename })` is the only change between the two; CI's `postgres:16` service (`.github/workflows/check.yml`) is the signal against Postgres itself, the same caveat `packages/sql/test/TenantScope.postgres.test.ts` documents. Nothing here has been run against a real Postgres by hand.
 
 ## Persistence
 
 `Users`, `Accounts`, `Sessions`, `Verification` and `AuditLog` are each written once, over a store port (`UserStore`, `AccountStore`, `SessionStore`, `VerificationStore`, `AuditLogStore` in `@awthaq/ports`), so you choose where state lives by providing one bundle from `@awthaq/core`, not by picking a layer per service:
 
 - `Persistence.memory`: the in-process `Ref` adapters plus `SqlTransaction.layerNoop`. For tests and a single process.
-- `Persistence.sql({ encryptPii? })`: the SQL adapters over the ambient `SqlClient`, the repositories they need, and `SqlTransaction.layerSql`. It requires `SqlClient` and `Encryption`; pass `encryptPii: true` to seal the PII columns.
+- `Persistence.sql({ encryptPii? })`: the SQL store adapters of `@awthaq/sql` (`CoreStoresSql.layer`, each adapter owning its statements) over the ambient `SqlClient`, and `SqlTransaction.layerSql`. It requires `SqlClient` and `Encryption`; pass `encryptPii: true` to seal the PII columns.
 
 Swapping one store (for example a Redis-backed `SessionStore`, ADR-EA-014) means providing your adapter in place of that one service; every adapter has to pass `StoreContract` from `@awthaq/test`. Mixing stores across bundles is allowed, but the swapped store is then outside the `SqlTransaction` the SQL bundle opens, so a multi-store operation (an account erasure, for example) is no longer atomic across it.
 

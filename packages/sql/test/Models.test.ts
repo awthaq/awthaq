@@ -3,7 +3,7 @@
 // server — they feed each dialect's model the row shape its driver actually
 // returns (`@effect/sql-pg`: JS `boolean`/`Date`; `node:sqlite`: `0 | 1` and
 // ISO strings) — so the Postgres field variants are exercised even where
-// `AWTHAQ_POSTGRES_URL` is unset. `Repositories.postgres.test.ts` is the
+// `AWTHAQ_POSTGRES_URL` is unset. `StoreContract.sql.test.ts` is the
 // real-server counterpart.
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";

@@ -1,5 +1,5 @@
 // P20a: step definitions for 28-tenancy.feature (BEH-EA-230..237). Every assertion reads the
-// state the real services and repositories produced: the raw `"tenantId"` column, the response
+// state the real services and store adapters produced: the raw `"tenantId"` column, the response
 // a router middleware wrote, the typed refusal an organization operation returned.
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
 import { AuditLogStore, Encryption, PasswordHasher, Tenant } from "@awthaq/ports";
@@ -581,7 +581,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(Object.hasOwn(M.User.jsonUpdate.fields, "tenantId"), false);
     // Non-vacuity: the same variants do carry the fields that may change.
     assert.equal(Object.hasOwn(M.User.update.fields, "name"), true);
-    // The insert variant is the only one that names a tenant: stamped by the repository, never by a caller's body.
+    // The insert variant is the only one that names a tenant: stamped by the store adapter, never by a caller's body.
     assert.equal(Object.hasOwn(M.User.insert.fields, "tenantId"), true);
   });
 

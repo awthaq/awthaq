@@ -3,9 +3,9 @@
 // The app's layers, without starting anything: `index.ts` serves them on :3002 and
 // `test/smoke.test.ts` boots the very same `AppLayer` in-process over an in-memory SQLite
 // database, so the example cannot drift from what its test proves (a sign-up, the mailed
-// verification token, a sign-in, all persisted through the real repositories).
+// verification token, a sign-in, all persisted through the real SQL store adapters).
 //
-// Password over SQL, end to end: a migration run, the encrypted-account repositories, the durable
+// Password over SQL, end to end: a migration run, the sealed provider tokens of the accounts adapter, the durable
 // audit log, a SQL-backed rate limiter, one SQL transaction domain. The backend is chosen at
 // startup: `DATABASE_URL` set means Postgres, otherwise a SQLite file (`SQLITE_FILE`, default
 // `./awthaq.sqlite`; `:memory:` works too). That is the one-layer substitution a deployment makes
@@ -61,7 +61,7 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 const auth = Auth.make([Password.Password]);
 
 // 2. The database, chosen by configuration. Both branches provide the same `SqlClient`, which is
-//    all the repositories and the migrator ask for; the dialect is read from the client.
+//    all the store adapters and the migrator ask for; the dialect is read from the client.
 const PostgresLive = PgClient.layerConfig({
   url: Config.Redacted("DATABASE_URL"),
 });

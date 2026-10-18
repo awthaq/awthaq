@@ -76,14 +76,14 @@ export const isUniqueViolation = (error: unknown): error is SqlError => {
   return message.includes("UNIQUE constraint failed");
 };
 
-/** What a repository statement fails with besides the domain's own outcomes. */
+/** What a store statement fails with besides the domain's own outcomes. */
 type Fault = SqlError | SchemaError | NoSuchElementError;
 
 const isFault = <E>(error: E): error is Extract<E, Fault> =>
   isSqlError(error) || isSchemaError(error) || isNoSuchElementError(error);
 
 /**
- * A repository call with nothing else to recover from: an outage is `StoreUnavailable`, a row that
+ * A store statement with nothing else to recover from: an outage is `StoreUnavailable`, a row that
  * no longer decodes (`SchemaError`) or a `RETURNING` that returned no row (`NoSuchElementError`) is
  * a defect. It leaves every other failure in `E` alone, so a method whose `E` also carries domain
  * outcomes (`SlugTaken`, `NotFound`) pipes through it too.

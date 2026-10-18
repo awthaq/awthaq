@@ -4,7 +4,7 @@
 # so only its passing scenarios are runtime evidence.
 
 # P20a (AH-003 / decision 36, tenancy follow-up): authored against the implemented tenancy
-# surface — `@awthaq/ports` `Tenant`, `@awthaq/sql` `TenantScope` and the stamped repositories,
+# surface — `@awthaq/ports` `Tenant`, `@awthaq/sql` `TenantScope` and the stamped store adapters,
 # `@awthaq/organization` `tenantMiddleware*`, `@awthaq/oauth` connections and the suspension
 # state `@awthaq/admin` `AdminTenants` flips. Stamping and the global identity directory run
 # over a real in-memory SQLite database migrated by core's own migrations; the organization
@@ -167,7 +167,7 @@ Feature: Multi-Tenancy
       When a user "scoped@example.com" is created inside a "TenantScope" for "tenant-a"
       Then that user's tenant is "tenant-a"
 
-    # @skip: needs a real Postgres session (row-level security does not exist on SQLite); covered by the pg suite `pnpm run test:pg` — packages/sql/test/Repositories.postgres.test.ts, "Tenant RLS (real Postgres)"
+    # @skip: needs a real Postgres session (row-level security does not exist on SQLite); covered by the pg suite `pnpm run test:pg` — packages/sql/test/TenantScope.postgres.test.ts, "Tenant RLS (real Postgres)"
     @skip
     @REQ-EA-832
     Scenario: Inside a tenant scope a read cannot see another tenant's row
@@ -176,7 +176,7 @@ Feature: Multi-Tenancy
       When the sessions are read inside a tenant scope for "tenant-a"
       Then only the "tenant-a" row is visible
 
-    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/Repositories.postgres.test.ts, "Tenant RLS (real Postgres)"
+    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/TenantScope.postgres.test.ts, "Tenant RLS (real Postgres)"
     @skip
     @REQ-EA-833
     Scenario: Inside a tenant scope a write can neither touch nor create another tenant's row
@@ -184,7 +184,7 @@ Feature: Multi-Tenancy
       When a write naming the tenant "tenant-b" runs inside a tenant scope for "tenant-a"
       Then the write is refused and no "tenant-b" row exists
 
-    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/Repositories.postgres.test.ts, "Tenant RLS (real Postgres)"
+    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/TenantScope.postgres.test.ts, "Tenant RLS (real Postgres)"
     @skip
     @REQ-EA-834
     Scenario: With no tenant set the policy admits every row

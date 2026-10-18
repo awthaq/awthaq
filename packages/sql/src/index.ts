@@ -1,15 +1,18 @@
 // @awthaq/sql — Persistence stratum (3)
 //
-// Models, repositories, migrations — database-neutral persistence (ADR-EA-004).
+// Models, SQL store adapters, migrations — database-neutral persistence (ADR-EA-004).
 //
 // Models.ts (spec/behaviors/05-persistence-stratum.md, BEH-EA-033/034):
 // `makeModels(dialect)` builds the entities with the dialect's boolean/DateTime
-// wire codec (TS-001). Repositories.ts (BEH-EA-035/036): users, accounts,
-// sessions, verification tokens/reservations (ADR-EA-016) and the audit log,
-// consumed by @awthaq/core's `layerSql` services. CoreMigrations.ts: the core
+// wire codec (TS-001). <X>StoreSql.ts (BEH-EA-035/036, plan 16): the SQL adapters of the
+// core store ports of `@awthaq/ports` (users, accounts, sessions, verification
+// tokens and reservations (ADR-EA-016), the audit log and the relay cursor), each
+// owning its statements, its sealing hook, its tenant stamp and its dialect branches;
+// CoreStoresSql.ts bundles them with `SqlTransaction.layerSql` (`Persistence.sql` is
+// that function). CoreMigrations.ts: the core
 // tables' forward-only migrations (BEH-EA-037). RateLimiterStoreSql.ts: an
-// opt-in SQL rate-limit store. RelayCursorStoreSql.ts: the event relay's persisted position, owning its
-// statements (plan 23). ReadRouting.ts: opt-in, default-off read-replica
+// opt-in SQL rate-limit store. RelayCursorStoreSql.ts: the event relay's persisted position
+// (plan 23). ReadRouting.ts: opt-in, default-off read-replica
 // routing with per-read consistency classes and causal tokens (RRC-001,
 // ADR-EA-024). TenantScope.ts: opt-in Postgres row-level security under the
 // `"tenantId"` column and `withTenant` (DRS-001, ADR-EA-018). TenantScoped.ts, SealedColumn.ts and

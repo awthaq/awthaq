@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-28 |
-> | Revision | 1.8 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.9 |
+> | Effective Date | 2026-10-18 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) <br> 1.3 (2026-10-13): BEH-EA-328: Keyed tables take their organization id explicitly, and BEH-EA-235: a connection's client secret is a sealed column (plan 05 phase 6) <br> 1.4 (2026-10-13): BEH-EA-233: the plugin-table RLS rollout is documented (`packages/sql/README.md`) and exercised by every plugin conformance call with `rls` (plan 05 phase 12) <br> 1.5 (2026-10-13): BEH-EA-237: suspension and reinstatement are `OrganizationDirectory` operations with veto and observe points, and the decision cache is cleared on both (ADR-EA-040, architecture plan 04 phase 4) <br> 1.6 (2026-10-13): BEH-EA-235: the connection store refuses an inactive organization and publishes connection events with an actor; deleting an organization removes its OIDC, SAML and SCIM connections in its transaction (OrganizationDeletion registry, ADR-EA-040, architecture plan 04 phase 5) <br> 1.7 (2026-10-13): BEH-EA-231: every store adapter stamps the ambient tenant through `Tenant.resolve`, the `Ref` adapters included (plan 02 phases 3 and 4) <br> 1.8 (2026-10-18): BEH-EA-236: admin reads every `AdminConfig` field per operation through one internal gate; the adopter list is corrected and a tenant's `config(...)` is a whole configuration (plan 13) |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) <br> 1.3 (2026-10-13): BEH-EA-328: Keyed tables take their organization id explicitly, and BEH-EA-235: a connection's client secret is a sealed column (plan 05 phase 6) <br> 1.4 (2026-10-13): BEH-EA-233: the plugin-table RLS rollout is documented (`packages/sql/README.md`) and exercised by every plugin conformance call with `rls` (plan 05 phase 12) <br> 1.5 (2026-10-13): BEH-EA-237: suspension and reinstatement are `OrganizationDirectory` operations with veto and observe points, and the decision cache is cleared on both (ADR-EA-040, architecture plan 04 phase 4) <br> 1.6 (2026-10-13): BEH-EA-235: the connection store refuses an inactive organization and publishes connection events with an actor; deleting an organization removes its OIDC, SAML and SCIM connections in its transaction (OrganizationDeletion registry, ADR-EA-040, architecture plan 04 phase 5) <br> 1.7 (2026-10-13): BEH-EA-231: every store adapter stamps the ambient tenant through `Tenant.resolve`, the `Ref` adapters included (plan 02 phases 3 and 4) <br> 1.8 (2026-10-18): BEH-EA-236: admin reads every `AdminConfig` field per operation through one internal gate; the adopter list is corrected and a tenant's `config(...)` is a whole configuration (plan 13) <br> 1.9 (2026-10-18): BEH-EA-231: the stamp is in the store adapter through `Tenant.resolve`; the explicit-tenant clause applies to the audit log, the one port that carries one (ADR-EA-041 revision 1.3, plan 16) |
 ---
 
 > A tenant is an `Organization` row ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)); everything below is opt-in and zero-cost for a single-tenant deployment.
@@ -31,16 +31,17 @@ _Previous: [BEH-EA-224](27-admin-impersonation.md#beh-ea-224-admin-actions-are-a
 ## BEH-EA-231: Every core insert is stamped with the ambient tenant
 
 ```text
-REQUIREMENT: Every repository insert into `users`, `accounts`, `sessions`,
-             `verification_tokens`, `verification_reservations` and
-             `auth_audit_log` MUST store `"tenantId"` as the input's explicit
-             value when non-null, otherwise the ambient `TenantContext`, otherwise
-             `NULL`. The column MUST have no JSON variant and no `update`
+REQUIREMENT: Every core store adapter's insert into `users`, `accounts`,
+             `sessions`, `verification_tokens`, `verification_reservations`
+             and `auth_audit_log` MUST stamp `"tenantId"` through
+             `Tenant.resolve`: the explicit value where the port carries one
+             (`AuditLogStore.append`), otherwise the ambient `TenantContext`,
+             otherwise `NULL`. The column MUST have no JSON variant and no `update`
              variant: a request body cannot name a tenant, and a row is stamped
              once.
 ```
 
-Stamping happens at the repository, the one place every insert passes through, so no service signature changes and a caller cannot forget it. `UserRecord.tenantId` and `SessionView.tenantId` expose the value; the `Ref` adapters of the core store ports (`AccountStore`, `VerificationStore`, `AuditLogStore`, and, as they land, the others) stamp the same field through `Tenant.resolve` (an explicit tenant wins, else the ambient one), so a memory composition carries the same `tenantId` the SQL one does. Historic rows and single-tenant deployments read back `None`.
+Stamping happens in the store adapter, SQL and `Ref` alike, the one place every insert passes through, so no service signature changes and a caller cannot forget it. Only the audit log's port carries an explicit tenant (`AuditLogStore.append`: the explicit value wins over the ambient one); the other ports take none, so they stamp the ambient value or `NULL`. `UserRecord.tenantId` and `SessionView.tenantId` expose the value; the `Ref` adapters of the core store ports (`AccountStore`, `VerificationStore`, `AuditLogStore`, and, as they land, the others) stamp the same field through `Tenant.resolve` (an explicit tenant wins, else the ambient one), so a memory composition carries the same `tenantId` the SQL one does. Historic rows and single-tenant deployments read back `None`.
 
 _Previous: [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none) | Next: [BEH-EA-232](28-tenancy.md#beh-ea-232-the-identity-directory-is-global-across-tenants)_
 

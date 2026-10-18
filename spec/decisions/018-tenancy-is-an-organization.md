@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-018 |
-> | Revision | 1.5 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.6 |
+> | Effective Date | 2026-10-18 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, DRS-005, SAM-006, CSG-009; wayfinder ticket 18); 1.1 (2026-09-29): per-tenant configuration adopted by password, sessions, oauth, passkey, jwt and admin (EP-007) <br> 1.2 (2026-10-13): Decision 10: plugin tables declare their tenancy, the cross-tenant witness lifts RLS; decision 5 covers plugin tables (plan 05) <br> 1.3 (2026-10-13): Decision 9: suspension is `OrganizationDirectory.suspend` with hooks, and AdminTenants is its caller (ADR-EA-040, architecture plan 04) <br> 1.4 (2026-10-13): Decision 3: tenant stamping lives at the store adapters through `Tenant.stamp` (both families) (plan 02, ADR-EA-041) <br> 1.5 (2026-10-18): Decision 8: admin reads every `AdminConfig` field per operation through one gate whose configuration reference is private (plan 13) |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, DRS-005, SAM-006, CSG-009; wayfinder ticket 18); 1.1 (2026-09-29): per-tenant configuration adopted by password, sessions, oauth, passkey, jwt and admin (EP-007) <br> 1.2 (2026-10-13): Decision 10: plugin tables declare their tenancy, the cross-tenant witness lifts RLS; decision 5 covers plugin tables (plan 05) <br> 1.3 (2026-10-13): Decision 9: suspension is `OrganizationDirectory.suspend` with hooks, and AdminTenants is its caller (ADR-EA-040, architecture plan 04) <br> 1.4 (2026-10-13): Decision 3: tenant stamping lives at the store adapters through `Tenant.stamp` (both families) (plan 02, ADR-EA-041) <br> 1.5 (2026-10-18): Decision 8: admin reads every `AdminConfig` field per operation through one gate whose configuration reference is private (plan 13); 1.6 (2026-10-18): the implemented line names the store adapters instead of `Repositories.ts`; no decision change (plan 16) |
 
 ---
 
@@ -65,7 +65,7 @@ RLS is defence in depth, not the primary authorization control ([ADR-EA-009](009
 
 **Trade-off accepted**: users and accounts are global, so a tenant cannot have its own private namespace of emails. That is the price of "one person, many organizations", and the directory stays the one thing sharding cannot split.
 
-Implemented: `packages/ports/src/Tenant.ts`, `packages/core/src/Tenant.ts`, `packages/sql/src/{CoreMigrations,Models,Repositories,TenantScope}.ts`, and the organization/OAuth pieces named above. Behaviors: [BEH-EA-230](../behaviors/28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none) through BEH-EA-237. Data-location guidance for deployers is in `packages/sql/README.md`, "Data location & residency".
+Implemented: `packages/ports/src/Tenant.ts`, `packages/core/src/Tenant.ts`, `packages/sql/src/{CoreMigrations,Models,TenantScope}.ts` and the store adapters (`*StoreSql.ts`), and the organization/OAuth pieces named above. Behaviors: [BEH-EA-230](../behaviors/28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none) through BEH-EA-237. Data-location guidance for deployers is in `packages/sql/README.md`, "Data location & residency".
 
 ### Revision note (plan 13)
 

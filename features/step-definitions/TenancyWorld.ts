@@ -8,7 +8,7 @@
 //
 //  - `identity`: `Users`/`Accounts`/`Sessions`/`Verification`/`AuditLog` over a real in-memory
 //    SQLite database migrated by core's own migrations. Tenant *stamping* (BEH-EA-231) and the
-//    global identity directory (BEH-EA-232) are properties of the repositories and of the
+//    global identity directory (BEH-EA-232) are properties of the store adapters and of the
 //    schema's unique constraints, which the memory twins cannot show.
 //  - `organizations`: the Organization plugin over its memory records, plus `AdminTenants`
 //    (suspension, BEH-EA-237), the qadi `relationships` resolver and the application's

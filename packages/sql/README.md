@@ -1,6 +1,6 @@
 # @awthaq/sql
 
-The persistence stratum: the entities, repositories and migrations behind `@awthaq/core`'s SQL-backed services, plus the operations notes for running them. It sits below `@awthaq/core` (which re-exports its id brands) and above nothing but `@awthaq/ports` (`Encryption`). See [`spec/overview.md`](../../spec/overview.md) for the package map and [`spec/behaviors/05-persistence-stratum.md`](../../spec/behaviors/05-persistence-stratum.md) (BEH-EA-033–040) and [ADR-EA-004](../../spec/decisions/004-database-neutral-models.md) for the contract.
+The persistence stratum: the entities, the SQL store adapters and the migrations behind `@awthaq/core`'s SQL-backed services, plus the operations notes for running them. It sits below `@awthaq/core` (which re-exports its id brands) and above nothing but `@awthaq/ports` (`Encryption`). See [`spec/overview.md`](../../spec/overview.md) for the package map and [`spec/behaviors/05-persistence-stratum.md`](../../spec/behaviors/05-persistence-stratum.md) (BEH-EA-033–040) and [ADR-EA-004](../../spec/decisions/004-database-neutral-models.md) for the contract.
 
 ## What ships
 
@@ -8,6 +8,7 @@ The persistence stratum: the entities, repositories and migrations behind `@awth
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Models`              | `makeModels(dialect)` — the `User`, `Account`, `Session`, `VerificationToken`, `VerificationReservation` `Model.Class` entities with the boolean/DateTime wire codec of the given dialect (`"pg"` or `"sqlite"`); `dialectFields(dialect)` / `resolveDialect(sql)` for record stores that declare their own `SqlSchema` structs; the id brands `UserId`, `AccountId`, `SessionId`, `VerificationTokenId` |
 | `UserStoreSql`, `AccountStoreSql` (requires `Encryption`), `SessionStoreSql`, `VerificationStoreSql` (tokens and the reservation claim), `AuditLogStoreSql`, `RelayCursorStoreSql` | the SQL adapters of the core store ports (`@awthaq/ports`), built over the ambient `SqlClient`. `Persistence.sql()` composes them; provide a `SqlClient` and `Encryption` |
+| `CoreStoresSql` | `CoreStoresSql.layer({ encryptPii? })`: every core store adapter, `SqlTransaction.layerSql` over the same client and the `SealedColumn.Deployed` list, in one layer; `Persistence.sql` in `@awthaq/core` is that function. Requires `SqlClient` and `Encryption`. Each adapter's own layer stays public (`UserStoreSql.layer`/`layerSealedPii`, `SessionStoreSql.layer`/`layerSealedPii`, …), so a deployment that swaps one store (a KV session store, ADR-EA-014) composes the others itself |
 | `CoreMigrations`      | `coreMigrations` — 29 forward-only migrations for the tables above, with one `pg` and one `sqlite` branch each                                                                                                                                                                                                                                                                                           |
 | `RateLimiterStoreSql` | an opt-in SQL store for `@awthaq/core`'s rate limiter, with its own migration and tracking table                                                                                                                                                                                                                                                                                                         |
 
@@ -28,7 +29,7 @@ The package depends only on `effect`'s `SqlClient`; no driver is a runtime depen
 | --------------------------------------------------------- | -------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@effect/sql-pg`                                          | `pg`     | Node, Bun, Deno (TCP) | supported; the real-Postgres suite runs (`pnpm run test:pg`)                                                                                                                                                                                                           |
 | `@effect/sql-sqlite-node`                                 | `sqlite` | Node (`node:sqlite`)  | supported; the default test target (`:memory:` and a WAL file)                                                                                                                                                                                                         |
-| `@effect/sql-libsql` (libSQL / Turso, HTTP or `file:`)    | `sqlite` | edge, workers, Node   | supported; the shared contract cases and `coreMigrations` pass over a `file:` database (`test/Repositories.libsql.test.ts`), including `Migrator`'s `withTransaction`. Remote `libsql:`/`https:` URLs use the same client, but only the `file:` path is exercised here |
+| `@effect/sql-libsql` (libSQL / Turso, HTTP or `file:`)    | `sqlite` | edge, workers, Node   | supported; the whole `StoreContract` and `coreMigrations` pass over a `file:` database (`@awthaq/test`'s `StoreContract.libsql.test.ts`), including `Migrator`'s `withTransaction`. Remote `libsql:`/`https:` URLs use the same client, but only the `file:` path is exercised here |
 | `@effect/sql-d1` (Cloudflare D1), `@effect/sql-sqlite-do` | `sqlite` | workers               | **not exercised.** The `sqlite` branches use only portable SQL, but `Migrator` wraps the whole pending batch in `sql.withTransaction` and D1 has no interactive transactions, so run migrations from Node against the same database instead                            |
 | `@effect/sql-pglite`                                      | `pg`     | WASM, in-process      | untested; same `pg` branches                                                                                                                                                                                                                                           |
 | MySQL, MSSQL, ClickHouse                                  | —        | —                     | unsupported: `CoreMigrations` and `resolveDialect` die on them                                                                                                                                                                                                         |
@@ -37,7 +38,7 @@ The deployment split that follows from this: **edge runtimes** (Workers, Vercel 
 
 ## Postgres client configuration
 
-The repositories share the client you give them with the rest of your application, and they never override its codecs. Configure the pool for your environment; the defaults are not an operations posture.
+The store adapters share the client you give them with the rest of your application, and they never override its codecs. Configure the pool for your environment; the defaults are not an operations posture.
 
 ```ts
 import * as PgClient from "@effect/sql-pg/PgClient";
@@ -74,7 +75,7 @@ const PgLive = PgClient.layerConfig({
   // PgClient.layerConfig({ url, types })
   ```
 
-  `test/Repositories.postgres.test.ts` proves a re-run applies nothing with it; the plugin store suites use the same codec (`TestSql` in `@awthaq/test`, `packages/test/src/TestSql.ts`).
+  `test/CoreMigrations.postgres.test.ts` proves a re-run applies nothing with it; the plugin store suites use the same codec (`TestSql` in `@awthaq/test`, `packages/test/src/TestSql.ts`).
 
 - **Timeouts.** Set `statement_timeout` at the role level (`ALTER ROLE app SET statement_timeout = '5s'`), which works regardless of pooler. Pool exhaustion surfaces as the driver's own error; distinguishing it is an upstream `@effect/sql-pg` concern.
 
@@ -97,7 +98,7 @@ const PgLive = PgClient.layerConfig({
 - **Busy timeout.** With a single process there is no contention. If a second process (a backup tool, a migration run, `sqlite3` shell) writes concurrently, writers wait up to `busyTimeout` (`SqliteClient.layer({ filename, busyTimeout: "10 seconds" })`) and then fail with a `SqlError`. `node:sqlite` is synchronous, so a long wait blocks the event loop.
 - **One writer, one instance.** SQLite serializes writers, and the WAL index lives in shared memory of one host. Run **one app instance per database file**, on a local disk (not NFS/SMB). Horizontal scale needs Postgres.
 
-The suite proves the compare-and-swap primitives (`Sessions.touch`, `VerificationReservations.claim`) across two connections on one WAL file (`test/Repositories.file.test.ts`).
+The suite proves the compare-and-swap primitives (`SessionStore.rotate`, `VerificationStore.reserve`) across two connections on one WAL file (`test/SqliteWal.test.ts`).
 
 ## Running migrations
 
@@ -133,7 +134,7 @@ A new _unique_ index over existing data fails if the data already violates it (f
 - **Booleans.** `BOOLEAN` on Postgres, `0 | 1` on SQLite. `Models.makeModels(dialect)` is the only place that difference exists; every JSON variant is identical across dialects.
 - **Opaque JSON is `TEXT` on every dialect** (`verification_tokens.payload`, `auth_audit_log.payload`, `users.metadata`), encoded with `Schema.fromJsonString`. A Postgres-only `JSONB` branch is added when a feature must query payload contents server-side; until then the absence is deliberate (ADR-EA-004, revision 1.1).
 - **Email.** Compared by JavaScript `toLowerCase()` at the domain boundary; the unique index is `lower(email)` (BEH-EA-041).
-- **Spans.** Every hand-written repository method is wrapped in a `<Prefix>.<method>` span (`Users.findByEmail`) with id-only attributes; nothing secret or personal is ever an attribute.
+- **Spans.** Every hand-written statement of a store adapter is wrapped in a `<Prefix>.<method>` span (`Users.findByEmail`) with id-only attributes; nothing secret or personal is ever an attribute.
 
 ## Multi-tenancy
 
@@ -154,7 +155,7 @@ yield * TenantScope.enableRls(); // idempotent; sessions, verification_tokens/re
 yield * handler.pipe(TenantScope.withTenant("acme"));
 ```
 
-Inside `withTenant`, a forgotten application filter, a cross-tenant `UPDATE` and a forged cross-tenant `INSERT` all fail closed at the database (proven by `test/Repositories.postgres.test.ts`). The policy is deliberately fail-open when no tenant is set, so a single-tenant deployment, a migration and a maintenance script keep working with RLS on. `enableRls`/`disableRls` are idempotent functions, not numbered migrations: RLS is an operator's reversible choice, not a step every deployment must apply in order. The tenant transaction is a unit of work (`SqlTransaction.transactional`, ADR-EA-037): an event published inside it reaches live subscribers only when the request's transaction commits, and an attempt event is recorded after it ends, on its own connection (the policy admits an unset tenant, and the row is stamped with the event's tenant). SQLite has no RLS; there `withTenant` only provides the ambient tenant, with no transaction and so no deferral. Rows written before you adopted tenancy have `NULL` and are invisible inside a tenant scope, so backfill before enabling.
+Inside `withTenant`, a forgotten application filter, a cross-tenant `UPDATE` and a forged cross-tenant `INSERT` all fail closed at the database (proven by `test/TenantScope.postgres.test.ts`). The policy is deliberately fail-open when no tenant is set, so a single-tenant deployment, a migration and a maintenance script keep working with RLS on. `enableRls`/`disableRls` are idempotent functions, not numbered migrations: RLS is an operator's reversible choice, not a step every deployment must apply in order. The tenant transaction is a unit of work (`SqlTransaction.transactional`, ADR-EA-037): an event published inside it reaches live subscribers only when the request's transaction commits, and an attempt event is recorded after it ends, on its own connection (the policy admits an unset tenant, and the row is stamped with the event's tenant). SQLite has no RLS; there `withTenant` only provides the ambient tenant, with no transaction and so no deferral. Rows written before you adopted tenancy have `NULL` and are invisible inside a tenant scope, so backfill before enabling.
 
 **Plugin tables (plan 05).** Every plugin declares each table it owns as Partitioned (a nullable `"tenantId"`, stamped at insert), Keyed (the organization id is the row's own key), Derived (scoped through a parent table) or Global (deliberately tenant-blind, with a reason), and `Auth.make` exposes the declarations as `auth.tenancy`. RLS covers them when you hand them over:
 
@@ -195,18 +196,18 @@ What this package encrypts, and what it does not:
 
 For SOC 2 / GDPR posture, **full-disk or database-level encryption and TLS to the database are deployer responsibilities** and are assumed for every plaintext column above.
 
-**Opt in to PII column encryption** with `Persistence.sql({ encryptPii: true })` (`@awthaq/core`). It chooses the encrypted repositories, which puts `Encryption` in their requirements (so forgetting to provide it is a compile error), and provides `SealedColumn.Deployed` listing exactly the columns it seals:
+**Opt in to PII column encryption** with `Persistence.sql({ encryptPii: true })` (`@awthaq/core`). It chooses the sealing store layers, which puts `Encryption` in their requirements (so forgetting to provide it is a compile error), and provides `SealedColumn.Deployed` listing exactly the columns it seals:
 
 ```ts
-Repositories.SessionsRepositoryEncryptedLive; // sessions.ipAddress / userAgent, AAD `sessions:<id>:<field>`
-Repositories.UsersRepositoryEncryptedLive; // users.metadata, AAD `users:<id>:metadata`
+SessionStoreSql.layerSealedPii; // sessions.ipAddress / userAgent, AAD `sessions:<id>:<field>`
+UserStoreSql.layerSealedPii; // users.metadata, AAD `users:<id>:metadata`
 ```
 
 All six core sealed columns are declared `SealedColumn`s (`CoreSealedColumns`) and follow the same rules as a plugin's: the store ports hand them to the domain sealed, and the domain decides what an unreadable one means (`Users` and `Sessions` degrade `metadata`, `ipAddress` and `userAgent` to absent with a warning; `Accounts.findProviderTokens` fails `ProviderTokensUnreadable`). Rows written earlier as plaintext keep working and are sealed on their next read (or immediately on write); `SealedColumnConfig.resealOnRead: false` turns the read-time sealing off. A value that has the envelope shape but fails authentication (moved to another row, tampered) is `SealedColumn/Unreadable` and is logged by its ids, never read as plaintext. After a key rotation run `SealedColumn.sweepDeployed` (the runbook in `docs/plugin-authoring.md`). Turning `encryptPii` off after it was on is unsupported: a plaintext adapter would hand back the envelope text as the value. Encrypted columns cannot be filtered or indexed on, which none of these are.
 
 ## Read replicas
 
-Off by default, and additive: with nothing configured every read uses the primary. To route display/history listings to a Postgres streaming replica, provide the replica's client once, at the top of the application (so both the repositories and the effects that capture tokens see it):
+Off by default, and additive: with nothing configured every read uses the primary. To route display/history listings to a Postgres streaming replica, provide the replica's client once, at the top of the application (so both the store adapters and the effects that capture tokens see it):
 
 ```ts
 import { ReadRouting } from "@awthaq/sql";
@@ -216,7 +217,7 @@ const AppLive = Layer.mergeAll(/* … */).pipe(
 );
 ```
 
-What may read the replica is decided per read, and the default is the primary: writes, `Users`, `Accounts`, `Sessions` point reads and CAS, and everything in `Verification`/`VerificationReservations` are always primary — a revoked or rotated session is authoritative on the very next read (ADR-EA-014). Only `Sessions.listByUser(…, { consistency: "eventual" })` (a device list; never a liveness check) and `AuditLog.list` (eventual by default; pass `{ consistency: "authoritative" }` to force the primary) may use it. Read-your-writes: a service that writes and then lists on the same fiber wraps the write in `ReadRouting.captureToken`; eventual reads on that fiber then use the replica only after it has replayed past the write (Postgres: `pg_last_wal_replay_lsn()`), else the primary. The token does not cross requests yet (ADR-EA-024, decision 4). Replication lag is otherwise the replica's own; monitor it, and treat an eventual listing as up to that stale.
+What may read the replica is decided per read, and the default is the primary: writes, the `UserStore` and `AccountStore` reads, `SessionStore` point reads and CAS, and everything in `VerificationStore` are always primary — a revoked or rotated session is authoritative on the very next read (ADR-EA-014). Only `SessionStore.listLive({ …, consistency: "eventual" })` (a device list; never a liveness check) and `AuditLogStore.select`/`pageAfter` (the caller passes the consistency; `"authoritative"` forces the primary) may use it. Read-your-writes: the session adapter's writes capture the causal token themselves (`SessionStore.insert`, `rotate`, `remove`, `removeForUser`, `flagReuse`; a service of your own that writes elsewhere wraps its write in `ReadRouting.captureToken`); eventual reads on that fiber then use the replica only after it has replayed past the write (Postgres: `pg_last_wal_replay_lsn()`), else the primary. The token does not cross requests yet (ADR-EA-024, decision 4). Replication lag is otherwise the replica's own; monitor it, and treat an eventual listing as up to that stale.
 
 ## Testing
 
@@ -225,7 +226,7 @@ pnpm --filter @awthaq/sql test    # :memory: SQLite, a temp-file WAL database, a
 pnpm run test:pg                  # + the real-Postgres suites, against a throwaway postgres:16 container
 ```
 
-`test/contract.ts` holds the dialect-neutral contract cases as one function, run by the `:memory:`, file-backed and real-Postgres suites, so a case added there runs on every dialect. `AWTHAQ_POSTGRES_URL` points the Postgres suites at an existing server instead; they drop and recreate the core tables, so use a scratch database. Without it the `*.postgres.test.ts` files skip.
+`@awthaq/test`'s `StoreContract` holds each port's cases as data and runs them on the `Ref` adapters, `:memory:` SQLite, a WAL file, libSQL and Postgres, so a case added there runs on every adapter and dialect; what only SQL can show (ciphertext at rest, query plans, statement spans, timestamps on disk, two-connection locking) is tested once beside its adapter, with `test/support/FaultySql.ts` failing a statement at the SQL client for the failure-mapping and retry cases. `AWTHAQ_POSTGRES_URL` points the Postgres suites at an existing server instead; they drop and recreate the core tables, so use a scratch database. Without it the `*.postgres.test.ts` files skip.
 
 The plugin record-store suites (admin, jwt, organization, passkey, roles, qadi claims, migrate-better-auth) build their database through `TestSql` (`import { TestSql } from "@awthaq/test"`, `packages/test/src/TestSql.ts`): `:memory:` SQLite normally, but under `AWTHAQ_POSTGRES_URL` the _same tests_ run on Postgres, each suite in its own schema, which is what `pnpm run test:pg` does. `TestSql.injectFailure` makes an atomicity test fail a statement for real on either dialect.
 

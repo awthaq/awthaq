@@ -10,10 +10,10 @@ import * as SealedColumn from "../SealedColumn.ts";
 
 /**
  * One codec over a sealed column (`SealedColumn.codec`): `seal` for writes, `sealed` wraps a stored
- * cell for a record. The default repositories build none and hand out `Sealed.plain`; the encrypted
- * ones (`Users`/`SessionsRepositoryEncryptedLive`) build one per `CoreSealedColumns` declaration, which
+ * cell for a record. The default store layers build none and hand out `Sealed.plain`; the sealing
+ * ones (`UserStoreSql`/`SessionStoreSql` `layerSealedPii`) build one per `CoreSealedColumns` declaration, which
  * puts `Encryption` in the layer's requirements, so forgetting to provide it is a compile error, not a
- * runtime surprise. Rows leave a repository as stored: the sealed cell is opened where the domain needs it.
+ * runtime surprise. Rows leave a store adapter as stored: the sealed cell is opened where the domain needs it.
  */
 export type ColumnCodec = Effect.Success<ReturnType<typeof SealedColumn.sqlCodec>>;
 

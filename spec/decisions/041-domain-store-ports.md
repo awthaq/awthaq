@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-041 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-10-18 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 02) <br> 1.1 (2026-10-13): Status flipped to Accepted, implemented: every phase of plan 02 shipped; `layerMemory` and `layerSql` removed from the five modules in favour of `Persistence.memory`/`Persistence.sql()` <br> 1.2 (2026-10-18): the bundles provide `RelayCursorStore` too and `StoreContract.relayCursor` is its bar: the relay's position joins the seam, closing plan 02's non-goal (architecture plan 23) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 02) <br> 1.1 (2026-10-13): Status flipped to Accepted, implemented: every phase of plan 02 shipped; `layerMemory` and `layerSql` removed from the five modules in favour of `Persistence.memory`/`Persistence.sql()` <br> 1.2 (2026-10-18): the bundles provide `RelayCursorStore` too and `StoreContract.relayCursor` is its bar: the relay's position joins the seam, closing plan 02's non-goal (architecture plan 23) <br> 1.3 (2026-10-18): decision 3 and 4: the SQL adapters own their statements and `Persistence.sql` is `CoreStoresSql.layer`; there is no repository layer; decision 6 runs on libSQL; alternative (d) recorded (architecture plan 16) |
 
 ---
 
@@ -26,13 +26,13 @@ The drift lives in the I/O sequencing around persistence, not in the pure rules,
 
 **2. Every primitive on a port is atomic by contract.** A read-modify-write the domain relies on (a revoke that must publish once, a CAS rotation, a once-only reuse flag, a last-account check, a verification claim-or-spend) is a single primitive whose atomicity is part of its stated contract: one `Ref.modify` in the memory adapter, one statement or one transaction in the SQL adapter. A primitive fails only with the typed `StoreUnavailable` (ADR-EA-028).
 
-**3. Placement.** The ports, the pure contract helpers (`isLive`, `evictionOrder`, `unionMethods`) and the `Ref` adapters live in `@awthaq/ports` (stratum 2, beside `RateLimiter`'s store, the precedent); the SQL adapters, over the existing repositories, live in `@awthaq/sql` (stratum 3); the domain services and the matched bundles live in `@awthaq/core` (stratum 4). The identifier brands move to `@awthaq/ports` (`Ids`), re-exported by `@awthaq/sql`'s `Models`, so a port and its adapters share one type.
+**3. Placement.** The ports, the pure contract helpers (`isLive`, `evictionOrder`, `unionMethods`) and the `Ref` adapters live in `@awthaq/ports` (stratum 2, beside `RateLimiter`'s store, the precedent); the SQL adapters, each owning its statements, sealing hook, tenant stamp and dialect branches, live in `@awthaq/sql` (stratum 3) and there is no repository layer beneath them (plan 16); the domain services and the matched bundles live in `@awthaq/core` (stratum 4). The identifier brands move to `@awthaq/ports` (`Ids`), re-exported by `@awthaq/sql`'s `Models`, so a port and its adapters share one type.
 
-**4. Matched bundles.** `Persistence.memory` provides every `Ref` store (the five domain stores and the event relay's `RelayCursorStore`) plus `SqlTransaction.layerNoop`; `Persistence.sql(options)` provides every SQL store plus `SqlTransaction.layerSql` over one `SqlClient`. A composition cannot pair a memory store with a SQL transaction by accident, and the README quickstart drops from six repositories and five layers to one call. One store may still be swapped (ADR-EA-014): it then sits outside the `SqlTransaction`, so its participation in erasure (ADR-EA-031) must be idempotent and retry-safe.
+**4. Matched bundles.** `Persistence.memory` provides every `Ref` store (the five domain stores and the event relay's `RelayCursorStore`) plus `SqlTransaction.layerNoop`; `Persistence.sql(options)` (`@awthaq/sql`'s `CoreStoresSql.layer`) provides every SQL store plus `SqlTransaction.layerSql` over one `SqlClient`. A composition cannot pair a memory store with a SQL transaction by accident, and the README quickstart drops from six repositories and five layers to one call. One store may still be swapped (ADR-EA-014): it then sits outside the `SqlTransaction`, so its participation in erasure (ADR-EA-031) must be idempotent and retry-safe.
 
 **5. One adapter substrate.** `@awthaq/sql`'s `SqlStore.write`/`read` wrap `StoreFailure` (plan 05): an outage is `StoreUnavailable`, a decode failure is a defect, a transient failure is retried at the top level only (never inside a caller's transaction), and a primitive that changes what a replica-eligible listing returns captures the causal token (ADR-EA-024). The tenant-stamp rule is `Tenant.stamp`/`Tenant.resolve` in `@awthaq/ports`, used by both adapter families.
 
-**6. The contract suite is the adapter bar.** `@awthaq/test`'s `StoreContract` holds each port's cases as data (`auditLog`, `verification`, `accounts`, `users`, `sessions`, `relayCursor`), concurrency cases included, and runs on the `Ref` adapters, SQLite `:memory:`, SQLite WAL file and Postgres (`pnpm test:pg`). An adapter, including a third party's KV `SessionStore`, is acceptable when it passes. Domain tests run once, on the `Ref` adapters.
+**6. The contract suite is the adapter bar.** `@awthaq/test`'s `StoreContract` holds each port's cases as data (`auditLog`, `verification`, `accounts`, `users`, `sessions`, `relayCursor`), concurrency cases included, and runs on the `Ref` adapters, SQLite `:memory:`, SQLite WAL file, libSQL and Postgres (`pnpm test:pg`). An adapter, including a third party's KV `SessionStore`, is acceptable when it passes. Domain tests run once, on the `Ref` adapters.
 
 **7. Operation labels stay at the service level.** `StoreUnavailable.operation` is visible on the wire and asserted by tests. Adapters log the precise primitive (`SessionStore.flagReuse`); the domain relabels the failure to the service operation (`Sessions.verify`), so wire labels do not change.
 
@@ -49,6 +49,7 @@ The drift lives in the I/O sequencing around persistence, not in the pure rules,
 - **(a) Ports in `@awthaq/core`, SQL adapters in `@awthaq/sql`.** Makes `@awthaq/sql` depend on core while core depends on sql: a package cycle that `tsc -b` refuses and `pnpm circular` flags.
 - **(b) Ports and both adapters in `@awthaq/sql`.** No cycle, but a KV backend would depend on a package named `sql`, and ADR-EA-014's "`Sessions` is a port" would stay nominal.
 - **(c) Ports in `@awthaq/ports`, the memory adapter beside each port, SQL adapters in `@awthaq/sql`**, chosen: the exact precedent of `RateLimiter.RateLimiterStore` and `RateLimiterStoreSql`.
+- **(d) SQL adapters over repositories** (plan 02's interim choice). Reversed by plan 16: each repository had exactly one caller, so the second seam bought no substitution; it doubled every row shape and split each primitive's atomicity argument across two files.
 - **Keep the twins with a shared helper module.** Rejected: the helpers already exist; the drift is in the I/O sequencing, which only an atomic seam fixes.
 - **Transactional memory (`TxRef`) now.** Rejected for this decision: plans 01 and 07 already give memory compositions compensation where a unit must leave nothing behind, and `Effect.tx` re-runs a body on conflict, including its publishes and crypto, which would need every service re-audited. Revisit if memory compositions need real rollback.
 

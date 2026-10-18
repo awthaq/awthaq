@@ -209,7 +209,7 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
 }) {}
 ```
 
-`Notes.records.memory` and `Notes.records.sql` are static members: a host picks one the way it picks a database, and `TestAuth.layer` selects one per composition. Three mistakes fail to compile, each naming the offending key:
+Core's own SQL stores have the same one-layer shape (plan 16): each `*StoreSql.layer` builds its `SqlSchema` statements and `SqlModel.makeRepository` CRUD inside the layer, over the ambient `SqlClient`, with no repository service beneath it, and `CoreStoresSql.layer()` bundles them the way `records.sql` bundles a plugin's. `Notes.records.memory` and `Notes.records.sql` are static members: a host picks one the way it picks a database, and `TestAuth.layer` selects one per composition. Three mistakes fail to compile, each naming the offending key:
 
 - **A missing store.** `AuthPlugin.layer` refuses a layer that requires a `/records/` store neither the plugin's own bundle nor a `dependsOn` plugin's bundle provides (`declare these record stores in AuthPlugin.Service's records`). A store another plugin owns comes from its bundle through `dependsOn`.
 - **A mismatched pair.** `memory` and `sql` must provide the same stores (`sql provides stores memory does not`, and the reverse).

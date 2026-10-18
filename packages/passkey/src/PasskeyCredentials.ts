@@ -4,7 +4,7 @@
 // persistence for the `passkey_credential` table (ticket 06) — a real
 // `Model.Class` built directly against `effect/unstable/schema`'s `Model`
 // and `effect/unstable/sql`'s `SqlSchema`, the same primitives
-// `@awthaq/sql`'s own `Models.ts`/`Repositories.ts` are built from, not
+// `@awthaq/sql`'s own `Models.ts` and store adapters are built from, not
 // imported from that package: this table belongs to the plugin, not the
 // shared persistence stratum.
 //

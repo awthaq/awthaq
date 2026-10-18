@@ -11,7 +11,7 @@
 // and timestamps as ISO strings, while `@effect/sql-pg`'s binary protocol
 // returns a JS `boolean`/`Date`, so `makeModels(dialect)` selects the
 // database-variant codec of just those columns. Every JSON variant is
-// byte-identical across dialects; nothing above the repository boundary can
+// byte-identical across dialects; nothing above the store adapters can
 // observe which dialect built a model.
 //
 // This package sits below `@awthaq/core` (spec/overview.md's stratum
@@ -206,7 +206,7 @@ export const resolveDialect = (sql: SqlClient.SqlClient): Effect.Effect<Dialect>
  * BEH-EA-041/042: `email` is compared case-insensitively unique by the
  * calling domain service (which lower-cases before every read and write);
  * `emailVerified` is excluded from the generic `update`/`jsonUpdate`
- * variants so a repository's ordinary `update` call cannot flip it —
+ * variants so an ordinary `update` cannot flip it —
  * only a dedicated operation (BEH-EA-042) may.
  *
  * FAMS-002/SAM-003 (wayfinder ticket 09): the domain layer's `UserIdentity`
@@ -214,8 +214,7 @@ export const resolveDialect = (sql: SqlClient.SqlClient): Effect.Effect<Dialect>
  * and `users_phone_unique` stay real database constraints. Both columns are
  * nullable with a `null` constructor default (an Anonymous row sets neither),
  * and — like `emailVerified` — excluded from `update`/`jsonUpdate`: an identity
- * only changes through the repository's dedicated `promoteIdentity`/
- * `changeEmail`/`verify*` writes. SCP-001: `status` (and its reason/expiry) is
+ * only changes through `UserStore.casIdentity`. SCP-001: `status` (and its reason/expiry) is
  * likewise write-gated to `setStatus`; no generic update field can touch it.
  */
 const insertOnly = <S extends Schema.Top>(schema: S) =>
@@ -225,7 +224,7 @@ const insertOnly = <S extends Schema.Top>(schema: S) =>
  * DRS-001/EP-001 (ADR-EA-018): the opaque tenant attribution column. Database
  * variants only — no JSON variant, so a client-supplied body can never name its
  * own tenant — and no `update`: a row is stamped once, at insert, from the
- * ambient `TenantContext` (`Repositories.ts` reads it; `NULL` when unset). The
+ * ambient `TenantContext` (each store adapter reads it through `Tenant.resolve`; `NULL` when unset). The
  * constructor default keeps every existing insert call site compiling.
  */
 const tenantIdField = Model.Field({
@@ -423,7 +422,7 @@ const verificationTokenFields = {
   /**
    * SOS-004: the per-token attempt budget (`NULL` = none, the default 256-bit token) and
    * how many wrong presentations have been spent. Select/insert only: they change through
-   * `VerificationRepository.recordFailedAttempt`'s one atomic statement, never a generic update.
+   * `VerificationStoreSql`'s one atomic spend statement, never a generic update.
    */
   maxAttempts: Model.Field({
     select: Schema.NullOr(Schema.Number),
@@ -460,8 +459,8 @@ const auditLogRow = <C extends Schema.Top>(occurredAt: C) =>
 // unexpired wins," never a token a caller presents back. `identifier` is its
 // own primary key (a plain, non-partial `UNIQUE`/`PRIMARY KEY` column): at
 // most one live reservation per identifier, ever. Claiming is one atomic
-// conditional upsert (`Repositories.ts`'s
-// `VerificationReservationsRepository.claim`), not a generic
+// conditional upsert (`VerificationStoreSql`'s
+// `reserve`), not a generic
 // `insert`/`update` pair — the model exists only to give that upsert's
 // `RETURNING` row a schema to decode against.
 // PV-380: the classes are declared at module scope (not inside a factory) so the emitted
@@ -588,7 +587,7 @@ const sqliteModels = {
 /**
  * TS-001: the four `Model.Class` entities (plus the reservation and audit-log
  * row schemas) with the database variants' boolean/DateTime codecs selected
- * for `dialect`. `Repositories.ts` resolves the dialect once per layer from
+ * for `dialect`. each store adapter resolves the dialect once per layer from
  * the ambient `SqlClient` (`resolveDialect`); the pg client's own codecs are
  * never overridden globally, because the ambient client is shared with the
  * host application's tables.

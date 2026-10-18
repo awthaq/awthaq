@@ -2,7 +2,7 @@
 //
 // spec/behaviors/06-domain-users-accounts.md, BEH-EA-043 through BEH-EA-045,
 // BEH-EA-047. Plan 02 (ADR-EA-041): written once, over `@awthaq/ports`' `AccountStore` (a `Ref`
-// adapter there, a SQL adapter over `@awthaq/sql`'s repository, BEH-EA-033-036). The service owns
+// adapter there, a SQL adapter in `@awthaq/sql` that owns its statements, BEH-EA-033-036). The service owns
 // the rules (the uniqueness error, the issuer convention, the last-account policy, the credential
 // hash brand, the id and the clock); the store owns persistence and the atomicity of each primitive.
 

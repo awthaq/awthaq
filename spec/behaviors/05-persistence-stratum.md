@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.6 |
+> | Revision | 1.7 |
 > | Effective Date | 2026-10-18 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` <br> 1.6 (2026-10-18): BEH-EA-034 names the canonical AADs and `Persistence.sql({ encryptPii })`; BEH-EA-324 covers core's six columns and the third treatment (a typed domain failure); BEH-EA-339 (a composition's sealed columns are swept as one list) (ADR-EA-019 revision 1.3, plan 17) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` <br> 1.6 (2026-10-18): BEH-EA-034 names the canonical AADs and `Persistence.sql({ encryptPii })`; BEH-EA-324 covers core's six columns and the third treatment (a typed domain failure); BEH-EA-339 (a composition's sealed columns are swept as one list) (ADR-EA-019 revision 1.3, plan 17) <br> 1.7 (2026-10-18): BEH-EA-035 retitled: a core store adapter owns its statements over the ambient `SqlClient` and a multi-statement primitive opens one unit (no repository layer beneath the store ports); BEH-EA-036 retitled: no store port accepts an offset, `UserStore.listPage` is the keyset subject; BEH-EA-033/034/325 name the store adapters (ADR-EA-041 revision 1.3, plan 16) |
 
 ---
 
-> Implemented in `@awthaq/sql` (`Models.ts`, `Repositories.ts`, `CoreMigrations.ts`; tests `packages/sql/test`, run against SQLite, libSQL and Postgres); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §12 and `research/10-schema-migrations.md`.
+> Implemented in `@awthaq/sql` (`Models.ts`, the store adapters `UserStoreSql`, `AccountStoreSql`, `SessionStoreSql`, `VerificationStoreSql`, `AuditLogStoreSql` and `CoreStoresSql.ts`, `CoreMigrations.ts`; tests `packages/sql/test` and `@awthaq/test`'s `StoreContract`, run against SQLite, libSQL and Postgres); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §12 and `research/10-schema-migrations.md`.
 
 ## BEH-EA-033: Every entity is a `Model.Class` with `Model.UuidV7Insert` ids
 
@@ -37,7 +37,7 @@ REQUIREMENT: `User`, `Account`, `Session`, and `VerificationToken` MUST each
              the ordinary creation path.
 ```
 
-One declaration per field stays the rule, with one deliberate exception (TS-001, wayfinder ticket 29): the per-dialect *wire codec* of the boolean and DateTime columns. `node:sqlite` binds and returns booleans as `0 | 1` and timestamps as ISO strings, while `@effect/sql-pg` returns a JS `boolean`/`Date`, so `Models.makeModels(dialect)` builds the entities with `Schema.BooleanFromBit`/`DateTimeUtcFromString` (sqlite) or `Schema.Boolean`/`DateTimeUtcFromDate` (pg) in the database variants of exactly those columns. Every JSON variant is byte-identical across dialects. Each repository layer resolves the dialect once from the ambient `SqlClient` and exposes the resulting `models`; the pg client's own codecs are never overridden, because that client is shared with the host application's tables. Record stores outside this package (admin, jwt, organization, passkey, migrate-better-auth) take the same codecs from `Models.dialectFields(dialect)`.
+One declaration per field stays the rule, with one deliberate exception (TS-001, wayfinder ticket 29): the per-dialect *wire codec* of the boolean and DateTime columns. `node:sqlite` binds and returns booleans as `0 | 1` and timestamps as ISO strings, while `@effect/sql-pg` returns a JS `boolean`/`Date`, so `Models.makeModels(dialect)` builds the entities with `Schema.BooleanFromBit`/`DateTimeUtcFromString` (sqlite) or `Schema.Boolean`/`DateTimeUtcFromDate` (pg) in the database variants of exactly those columns. Every JSON variant is byte-identical across dialects. Each store adapter resolves the dialect once from the ambient `SqlClient` and builds its own `models`; the pg client's own codecs are never overridden, because that client is shared with the host application's tables. Record stores outside this package (admin, jwt, organization, passkey, migrate-better-auth) take the same codecs from `Models.dialectFields(dialect)`.
 
 `archive/PRD.md` §12 fixes `Model.Class` as the one entity-definition mechanism, from which validation schemas, JSON variants, and repository helpers are all derived, rather than declared three separate times. `better-auth/01-core-domain/01-entities-and-invariants.md` §1 documents the same base-contract shape (an opaque, supplier-assigned `id`) as the invariant every one of better-auth's four core entities shares; awthaq's plan is to make that shared base a property of `Model.Class` itself rather than a convention each entity's author must repeat.
 
@@ -58,51 +58,57 @@ REQUIREMENT: A field declared `Model.Sensitive` MUST be excluded from every
              merely by returning the entity value.
 ```
 
-The shipped `Account` model types its token columns as plain nullable strings, not `Schema.Redacted`: `Schema.Redacted`'s *encoded* form is itself a wrapped value and cannot be bound as a SQL parameter, so the repository stratum cannot carry it. The boundary is deliberate (SMS-007): a repository row holds the plaintext token in memory only transiently, the database holds AES-GCM ciphertext bound to the row and column through additional authenticated data (`ports/Encryption`; for a provider token the AAD is `accounts:<id>:<field>`, ADR-EA-019 decision 6), `Redacted` appears at the `Encryption` seam and again from core's domain records upward (`ProviderTokenSet.accessToken` is `Redacted<string>`), and JSON exclusion is guaranteed by `Model.Sensitive` regardless of the value's wrapper type.
+The shipped `Account` model types its token columns as plain nullable strings, not `Schema.Redacted`: `Schema.Redacted`'s *encoded* form is itself a wrapped value and cannot be bound as a SQL parameter, so the store adapters cannot carry it. The boundary is deliberate (SMS-007): an adapter row holds the plaintext token in memory only transiently, the database holds AES-GCM ciphertext bound to the row and column through additional authenticated data (`ports/Encryption`; for a provider token the AAD is `accounts:<id>:<field>`, ADR-EA-019 decision 6), `Redacted` appears at the `Encryption` seam and again from core's domain records upward (`ProviderTokenSet.accessToken` is `Redacted<string>`), and JSON exclusion is guaranteed by `Model.Sensitive` regardless of the value's wrapper type.
 
-The non-secret personal-data columns — `sessions.ipAddress`, `sessions.userAgent`, `users.metadata` — are plaintext by default and encrypted through the same `Encryption` port, with row-and-column AAD (`sessions:<id>:<field>`, `users:<id>:metadata`), when the composition chooses `Persistence.sql({ encryptPii: true })` (CSG-006, option B). The choice is the layer, so the added `Encryption` requirement is a compile-time fact; `users.email` stays plaintext because it is the lookup and uniqueness key. These six columns are declared `SealedColumn`s (`CoreSealedColumns`) and follow BEH-EA-324.
+The non-secret personal-data columns — `sessions.ipAddress`, `sessions.userAgent`, `users.metadata` — are plaintext by default and encrypted through the same `Encryption` port, with row-and-column AAD (`sessions:<id>:<field>`, `users:<id>:metadata`), when the composition chooses `Persistence.sql({ encryptPii: true })` (`UserStoreSql.layerSealedPii` and `SessionStoreSql.layerSealedPii`; CSG-006, option B). The choice is the layer, so the added `Encryption` requirement is a compile-time fact; `users.email` stays plaintext because it is the lookup and uniqueness key. These six columns are declared `SealedColumn`s (`CoreSealedColumns`) and follow BEH-EA-324.
 
 `archive/PRD.md` §12 and §18 both require this: "`Model.Sensitive` for hashes and secrets so they never appear in JSON variants," and separately, "contract tests assert no `Redacted` value reaches spans or events." `better-auth/01-core-domain/01-entities-and-invariants.md` §6.1 documents the analogous rule in better-auth's schema (`returned:false` on `password`, `accessToken`, `refreshToken`, `idToken`) as a per-field attribute a schema author must set correctly; awthaq's plan folds the same guarantee into `Model.Sensitive` so the exclusion is a type-level fact about the field, not an attribute that could be omitted.
 
-## BEH-EA-035: Repositories are built with `SqlModel.makeRepository` over the ambient `SqlClient`, never opening their own transactions
+## BEH-EA-035: A core store adapter owns its statements over the ambient `SqlClient`; a multi-statement primitive opens one unit, never the caller's boundary
 
 ```ts
-const repo = yield* SqlModel.makeRepository(User, { tableName: "users", spanPrefix: "Users", idColumn: "id" })
+const crud = yield* SqlModel.makeRepository(models.Session, { tableName: "sessions", spanPrefix: "Sessions", idColumn: "id" })
 ```
 
 ```text
-REQUIREMENT: A repository MUST be a `Context.Service` built via
-             `SqlModel.makeRepository` (plus `SqlSchema` for typed one-off
-             queries) against the ambient `SqlClient`; a repository method
-             MUST NOT call `SqlClient.withTransaction` itself — transaction
-             boundaries are the calling domain service's responsibility.
+REQUIREMENT: A core SQL store adapter MUST build its statements
+             (`SqlModel.makeRepository` CRUD and `SqlSchema` queries) inside
+             its own layer, over the ambient `SqlClient`, with no intermediate
+             public service. A primitive that is one statement MUST NOT open a
+             transaction; a primitive that is several statements MUST run
+             them in one `SqlTransaction.transactional(sql)` unit, which is a
+             savepoint inside a caller's transaction and so never moves the
+             caller's boundary. Composing two primitives is the domain
+             service's job.
 ```
 
-`research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so a repository that opened its own transaction internally would silently change the atomicity boundary any caller composing two repository calls expects. Keeping repositories transaction-agnostic and letting the domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) hold the boundary is what keeps composition safe. A domain-service transaction spanning several core tables (OAuth's just-in-time create-and-link, `confirmReset`) is only atomic if those tables share one transaction domain — see [INV-EA-017](../invariants.md#inv-ea-017-the-core-identity-tables-share-one-transaction-domain-and-any-partitioning-scheme-co-locates-a-user-with-its-accounts): any sharding or partitioning scheme must co-locate a user with its accounts.
+`research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so an adapter that opened a transaction around a single statement, or a transaction of its own where the caller holds one, would silently change the atomicity boundary any caller composing two store calls expects. The domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) holds the boundary. A domain-service transaction spanning several core tables (OAuth's just-in-time create-and-link, `confirmReset`) is only atomic if those tables share one transaction domain — see [INV-EA-017](../invariants.md#inv-ea-017-the-core-identity-tables-share-one-transaction-domain-and-any-partitioning-scheme-co-locates-a-user-with-its-accounts): any sharding or partitioning scheme must co-locate a user with its accounts.
 
-**One bounded exception (OHS-002).** A plugin's own records service (`@awthaq/organization`'s `TeamRecords`, hand-written over `SqlSchema` rather than `SqlModel.makeRepository`) whose *single* operation is inherently several statements — delete a team and its membership rows, insert a membership and bump the team's `memberCount` — wraps that one operation in `SqlTransaction.transactional(sql)` (ADR-EA-037) so it is atomic even when called directly. This does not move the caller's boundary: inside a domain service's own transaction the wrapper is a savepoint, and the outer commit/rollback still decides the outcome. Composing two records calls remains the domain service's job (`Organization.delete` holds the cascade's transaction via the `SqlTransaction` port).
+Since plan 02 the store port is the seam, and since plan 16 there is no second one beneath it: each adapter (`UserStoreSql`, `AccountStoreSql`, `SessionStoreSql`, `VerificationStoreSql`, `AuditLogStoreSql`, `RelayCursorStoreSql`) holds its statements, its sealing hook, its tenant stamp, its dialect branches and its read routing, and `CoreStoresSql.layer({ encryptPii? })` bundles them (`Persistence.sql` is that function). The multi-statement primitives are `AccountStore.deleteUnlessLast`, `SessionStore.flagReuse`/`reauthenticate`/`insert` with a supersede or a cap, `UserStore.casIdentity` (a savepoint, so a unique violation is `Taken` and does not abort the caller's transaction), `AuditLogStore.rewriteReferencing` and `VerificationStore.transaction` (ADR-EA-041 decision 2); every other primitive is one statement.
 
-**Read replicas (RRC-001, [ADR-EA-024](../decisions/024-read-replica-routing.md)).** Everything above assumes one primary: a read issued after a committed write sees it. Replica routing is opt-in (`ReadRouting.replica(layer)`) and never changes that for anything that decides liveness or authorization: every write, `Users`/`Accounts` read, `Sessions` point read and CAS, and all `Verification`/`VerificationReservations` methods are primary-pinned, and carry write results back with `RETURNING` rather than re-reading. Only display/history listings may ask for `consistency: "eventual"` (`Sessions.listByUser`, `AuditLog.list`), and an eventual read on a fiber that has written (`ReadRouting.captureToken`) goes to the replica only once it has replayed past that write, else to the primary.
+**The same rule for plugin records (OHS-002).** A plugin's own records service (`@awthaq/organization`'s `TeamRecords`, hand-written over `SqlSchema`) whose *single* operation is inherently several statements — delete a team and its membership rows, insert a membership and bump the team's `memberCount` — wraps that one operation in `SqlTransaction.transactional(sql)` (ADR-EA-037) so it is atomic even when called directly. This does not move the caller's boundary: inside a domain service's own transaction the wrapper is a savepoint, and the outer commit/rollback still decides the outcome. Composing two records calls remains the domain service's job (`Organization.delete` holds the cascade's transaction via the `SqlTransaction` port).
 
-Every hand-written repository method (anything `SqlModel.makeRepository` does not generate) is wrapped in a span named `<spanPrefix>.<method>` — `Users.findByEmail`, `Sessions.touch`, `VerificationTokens.tryConsume` — matching the convention `SqlModel` uses for its own CRUD methods, so a trace reads `Users.findByEmail > sql.execute` (EOTS-008). Span attributes are ids only (a user, session or account id); never an email, identifier, hash, token, provider subject or payload (BEH-EA-199).
+**Read replicas (RRC-001, [ADR-EA-024](../decisions/024-read-replica-routing.md)).** Everything above assumes one primary: a read issued after a committed write sees it. Replica routing is opt-in (`ReadRouting.replica(layer)`, provided above the bundle) and never changes that for anything that decides liveness or authorization: every write, `UserStore`/`AccountStore` read, `SessionStore` point read and CAS, and all `VerificationStore` primitives are primary-pinned, and carry write results back with `RETURNING` rather than re-reading. Only display/history listings may ask for `consistency: "eventual"` (`SessionStore.listLive`, `AuditLogStore.select`/`pageAfter`), and an eventual read on a fiber that has written (`ReadRouting.captureToken`, wired by the session adapter's writes) goes to the replica only once it has replayed past that write, else to the primary.
 
-## BEH-EA-036: Pagination is keyset-only; no repository interface accepts an offset
+Every hand-written statement (anything `SqlModel.makeRepository` does not generate) is wrapped in a span named `<spanPrefix>.<method>` — `Users.findByEmail`, `Sessions.touch`, `VerificationTokens.tryConsume` — matching the convention `SqlModel` uses for its own CRUD methods, so a trace reads `Users.findByEmail > sql.execute` (EOTS-008). Span attributes are ids only (a user, session or account id); never an email, identifier, hash, token, provider subject or payload (BEH-EA-199).
+
+## BEH-EA-036: Pagination is keyset-only; no store port accepts an offset
 
 ```ts
-type Cursor = { readonly createdAt: DateTime.Utc; readonly id: string }
-listByUser: (userId: UserId, now: DateTime.Utc, cursor?: Cursor, limit?: number) => Effect.Effect<Page<Session>, RepositoryError>
+type UserCursor = { readonly createdAt: DateTime.Utc; readonly id: string }
+listPage: (input: { after: Option<UserCursor>; limit: number }) => Effect<{ items: ReadonlyArray<StoredUser>; next: Option<UserCursor> }, StoreUnavailable>
 ```
 
 ```text
-REQUIREMENT: No repository's public interface MAY accept an offset
-             parameter; every paginated query MUST accept an opaque cursor
+REQUIREMENT: No store port's public interface MAY accept an offset
+             parameter; every paginated primitive MUST accept an opaque cursor
              derived from `(createdAt, id)` and return the next cursor
              alongside the page.
 ```
 
-`research/10-schema-migrations.md` Q72 and Q79 cite the reason directly: offset pagination forces the database to walk and discard every skipped row, a cost that grows linearly with the offset (Winand, "No Offset"; Slack's own migration off offset pagination is cited as the production case study). Session and verification-token tables are append-mostly with a monotonic `(createdAt, id)`, which is exactly the shape a keyset cursor needs — a tiebreaker on `id` is required because timestamps alone can collide within the same millisecond.
+`research/10-schema-migrations.md` Q72 and Q79 cite the reason directly: offset pagination forces the database to walk and discard every skipped row, a cost that grows linearly with the offset (Winand, "No Offset"; Slack's own migration off offset pagination is cited as the production case study). The user and session tables are append-mostly with a monotonic `(createdAt, id)`, which is exactly the shape a keyset cursor needs — a tiebreaker on `id` is required because timestamps alone can collide within the same millisecond. `UserStore.listPage` is the one port that pages by cursor; the type gate `keyset-only-no-offset` refuses an offset on it.
 
-Two refinements bind the session page query specifically. **Index-aligned (PPS-002):** the cursor is a row-value comparison `("createdAt", id) > (?, ?)` served by the partial composite index `sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL` (migration 19), so filter and order need no sort node. **Bounded by construction (ESR-010):** `listByUser` clamps the page size to `[1, MAX_PAGE_SIZE]` (200) and the request schema enforces the same bound, so no caller-supplied limit can produce a `SqlError` or an unbounded page; the query also takes the caller's clock and lists only live (unexpired, non-tombstoned) rows (SMS-002, [BEH-EA-054](07-sessions.md#beh-ea-054-sessions-expose-a-device-list-per-device-revocation-and-revoke-others)).
+Two refinements bind the session listing specifically. **Index-aligned (PPS-002):** the cursor is a row-value comparison `("createdAt", id) > (?, ?)` served by the partial composite index `sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL` (migration 19), so filter and order need no sort node. **Bounded by construction (ESR-010):** `SessionStore.listLive` drains the page statement at a fixed page size of 200, the adapter's own constant, and the request schema enforces the same bound, so no caller-supplied limit can produce a `SqlError` or an unbounded page; the statement also takes the caller's clock and lists only live (unexpired, non-tombstoned) rows (SMS-002, [BEH-EA-054](07-sessions.md#beh-ea-054-sessions-expose-a-device-list-per-device-revocation-and-revoke-others)).
 
 ## BEH-EA-037: A plugin's migrations are v4 `Migrator` records, exported statically per plugin
 
@@ -199,7 +205,7 @@ A ciphertext copied to another row or column fails authentication, because the A
 ```text
 REQUIREMENT: A plugin records module MUST map a `SqlError` to the typed
              `StoreUnavailable` naming `<Records>.<method>` (via
-             `StoreFailure`), exactly as a core repository does
+             `StoreFailure`), exactly as a core store adapter does
              (BEH-EA-035); a `SchemaError`, and a statement the database
              refused as malformed or unauthorised, MUST remain defects. A
              credential-resolver contribution MAY fail with
@@ -213,7 +219,7 @@ REQUIREMENT: A plugin records module MUST map a `SqlError` to the typed
 ```text
 REQUIREMENT: `Persistence.sql(options)` MUST provide `SealedColumn.Deployed`,
              the exact list of sealed columns that composition writes, derived
-             from the same options that choose its repositories; a column it
+             from the same options that choose its store layers; a column it
              stores in plaintext MUST NOT be listed. `SealedColumn.sweepDeployed`
              MUST sweep that list plus the columns the caller adds, each once,
              and report `{ scanned, resealed, unreadable }` per column.

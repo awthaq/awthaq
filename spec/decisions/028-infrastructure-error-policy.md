@@ -58,7 +58,7 @@ Widening `publish`'s `E` to `StoreUnavailable` was rejected: it would cascade th
 
 `Errors.retryTransient()` retries an effect while it fails with a *retryable* `SqlError` (`SQLITE_BUSY`/`SQLITE_LOCKED`, a Postgres deadlock or serialization failure, a lock or statement timeout, a dropped connection) up to three times on a jittered exponential schedule from 25 ms, and nothing else (constraint violations, `SchemaError`, defects are never retried). It wraps a whole unit of work: `Sessions.issue`'s statement or transaction and `Sessions.verify`'s idle-refresh touch (SEA-002). Once the retries are spent the last `SqlError` reaches the service's own `storeUnavailable(operation)`. See [the SQLite embedded-deployment appendix](../appendices/04-sqlite-embedded-deployment.md).
 
-_Related: [ADR-EA-013](013-error-taxonomy-http-mapping.md), [BEH-EA-035](../behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions)._
+_Related: [ADR-EA-013](013-error-taxonomy-http-mapping.md), [BEH-EA-035](../behaviors/05-persistence-stratum.md#beh-ea-035-a-core-store-adapter-owns-its-statements-over-the-ambient-sqlclient-a-multi-statement-primitive-opens-one-unit-never-the-callers-boundary)._
 
 ### Revision note (plan 02)
 

@@ -59,31 +59,31 @@ Feature: The Persistence Stratum
 
   # BEH-EA-035 — spec/behaviors/05-persistence-stratum.md
   @BEH-EA-035
-  Rule: Repositories are built with SqlModel.makeRepository over the ambient SqlClient, never opening their own transactions
+  Rule: A core store adapter owns its statements over the ambient SqlClient; a multi-statement primitive opens one unit, never the caller's boundary
 
     @REQ-EA-090
-    Scenario: A repository is constructed as a Context.Service via SqlModel.makeRepository
-      Given a "Users" repository built with SqlModel.makeRepository against the ambient SqlClient
-      When the repository is resolved
-      Then it is provided as a Context.Service
+    Scenario: A core store adapter is a layer over the ambient SqlClient that owns its statements
+      Given the "UserStoreSql" adapter built with SqlModel.makeRepository against the ambient SqlClient
+      When the adapter is resolved
+      Then it provides the "UserStore" port from a layer that needs only the SqlClient
 
     @REQ-EA-091
-    Scenario: A repository method does not open its own transaction
-      Given a repository method that reads or writes a "User" row
-      When the method executes
-      Then it does not call SqlClient.withTransaction itself
+    Scenario: A single-statement primitive opens no transaction; a multi-statement primitive opens exactly one unit
+      Given store primitives that read or write a "User" row and an "Account" row
+      When the primitives execute
+      Then the single-statement one opens no transaction and the multi-statement one opens exactly one
 
     # Observed through Password.confirmReset over a real SQLite transaction with a fault injected between the two writes (PasswordWorld, TIR-005).
     @REQ-EA-092
-    Scenario: A domain service composing two repository calls holds the transaction boundary
+    Scenario: A domain service composing two store calls holds the transaction boundary
       Given "Password.confirmReset" consuming a verification token and rotating a session in one operation
       When "Password.confirmReset" runs
-      Then the domain service itself opens the transaction boundary around both repository calls
+      Then the domain service itself opens the transaction boundary around both store calls
       And the token consumption and the session rotation commit or roll back together
 
   # BEH-EA-036 — spec/behaviors/05-persistence-stratum.md
   @BEH-EA-036
-  Rule: Pagination is keyset-only; no repository interface accepts an offset
+  Rule: Pagination is keyset-only; no store port accepts an offset
 
     @REQ-EA-093
     Scenario: A paginated query accepts an opaque cursor instead of an offset

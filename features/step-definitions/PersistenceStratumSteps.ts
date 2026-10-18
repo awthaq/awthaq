@@ -1,6 +1,6 @@
 // P20a/AH-003, decision 36 Tier 4: 01-contract-and-persistence/05-persistence-stratum.feature
 // (BEH-EA-033..036 here; pagination is in this file's sibling `PersistenceKeysetSteps.ts` and the
-// migration Rules BEH-EA-037..040 in `PersistenceMigrationSteps.ts`). Entities and repositories
+// migration Rules BEH-EA-037..040 in `PersistenceMigrationSteps.ts`). Entities and store adapters
 // run against a real in-memory SQLite database migrated by the framework `Migrator`
 // (`PersistenceStratumWorld.ts`). Scenarios whose behavior does not exist yet (INV-EA-016's
 // ownership validation) or needs another World (REQ-EA-092) stay `@skip` in the feature.
@@ -308,18 +308,18 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     }
   });
 
-  // ---- BEH-EA-035: repositories over the ambient SqlClient ----
+  // ---- BEH-EA-035: store adapters over the ambient SqlClient ----
 
   Given(
-    "a {string} repository built with SqlModel.makeRepository against the ambient SqlClient",
+    "the {string} adapter built with SqlModel.makeRepository against the ambient SqlClient",
     function* (name: string) {
       yield* Effect.void; // an assertion-only step: nothing to await
-      assert.equal(name, "Users");
+      assert.equal(name, "UserStoreSql");
       assert.match(source("../../packages/sql/src/UserStoreSql.ts"), /SqlModel\.makeRepository\(/);
     },
   );
 
-  When("the repository is resolved", function* () {
+  When("the adapter is resolved", function* () {
     // The adapter's layer needs nothing but the ambient `SqlClient`: `withDatabase` provides only that.
     const key = yield* withDatabase(
       Effect.provide(
@@ -330,19 +330,26 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     yield* put(strings, [key]);
   });
 
-  Then("it is provided as a Context.Service", function* () {
-    const [key] = yield* take(strings);
-    assert.equal(typeof key, "string");
-    // Resolved by `yield* UserStore` from a Layer needing nothing but the ambient `SqlClient`.
-    assert.equal(key, UserStore.UserStore.key);
-  });
+  Then(
+    "it provides the {string} port from a layer that needs only the SqlClient",
+    function* (port: string) {
+      const [key] = yield* take(strings);
+      assert.equal(typeof key, "string");
+      // Resolved by `yield* UserStore` from a Layer needing nothing but the ambient `SqlClient`.
+      assert.equal(port, "UserStore");
+      assert.equal(key, UserStore.UserStore.key);
+    },
+  );
 
-  Given("a repository method that reads or writes a {string} row", function* (name: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-    assert.equal(name, "User");
-  });
+  Given(
+    "store primitives that read or write a {string} row and an {string} row",
+    function* (first: string, second: string) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual([first, second], ["User", "Account"]);
+    },
+  );
 
-  When("the method executes", function* () {
+  When("the primitives execute", function* () {
     const transactionSpans = (spans: ReadonlyArray<{ readonly name: string }>) =>
       spans.filter((span) => span.name === "sql.transaction").length;
     const single = collectSpans();
@@ -389,14 +396,17 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     ]);
   });
 
-  Then("it does not call SqlClient.withTransaction itself", function* () {
-    const [singleTransactions, multiTransactions, controlTransactions, storeSpans] =
-      yield* take(numbers);
-    assert.equal(singleTransactions, 0, "a single-statement primitive opened no transaction");
-    assert.equal(multiTransactions, 1, "a multi-statement primitive opened exactly one unit");
-    assert.ok((controlTransactions ?? 0) > 0, "an explicit withTransaction is visible as a span");
-    assert.ok((storeSpans ?? 0) > 0, "the primitive really ran under the tracer");
-  });
+  Then(
+    "the single-statement one opens no transaction and the multi-statement one opens exactly one",
+    function* () {
+      const [singleTransactions, multiTransactions, controlTransactions, storeSpans] =
+        yield* take(numbers);
+      assert.equal(singleTransactions, 0, "a single-statement primitive opened no transaction");
+      assert.equal(multiTransactions, 1, "a multi-statement primitive opened exactly one unit");
+      assert.ok((controlTransactions ?? 0) > 0, "an explicit withTransaction is visible as a span");
+      assert.ok((storeSpans ?? 0) > 0, "the primitive really ran under the tracer");
+    },
+  );
 
   // ---- BEH-EA-339: a composition's sealed columns are swept as one list (plan 17) ----
 

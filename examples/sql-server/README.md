@@ -3,7 +3,7 @@
 The README quickstart as a runnable, tested app: **Password over a real, migrated SQL
 backend**. It runs against a SQLite file by default (nothing to install) and against
 Postgres the moment `DATABASE_URL` is set. Only the `SqlClient` layer differs between the two
-(`SqlLive` in [`app.ts`](app.ts)); the plugin composition, migrations, repositories and
+(`SqlLive` in [`app.ts`](app.ts)); the plugin composition, migrations, store adapters and
 rate-limit store are the same code, which is the point: start embedded, move to Postgres without
 rewriting plugin code.
 
