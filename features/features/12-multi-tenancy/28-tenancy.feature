@@ -361,6 +361,20 @@ Feature: Multi-Tenancy
       When three members are added in turn with no per-request configuration
       Then the first two additions succeed and the third is refused with "MembershipLimitReached"
 
+    @REQ-EA-1307
+    Scenario: A tenant's administration configuration can refuse deleting a user the platform would allow
+      Given a user "victim" exists in a composition whose build-time configuration lets every administrator delete users and manage credentials
+      And the tenant "acme" configures credential administration and a password policy, but no account deletion
+      When an administrator deletes "victim" in a request naming the tenant "acme"
+      Then the deletion of "victim" is refused with "AdminActionDenied" and the user still exists
+
+    @REQ-EA-1308
+    Scenario: A tenant's administration configuration supplies its own password policy
+      Given a user "victim" exists in a composition whose build-time configuration lets every administrator delete users and manage credentials
+      And the tenant "acme" configures credential administration and a password policy, but no account deletion
+      When an administrator sets a password with no digit for "victim" in a request naming the tenant "acme"
+      Then the password change for "victim" is refused with "AdminWeakPassword"
+
   # BEH-EA-237 — spec/behaviors/28-tenancy.md; see also ADR-EA-018
   @BEH-EA-237
   Rule: A suspended organization refuses organization-scoped access

@@ -2,6 +2,7 @@
 // `Auth.make` and `TestAuth.layer` (plan 08), runs its real migrations, drives the endpoints over a real `HttpRouter`
 // handler with a real session cookie, and aborts an operation with a veto tap, in BOTH record modes: the template's
 // `records` bundle is what makes the same suite run over memory and over a migrated database.
+import { Api } from "@awthaq/api";
 import { Auth, HookPoint, Migrations } from "@awthaq/core";
 import { Tenant } from "@awthaq/ports";
 import { TestAuth, TestSql } from "@awthaq/test";
@@ -59,6 +60,27 @@ describe("plugin-template", () => {
       [["notes", "notes", "create", "createByUser", "user", "attempts", 5]],
     );
   });
+});
+
+describe("plugin-template: per-tenant configuration (ADR-EA-018 D8)", () => {
+  it.effect("a NotesConfig provided for the request overrides the build-time maxLength", () =>
+    Effect.gen(function* () {
+      const notes = yield* Template.Notes;
+      const caller = new Api.UserPrincipal({
+        ref: new Api.PrincipalRef({ type: "user", id: "tenant-user" }),
+        sessionId: "tenant-session",
+      });
+      const text = "x".repeat(25);
+      // Build-time `maxLength: 20` refuses it ...
+      const refused = yield* notes.create(caller, text).pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "NoteTooLong");
+      // ... a tenant that allows 30 accepts it, in the same composition.
+      const created = yield* notes
+        .create(caller, text)
+        .pipe(Effect.provide(Template.config({ maxLength: 30 })));
+      assert.strictEqual(created.text, text);
+    }).pipe(Effect.provide(TestAuth.layer(built, common))),
+  );
 });
 
 describe("plugin-template over sql records: the migration", () => {

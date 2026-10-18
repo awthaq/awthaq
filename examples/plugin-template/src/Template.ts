@@ -8,7 +8,7 @@
 
 import { Api } from "@awthaq/api";
 import { AuthPlugin, HookPoint, Migrations, RateLimits } from "@awthaq/core";
-import { RateLimiter } from "@awthaq/ports";
+import { RateLimiter, Tenant } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -339,7 +339,9 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
       // Dependencies are plain `yield*`s: core services and this plugin's own records
       // are required from the environment, never constructed here (ports-required rule).
       const records = yield* NoteRecords;
-      const settings = yield* NotesConfig;
+      // ADR-EA-018 Decision 8: the configuration is read per operation, so a tenant's `Template.config(...)` provided
+      // in the calling fiber governs its own requests; with none, this build-time value applies.
+      const settingsNow = Tenant.configInForce(NotesConfig, yield* NotesConfig);
       const beforeCreate = yield* BeforeCreateNote;
       const afterCreate = yield* AfterCreateNote;
       // One budget, opened once: `limits.spend("createByUser", { userId })` is checked against the table
@@ -348,6 +350,7 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
       const limits = yield* RateLimits.budget(Notes);
 
       const create: NotesShape["create"] = Effect.fnUntraced(function* (caller, text) {
+        const settings = yield* settingsNow;
         yield* limits.spend("createByUser", { userId: caller.ref.id });
         if (text.length > settings.maxLength) {
           return yield* Effect.fail(new TemplateApi.NoteTooLong());

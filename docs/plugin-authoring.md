@@ -11,7 +11,7 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 | Piece              | Template file                                         | Rule                                                                                                                         |
 | ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Contract           | `TemplateApi.ts`                                      | One `HttpApiGroup` whose id is the plugin id, wrapped in `HttpApi.make("auth")`.                                             |
-| Config             | `Template.ts` (`NotesConfig`)                         | A `Context.Reference` with a default plus a `config(partial)` layer (ADR-EA-011). Policy knobs are never a required service. |
+| Config             | `Template.ts` (`NotesConfig`)                         | A `Context.Reference` with a default plus a `config(partial)` layer (ADR-EA-011). Policy knobs are never a required service. Read per operation, see "Per-tenant configuration". |
 | Persistence        | `Template.ts` (`NoteRecords`, `layerMemory`, `layerSql`) | The plugin owns its tables; the table prefix is the plugin id. Record stores are keyed `<pkg>/records/<Name>` and declared as `records: { memory, sql }` on `AuthPlugin.Service` (compile-checked: complete, matched, records only), below. Tenancy, sealed columns and store failures come from `@awthaq/sql` (`TenantScoped`, `SealedColumn`, `StoreFailure`). |
 | Migrations         | `Template.ts` (`notesMigrations`)                     | Append-only, dialect-branched with `sql.onDialectOrElse`.                                                                    |
 | Hooks              | `Template.ts` (`BeforeCreateNote`, `AfterCreateNote`) | One veto (before) and one observe (after) point per mutating operation.                                                      |
@@ -139,6 +139,10 @@ Every table a plugin owns declares how it relates to the tenant (ADR-EA-018 deci
 - A method that must see more than the ambient tenant (an erasure sweep, a platform listing, a lookup by a capability that arrives before any tenant is known) takes a `TenantScoped.CrossTenant` witness as its first argument, minted by `TenantScoped.crossTenant("<why it is sound>")` next to the call. On Postgres with RLS on, the SQL adapter runs that statement under `TenantScoped.lift(grant)` (or `liftOn(sql, grant)`), which lifts the policy for that one statement; `Tenant.withoutTenant` alone does not.
 - Prove it with `TestAuth.runTenantIsolationTests` (`@awthaq/test`): one call per records interface, over `layerMemory` and `layerSql`, with `rls: { layer }` so `pnpm run test:pg` also checks the database backstop. Its `methods` map is keyed by `keyof Shape`, so a method added without a classification (`scoped`, `crossTenant`, `keyed`, `derived`, `insert`) does not compile. `examples/plugin-template/test/Template.test.ts` is the worked call.
 - Opt-in row-level security covers the declarations when the operator asks: `TenantScope.enableRls({ plugins: auth.tenancy })` (`packages/sql/README.md`).
+
+## Per-tenant configuration (ADR-EA-018 D8)
+
+Read a `Context.Reference` config per operation through `Tenant.configInForce(Reference, built)`: a value provided in the calling fiber (a tenant's `config(...)` layer, served by a `TenantConfig` `LayerMap`) governs that request, and with none the value read at build applies. A value derived once at boot is documented at its read. When a predicate gates an operation, keep the reference module-private to the gate and hand the operation only the configuration the gate decided with (see `@awthaq/admin` `internal/AdminGate.ts`). A tenant's `config(...)` is a whole configuration: fields it does not name take the plugin's defaults.
 
 ## Sealed columns
 

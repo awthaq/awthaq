@@ -979,3 +979,27 @@ New REQ ids are the next free ones at execution time. They are above `REQ-EA-130
    - **Recommended: no.** The shared part is six lines. The predicate inputs, errors and throttling differ, and a core helper would be shallow.
 6. **Ship Phase 0 alone, now, as a hotfix** (Wave 0, before the refactor)?
    - **Recommended: yes.** It is the only phase that changes what a deployment allows. It closes a path to an irreversible erasure against a tenant's stated policy, and it is three lines plus four tests.
+
+---
+
+## Decisions taken (implementation, 2026-10-18)
+
+Open questions took the plan's recommended default:
+
+1. **Q1, make `AdminConfig` private: yes** (Phase 2). `Admin.AdminConfig` is no longer exported; changeset `admin-config-private` (minor) carries the `Migration:` line.
+2. **Q2, `actionDenied` carries the target: yes** (Phase 3). Optional `targetUserId` / `organizationId`; SAML and webhooks publish without them.
+3. **Q3, tenant configuration semantics: no overlay.** A tenant's `Admin.config(partial)` stays a whole configuration over the deny-all defaults; documented in the changeset, the README, BEH-EA-236 and ADR-EA-018 rev 1.5.
+4. **Q4, SAML `canManageSaml` per tenant: separate follow-up**, not done here.
+5. **Q5, shared core gate for admin/SAML/webhooks: no.**
+6. **Q6, Phase 0 alone first: yes.** Phase 0 is its own commit (hotfix), before the refactor.
+
+Implementation notes and deviations:
+
+- **Phase 4 (consume plan 11's principal helper) was NOT done.** Plan 11 is not implemented yet, so the three `currentUserPrincipal` copies in `Admin.ts`, `AdminAccounts.ts` and `AdminTenants.ts` remain. Do it after plan 11.
+- Phase 0's four tests lived in `AdminTenantConfig.test.ts`; Phase 1 deleted that file and moved the cases into `AdminGate.test.ts` (matrix tests for opens/tightens, the per-operation non-gate configuration test, and one `LayerMap` test for the production path).
+- `AdminGate.test.ts` provides tenant configuration per request with `Effect.provide(Admin.config(...))` for the matrix (the mechanism `configInForce` reads), and a `LayerMap` for one end-to-end case.
+- TS2883: `AdminTenants.ts` no longer yields `AuthEvents`/`Users` itself, so it keeps them type-imported through an exported `GateServices` alias so declaration emit can name them. No return-type annotation was added.
+- `Admin.AdminShape` and the layer/handler call shapes are unchanged; `AdminGate.AdminGate` (type) is exported only from Phase 2 on, when the types test needs it.
+- The BEH-EA-221 `Hooks.BeforeCredentialReset` stale sentence was replaced as the plan says.
+- BDD: two scenarios under `@BEH-EA-236` (REQ ids allocated by `allocate-req-ea.py`); the world gained an `AdminAccounts` stack with its own `LayerMap`.
+- Plugin template reads `NotesConfig` per operation (`Tenant.configInForce`); `Tenant` is imported from `@awthaq/ports` there.

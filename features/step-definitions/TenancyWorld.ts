@@ -21,7 +21,7 @@
 // middleware, behind `HttpRouter.toWebHandler`.
 import { TestEncryption } from "@awthaq/test";
 import { Api } from "@awthaq/api";
-import { Admin, AdminTenants } from "@awthaq/admin";
+import { Admin, AdminAccounts, AdminTenants } from "@awthaq/admin";
 import {
   Accounts,
   AuditLog,
@@ -46,7 +46,7 @@ import {
 } from "@awthaq/organization";
 import { ConnectionRecords, DomainClaims, OrganizationRecords } from "@awthaq/organization/records";
 import { OAuth, OAuthConnections, OAuthProvider } from "@awthaq/oauth";
-import { Encryption, KeyProvider, SqlTransaction, Tenant } from "@awthaq/ports";
+import { Encryption, KeyProvider, PasswordHasher, SqlTransaction, Tenant } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -201,6 +201,45 @@ const buildOrganizationStack = () =>
           }),
         ),
         taps: RefuseBillingHold,
+      }),
+    ),
+  );
+
+// ---- the admin-accounts stack (BEH-EA-236, plan 13) ---------------------------------------
+
+/** The tenant "acme" keeps credential administration and requires a digit in a password, but configures no deletion. */
+export class AdminAccountsTenantConfig extends LayerMap.Service<AdminAccountsTenantConfig>()(
+  "features/TenancyWorld/AdminAccountsTenantConfig",
+  {
+    lookup: (tenantId: string) =>
+      Layer.merge(
+        Admin.config({
+          canManageCredentials: () => Effect.succeed(true),
+          passwordPolicy: (password) =>
+            Effect.succeed(/\d/.test(Redacted.value(password)) ? [] : ["must contain a digit"]),
+        }),
+        Tenant.configApplied(tenantId),
+      ),
+    idleTimeToLive: "1 minute",
+  },
+) {}
+
+export type AdminAccountsServices =
+  | AdminAccounts.AdminAccounts
+  | Users.Users
+  | Accounts.Accounts
+  | PasswordHasher.PasswordHasher
+  | AdminAccountsTenantConfig;
+
+/** Build-time: every administrator may delete users and manage credentials; tenants decide for themselves. */
+const buildAdminAccountsStack = () =>
+  AdminAccountsTenantConfig.layer.pipe(
+    Layer.provideMerge(
+      TestAuth.layer(Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]), {
+        services: Admin.config({
+          canDeleteUsers: () => Effect.succeed(true),
+          canManageCredentials: () => Effect.succeed(true),
+        }),
       }),
     ),
   );
@@ -409,6 +448,7 @@ export interface WorldShape {
   readonly identity: Context.Context<IdentityServices>;
   readonly organizations: Context.Context<OrganizationServices>;
   readonly connections: Context.Context<ConnectionServices>;
+  readonly adminAccounts: Context.Context<AdminAccountsServices>;
   readonly gatewayProbe: GatewayProbe;
   readonly gatewayVariant: Ref.Ref<GatewayVariant | undefined>;
   readonly gateway: Ref.Ref<((request: Request) => Promise<Response>) | undefined>;
@@ -459,6 +499,7 @@ export const WorldLive = Layer.effect(
     const identity = yield* build(buildIdentityStack());
     const organizations = yield* build(buildOrganizationStack());
     const connections = yield* build(buildConnectionStack());
+    const adminAccounts = yield* build(buildAdminAccountsStack());
     const disposers: Array<() => Promise<void>> = [];
     yield* Effect.addFinalizer(() =>
       Effect.andThen(
@@ -500,6 +541,7 @@ export const WorldLive = Layer.effect(
       identity,
       organizations,
       connections,
+      adminAccounts,
       gatewayProbe,
       gatewayVariant,
       gateway,
@@ -550,6 +592,13 @@ export const organization = <A, E>(effect: Effect.Effect<A, E, OrganizationServi
   Effect.gen(function* () {
     const world = yield* World;
     return yield* Effect.provide(effect, world.organizations).pipe(Effect.orDie);
+  });
+
+/** Runs an admin-accounts-stack effect; a typed failure is a defect (use `outcomeTag` to observe one). */
+export const adminAccounts = <A, E>(effect: Effect.Effect<A, E, AdminAccountsServices>) =>
+  Effect.gen(function* () {
+    const world = yield* World;
+    return yield* Effect.provide(effect, world.adminAccounts).pipe(Effect.orDie);
   });
 
 /**
