@@ -28,7 +28,13 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import assert from "node:assert/strict";
 import { CSRF_COOKIE_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
-import { headersWithCookie, SESSION_COOKIE, send, World } from "./NextSsrWorld.ts";
+import {
+  headersWithCookie,
+  makeSecureDomainApp,
+  SESSION_COOKIE,
+  send,
+  World,
+} from "./NextSsrWorld.ts";
 import { isBoolean, isNumber, isString, isStringArray } from "./shared/Outcomes.ts";
 
 /** What a Server Component / server action sees of `getSession`'s answer. */
@@ -160,6 +166,69 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(seen.found, true);
       assert.equal(seen.userId, yield* outcomes.getAs("expectedUserId", isString));
       assert.equal(seen.principalId, seen.userId);
+    },
+  );
+
+  // IC-007: under a domain-scoped session cookie the configured name is the one `getSession` verifies.
+  Given(
+    "a deployment whose session cookie is domain-scoped and a live session for {string}",
+    function* (name: string) {
+      const world = yield* World;
+      const app = makeSecureDomainApp(world.roles, world.resolverCalls);
+      const outcome = yield* Effect.promise(async () => {
+        try {
+          const issued = await app.runtime.runPromise(
+            Effect.gen(function* () {
+              const users = yield* Users.Users;
+              const sessions = yield* Sessions.Sessions;
+              const user = yield* users
+                .create({ identity: { _tag: "Email", email: `${name}@example.com` }, name })
+                .pipe(Effect.orDie);
+              return { userId: user.id, issued: yield* sessions.issue({ userId: user.id }) };
+            }),
+          );
+          const token = Redacted.value(issued.issued.token);
+          const read = async (cookieName: string) => {
+            const session = await getSession(
+              headersWithCookie(`${cookieName}=${token}`),
+              app.runtime,
+            );
+            return session?.user.id;
+          };
+          return {
+            userId: issued.userId,
+            configured: await read("__Secure-session"),
+            defaultName: await read("__Host-session"),
+          };
+        } finally {
+          await app.dispose();
+        }
+      });
+      yield* world.outcomes.set("secureUserId", outcome.userId);
+      yield* world.outcomes.set("secureConfigured", outcome.configured ?? "");
+      yield* world.outcomes.set("secureDefaultName", outcome.defaultName ?? "");
+    },
+  );
+
+  When(
+    "a React Server Component calls getSession with the {string} cookie",
+    function* (_cookieName: string) {
+      // The reads happened in the Given, against the one runtime that carries the domain-scoped configuration.
+      yield* Effect.void;
+    },
+  );
+
+  Then("it returns a database-verified session for {string}", function* (_name: string) {
+    const { outcomes } = yield* World;
+    const expected = yield* outcomes.getAs("secureUserId", isString);
+    assert.equal(yield* outcomes.getAs("secureConfigured", isString), expected);
+  });
+
+  Then(
+    "a request carrying the same token under {string} resolves no session",
+    function* (_cookieName: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("secureDefaultName", isString), "");
     },
   );
 

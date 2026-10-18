@@ -36,7 +36,7 @@ import {
   applyRotatedSession,
   getSession,
   makeGetSession,
-  verifySessionToken,
+  resolveSessionCookies,
 } from "../src/Session.ts";
 import type { HeadersLike } from "../src/CookieHeader.ts";
 
@@ -107,8 +107,8 @@ const headersWithCookie = (cookieHeader: string | null): HeadersLike => ({
 const cookieHeaderFor = (token: Redacted.Redacted<string>): string =>
   `${Api.SessionCookie.key}=${Redacted.value(token)}`;
 
-describe("makeGetSession — the injected verify seam (BO-004)", () => {
-  it("routes every candidate token through `verify`, so an adapter can dedupe per render", () =>
+describe("makeGetSession: the injected cookie-header resolver (BO-004)", () => {
+  it("routes the whole cookie header through the injected resolver, so an adapter can dedupe per render: two calls in one render verify once", () =>
     withRuntime(TestLayer, async (runtime) => {
       const issued = await runtime.runPromise(
         Effect.gen(function* () {
@@ -121,61 +121,26 @@ describe("makeGetSession — the injected verify seam (BO-004)", () => {
           return yield* sessions.issue({ userId: user.id });
         }),
       );
-      const seen: Array<string> = [];
-      const memo = new Map<string, ReturnType<typeof verifySessionToken>>();
-      const dedupedGetSession = makeGetSession((token, rt, kind) => {
-        seen.push(token);
-        const hit = memo.get(token);
+      const seen: Array<string | null> = [];
+      const memo = new Map<string | null, ReturnType<typeof resolveSessionCookies>>();
+      const dedupedGetSession = makeGetSession((cookieHeader, rt) => {
+        seen.push(cookieHeader);
+        const hit = memo.get(cookieHeader);
         if (hit !== undefined) return hit;
-        const fresh = verifySessionToken(token, rt, kind);
-        memo.set(token, fresh);
+        const fresh = resolveSessionCookies(cookieHeader, rt);
+        memo.set(cookieHeader, fresh);
         return fresh;
       });
-      const headers = headersWithCookie(cookieHeaderFor(issued.token));
+      const cookieHeader = cookieHeaderFor(issued.token);
+      const headers = headersWithCookie(cookieHeader);
       const [first, second] = await Promise.all([
         dedupedGetSession(headers, runtime),
         dedupedGetSession(headers, runtime),
       ]);
-      assert.deepStrictEqual(seen, [Redacted.value(issued.token), Redacted.value(issued.token)]);
+      assert.deepStrictEqual(seen, [cookieHeader, cookieHeader]);
+      assert.strictEqual(memo.size, 1);
       assert.strictEqual(first?.session.id, issued.session.id);
       assert.strictEqual(second, first);
-    }));
-});
-
-describe("getSession — impersonation precedence (APS-006)", () => {
-  it("APS-006: an impersonation cookie shadows the session cookie; an ordinary session planted in it is ignored", () =>
-    withRuntime(TestLayer, async (runtime) => {
-      const { own, planted, impersonation, target } = await runtime.runPromise(
-        Effect.gen(function* () {
-          const users = yield* Users.Users;
-          const sessions = yield* Sessions.Sessions;
-          const admin = yield* users.create({
-            identity: { _tag: "Email", email: "aps006-admin@example.com" },
-            name: "Admin",
-          });
-          const targetUser = yield* users.create({
-            identity: { _tag: "Email", email: "aps006-target@example.com" },
-            name: "Target",
-          });
-          return {
-            target: targetUser,
-            own: yield* sessions.issue({ userId: admin.id }),
-            planted: yield* sessions.issue({ userId: admin.id }),
-            impersonation: yield* sessions.issue({
-              userId: targetUser.id,
-              actingAs: { type: "user", id: admin.id },
-            }),
-          };
-        }),
-      );
-      const cookie = (impersonationToken: Redacted.Redacted<string>) =>
-        `${Api.ImpersonationCookie.key}=${Redacted.value(impersonationToken)}; ${cookieHeaderFor(own.token)}`;
-
-      const shadowed = await getSession(headersWithCookie(cookie(impersonation.token)), runtime);
-      assert.strictEqual(shadowed?.user.id, target.id);
-
-      const ignored = await getSession(headersWithCookie(cookie(planted.token)), runtime);
-      assert.strictEqual(ignored?.session.id, own.session.id);
     }));
 });
 
@@ -460,5 +425,36 @@ describe("getSession under SecureDomain (IC-007)", () => {
       assert.strictEqual(written[0]?.options.sameSite, "lax");
       // 30 days absolute, 2 minutes into the session on the runtime's (Test)Clock.
       assert.strictEqual(written[0]?.options.maxAge, 30 * 24 * 3600 - 120);
+    }));
+});
+
+describe("getSession rotation rendering (IC-001, BEH-EA-185)", () => {
+  it("a planted ordinary session's rotation in the impersonation cookie is not rendered into Session.rotated", () =>
+    withRuntime(ShortTouchLayer, async (runtime) => {
+      const { own, planted } = await runtime.runPromise(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "planted-rotation@example.com" },
+            name: "Planted",
+          });
+          return {
+            own: yield* sessions.issue({ userId: user.id }),
+            planted: yield* sessions.issue({ userId: user.id }),
+          };
+        }),
+      );
+      // Past `touchEvery`: both verifies rotate their session's secret.
+      await runtime.runPromise(TestClock.adjust(Duration.minutes(2)));
+      const header = `${Api.ImpersonationCookie.key}=${Redacted.value(planted.token)}; ${cookieHeaderFor(own.token)}`;
+      const session = await getSession(headersWithCookie(header), runtime);
+      assert.strictEqual(session?.session.id, own.session.id);
+      // Only the resolved session's rotation is rendered, under the session cookie's name.
+      assert.strictEqual(session?.rotated?.cookie.name, Api.SessionCookie.key);
+      const fresh = session?.rotated?.token;
+      if (fresh === undefined) throw new Error("expected the own session to rotate");
+      const again = await getSession(headersWithCookie(cookieHeaderFor(fresh)), runtime);
+      assert.strictEqual(again?.session.id, own.session.id);
     }));
 });

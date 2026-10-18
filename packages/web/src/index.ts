@@ -17,8 +17,13 @@
 //
 // spec/behaviors/24-nextjs-ssr.md (BEH-EA-185/188/189/190).
 
-export { applyRotatedSession, getSession, makeGetSession, verifySessionToken } from "./Session.ts";
-export type { Session, SessionRuntime, SessionServices, VerifySessionToken } from "./Session.ts";
+export {
+  applyRotatedSession,
+  getSession,
+  makeGetSession,
+  resolveSessionCookies,
+} from "./Session.ts";
+export type { ResolveSessionCookies, Session, SessionRuntime, SessionServices } from "./Session.ts";
 export { hasSessionCookie } from "./HasSessionCookie.ts";
 export { findCookieValue, hasCookie } from "./CookieHeader.ts";
 export type { HeadersLike } from "./CookieHeader.ts";

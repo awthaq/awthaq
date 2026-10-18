@@ -30,6 +30,13 @@ Feature: Next.js Server Rendering
       Then it calls "getSession" to verify the cookie against the session store
       And it never treats cookie presence alone as sufficient for that authorization check
 
+    @REQ-EA-1316
+    Scenario: Under a domain-scoped session cookie getSession verifies the configured cookie
+      Given a deployment whose session cookie is domain-scoped and a live session for "alice"
+      When a React Server Component calls getSession with the "__Secure-session" cookie
+      Then it returns a database-verified session for "alice"
+      But a request carrying the same token under "__Host-session" resolves no session
+
   # BEH-EA-186 — spec/behaviors/24-nextjs-ssr.md
   @BEH-EA-186
   Rule: Server-side decide produces the client seed

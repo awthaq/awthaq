@@ -27,7 +27,10 @@ const view: Sessions.SessionView = {
 };
 
 const session = (): Session => ({
-  principal: Api.anonymousPrincipal,
+  principal: new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "user-1" }),
+    sessionId: "session-1",
+  }),
   user: {
     id: Users.UserId("user-1"),
     identity: { _tag: "Email", email: "user@example.com", emailVerified: true },

@@ -5,7 +5,7 @@ The framework-neutral core of a web adapter (BO-004). `@awthaq/next` is the Next
 | Export | What it does |
 | --- | --- |
 | `getSession(headers, runtime)` | The database-verified boundary (BEH-EA-185): resolves `{ principal, user, session, rotated }` under the runtime's `SessionCookieConfig` (IC-007), or `undefined` for a missing, malformed, expired or unknown-session cookie. |
-| `makeGetSession(verify)` | The same function over an injected `verify(token, runtime)`, so an adapter can dedupe per render (`@awthaq/next` passes `React.cache(verifySessionToken)`). |
+| `makeGetSession(resolveCookieHeader)` | The same function over an injected `resolveCookieHeader(cookieHeader, runtime)` (the whole cookie-header resolution, `resolveSessionCookies`), so an adapter can dedupe per render (`@awthaq/next` passes `React.cache(resolveSessionCookies)`). |
 | `applyRotatedSession(session, jar)` | Delivers a rotated session cookie (`session.rotated.cookie`, rendered under the configured name and attributes) into a mutable cookie jar (BO-001). |
 | `hasSessionCookie(request, cookie)` | The presence-only, proxy/middleware check (BEH-EA-188). `cookie` is the partial given to `SessionCookie.config` (`{}` for the default). Never the boundary. |
 | `applyResponseCookies(response, jar)` | Writes every `Set-Cookie` a `Response` carries into a framework cookie jar (BEH-EA-189). |

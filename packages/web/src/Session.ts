@@ -40,7 +40,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
+import type * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import { findCookieValue } from "./CookieHeader.ts";
 import type { HeadersLike } from "./CookieHeader.ts";
 import { setCookie } from "./CookieJar.ts";
@@ -54,7 +55,8 @@ import type { CookieJarLike } from "./CookieJar.ts";
  * Component prop. Cross to the client through `@awthaq/next`'s `toInitialSession`.
  */
 export interface Session {
-  readonly principal: Api.Principal;
+  /** The user tier admits only a `User` (`Credentials.userTier`). */
+  readonly principal: Api.UserPrincipal;
   readonly user: Users.UserRecord;
   readonly session: Sessions.SessionView;
   /**
@@ -89,34 +91,59 @@ const cookieValue = (cookieHeader: string | null, name: string): string | undefi
   }
 };
 
-const resolve = (token: string, kind: SessionCookie.CookieKind) =>
+/**
+ * BEH-EA-185: the whole cookie header resolved through `Credentials` under the user tier (ADR-EA-042): the
+ * impersonation cookie, then the session cookie, each under the runtime's `SessionCookieConfig` (IC-007), falling
+ * through exactly as `Api.Authentication` does. "No valid session" (nothing presented, or nothing resolves, or the
+ * session's user is gone) is the one ordinary case, `undefined`. A `StoreUnavailable` (a real backing-store outage)
+ * is not caught and propagates as a rejection.
+ */
+const resolveCookies = (cookieHeader: string | null) =>
   Effect.gen(function* () {
-    const sessions = yield* Sessions.Sessions;
     const users = yield* Users.Users;
-    const resolver = yield* Credentials.PrincipalResolver;
-    const { session, rotated } = yield* sessions.verify(Redacted.make(token));
-    // RSC-007: independent of each other once `verify` has succeeded.
-    const [user, principal] = yield* Effect.all(
-      [users.findById(session.userId), resolver.resolve(session)],
-      { concurrency: "unbounded" },
+    const base = yield* Credentials.PrincipalResolver;
+    // RSC-007: the user lookup runs beside the principal resolution, not after it, by decorating the resolver the
+    // module uses for this one call (no interface change to Credentials).
+    const found = yield* Ref.make(Option.none<Users.UserRecord>());
+    const alongside = Credentials.PrincipalResolver.of({
+      resolve: (session) =>
+        Effect.all([base.resolve(session), users.findById(session.userId).pipe(Effect.option)], {
+          concurrency: "unbounded",
+        }).pipe(
+          Effect.tap(([, user]) => Ref.set(found, user)),
+          Effect.map(([principal]) => principal),
+        ),
+    });
+    const credentials = yield* Credentials.make.pipe(
+      Effect.provideService(Credentials.PrincipalResolver, alongside),
     );
-    // IC-007: rendered inside the runtime, so the host's `SessionCookieConfig` and `Clock` apply.
-    const rendered = Option.isSome(rotated)
-      ? { token: rotated.value, cookie: yield* SessionCookie.render(session, rotated.value, kind) }
-      : undefined;
-    return { principal, user, session, rotated: rendered };
-  }).pipe(
-    // BEH-EA-185: "no valid session" — cookie names a session that doesn't
-    // exist, has expired, or belongs to a user record that's gone — is the
-    // one ordinary case, collapsed to `undefined` rather than a rejection.
-    // A `PlatformError` (a real backing-store outage) is not caught here
-    // and propagates, distinct from the ordinary case.
-    Effect.catchTags({
-      "Sessions/NotFound": () => Effect.succeed(undefined),
-      SessionExpired: () => Effect.succeed(undefined),
-      UserNotFound: () => Effect.succeed(undefined),
-    }),
-  );
+    const { scope, rotations } = yield* Credentials.collecting;
+    const presented = yield* Credentials.presented({
+      cookie: (name) => cookieValue(cookieHeader, name),
+      header: () => undefined,
+    });
+    const resolved = yield* credentials.resolve(presented, Credentials.userTier, scope);
+    // A cookie-only call presents nothing claimable.
+    if (resolved._tag === "Claimed") return undefined;
+    const user = yield* Ref.get(found);
+    // BEH-EA-185: the session's user is gone.
+    if (Option.isNone(user)) return undefined;
+    // Only the resolved session's rotation is rendered: a planted ordinary session's rotation in the
+    // impersonation cookie is collected but dropped (it fails after `rotationGrace` and the request falls through).
+    const own = (yield* rotations).find((rotation) => rotation.session.id === resolved.session.id);
+    const rotated =
+      own === undefined
+        ? undefined
+        : {
+            token: own.token,
+            cookie: yield* SessionCookie.render(
+              own.session,
+              own.token,
+              own.carrier === "impersonation" ? "impersonation" : "session",
+            ),
+          };
+    return { principal: resolved.principal, user: user.value, session: resolved.session, rotated };
+  }).pipe(Effect.catchTag("Unauthenticated", () => Effect.succeed(undefined)));
 
 /** The services `getSession` needs; a runtime may carry more (`Extra`). */
 export type SessionServices = Sessions.Sessions | Users.Users | Credentials.PrincipalResolver;
@@ -124,56 +151,34 @@ export type SessionServices = Sessions.Sessions | Users.Users | Credentials.Prin
 export type SessionRuntime = ManagedRuntime.ManagedRuntime<SessionServices, never>;
 
 /**
- * Verifies one session token against the database — the unit `getSession`
- * calls per candidate cookie, and the seam an adapter wraps to dedupe per
- * render (`makeGetSession`).
+ * The unit an adapter dedupes per render (`@awthaq/next`: `React.cache(resolveSessionCookies)`): the whole
+ * cookie-header resolution, so the precedence, both verifies and the rotation's rendering are one unit. Within one
+ * render `headers().get("cookie")` is the same string and the runtime the same object.
  */
-export type VerifySessionToken = (
-  token: string,
+export type ResolveSessionCookies = (
+  cookieHeader: string | null,
   runtime: SessionRuntime,
-  kind: SessionCookie.CookieKind,
 ) => Promise<Session | undefined>;
 
-export const verifySessionToken: VerifySessionToken = (token, runtime, kind) =>
-  runtime.runPromise(resolve(token, kind));
+export const resolveSessionCookies: ResolveSessionCookies = (cookieHeader, runtime) =>
+  runtime.runPromise(resolveCookies(cookieHeader));
 
 /**
- * BEH-EA-185: builds a `getSession` over `verify`. `@awthaq/next` passes
- * `React.cache(verifySessionToken)` — NSA-002, the framework-idiomatic
- * per-request/per-render dedup, scoped to exactly one render pass or one
- * Server Action invocation, never spanning across them (so it doesn't
- * relitigate BEH-EA-190's "a server action MUST call getSession fresh on every
- * invocation") — so two calls against the same cookie within one render hit
- * `sessions.verify` exactly once, closing the "second call loses the rotation
- * race" scenario structurally. An adapter with no such primitive (SvelteKit's
- * `event.locals`, Astro's `Astro.locals`) memoizes in its own request scope,
- * or uses the plain `getSession` below.
+ * BEH-EA-185: builds a `getSession` over the cookie-header resolution. `@awthaq/next` passes
+ * `React.cache(resolveSessionCookies)` — NSA-002, the framework-idiomatic per-request/per-render
+ * dedup, scoped to exactly one render pass or one Server Action invocation, never spanning across them (so it
+ * doesn't relitigate BEH-EA-190's "a server action MUST call getSession fresh on every invocation") — so two calls
+ * against the same cookie header within one render hit `sessions.verify` exactly once, closing the "second call
+ * loses the rotation race" scenario structurally. An adapter with no such primitive (SvelteKit's `event.locals`,
+ * Astro's `Astro.locals`) memoizes in its own request scope, or uses the plain `getSession` below.
  */
 export const makeGetSession =
-  (verify: VerifySessionToken) =>
-  async <Extra = never>(
+  (resolveCookieHeader: ResolveSessionCookies) =>
+  <Extra = never>(
     headers: HeadersLike,
     runtime: ManagedRuntime.ManagedRuntime<SessionServices | Extra, never>,
-  ): Promise<Session | undefined> => {
-    // IC-007: the names follow the runtime's `SessionCookieConfig`, as every other reader's do.
-    const config = await runtime.runPromise(Effect.service(SessionCookie.SessionCookieConfig));
-    const cookieHeader = headers.get("cookie");
-    const token = cookieValue(cookieHeader, SessionCookie.cookieName(config, "session"));
-    // APS-006: a live impersonation cookie shadows the caller's own session, the
-    // same precedence `Api.Authentication` applies; only a session carrying
-    // `actingAs` counts from it, otherwise fall through to the ordinary cookie.
-    const impersonationToken = cookieValue(
-      cookieHeader,
-      SessionCookie.cookieName(config, "impersonation"),
-    );
-    const own = () =>
-      token === undefined ? Promise.resolve(undefined) : verify(token, runtime, "session");
-    if (impersonationToken === undefined) return own();
-    const impersonated = await verify(impersonationToken, runtime, "impersonation");
-    return impersonated !== undefined && Option.isSome(impersonated.session.actingAs)
-      ? impersonated
-      : own();
-  };
+  ): Promise<Session | undefined> =>
+    resolveCookieHeader(headers.get("cookie"), runtime);
 
 /**
  * BEH-EA-185: verifies the incoming request's session cookie against the
@@ -181,7 +186,7 @@ export const makeGetSession =
  * missing, malformed, expired, or unknown-session cookie; only a genuine
  * backing-store outage propagates as a rejection.
  */
-export const getSession = makeGetSession(verifySessionToken);
+export const getSession = makeGetSession(resolveSessionCookies);
 
 /**
  * BO-001/IC-001: delivers `session.rotated`, if any, into `jar` — a no-op
