@@ -203,6 +203,26 @@ export const ImpersonationCookie = HttpApiSecurity.apiKey({
   key: IMPERSONATION_COOKIE_NAME,
   in: "cookie",
 });
+
+/** CSS-007/IC-007: the names a domain-scoped cookie (`SessionCookie.SecureDomain`) carries; the `__Host-` prefix forbids a `Domain`. */
+export const SECURE_SESSION_COOKIE_NAME = "__Secure-session";
+export const SECURE_IMPERSONATION_COOKIE_NAME = "__Secure-impersonation";
+
+/**
+ * CSS-007/IC-007: the one naming rule. Only a domain-scoped cookie (`SessionCookie.SecureDomain`) drops `__Host-`.
+ * Takes the mode's tag only, so an edge bundle can name the cookie without importing `@awthaq/core`.
+ */
+export const sessionCookieName = (
+  mode: { readonly _tag: string },
+  kind: "session" | "impersonation",
+): string =>
+  mode._tag === "SecureDomain"
+    ? kind === "session"
+      ? SECURE_SESSION_COOKIE_NAME
+      : SECURE_IMPERSONATION_COOKIE_NAME
+    : kind === "session"
+      ? SESSION_COOKIE_NAME
+      : IMPERSONATION_COOKIE_NAME;
 export const BearerToken = HttpApiSecurity.bearer;
 
 /**

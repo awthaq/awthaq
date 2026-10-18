@@ -8,3 +8,4 @@ export { findCookieValue, hasCookie } from "./CookieHeader.ts";
 export type { HeadersLike } from "./CookieHeader.ts";
 export { applyResponseCookies, parseSetCookie, setCookie } from "./CookieJar.ts";
 export type { CookieJarLike, CookieSetOptions, CookieWriteOptions } from "./CookieJar.ts";
+export { hasSessionCookie } from "./HasSessionCookie.ts";

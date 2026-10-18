@@ -13,7 +13,15 @@
 // simulated time and have `Sessions.layerMemory`'s own `DateTime.now` reads
 // see it.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Hooks,
+  Persistence,
+  SessionCookie,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -84,6 +92,14 @@ const ShortTouchLayer = Layer.mergeAll(
   ),
 );
 
+/** IC-007: the `ShortTouchLayer` composition under a domain-scoped session cookie (`__Secure-session`). */
+const SecureDomainLayer = Layer.mergeAll(
+  ShortTouchLayer,
+  SessionCookie.config({
+    mode: SessionCookie.SecureDomain({ domain: "example.com", sameSite: "lax" }),
+  }),
+);
+
 const headersWithCookie = (cookieHeader: string | null): HeadersLike => ({
   get: (name) => (name.toLowerCase() === "cookie" ? cookieHeader : null),
 });
@@ -107,11 +123,11 @@ describe("makeGetSession — the injected verify seam (BO-004)", () => {
       );
       const seen: Array<string> = [];
       const memo = new Map<string, ReturnType<typeof verifySessionToken>>();
-      const dedupedGetSession = makeGetSession((token, rt) => {
+      const dedupedGetSession = makeGetSession((token, rt, kind) => {
         seen.push(token);
         const hit = memo.get(token);
         if (hit !== undefined) return hit;
-        const fresh = verifySessionToken(token, rt);
+        const fresh = verifySessionToken(token, rt, kind);
         memo.set(token, fresh);
         return fresh;
       });
@@ -274,7 +290,7 @@ describe("getSession (BEH-EA-185)", () => {
       // The freshly rotated token, once delivered, verifies on its own.
       if (rotated.rotated === undefined) return;
       const freshSession = await getSession(
-        headersWithCookie(cookieHeaderFor(rotated.rotated)),
+        headersWithCookie(cookieHeaderFor(rotated.rotated.token)),
         rotationRuntime,
       );
       assert.isDefined(freshSession);
@@ -310,7 +326,7 @@ describe("getSession (BEH-EA-185)", () => {
       assert.strictEqual(written.length, 1);
       assert.strictEqual(written[0]?.name, Api.SessionCookie.key);
       if (rotated?.rotated === undefined) throw new Error("expected a rotated token");
-      assert.strictEqual(written[0]?.value, Redacted.value(rotated.rotated));
+      assert.strictEqual(written[0]?.value, Redacted.value(rotated.rotated.token));
 
       // undefined session — also a no-op, not a throw.
       applyRotatedSession(undefined, jar);
@@ -376,4 +392,73 @@ describe("getSession (BEH-EA-185)", () => {
       },
     );
   });
+});
+
+describe("getSession under SecureDomain (IC-007)", () => {
+  const seed = (email: string) =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
+      const admin = yield* users.create({ identity: { _tag: "Email", email }, name: "Admin" });
+      const target = yield* users.create({
+        identity: { _tag: "Email", email: `target-${email}` },
+        name: "Target",
+      });
+      return {
+        admin,
+        target,
+        own: yield* sessions.issue({ userId: admin.id }),
+        impersonation: yield* sessions.issue({
+          userId: target.id,
+          actingAs: { type: "user", id: admin.id },
+        }),
+      };
+    });
+
+  it("IC-007: under SecureDomain, getSession resolves the session from __Secure-session and ignores __Host-session", () =>
+    withRuntime(SecureDomainLayer, async (runtime) => {
+      const { admin, own } = await runtime.runPromise(seed("secure-read@example.com"));
+      const token = Redacted.value(own.token);
+      const read = await getSession(headersWithCookie(`__Secure-session=${token}`), runtime);
+      assert.strictEqual(read?.user.id, admin.id);
+      const ignored = await getSession(headersWithCookie(`__Host-session=${token}`), runtime);
+      assert.isUndefined(ignored);
+    }));
+
+  it("IC-007: under SecureDomain, an impersonation session in __Secure-impersonation shadows __Secure-session", () =>
+    withRuntime(SecureDomainLayer, async (runtime) => {
+      const { target, own, impersonation } = await runtime.runPromise(
+        seed("secure-imp@example.com"),
+      );
+      const header = `__Secure-impersonation=${Redacted.value(impersonation.token)}; __Secure-session=${Redacted.value(own.token)}`;
+      const shadowed = await getSession(headersWithCookie(header), runtime);
+      assert.strictEqual(shadowed?.user.id, target.id);
+    }));
+
+  it("IC-007/BO-005: applyRotatedSession writes the rotation as __Secure-session with the Domain, the configured SameSite and a Max-Age from the runtime Clock", () =>
+    withRuntime(SecureDomainLayer, async (runtime) => {
+      const { own } = await runtime.runPromise(seed("secure-rotate@example.com"));
+      await runtime.runPromise(TestClock.adjust(Duration.minutes(2)));
+      const rotated = await getSession(
+        headersWithCookie(`__Secure-session=${Redacted.value(own.token)}`),
+        runtime,
+      );
+      assert.isDefined(rotated?.rotated);
+      const written: Array<{
+        readonly name: string;
+        readonly options: {
+          readonly domain?: string;
+          readonly sameSite?: string;
+          readonly maxAge?: number;
+        };
+      }> = [];
+      applyRotatedSession(rotated, {
+        set: (name, _value, options) => written.push({ name, options }),
+      });
+      assert.strictEqual(written[0]?.name, "__Secure-session");
+      assert.strictEqual(written[0]?.options.domain, "example.com");
+      assert.strictEqual(written[0]?.options.sameSite, "lax");
+      // 30 days absolute, 2 minutes into the session on the runtime's (Test)Clock.
+      assert.strictEqual(written[0]?.options.maxAge, 30 * 24 * 3600 - 120);
+    }));
 });

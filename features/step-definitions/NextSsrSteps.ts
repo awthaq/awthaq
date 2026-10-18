@@ -172,7 +172,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { outcomes } = yield* World;
     const cookie = yield* outcomes.getAs("cookie", isString);
     yield* outcomes.set("seen", yield* readSession(cookie));
-    yield* outcomes.set("presence", hasSessionCookie({ headers: headersWithCookie(cookie) }));
+    yield* outcomes.set("presence", hasSessionCookie({ headers: headersWithCookie(cookie) }, {}));
   });
 
   Then("it returns {string}", function* (literalValue: string) {
@@ -203,7 +203,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   When("a page or server action performs its own authorization", function* () {
     const { outcomes } = yield* World;
     const cookie = yield* outcomes.getAs("cookie", isString);
-    yield* outcomes.set("presence", hasSessionCookie({ headers: headersWithCookie(cookie) }));
+    yield* outcomes.set("presence", hasSessionCookie({ headers: headersWithCookie(cookie) }, {}));
     yield* outcomes.set("seen", yield* readSession(cookie));
   });
 
@@ -429,7 +429,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   /** An application's `proxy.ts`: an optimistic, synchronous, cookie-presence-only redirect. */
   const proxyDecision = (request: { readonly headers: ReturnType<typeof headersWithCookie> }) =>
-    hasSessionCookie(request) ? { action: "next" } : { action: "redirect", to: "/sign-in" };
+    hasSessionCookie(request, {}) ? { action: "next" } : { action: "redirect", to: "/sign-in" };
 
   Given("a request to a path under {string} carrying no session cookie", function* (_path: string) {
     const { outcomes } = yield* World;
@@ -457,6 +457,48 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { outcomes } = yield* World;
     assert.equal(yield* outcomes.getAs("proxySync", isBoolean), true);
   });
+
+  // IC-007: the deployment's session-cookie mode is the argument `proxy.ts` passes to `hasSessionCookie`.
+  const domainScoped = {
+    mode: { _tag: "SecureDomain", domain: "example.com", sameSite: "lax" },
+  } as const;
+
+  Given("a deployment whose session cookie is domain-scoped", function* () {
+    const { outcomes } = yield* World;
+    yield* outcomes.set("domainScoped", true);
+  });
+
+  When(
+    "{string} runs against a request carrying only a {string} cookie",
+    function* (_proxy: string, name: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("domainScoped", isBoolean), true);
+      yield* outcomes.set(
+        "configuredPresent",
+        hasSessionCookie({ headers: headersWithCookie(`${name}=anything`) }, domainScoped),
+      );
+      yield* outcomes.set(
+        "defaultNamePresent",
+        hasSessionCookie({ headers: headersWithCookie("__Host-session=anything") }, domainScoped),
+      );
+    },
+  );
+
+  Then(
+    "the request is allowed past {string} because the configured cookie is present",
+    function* (_proxy: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("configuredPresent", isBoolean), true);
+    },
+  );
+
+  Then(
+    "a request carrying only a {string} cookie is redirected to {string}",
+    function* (_name: string, _target: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("defaultNamePresent", isBoolean), false);
+    },
+  );
 
   Given(
     "a request to a path under {string} carrying a session cookie that is present but stale",

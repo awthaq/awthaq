@@ -106,6 +106,13 @@ Feature: Next.js Server Rendering
       Then it independently verifies the session itself
       And it does not treat having passed "proxy.ts" as proof of authentication or authorization
 
+    @REQ-EA-1314
+    Scenario: Under a domain-scoped session cookie proxy.ts checks the configured cookie name
+      Given a deployment whose session cookie is domain-scoped
+      When "proxy.ts" runs against a request carrying only a "__Secure-session" cookie
+      Then the request is allowed past "proxy.ts" because the configured cookie is present
+      But a request carrying only a "__Host-session" cookie is redirected to "/sign-in"
+
   # BEH-EA-189 — spec/behaviors/24-nextjs-ssr.md
   @BEH-EA-189
   Rule: withNextCookies bridges Set-Cookie from server actions

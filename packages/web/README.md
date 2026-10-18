@@ -4,13 +4,13 @@ The framework-neutral core of a web adapter (BO-004). `@awthaq/next` is the Next
 
 | Export | What it does |
 | --- | --- |
-| `getSession(headers, runtime)` | The database-verified boundary (BEH-EA-185): resolves `{ principal, user, session, rotated }`, or `undefined` for a missing, malformed, expired or unknown-session cookie. |
+| `getSession(headers, runtime)` | The database-verified boundary (BEH-EA-185): resolves `{ principal, user, session, rotated }` under the runtime's `SessionCookieConfig` (IC-007), or `undefined` for a missing, malformed, expired or unknown-session cookie. |
 | `makeGetSession(verify)` | The same function over an injected `verify(token, runtime)`, so an adapter can dedupe per render (`@awthaq/next` passes `React.cache(verifySessionToken)`). |
-| `applyRotatedSession(session, jar)` | Delivers a rotated session secret into a mutable cookie jar (BO-001). |
-| `hasSessionCookie(request)` | The presence-only, proxy/middleware check (BEH-EA-188). Never the boundary. |
+| `applyRotatedSession(session, jar)` | Delivers a rotated session cookie (`session.rotated.cookie`, rendered under the configured name and attributes) into a mutable cookie jar (BO-001). |
+| `hasSessionCookie(request, cookie)` | The presence-only, proxy/middleware check (BEH-EA-188). `cookie` is the partial given to `SessionCookie.config` (`{}` for the default). Never the boundary. |
 | `applyResponseCookies(response, jar)` | Writes every `Set-Cookie` a `Response` carries into a framework cookie jar (BEH-EA-189). |
 | `makeInProcessClient(api, options)` / `inProcessClient(api, options)` | A typed `HttpApiClient` over your own composed web handler for server actions: forwards the caller's cookies, echoes `__Host-csrf` as `x-csrf-token`, retries the cold-start CSRF rejection once, and lands every `Set-Cookie` in the jar (BEH-EA-189/190). |
-| `@awthaq/web/cookies` | The edge-safe subpath: `findCookieValue`, `hasCookie`, `parseSetCookie`, `applyResponseCookies`, `setCookie` and the jar types, with no `@awthaq/core`/`@awthaq/server` in the import graph. |
+| `@awthaq/web/cookies` | The edge-safe subpath: `findCookieValue`, `hasCookie`, `hasSessionCookie`, `parseSetCookie`, `applyResponseCookies`, `setCookie` and the jar types, with no `@awthaq/core`/`@awthaq/server` in the import graph. |
 
 ## The cookie jar
 

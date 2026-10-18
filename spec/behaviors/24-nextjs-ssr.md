@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-24 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Examples updated to the shipped signatures (`getSession(headers, runtime)`, `withNextCookies(response, jar)`) and the banner given implementation pointers; requirement texts unchanged (NAM-010, BO-008, IC-006, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Examples updated to the shipped signatures (`getSession(headers, runtime)`, `withNextCookies(response, jar)`) and the banner given implementation pointers; requirement texts unchanged (NAM-010, BO-008, IC-006, CCR-EA-006) <br> 1.2 (2026-10-18): BEH-EA-185 reads and renders under the runtime's `SessionCookieConfig`; BEH-EA-188 `hasSessionCookie` takes the cookie mode (plan 11 phase 0) |
 ---
 
 > Implemented in `@awthaq/web` — the framework-neutral core (`Session.ts`, `HasSessionCookie.ts`, `CookieJar.ts`, `InProcessClient.ts`; tests `packages/web/test`; BO-004) — and `@awthaq/next`, the Next adapter over it (`GetSession.ts`'s `React.cache` dedup, `WithNextCookies.ts`/`ServerActionClient.ts` name aliases, `edge.ts`, `Seed.ts`; tests `packages/next/test`) — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md) §5. The examples below use the shipped signatures: `getSession(headers, runtime)` and `withNextCookies(response, jar)`. Its BDD scenarios are `@skip @unwired`.
@@ -30,6 +30,8 @@ REQUIREMENT: `getSession`, called from a React Server Component or a server
 ```
 
 `usage-examples-v4.md` §13 states this directly: "`getSession` reads the cookie and verifies against the database, server-side." Cookie presence is a legitimate optimistic signal for `proxy.ts` (BEH-EA-188), but it is not proof of a valid session — only a database (or equivalently authoritative) lookup is, which is why the two checks are named separately and used in different places.
+
+**Configured cookie names (IC-007, plan 11).** `getSession` reads the session and impersonation cookies under the runtime's `SessionCookieConfig`, so under `SessionCookie.SecureDomain` it reads `__Secure-session` and `__Secure-impersonation`, never the default names. `Session.rotated` carries the rotation already rendered under that config (name, `Domain`, `SameSite`, and a `Max-Age` computed from the runtime `Clock`) for the cookie kind it came in on; `applyRotatedSession` writes it into the jar unchanged.
 
 _Previous: [BEH-EA-184](23-react.md#beh-ea-184-one-evaluation-path-across-server-client-and-tests) | Next: [BEH-EA-186](24-nextjs-ssr.md#beh-ea-186-server-side-decide-produces-the-client-seed)_
 
@@ -90,6 +92,8 @@ REQUIREMENT: `proxy.ts` MUST perform only a database-free check for redirect
 ```
 
 `usage-examples-v4.md` §13 labels this explicitly: "optimistic redirect only, never the boundary." research/11-client-frontend.md's Q84 gives the platform reason this is not merely a stylistic choice: Next.js's own guidance says Proxy "runs on every route... only read the session from the cookie... and avoid database checks," so a database-backed verification cannot live there without a real performance cost on every request — the real check belongs in the page's data-access layer, where `getSession` (BEH-EA-185) runs it once per request that actually needs it.
+
+**Configured cookie name (IC-007, plan 11).** `hasSessionCookie(request, cookie)` takes the session-cookie mode (the same partial given to `SessionCookie.config`; `{}` for the default) and checks that cookie's name (`__Secure-session` under `SecureDomain`). The argument is required, so a `SecureDomain` host cannot forget it. It imports nothing from `@awthaq/core`/`@awthaq/server` at runtime (the naming rule is `Api.sessionCookieName`) and is also exported from `@awthaq/web/cookies`.
 
 **Stateless edge tier (BO-006, decision D1 option C).** Presence alone lets a forged or long-expired opaque cookie through the edge. `@awthaq/jwt`'s `JwtConfig.sessionCookie` (default off) makes every cookie-authenticated response also carry a `__Host-`-prefixed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie holding a JWT of the same principal that expires with the cookie (default 5 minutes); `@awthaq/next/edge`'s `verifySessionJwt` verifies it against the JWKS through the lite verifier (`@awthaq/jwt/verify`, free of `@awthaq/core`/`@awthaq/server` — pinned by an import-graph test) and yields the claims or `undefined`. It is still a redirect signal: the mirror is a copy, a revoked session's mirror keeps verifying for at most its `ttl` (sign-out does not clear it), and the boundary stays `getSession`. Edge deployments: `hasSessionCookie` and `@awthaq/next/edge` are the edge-safe entries; `getSession`/`serverActionClient` need the origin (Sessions/Users/SQL).
 

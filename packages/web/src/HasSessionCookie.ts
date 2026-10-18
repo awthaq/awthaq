@@ -20,14 +20,26 @@
 // the mistake this module's own existence is meant to make hard to make.
 
 import { Api } from "@awthaq/api";
+import type { SessionCookie } from "@awthaq/core"; // type-only: erased, so the edge bundle stays free of core
 import { hasCookie } from "./CookieHeader.ts";
 import type { HeadersLike } from "./CookieHeader.ts";
 
 /**
- * BEH-EA-188: does the request carry a session cookie at all? Not whether
- * it is valid — see this module's header comment. `request` only needs a
- * `headers` object shaped like `HeadersLike` (both a Web platform
+ * BEH-EA-188/IC-007: does the request carry the session cookie at all? Not
+ * whether it is valid — see this module's header comment. `request` only needs
+ * a `headers` object shaped like `HeadersLike` (both a Web platform
  * `NextRequest`/`Request` and Next's `ReadonlyHeaders` already qualify).
+ *
+ * `cookie` is the same partial a host gives `SessionCookie.config(...)` (`{}`
+ * for the default): the cookie's name follows its mode (`__Secure-session`
+ * under `SecureDomain`), and the argument is required so a `SecureDomain` host
+ * cannot forget it.
  */
-export const hasSessionCookie = (request: { readonly headers: HeadersLike }): boolean =>
-  hasCookie(request.headers.get("cookie"), Api.SessionCookie.key);
+export const hasSessionCookie = (
+  request: { readonly headers: HeadersLike },
+  cookie: { readonly mode?: SessionCookie.Mode },
+): boolean =>
+  hasCookie(
+    request.headers.get("cookie"),
+    Api.sessionCookieName(cookie.mode ?? { _tag: "Host" }, "session"),
+  );

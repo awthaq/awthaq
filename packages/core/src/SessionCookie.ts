@@ -92,13 +92,7 @@ export type CookieKind = "session" | "impersonation";
 
 /** The name every reader (Authentication, SubjectExtractor, adapters) must use for this config. */
 export const cookieName = (cfg: SessionCookieConfigShape, kind: CookieKind = "session"): string =>
-  kind === "impersonation"
-    ? cfg.mode._tag === "SecureDomain"
-      ? "__Secure-impersonation"
-      : Api.IMPERSONATION_COOKIE_NAME
-    : cfg.mode._tag === "SecureDomain"
-      ? "__Secure-session"
-      : Api.SESSION_COOKIE_NAME;
+  Api.sessionCookieName(cfg.mode, kind);
 
 export interface CookieOptions {
   readonly secure: true;

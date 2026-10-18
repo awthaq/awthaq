@@ -61,4 +61,11 @@ describe("@awthaq/next/edge import graph (BO-006)", () => {
       );
     }
   });
+
+  it("IC-007: the hasSessionCookie module reaches no core/server runtime import", () => {
+    const { packages } = walk(join(packagesDir, "web", "src", "HasSessionCookie.ts"));
+    for (const forbidden of ["@awthaq/core", "@awthaq/server", "@awthaq/client", "@awthaq/react"]) {
+      assert.notInclude(Array.from(packages), forbidden);
+    }
+  });
 });

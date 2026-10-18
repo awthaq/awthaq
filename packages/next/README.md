@@ -78,7 +78,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export function proxy(request: NextRequest) {
-  if (!hasSessionCookie(request) && request.nextUrl.pathname.startsWith("/app")) {
+  if (!hasSessionCookie(request, {}) && request.nextUrl.pathname.startsWith("/app")) {
     return NextResponse.redirect(new URL("/sign-in", request.url));
   }
 }
@@ -89,6 +89,9 @@ function in `middleware.ts` and export it as `middleware`. The recipes in this
 README assume Next.js 15 or newer (`headers()`/`cookies()` are async there).
 
 `hasSessionCookie` checks presence only — a forged or expired cookie passes.
+The second argument is the same partial you give `SessionCookie.config(...)`
+(`{}` for the default): under `SessionCookie.SecureDomain` it checks
+`__Secure-session`, and `getSession` reads that configured name too.
 This exists purely to skip rendering a page the real boundary below would
 reject anyway; it is never itself the boundary.
 
@@ -324,7 +327,8 @@ this package's design exists to make hard to write.
 secret keeps verifying only for `SessionConfig.rotationGrace` (30 seconds by
 default) after that happens.
 `getSession`'s `Session` carries that fresh token on `session.rotated`
-(`undefined` when nothing rotated this call); deliver it in any context that
+(`undefined` when nothing rotated this call; `{ token, cookie }`, the cookie
+already rendered under the runtime's `SessionCookieConfig`); deliver it in any context that
 holds a mutable cookie jar — a Server Action or a Route Handler:
 
 ```ts
