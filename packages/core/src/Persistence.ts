@@ -28,8 +28,10 @@ import {
 import {
   AccountStoreSql,
   AuditLogStoreSql,
+  CoreSealedColumns,
   RelayCursorStoreSql,
   Repositories,
+  SealedColumn,
   SessionStoreSql,
   UserStoreSql,
   VerificationStoreSql,
@@ -55,7 +57,9 @@ export const memory = Layer.mergeAll(
 export interface SqlOptions {
   /**
    * CSG-006: seal `users.metadata` and `sessions.ipAddress`/`userAgent` at rest through `Encryption`
-   * (AAD `<entity>:<id>:<field>`). Default `false`. Provider tokens are always sealed.
+   * (AAD `<table>:<id>:<column>`, ADR-EA-019 decision 6). Default `false`. Provider tokens are always
+   * sealed. The composition provides `SealedColumn.Deployed`, the list of the columns it really seals, so
+   * after a key rotation `SealedColumn.sweepDeployed` re-seals exactly those (and never seals a plaintext one).
    */
   readonly encryptPii?: boolean;
 }
@@ -68,8 +72,10 @@ export type SqlRequirements = SqlClient.SqlClient | Encryption.Encryption;
  * (INV-EA-017: the core identity tables share one transaction domain). Requires `SqlClient` and
  * `Encryption` (the accounts repository seals provider tokens).
  */
-export const sql = (options?: SqlOptions) =>
-  Layer.mergeAll(
+export const sql = (options?: SqlOptions) => {
+  // One value decides both the repositories and the `Deployed` list, so the two cannot disagree.
+  const encryptPii = options?.encryptPii === true;
+  return Layer.mergeAll(
     UserStoreSql.layer,
     AccountStoreSql.layer,
     SessionStoreSql.layer,
@@ -77,13 +83,12 @@ export const sql = (options?: SqlOptions) =>
     AuditLogStoreSql.layer,
     RelayCursorStoreSql.layer,
     SqlTransaction.layerSql,
+    Layer.succeed(SealedColumn.Deployed, { columns: CoreSealedColumns.deployed({ encryptPii }) }),
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
-        options?.encryptPii === true
-          ? Repositories.UsersRepositoryEncryptedLive
-          : Repositories.UsersRepositoryLive,
-        options?.encryptPii === true
+        encryptPii ? Repositories.UsersRepositoryEncryptedLive : Repositories.UsersRepositoryLive,
+        encryptPii
           ? Repositories.SessionsRepositoryEncryptedLive
           : Repositories.SessionsRepositoryLive,
         Repositories.AccountsRepositoryLive,
@@ -93,3 +98,4 @@ export const sql = (options?: SqlOptions) =>
       ),
     ),
   );
+};

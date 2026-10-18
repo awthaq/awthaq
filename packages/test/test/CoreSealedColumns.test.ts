@@ -111,18 +111,13 @@ const newAccount = (id: string, userId: string, subject: string): AccountStore.N
   updatedAt: at(0),
 });
 
-/** What the runbook (`docs/plugin-authoring.md`) used to tell an operator to declare by hand. */
-const handDeclared = {
-  usersMetadata: { table: "users", column: "metadata", key: "id", adoptPlaintext: true },
-  sessionsIpAddress: { table: "sessions", column: "ipAddress", key: "id", adoptPlaintext: true },
-  sessionsUserAgent: { table: "sessions", column: "userAgent", key: "id", adoptPlaintext: true },
-  accountsAccessToken: {
-    table: "accounts",
-    column: "accessToken",
-    key: "id",
-    adoptPlaintext: false,
-  },
-} satisfies Record<string, SealedColumn.Sweepable>;
+/** What the runbook used to tell an operator to declare by hand (it is the canonical declaration, so it is safe now). */
+const handDeclaredMetadata = {
+  table: "users",
+  column: "metadata",
+  key: "id",
+  adoptPlaintext: true,
+} satisfies SealedColumn.Sweepable;
 
 /** A sealed optional cell, opened to its plaintext (fails `Unreadable`). */
 const openText = (value: Option.Option<Sealed.Sealed<string>>) =>
@@ -137,7 +132,7 @@ describe("core sealed columns: the bugs plan 17 fixes", () => {
         const users = yield* UserStore.UserStore;
         yield* users.insertOrHolder(newUser("u1", Option.some('{"a":1}')));
         keys.rotateTo("k2");
-        const report = yield* SealedColumn.sweep(handDeclared.usersMetadata);
+        const report = yield* SealedColumn.sweep(handDeclaredMetadata);
         assert.deepStrictEqual(report, { scanned: 1, resealed: 1, unreadable: 0 });
       }).pipe(Effect.provide(layer));
     },
@@ -152,7 +147,7 @@ describe("core sealed columns: the bugs plan 17 fixes", () => {
         const sql = yield* SqlClient.SqlClient;
         yield* users.insertOrHolder(newUser("u2", Option.none()));
         yield* sql`UPDATE users SET metadata = ${'{"b":2}'} WHERE id = ${"u2"}`;
-        yield* SealedColumn.sweep(handDeclared.usersMetadata);
+        yield* SealedColumn.sweep(handDeclaredMetadata);
         const read = Option.getOrThrow(yield* users.get(makeUserId("u2")));
         assert.deepStrictEqual(yield* openText(read.metadata), Option.some('{"b":2}'));
       }).pipe(Effect.provide(layer));
@@ -184,7 +179,7 @@ describe("core sealed columns: the bugs plan 17 fixes", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect.fails(
+  it.effect(
     "key retirement: after rotating and sweeping every deployed column, the retired key can be dropped and every core value still opens",
     () => {
       const { keys, layer } = environment("core_sealed_retirement");
@@ -200,7 +195,27 @@ describe("core sealed columns: the bugs plan 17 fixes", () => {
         });
         yield* accounts.insertIfAbsent(newAccount("a4", "u4", "four"));
         keys.rotateTo("k2");
-        yield* SealedColumn.sweepAll(Object.values(handDeclared));
+        const reports = yield* SealedColumn.sweepDeployed();
+        assert.deepStrictEqual(
+          reports.map((report) => [
+            report.table,
+            report.column,
+            report.resealed,
+            report.unreadable,
+          ]),
+          [
+            ["accounts", "accessToken", 1, 0],
+            ["accounts", "refreshToken", 1, 0],
+            ["accounts", "idToken", 1, 0],
+            ["users", "metadata", 1, 0],
+            ["sessions", "ipAddress", 1, 0],
+            ["sessions", "userAgent", 1, 0],
+          ],
+        );
+        // A second pass finds nothing stale: the retired key can be dropped.
+        assert.isTrue(
+          (yield* SealedColumn.sweepDeployed()).every((report) => report.resealed === 0),
+        );
         keys.retire("k1");
         const user = Option.getOrThrow(yield* users.get(makeUserId("u4")));
         assert.deepStrictEqual(yield* openText(user.metadata), Option.some('{"k":1}'));
@@ -385,7 +400,7 @@ const seedUserAndSession = (
 
 describe("core sealed columns: what only core can show", () => {
   it.effect(
-    "encryptPii: false: the PII columns are stored as given and open through Sealed.plain",
+    "encryptPii: false: the PII columns are stored as given, open through Sealed.plain, and are not deployed",
     () => {
       const { layer } = environment("core_sealed_plain", { encryptPii: false });
       return Effect.gen(function* () {
@@ -397,9 +412,38 @@ describe("core sealed columns: what only core can show", () => {
         assert.strictEqual(yield* rawColumn("sessions", "userAgent")("s5"), "Agent/1.0");
         const user = Option.getOrThrow(yield* users.get(makeUserId("u5")));
         assert.deepStrictEqual(yield* openText(user.metadata), Option.some('{"k":5}'));
+        // The composition lists only what it seals: a sweep never seals plaintext PII behind a plaintext adapter.
+        const deployed = yield* SealedColumn.Deployed;
+        assert.deepStrictEqual(
+          deployed.columns.map((declared) => `${declared.table}.${declared.column}`),
+          ["accounts.accessToken", "accounts.refreshToken", "accounts.idToken"],
+        );
+        assert.deepStrictEqual(
+          (yield* SealedColumn.sweepDeployed()).map((report) => report.column),
+          ["accessToken", "refreshToken", "idToken"],
+        );
+        assert.strictEqual(yield* rawColumn("users", "metadata")("u5"), '{"k":5}');
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it.effect("encryptPii: true deploys all six core columns", () => {
+    const { layer } = environment("core_sealed_deployed");
+    return Effect.gen(function* () {
+      const deployed = yield* SealedColumn.Deployed;
+      assert.deepStrictEqual(
+        deployed.columns.map((declared) => `${declared.table}.${declared.column}`),
+        [
+          "accounts.accessToken",
+          "accounts.refreshToken",
+          "accounts.idToken",
+          "users.metadata",
+          "sessions.ipAddress",
+          "sessions.userAgent",
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("a plaintext metadata row written before opting in opens and is sealed on read", () => {
     const { layer } = environment("core_sealed_adopt");
