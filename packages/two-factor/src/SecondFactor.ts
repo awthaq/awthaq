@@ -43,10 +43,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as Schema from "effect/Schema";
 import {
-  CHALLENGE_PURPOSE,
-  ChallengePayload,
+  ChallengeLink,
   TwoFactorChallengeId,
   type ConsumedChallenge,
   type FactorProof,
@@ -433,8 +431,7 @@ export const layer = Layer.effect(
 
     const issueChallenge: SecondFactorShape["issueChallenge"] = Effect.fnUntraced(
       function* (input) {
-        const issued = yield* verification.issue({
-          identifier: VerificationLink.identifierOf(CHALLENGE_PURPOSE, input.userId),
+        const issued = yield* VerificationLink.issue({ verification, crypto }, ChallengeLink, {
           ttl: config.challengeTtl,
           userId: input.userId,
           payload: {
@@ -444,51 +441,35 @@ export const layer = Layer.effect(
             ...(input.handoff === undefined ? {} : { handoff: input.handoff }),
           },
         });
-        return TwoFactorChallengeId(
-          Redacted.value(
-            VerificationLink.encode({
-              purpose: CHALLENGE_PURPOSE,
-              publicId: input.userId,
-              value: issued.value,
-            }),
-          ),
-        );
+        return TwoFactorChallengeId(Redacted.value(issued.token));
       },
     );
 
-    const decodePayload = Schema.decodeUnknownOption(ChallengePayload);
+    // The source budget is `TwoFactor.attempt`'s `verifyByIp`, spent before `redeemChallenge`
+    // (`TwoFactor.ts`); a wrong code is charged to the per-account failure budget (BCR-006,
+    // `recordFailure`), so the token has no budget of its own.
+    const challenges = VerificationLink.redeemer(ChallengeLink, {
+      verification,
+      budget: { source: "caller", token: "none" },
+    });
 
     const redeemChallenge: SecondFactorShape["redeemChallenge"] = (challengeId, use) =>
-      Effect.gen(function* () {
-        const invalid = new InvalidTwoFactorCode({});
-        const decoded = VerificationLink.decode(Redacted.value(challengeId), {
-          name: CHALLENGE_PURPOSE,
-        });
-        if (Option.isNone(decoded)) return yield* Effect.fail(invalid);
-        // The identifier is derived from the claimed user, so a challenge cannot be spent as another's.
-        return yield* verification
-          .redeem({
-            identifier: decoded.value.identifier,
-            value: decoded.value.value,
-            use: (token) =>
-              Effect.gen(function* () {
-                const payload = decodePayload(token.payload);
-                // A row that is no challenge of ours is spent, as before (the refusal commits).
-                if (Option.isNone(payload) || Option.isNone(token.userId)) {
-                  return yield* Effect.fail(invalid);
-                }
-                return yield* use({
-                  userId: token.userId.value,
-                  strategy: payload.value.strategy,
-                  amr: payload.value.amr.filter(Sessions.isAuthMethod),
-                  attempt: payload.value.attempt,
-                  handoff: payload.value.handoff,
-                });
-              }),
-            onFailure: Verification.commitUnlessUnavailable,
-          })
-          .pipe(Effect.catchTag("Verification/TokenConsumed", () => Effect.fail(invalid)));
-      });
+      challenges(
+        { token: challengeId },
+        ({ userId, payload }) =>
+          use({
+            userId,
+            strategy: payload.strategy,
+            amr: payload.amr.filter(Sessions.isAuthMethod),
+            attempt: payload.attempt,
+            handoff: payload.handoff,
+          }),
+        { onFailure: Verification.commitUnlessUnavailable },
+      ).pipe(
+        Effect.catchTag("VerificationLink/Refused", () =>
+          Effect.fail(new InvalidTwoFactorCode({})),
+        ),
+      );
 
     return SecondFactor.of({
       isEnrolled,
