@@ -73,7 +73,6 @@ export const layer = (options?: Options) => {
         encryptPii
           ? Repositories.SessionsRepositoryEncryptedLive
           : Repositories.SessionsRepositoryLive,
-        Repositories.AccountsRepositoryLive,
       ),
     ),
   );

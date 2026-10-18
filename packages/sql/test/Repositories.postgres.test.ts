@@ -65,28 +65,6 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
     }).pipe(Effect.provide(RepositoriesLive)),
   );
 
-  it.effect("enforces the (providerId, subject, issuer) unique constraint", () =>
-    Effect.gen(function* () {
-      const users = yield* Repositories.UsersRepository;
-      const accounts = yield* Repositories.AccountsRepository;
-      const user = yield* users.insert(
-        yield* M.User.insert.makeEffect({ email: "dupe@example.com", name: "Dupe" }),
-      );
-      const insert = yield* M.Account.insert.makeEffect({
-        userId: user.id,
-        providerId: "password",
-        subject: user.id,
-        issuer: "",
-        passwordHash: null,
-        accessToken: null,
-        refreshToken: null,
-      });
-      yield* accounts.insert(insert);
-      const failure = yield* accounts.insert(insert).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "SqlError");
-    }).pipe(Effect.provide(RepositoriesLive)),
-  );
-
   // upstream-hardening-followups ticket 01: every one of these exercises a
   // raw SQL query this ticket quoted — before the fix each failed against
   // real Postgres with `column "..." does not exist` (Postgres folds an
@@ -120,39 +98,6 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
       // AAPS-005: a second verification expecting the old state finds nothing to change.
       assert.isTrue(Option.isNone(yield* verify));
     }).pipe(Effect.provide(RepositoriesLive)),
-  );
-
-  it.effect(
-    "Accounts.findIdentityByKey/listIdentitiesByUser/deleteAllByUser all resolve the quoted providerId/userId columns",
-    () =>
-      Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        const accounts = yield* Repositories.AccountsRepository;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "acct-cols@example.com", name: "A" }),
-        );
-        yield* accounts.insert(
-          yield* M.Account.insert.makeEffect({
-            userId: user.id,
-            providerId: "password",
-            subject: user.id,
-            issuer: "",
-            passwordHash: null,
-            accessToken: null,
-            refreshToken: null,
-          }),
-        );
-
-        const found = yield* accounts.findIdentityByKey("password", user.id, "");
-        assert.isTrue(Option.isSome(found));
-
-        const listed = yield* accounts.listIdentitiesByUser(user.id);
-        assert.strictEqual(listed.length, 1);
-
-        yield* accounts.deleteAllByUser(user.id);
-        const afterDelete = yield* accounts.listIdentitiesByUser(user.id);
-        assert.strictEqual(afterDelete.length, 0);
-      }).pipe(Effect.provide(RepositoriesLive)),
   );
 
   it.effect(

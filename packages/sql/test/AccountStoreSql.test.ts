@@ -2,7 +2,7 @@
 // is `StoreContract.accounts` (`packages/test/test/StoreContract.*.test.ts`, also on Postgres under
 // `pnpm test:pg`); this is the adapter's token encryption, the identity reads that never touch it,
 // the typed unreadable-token answer, and the failure mapping.
-import { AccountStore, Encryption, KeyProvider } from "@awthaq/ports";
+import { AccountStore, Encryption, KeyProvider, Sealed } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -15,16 +15,15 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
+import { UnknownError } from "effect/unstable/sql/SqlError";
 import * as AccountStoreSql from "../src/AccountStoreSql.ts";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
-import * as Repositories from "../src/Repositories.ts";
+import * as FaultySql from "./support/FaultySql.ts";
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
-const Migrated = Layer.effectDiscard(
-  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
-).pipe(Layer.provide(SqlLive));
+const migrate = Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+const Migrated = Layer.effectDiscard(migrate).pipe(Layer.provide(SqlLive));
 
 const key = (fill: number) => Buffer.alloc(32, fill).toString("base64");
 const k1 = { kid: "k1", key: key(1) };
@@ -34,26 +33,22 @@ const k2 = { kid: "k2", key: key(2) };
 const storeLayer = (keyset: ReadonlyArray<{ kid: string; key: string }>, current: string) =>
   AccountStoreSql.layer.pipe(
     Layer.provide(
-      Layer.fresh(Repositories.AccountsRepositoryLive).pipe(
+      Layer.fresh(Encryption.layer).pipe(
         Layer.provide(
-          Layer.fresh(Encryption.layer).pipe(
+          Layer.fresh(KeyProvider.layerEnv).pipe(
             Layer.provide(
-              Layer.fresh(KeyProvider.layerEnv).pipe(
-                Layer.provide(
-                  ConfigProvider.layer(
-                    ConfigProvider.fromEnv({
-                      env: {
-                        AWTHAQ_ENCRYPTION_KEYS: JSON.stringify(keyset),
-                        AWTHAQ_ENCRYPTION_KEY_ID: current,
-                      },
-                    }),
-                  ),
-                ),
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({
+                  env: {
+                    AWTHAQ_ENCRYPTION_KEYS: JSON.stringify(keyset),
+                    AWTHAQ_ENCRYPTION_KEY_ID: current,
+                  },
+                }),
               ),
             ),
-            Layer.provide(NodeCrypto.layer),
           ),
         ),
+        Layer.provide(NodeCrypto.layer),
       ),
     ),
   );
@@ -172,62 +167,75 @@ describe("AccountStoreSql tokens at rest (BE-002, SMS-002)", () => {
         assert.strictEqual(Redacted.value(yield* healed.accessToken.open), "access-secret");
       }).pipe(Effect.provide(over(storeLayer([k1], "k1")))),
   );
+
+  // Ticket 18 / BAM-008: the three token columns, idToken included, are ciphertext at rest.
+  it.effect("the three token columns are ciphertext at rest and open to the plaintext", () =>
+    Effect.gen(function* () {
+      yield* seed("a1");
+      const raw = yield* rawTokens("a1");
+      for (const [column, plaintext] of [
+        [raw.accessToken, "access-secret"],
+        [raw.refreshToken, "refresh-secret"],
+        [raw.idToken, "id-secret"],
+      ] as const) {
+        assert.isString(column);
+        assert.notInclude(column, plaintext);
+        assert.strictEqual(kidOf(column), "k1");
+      }
+      const store = yield* AccountStore.AccountStore;
+      const read = Option.getOrThrow(
+        Option.getOrThrow(yield* store.readProviderTokens(accountId("a1"))),
+      );
+      assert.strictEqual(Redacted.value(yield* read.accessToken.open), "access-secret");
+      assert.strictEqual(
+        Redacted.value(yield* Sealed.orDie(Option.getOrThrow(read.idToken).open)),
+        "id-secret",
+      );
+    }).pipe(Effect.provide(over(storeLayer([k1], "k1")))),
+  );
+
+  // Plan 17: the AAD is `accounts:<id>:<field>`, so a ciphertext copied to another account is unreadable.
+  it.effect(
+    "writeProviderTokens seals under the row's own AAD; a token moved to another row is unreadable",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* AccountStore.AccountStore;
+        const sql = yield* SqlClient.SqlClient;
+        yield* seed("a1");
+        yield* seed("a2");
+        yield* store.writeProviderTokens(accountId("a1"), tokens, at(2));
+        const donor = yield* rawTokens("a1");
+        yield* sql`UPDATE accounts SET "accessToken" = ${donor.accessToken} WHERE id = ${"a2"}`;
+        const moved = Option.getOrThrow(
+          Option.getOrThrow(yield* store.readProviderTokens(accountId("a2"))),
+        );
+        const failure = yield* moved.accessToken.open.pipe(Effect.flip);
+        assert.strictEqual(failure.reason, "DecryptionFailed");
+        // The owner still reads its own.
+        const own = Option.getOrThrow(
+          Option.getOrThrow(yield* store.readProviderTokens(accountId("a1"))),
+        );
+        assert.strictEqual(Redacted.value(yield* own.accessToken.open), "access-secret");
+      }).pipe(Effect.provide(over(storeLayer([k1], "k1")))),
+  );
 });
 
 describe("AccountStoreSql failure mapping (MA-004)", () => {
-  const outage = () =>
-    new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) });
-
-  const DownRepository = Layer.effect(
-    Repositories.AccountsRepository,
-    Effect.gen(function* () {
-      const real = yield* Repositories.AccountsRepository;
-      return {
-        ...real,
-        insertIdentityIfAbsent: () => Effect.fail(outage()),
-        findIdentityById: () => Effect.fail(outage()),
-        findIdentityByKey: () => Effect.fail(outage()),
-        listIdentitiesByUser: () => Effect.fail(outage()),
-        findPasswordHash: () => Effect.fail(outage()),
-        findSealedTokensById: () => Effect.fail(outage()),
-        writePasswordHash: () => Effect.fail(outage()),
-        writeTokens: () => Effect.fail(outage()),
-        deleteAllByUser: () => Effect.fail(outage()),
-      };
-    }),
-  ).pipe(
-    Layer.provide(
-      Repositories.AccountsRepositoryLive.pipe(
-        Layer.provide(
-          Encryption.layer.pipe(
-            Layer.provide(
-              KeyProvider.layerEnv.pipe(
-                Layer.provide(
-                  ConfigProvider.layer(
-                    ConfigProvider.fromEnv({
-                      env: { AWTHAQ_ENCRYPTION_KEY: key(7) },
-                    }),
-                  ),
-                ),
-              ),
-            ),
-            Layer.provide(NodeCrypto.layer),
-          ),
-        ),
-      ),
-    ),
-  );
-
-  const DownStore = AccountStoreSql.layer.pipe(
-    Layer.provide(DownRepository),
-    Layer.provide(SqlLive),
-    Layer.provide(Migrated),
+  const Faulty = FaultySql.layer(SqliteClient.layer({ filename: ":memory:" }));
+  const DownStore = storeLayer([{ kid: "k7", key: key(7) }], "k7").pipe(
+    Layer.provideMerge(Layer.effectDiscard(migrate).pipe(Layer.provide(Faulty))),
+    Layer.provideMerge(Faulty),
   );
 
   // A transient failure is retried on the real clock before it is given up on.
   it.live("a SqlError is StoreUnavailable naming the primitive that failed", () =>
     Effect.gen(function* () {
       const store = yield* AccountStore.AccountStore;
+      const faults = yield* FaultySql.FaultControl;
+      yield* faults.failNext({
+        count: Number.POSITIVE_INFINITY,
+        reason: new UnknownError({ cause: new Error("connection reset") }),
+      });
       const id = accountId("a1");
       const failures = {
         insertIfAbsent: yield* seed("a1").pipe(Effect.flip),
@@ -240,6 +248,7 @@ describe("AccountStoreSql failure mapping (MA-004)", () => {
           .writeCredentialHash(id, Redacted.make("h"), at(1))
           .pipe(Effect.flip),
         writeProviderTokens: yield* store.writeProviderTokens(id, tokens, at(1)).pipe(Effect.flip),
+        deleteUnlessLast: yield* store.deleteUnlessLast(id, true).pipe(Effect.flip),
         deleteByUser: yield* store.deleteByUser(userId("u1")).pipe(Effect.flip),
       };
       for (const [primitive, failure] of Object.entries(failures)) {

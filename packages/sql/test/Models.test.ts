@@ -224,3 +224,36 @@ describe("Models.makeModels (TS-001)", () => {
     }),
   );
 });
+
+// BEH-EA-034 (moved from the repository contract, plan 16): a model property, so no database.
+describe("Models sensitive fields (BEH-EA-034)", () => {
+  it.effect("passwordHash and the token columns never appear in the Account JSON variant", () =>
+    Effect.gen(function* () {
+      const account = yield* Schema.decodeUnknownEffect(sqlite.Account)({
+        id: "a1",
+        userId: "u1",
+        providerId: "password",
+        subject: "u1",
+        issuer: "",
+        tenantId: null,
+        passwordHash: "super-secret-hash",
+        accessToken: "access-ciphertext",
+        refreshToken: "refresh-ciphertext",
+        idToken: "id-ciphertext",
+        accessTokenExpiresAt: null,
+        refreshTokenExpiresAt: null,
+        scope: null,
+        tokenType: null,
+        createdAt: iso,
+        updatedAt: iso,
+      });
+      // The stored row does hold the hash: the JSON variant is what must hide it.
+      assert.strictEqual(account.passwordHash, "super-secret-hash");
+      const json = yield* Schema.encodeUnknownEffect(sqlite.Account.json)(account);
+      for (const field of ["passwordHash", "accessToken", "refreshToken", "idToken"]) {
+        assert.notProperty(json, field);
+      }
+      assert.strictEqual(json.providerId, "password");
+    }),
+  );
+});

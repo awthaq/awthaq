@@ -8,12 +8,13 @@
 // in-memory stand-in. The dialect-neutral cases live in `contract.ts` (shared
 // with the file-backed and Postgres suites, ESR-009); the cases below are
 // SQLite-specific or cheap enough to keep on the in-memory database only.
-import { AuditLogStore, VerificationStore } from "@awthaq/ports";
+import { AccountStore, AuditLogStore, VerificationStore } from "@awthaq/ports";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as Model from "effect/unstable/schema/Model";
@@ -121,7 +122,7 @@ describe("Repositories (SQLite specifics)", () => {
     Effect.gen(function* () {
       const { spans, tracer } = collectSpans();
       const users = yield* Repositories.UsersRepository;
-      const accounts = yield* Repositories.AccountsRepository;
+      const accounts = yield* AccountStore.AccountStore;
       const verification = yield* VerificationStore.VerificationStore;
       const now = yield* DateTime.now;
       const user = yield* insertUser("secret-email@example.com");
@@ -129,8 +130,8 @@ describe("Repositories (SQLite specifics)", () => {
       yield* Effect.provideService(
         Effect.gen(function* () {
           yield* users.findByEmail("secret-email@example.com");
-          yield* accounts.findIdentityByKey("github", "subject-secret", "");
-          yield* accounts.listIdentitiesByUser(user.id);
+          yield* accounts.getByKey("github", "subject-secret", "");
+          yield* accounts.listByUser(user.id);
           yield* verification.present({
             identifier: "verify-email:identifier-secret",
             valueHash: "hash-secret",
@@ -218,7 +219,7 @@ describe("Repositories (SQLite specifics)", () => {
         const sql = yield* SqlClient.SqlClient;
         const users = yield* Repositories.UsersRepository;
         const sessions = yield* Repositories.SessionsRepository;
-        const accounts = yield* Repositories.AccountsRepository;
+        const accounts = yield* AccountStore.AccountStore;
         const verification = yield* VerificationStore.VerificationStore;
         const now = yield* DateTime.now;
 
@@ -253,28 +254,28 @@ describe("Repositories (SQLite specifics)", () => {
         yield* sessions.markReusedOnce(session.id, now);
         // `next` expires at `now`; reauthenticate judges liveness at its instant, so use one second earlier.
         yield* sessions.reauthenticate(next.id, user.id, DateTime.subtract(now, { seconds: 1 }));
-        yield* accounts.insert(
-          yield* M.Account.insert.makeEffect({
-            userId: user.id,
-            providerId: "github",
-            subject: "sea005",
-            issuer: "",
-            passwordHash: null,
-            accessToken: null,
-            refreshToken: null,
-          }),
-        );
-        const account = yield* accounts.findIdentityByKey("github", "sea005", "");
-        yield* accounts.writeTokens(
-          Option.getOrThrow(account).id,
+        const accountId = Schema.decodeUnknownSync(Models.AccountId)("sea005-account");
+        yield* accounts.insertIfAbsent({
+          id: accountId,
+          userId: user.id,
+          providerId: "github",
+          subject: "sea005",
+          issuer: "",
+          credentialHash: Option.none(),
+          tokens: Option.none(),
+          createdAt: now,
+          updatedAt: now,
+        });
+        yield* accounts.writeProviderTokens(
+          accountId,
           {
-            accessToken: "a",
-            refreshToken: "r",
-            idToken: null,
-            accessTokenExpiresAt: now,
-            refreshTokenExpiresAt: now,
-            scope: null,
-            tokenType: null,
+            accessToken: Redacted.make("a"),
+            refreshToken: Option.some(Redacted.make("r")),
+            idToken: Option.none(),
+            accessTokenExpiresAt: Option.some(now),
+            refreshTokenExpiresAt: Option.some(now),
+            scope: Option.none(),
+            tokenType: Option.none(),
           },
           now,
         );

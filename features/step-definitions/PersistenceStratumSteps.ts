@@ -30,6 +30,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { cell, put, take, type World } from "./FoundationsWorld.ts";
 import {
   collectSpans,
+  insertAccount,
   insertSession,
   insertUser,
   M,
@@ -164,21 +165,16 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     const encoded = yield* withDatabase(
       Effect.gen(function* () {
         const users = yield* Repositories.UsersRepository;
-        const accounts = yield* Repositories.AccountsRepository;
         const user = yield* users.insert(
           yield* M.User.insert.makeEffect({ email: "sens@example.com", name: "Sens" }),
         );
-        const account = yield* accounts.insert(
-          yield* M.Account.insert.makeEffect({
-            userId: user.id,
-            providerId: "password",
-            subject: user.id,
-            issuer: "",
-            passwordHash: "super-secret-hash",
-            accessToken: null,
-            refreshToken: null,
-          }),
-        );
+        const account = yield* insertAccount({
+          userId: user.id,
+          providerId: "password",
+          subject: user.id,
+          passwordHash: "super-secret-hash",
+          accessToken: null,
+        });
         // The stored row does hold the hash: the JSON variant is what must hide it.
         assert.equal(account.passwordHash, "super-secret-hash");
         return yield* Schema.encodeUnknownEffect(M.Account.json)(account);
@@ -213,22 +209,17 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
       handlers.handle("account", () =>
         Effect.gen(function* () {
           const users = yield* Repositories.UsersRepository;
-          const accounts = yield* Repositories.AccountsRepository;
           const user = yield* users.insert(
             yield* M.User.insert.makeEffect({ email: "leak@example.com", name: "Leak" }),
           );
           // The whole entity — secrets included — is what the handler hands back.
-          return yield* accounts.insert(
-            yield* M.Account.insert.makeEffect({
-              userId: user.id,
-              providerId: "github",
-              subject: "gh-leak",
-              issuer: "",
-              passwordHash: "wire-secret-hash",
-              accessToken: "wire-secret-access",
-              refreshToken: "wire-secret-refresh",
-            }),
-          );
+          return yield* insertAccount({
+            userId: user.id,
+            providerId: "github",
+            subject: "gh-leak",
+            passwordHash: "wire-secret-hash",
+            accessToken: "wire-secret-access",
+          });
         }).pipe(Effect.orDie),
       ),
     );
@@ -272,25 +263,21 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
       const guard = yield* RedactionGuard.RedactionGuard;
       yield* guard.watch("accessToken", CANARY);
       const users = yield* Repositories.UsersRepository;
-      const accounts = yield* Repositories.AccountsRepository;
+      const accounts = yield* AccountStore.AccountStore;
       const domain = yield* Accounts.Accounts;
       const user = yield* users.insert(
         yield* M.User.insert.makeEffect({ email: "spans@example.com", name: "Spans" }),
       );
-      // The repository entity, secret included, through its own (traced) methods...
-      const account = yield* accounts.insert(
-        yield* M.Account.insert.makeEffect({
-          userId: user.id,
-          providerId: "github",
-          subject: "gh-spans",
-          issuer: "",
-          passwordHash: null,
-          accessToken: CANARY,
-          refreshToken: null,
-        }),
-      );
-      yield* accounts.findSealedTokensById(account.id);
-      yield* accounts.listIdentitiesByUser(user.id);
+      // The stored entity, secret included, through the store's own (traced) primitives...
+      const account = yield* insertAccount({
+        userId: user.id,
+        providerId: "github",
+        subject: "gh-spans",
+        passwordHash: null,
+        accessToken: CANARY,
+      });
+      yield* accounts.readProviderTokens(account.id);
+      yield* accounts.listByUser(user.id);
       // ...and the domain service a real sign-in reaches it through.
       yield* domain.link({
         userId: Users.UserId(user.id),

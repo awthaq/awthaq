@@ -6,7 +6,7 @@
 // `Repositories.file.test.ts` on a WAL file, `Repositories.postgres.test.ts`
 // on a real server) calls with its own migrated `SqlClient` layer, so a new
 // case lands on every dialect at once.
-import { Encryption, KeyProvider, Sealed, Tenant } from "@awthaq/ports";
+import { Encryption, KeyProvider, Tenant } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -15,11 +15,11 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as AccountStoreSql from "../src/AccountStoreSql.ts";
 import * as AuditLogStoreSql from "../src/AuditLogStoreSql.ts";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
@@ -63,11 +63,11 @@ export const repositoriesLayer = <E>(
 
   return Layer.mergeAll(
     Repositories.UsersRepositoryLive,
-    Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
     Repositories.SessionsRepositoryLive,
     // Plan 16: the audit log and verification stores are adapters without a repository; suites that need a row use the port.
     AuditLogStoreSql.layer,
     VerificationStoreSql.layer,
+    AccountStoreSql.layer.pipe(Layer.provide(EncryptionLive)),
   ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 };
 
@@ -209,107 +209,6 @@ export const contractCases = (
           assert.strictEqual(active.status, "active");
           assert.strictEqual(active.suspendedUntil, null);
         }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "BEH-EA-034: passwordHash/accessToken/refreshToken never appear in the JSON variant",
-      () =>
-        Effect.gen(function* () {
-          const accounts = yield* Repositories.AccountsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "creds@example.com", name: "Creds" }),
-          );
-          const account = yield* accounts.insert(
-            yield* M.Account.insert.makeEffect({
-              userId: user.id,
-              providerId: "password",
-              subject: user.id,
-              issuer: "",
-              passwordHash: "super-secret-hash",
-              accessToken: null,
-              refreshToken: null,
-            }),
-          );
-          assert.strictEqual(account.passwordHash, "super-secret-hash");
-          const json = yield* Schema.encodeUnknownEffect(M.Account.json)(account);
-          assert.notProperty(json, "passwordHash");
-          assert.notProperty(json, "accessToken");
-          assert.notProperty(json, "refreshToken");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect(
-      "Ticket 18: accessToken/refreshToken are written sealed and read back sealed, and the raw persisted bytes are not the plaintext",
-      () =>
-        Effect.gen(function* () {
-          const accounts = yield* Repositories.AccountsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const sql = yield* SqlClient.SqlClient;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "encrypted@example.com", name: "Enc" }),
-          );
-          const account = yield* accounts.insert(
-            yield* M.Account.insert.makeEffect({
-              userId: user.id,
-              providerId: "github",
-              subject: "gh-encrypted",
-              issuer: "",
-              passwordHash: null,
-              accessToken: "plaintext-access-token",
-              refreshToken: "plaintext-refresh-token",
-            }),
-          );
-          // Plan 17: `insert` returns the row as stored, never re-reading the envelope it just wrote.
-          assert.notInclude(account.accessToken ?? "", "plaintext-access-token");
-
-          // The strict read hands the tokens over sealed; opening them yields the plaintext.
-          const reread = Option.getOrThrow(yield* accounts.findSealedTokensById(account.id));
-          assert.strictEqual(
-            Redacted.value(yield* Sealed.orDie(Option.getOrThrow(reread.accessToken).open)),
-            "plaintext-access-token",
-          );
-          assert.strictEqual(
-            Redacted.value(yield* Sealed.orDie(Option.getOrThrow(reread.refreshToken).open)),
-            "plaintext-refresh-token",
-          );
-
-          // But the actual bytes on disk are demonstrably not the plaintext — a raw query bypassing
-          // this repository.
-          const rows = yield* sql<{
-            readonly accessToken: string;
-            readonly refreshToken: string;
-          }>`SELECT "accessToken", "refreshToken" FROM accounts WHERE id = ${account.id}`;
-          const row = rows[0];
-          assert.isDefined(row);
-          assert.notInclude(row?.accessToken, "plaintext-access-token");
-          assert.notInclude(row?.refreshToken, "plaintext-refresh-token");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
-    it.effect("BEH-EA-043: findIdentityByKey identifies at most one Account row", () =>
-      Effect.gen(function* () {
-        const accounts = yield* Repositories.AccountsRepository;
-        const users = yield* Repositories.UsersRepository;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "oauth@example.com", name: "Oauth" }),
-        );
-        yield* accounts.insert(
-          yield* M.Account.insert.makeEffect({
-            userId: user.id,
-            providerId: "github",
-            subject: "gh-123",
-            issuer: "",
-            passwordHash: null,
-            accessToken: "token",
-            refreshToken: null,
-          }),
-        );
-        const found = yield* accounts.findIdentityByKey("github", "gh-123", "");
-        assert.isTrue(Option.isSome(found));
-        const missing = yield* accounts.findIdentityByKey("github", "no-such-subject", "");
-        assert.isTrue(Option.isNone(missing));
-      }).pipe(Effect.provide(RepositoriesLive)),
     );
 
     it.effect(
@@ -683,44 +582,6 @@ export const contractCases = (
         }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect(
-      "BAM-008: idToken is sealed on write, opens from the sealed read, and is ciphertext at rest",
-      () =>
-        Effect.gen(function* () {
-          const accounts = yield* Repositories.AccountsRepository;
-          const users = yield* Repositories.UsersRepository;
-          const sql = yield* SqlClient.SqlClient;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "idtoken@example.com", name: "Id" }),
-          );
-          const account = yield* accounts.insert(
-            yield* M.Account.insert.makeEffect({
-              userId: user.id,
-              providerId: "google",
-              subject: "gh-id-token",
-              issuer: "",
-              passwordHash: null,
-              accessToken: "access",
-              refreshToken: null,
-              idToken: "plaintext.id.token",
-            }),
-          );
-          const reread = Option.getOrThrow(yield* accounts.findSealedTokensById(account.id));
-          assert.strictEqual(
-            Redacted.value(yield* Sealed.orDie(Option.getOrThrow(reread.idToken).open)),
-            "plaintext.id.token",
-          );
-          const rows = yield* sql<{
-            readonly idToken: string;
-          }>`SELECT "idToken" FROM accounts WHERE id = ${account.id}`;
-          assert.isDefined(rows[0]);
-          assert.notInclude(rows[0]?.idToken, "plaintext.id.token");
-          // Never in the JSON variant.
-          const json = yield* Schema.encodeUnknownEffect(M.Account.json)(account);
-          assert.notProperty(json, "idToken");
-        }).pipe(Effect.provide(RepositoriesLive)),
-    );
-
     // SMS-002/ESR-010/GC-005/ESR-002: the session device-list page query and owned delete.
     const makeUser = (email: string) =>
       Effect.gen(function* () {
@@ -866,7 +727,6 @@ export const contractCases = (
     const insertEveryTable = (label: string) =>
       Effect.gen(function* () {
         const users = yield* Repositories.UsersRepository;
-        const accounts = yield* Repositories.AccountsRepository;
         const now = yield* DateTime.now;
         const future = DateTime.addDuration(now, Duration.days(1));
         const user = yield* users.insert(
@@ -875,24 +735,12 @@ export const contractCases = (
         const orphan = yield* users.insertIfAbsent(
           yield* M.User.insert.makeEffect({ email: `${label}-absent@tenant.test`, name: label }),
         );
-        const account = yield* accounts.insert(
-          yield* M.Account.insert.makeEffect({
-            userId: user.id,
-            providerId: "github",
-            subject: `${label}-subject`,
-            issuer: "",
-            passwordHash: null,
-            accessToken: null,
-            refreshToken: null,
-          }),
-        );
         const session = yield* insertLiveSession(user.id, {
           absoluteExpiresAt: future,
           idleExpiresAt: future,
         });
         return {
           users: [user.tenantId, ...(Option.isSome(orphan) ? [orphan.value.tenantId] : [])],
-          accounts: [account.tenantId],
           sessions: [session.tenantId],
         };
       });
@@ -902,7 +750,6 @@ export const contractCases = (
         const tenanted = yield* insertEveryTable("t1").pipe(Tenant.withTenant("tenant-1"));
         assert.deepStrictEqual(tenanted, {
           users: ["tenant-1", "tenant-1"],
-          accounts: ["tenant-1"],
           sessions: ["tenant-1"],
         });
 
@@ -910,7 +757,6 @@ export const contractCases = (
         const plain = yield* insertEveryTable("plain");
         assert.deepStrictEqual(plain, {
           users: [null, null],
-          accounts: [null],
           sessions: [null],
         });
 
@@ -929,35 +775,17 @@ export const contractCases = (
       }).pipe(Effect.provide(RepositoriesLive)),
     );
 
-    it.effect("DRS-005: the login lookups stay global — a tenant never narrows the directory", () =>
+    it.effect("DRS-005: the email lookup stays global — a tenant never narrows the directory", () =>
       Effect.gen(function* () {
         const users = yield* Repositories.UsersRepository;
-        const accounts = yield* Repositories.AccountsRepository;
-        const created = yield* users
+        yield* users
           .insert(yield* M.User.insert.makeEffect({ email: "global@tenant.test", name: "G" }))
-          .pipe(Tenant.withTenant("tenant-a"));
-        yield* accounts
-          .insert(
-            yield* M.Account.insert.makeEffect({
-              userId: created.id,
-              providerId: "github",
-              subject: "global-subject",
-              issuer: "",
-              passwordHash: null,
-              accessToken: null,
-              refreshToken: null,
-            }),
-          )
           .pipe(Tenant.withTenant("tenant-a"));
         // The same email / provider subject resolves from another tenant's request.
         const byEmail = yield* users
           .findByEmail("global@tenant.test")
           .pipe(Tenant.withTenant("tenant-b"));
-        const bySubject = yield* accounts
-          .findIdentityByKey("github", "global-subject", "")
-          .pipe(Tenant.withTenant("tenant-b"));
         assert.isTrue(Option.isSome(byEmail));
-        assert.isTrue(Option.isSome(bySubject));
       }).pipe(Effect.provide(RepositoriesLive)),
     );
 

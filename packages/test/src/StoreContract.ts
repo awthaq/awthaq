@@ -713,6 +713,21 @@ export const accounts: ReadonlyArray<AccountCase> = [
     }),
   },
   {
+    name: "getByKey and listByUser are global across tenants (the directory is not narrowed by the ambient tenant)",
+    run: Effect.gen(function* () {
+      const store = yield* AccountStore.AccountStore;
+      yield* Tenant.withTenant("tenant-a")(
+        store.insertIfAbsent(newAccount("a1", "u1", { providerId: "github", subject: "global" })),
+      );
+      // DRS-005: the same provider subject resolves from another tenant's request, and with none.
+      const fromB = yield* Tenant.withTenant("tenant-b")(store.getByKey("github", "global", ""));
+      assert.equal(Option.isSome(fromB), true);
+      assert.equal(Option.isSome(yield* store.getByKey("github", "global", "")), true);
+      const listedB = yield* Tenant.withTenant("tenant-b")(store.listByUser(makeUserId("u1")));
+      assert.deepEqual(accountIds(listedB), ["a1"]);
+    }),
+  },
+  {
     name: "insertIfAbsent is exclusive per (providerId, subject, issuer); a different issuer is a different account",
     run: Effect.gen(function* () {
       const store = yield* AccountStore.AccountStore;

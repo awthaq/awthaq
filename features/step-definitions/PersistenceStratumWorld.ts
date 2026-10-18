@@ -7,8 +7,8 @@
 // whole flow against one database inside a single `withDatabase`, and the Then reads the result
 // back from the scratch (`FoundationsWorld`).
 import { Persistence, Users } from "@awthaq/core";
-import { Models, Repositories, CoreMigrations } from "@awthaq/sql";
-import { Encryption, KeyProvider } from "@awthaq/ports";
+import { AccountStoreSql, Models, Repositories, CoreMigrations } from "@awthaq/sql";
+import { AccountStore, Encryption, KeyProvider } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -21,6 +21,8 @@ import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { TestAuth } from "@awthaq/test";
 
 /** The SQLite-dialect models: what `Repositories` decodes with on this database. */
@@ -51,7 +53,7 @@ const Migrated = Layer.effectDiscard(
 /** Every repository over one migrated in-memory database. */
 export const RepositoriesLive = Layer.mergeAll(
   Repositories.UsersRepositoryLive,
-  Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
+  AccountStoreSql.layer.pipe(Layer.provide(EncryptionLive)),
   Repositories.SessionsRepositoryLive,
 ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 
@@ -77,6 +79,48 @@ export const insertUser = (email: string) =>
   Effect.gen(function* () {
     const users = yield* Repositories.UsersRepository;
     return yield* users.insert(yield* M.User.insert.makeEffect({ email, name: email }));
+  });
+
+/**
+ * One account stored through the `AccountStore` port (its tokens sealed at rest), read back as the
+ * `Account` model entity: the row exactly as the database holds it, secrets included.
+ */
+export const insertAccount = (input: {
+  readonly userId: Models.UserId;
+  readonly providerId: string;
+  readonly subject: string;
+  readonly passwordHash: string | null;
+  readonly accessToken: string | null;
+}) =>
+  Effect.gen(function* () {
+    const accounts = yield* AccountStore.AccountStore;
+    const sql = yield* SqlClient.SqlClient;
+    const id = Schema.decodeUnknownSync(Models.AccountId)(globalThis.crypto.randomUUID());
+    const at = yield* DateTime.now;
+    yield* accounts.insertIfAbsent({
+      id,
+      userId: input.userId,
+      providerId: input.providerId,
+      subject: input.subject,
+      issuer: "",
+      credentialHash: Option.map(Option.fromNullOr(input.passwordHash), Redacted.make),
+      tokens: Option.map(Option.fromNullOr(input.accessToken), (accessToken) => ({
+        accessToken: Redacted.make(accessToken),
+        refreshToken: Option.none(),
+        idToken: Option.none(),
+        accessTokenExpiresAt: Option.none(),
+        refreshTokenExpiresAt: Option.none(),
+        scope: Option.none(),
+        tokenType: Option.none(),
+      })),
+      createdAt: at,
+      updatedAt: at,
+    });
+    return yield* SqlSchema.findOne({
+      Request: Models.AccountId,
+      Result: M.Account,
+      execute: (accountId) => sql`SELECT * FROM accounts WHERE id = ${accountId}`,
+    })(id);
   });
 
 /** One session row with an explicit `createdAt`; every fixture row expires at its own `createdAt`, so list from before the first. */
