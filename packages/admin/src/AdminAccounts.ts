@@ -166,7 +166,8 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
       const mailer = yield* Mailer.Mailer;
       const crypto = yield* Crypto.Crypto;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
-      const adminConfig = yield* AdminConfig;
+      // ADR-EA-018 Decision 8: read per operation, so a tenant's `Admin.config(...)` governs its own requests.
+      const configNow = Tenant.configInForce(AdminConfig, yield* AdminConfig);
       const beforeCredentialReset = yield* Hooks.BeforeCredentialReset;
 
       /** Gate first (a denied caller learns nothing about ids or refusal rules), same event as `Admin`'s user gates. */
@@ -176,6 +177,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
         userId: Users.UserId,
         gate: "canDeleteUsers" | "canManageCredentials",
       ) {
+        const adminConfig = yield* configNow;
         const allowed = yield* adminConfig[gate]({
           admin: makeSubject({ id: caller.ref.id }),
           target: Option.some(makeSubject({ id: userId })),
@@ -189,6 +191,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
           });
           return yield* Effect.fail(new AdminApi.AdminActionDenied());
         }
+        return adminConfig;
       });
 
       const existing = (userId: Users.UserId) =>
@@ -226,7 +229,12 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
 
       const setUserEmail: AdminAccountsShape["setUserEmail"] = Effect.fnUntraced(
         function* (caller, userId, input) {
-          yield* authorize(caller, "setUserEmail", userId, "canManageCredentials");
+          const adminConfig = yield* authorize(
+            caller,
+            "setUserEmail",
+            userId,
+            "canManageCredentials",
+          );
           const user = yield* existing(userId);
           const current = Users.emailOf(user);
           if (Option.isNone(current)) {
@@ -258,7 +266,12 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
 
       const setUserPassword: AdminAccountsShape["setUserPassword"] = Effect.fnUntraced(
         function* (caller, userId, input) {
-          yield* authorize(caller, "setUserPassword", userId, "canManageCredentials");
+          const adminConfig = yield* authorize(
+            caller,
+            "setUserPassword",
+            userId,
+            "canManageCredentials",
+          );
           if (caller.ref.id === userId) {
             return yield* Effect.fail(new AdminAccountsApi.AdminSelfActionRefused());
           }
