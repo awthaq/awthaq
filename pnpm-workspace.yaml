@@ -34,7 +34,7 @@ catalog:
   # for its @qadi/react package — kept identical so both repos exercise one
   # real, matching React version rather than two independently-drifting ones.
   react: 19.3.0
-  react-dom: 19.3.0
+  react-dom: 19.3.1
   "@types/react": 19.3.0
   "@types/react-dom": 19.3.0
   "@testing-library/react": ^16.3.2
