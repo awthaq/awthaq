@@ -1138,7 +1138,7 @@ export const runPluginContractTests = <O, R = never>(
   framework.describe("runPluginContractTests", () => {
     let previousContract: AuthPlugin.Any["contract"] | undefined;
 
-    for (const options of config.options) {
+    for (const [optionIndex, options] of config.options.entries()) {
       const plugin = makePlugin(options);
       const host = config.host ?? dependencyClosure(plugin);
       const hostIds = new Set(host.map((installed) => installed.id));
@@ -1256,7 +1256,12 @@ export const runPluginContractTests = <O, R = never>(
           const outcome = await Effect.runPromise(
             Effect.exit(
               Effect.all([
-                applyMigrationsOn(migrations, TestSql.layer(`schema_parity_${plugin.id}`)),
+                // One schema per option set: a framework may run these checks concurrently, and
+                // two builds sharing a schema race on its DROP/CREATE.
+                applyMigrationsOn(
+                  migrations,
+                  TestSql.layer(`schema_parity_${plugin.id}_${optionIndex}`),
+                ),
                 applyMigrations(migrations),
               ]),
             ),
