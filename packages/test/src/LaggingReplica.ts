@@ -19,12 +19,13 @@
 // replica's copy.
 
 import { ReadRouting } from "@awthaq/sql";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 /** The core tables `@awthaq/sql`'s `CoreMigrations` creates. */
 export const coreTables: ReadonlyArray<string> = [
@@ -65,7 +66,7 @@ export const make = (options: {
       for (const table of tables) {
         const rows = yield* primary`SELECT * FROM ${primary(table)}`;
         yield* replica`DELETE FROM ${replica(table)}`;
-        if (rows.length > 0) {
+        if (Arr.isReadonlyArrayNonEmpty(rows)) {
           yield* replica`INSERT INTO ${replica(table)} ${replica.insert(rows)}`;
         }
       }

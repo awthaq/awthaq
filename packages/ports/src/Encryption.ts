@@ -27,17 +27,17 @@
 // separates them via `getAuthTag()`), so the envelope only needs to carry
 // `iv` and `ciphertext`.
 //
-// The IV itself comes from the ambient `effect/Crypto` service (the same
-// `Crypto.Crypto.randomBytes` every other random-material generator in
+// The IV itself comes from the ambient `SecureRandom` service (the same
+// `randomBytes` every other random-material generator in
 // this codebase already uses — `Sessions.ts`, `Verification.ts`,
 // `Accounts.ts`), not `globalThis.crypto.getRandomValues` directly, so a
-// test can substitute a deterministic `Crypto` layer the same way it
+// test can substitute a deterministic `SecureRandom` layer the same way it
 // already can for every other capability this codebase generates
 // randomly.
 
 import type { webcrypto } from "node:crypto";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
@@ -163,87 +163,88 @@ const importAesKey = (bytes: Uint8Array, usage: "encrypt" | "decrypt") =>
 const additionalData = (version: 1 | 2, kid: string, aad: string) =>
   new TextEncoder().encode(version === 1 ? aad : `awthaq-enc:v2:${kid.length}:${kid}:${aad}`);
 
-export const layer: Layer.Layer<Encryption, never, KeyProvider | Crypto.Crypto> = Layer.effect(
-  Encryption,
-  Effect.gen(function* () {
-    const keyProvider = yield* KeyProvider;
-    const crypto = yield* Crypto.Crypto;
+export const layer: Layer.Layer<Encryption, never, KeyProvider | SecureRandom.SecureRandom> =
+  Layer.effect(
+    Encryption,
+    Effect.gen(function* () {
+      const keyProvider = yield* KeyProvider;
+      const random = yield* SecureRandom.SecureRandom;
 
-    // SMS-005: one non-extractable CryptoKey per (kid, usage), so the raw key
-    // bytes are unwrapped from `Redacted` once per kid instead of on every
-    // call. `currentKey`/`getKey` are still consulted on every operation, so a
-    // provider that stops knowing a kid stops decrypting under it at once.
-    const imported = yield* Ref.make(HashMap.empty<string, webcrypto.CryptoKey>());
-    const aesKey = (material: KeyMaterial, usage: "encrypt" | "decrypt") =>
-      Effect.gen(function* () {
-        const cacheKey = `${usage}:${material.kid}`;
-        const hit = HashMap.get(yield* Ref.get(imported), cacheKey);
-        if (Option.isSome(hit)) return hit.value;
-        const key = yield* importAesKey(Redacted.value(material.key), usage);
-        yield* Ref.update(imported, HashMap.set(cacheKey, key));
-        return key;
-      });
-
-    const encrypt: EncryptionShape["encrypt"] = (plaintext, aad) =>
-      Effect.gen(function* () {
-        const material = yield* keyProvider.currentKey;
-        const iv = yield* crypto.randomBytes(IV_LENGTH).pipe(Effect.orDie);
-        const key = yield* aesKey(material, "encrypt");
-        const ciphertext = yield* Effect.promise(() =>
-          globalThis.crypto.subtle.encrypt(
-            {
-              name: ALGORITHM,
-              iv: toArrayBuffer(iv),
-              additionalData: additionalData(2, material.kid, aad),
-            },
-            key,
-            new TextEncoder().encode(Redacted.value(plaintext)),
-          ),
-        );
-        return encodeEnvelope({
-          v: 2,
-          kid: material.kid,
-          iv: Buffer.from(iv).toString("base64"),
-          ciphertext: Buffer.from(ciphertext).toString("base64"),
+      // SMS-005: one non-extractable CryptoKey per (kid, usage), so the raw key
+      // bytes are unwrapped from `Redacted` once per kid instead of on every
+      // call. `currentKey`/`getKey` are still consulted on every operation, so a
+      // provider that stops knowing a kid stops decrypting under it at once.
+      const imported = yield* Ref.make(HashMap.empty<string, webcrypto.CryptoKey>());
+      const aesKey = (material: KeyMaterial, usage: "encrypt" | "decrypt") =>
+        Effect.gen(function* () {
+          const cacheKey = `${usage}:${material.kid}`;
+          const hit = HashMap.get(yield* Ref.get(imported), cacheKey);
+          if (Option.isSome(hit)) return hit.value;
+          const key = yield* importAesKey(Redacted.value(material.key), usage);
+          yield* Ref.update(imported, HashMap.set(cacheKey, key));
+          return key;
         });
-      });
 
-    const decrypt: EncryptionShape["decrypt"] = (encoded, aad) =>
-      Effect.gen(function* () {
-        const envelope = decodeEnvelope(encoded);
-        if (envelope === undefined) {
-          return yield* Effect.fail(
-            new DecryptionFailed({ reason: "malformed ciphertext envelope" }),
-          );
-        }
-        const material = yield* keyProvider.getKey(envelope.kid);
-        const key = yield* aesKey(material, "decrypt");
-        const plaintext = yield* Effect.tryPromise({
-          try: () =>
-            globalThis.crypto.subtle.decrypt(
+      const encrypt: EncryptionShape["encrypt"] = (plaintext, aad) =>
+        Effect.gen(function* () {
+          const material = yield* keyProvider.currentKey;
+          const iv = yield* random.randomBytes(IV_LENGTH);
+          const key = yield* aesKey(material, "encrypt");
+          const ciphertext = yield* Effect.promise(() =>
+            globalThis.crypto.subtle.encrypt(
               {
                 name: ALGORITHM,
-                iv: toArrayBuffer(Buffer.from(envelope.iv, "base64")),
-                additionalData: additionalData(envelope.v, envelope.kid, aad),
+                iv: toArrayBuffer(iv),
+                additionalData: additionalData(2, material.kid, aad),
               },
               key,
-              toArrayBuffer(Buffer.from(envelope.ciphertext, "base64")),
+              new TextEncoder().encode(Redacted.value(plaintext)),
             ),
-          catch: () =>
-            new DecryptionFailed({
-              reason: "authentication failed (tampered ciphertext, wrong AAD, or wrong key)",
-            }),
+          );
+          return encodeEnvelope({
+            v: 2,
+            kid: material.kid,
+            iv: Buffer.from(iv).toString("base64"),
+            ciphertext: Buffer.from(ciphertext).toString("base64"),
+          });
         });
-        const current = yield* keyProvider.currentKey;
-        return {
-          plaintext: Redacted.make(new TextDecoder().decode(plaintext)),
-          staleKid:
-            envelope.v === 1 || envelope.kid !== current.kid
-              ? Option.some(envelope.kid)
-              : Option.none(),
-        };
-      });
 
-    return Encryption.of({ encrypt, decrypt });
-  }),
-);
+      const decrypt: EncryptionShape["decrypt"] = (encoded, aad) =>
+        Effect.gen(function* () {
+          const envelope = decodeEnvelope(encoded);
+          if (envelope === undefined) {
+            return yield* Effect.fail(
+              new DecryptionFailed({ reason: "malformed ciphertext envelope" }),
+            );
+          }
+          const material = yield* keyProvider.getKey(envelope.kid);
+          const key = yield* aesKey(material, "decrypt");
+          const plaintext = yield* Effect.tryPromise({
+            try: () =>
+              globalThis.crypto.subtle.decrypt(
+                {
+                  name: ALGORITHM,
+                  iv: toArrayBuffer(Buffer.from(envelope.iv, "base64")),
+                  additionalData: additionalData(envelope.v, envelope.kid, aad),
+                },
+                key,
+                toArrayBuffer(Buffer.from(envelope.ciphertext, "base64")),
+              ),
+            catch: () =>
+              new DecryptionFailed({
+                reason: "authentication failed (tampered ciphertext, wrong AAD, or wrong key)",
+              }),
+          });
+          const current = yield* keyProvider.currentKey;
+          return {
+            plaintext: Redacted.make(new TextDecoder().decode(plaintext)),
+            staleKid:
+              envelope.v === 1 || envelope.kid !== current.kid
+                ? Option.some(envelope.kid)
+                : Option.none(),
+          };
+        });
+
+      return Encryption.of({ encrypt, decrypt });
+    }),
+  );

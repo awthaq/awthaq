@@ -2,7 +2,7 @@
 // between a dynamic-role author and self-escalation (ticket 15/RRM-001/RZS-005), so its
 // algebra is stated as invariants over generated statement sets rather than hand-picked cases.
 import { assert, describe, it } from "@effect/vitest";
-import * as Arbitrary from "effect/unstable/arbitrary/Arbitrary";
+import * as Arbitrary from "effect/Arbitrary";
 import * as Schema from "effect/Schema";
 import * as PermissionEngine from "../src/PermissionEngine.ts";
 

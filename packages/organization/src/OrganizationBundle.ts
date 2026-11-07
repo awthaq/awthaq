@@ -7,7 +7,7 @@
 // tables, which `OrganizationConnections` and `Sso` use.
 //
 // memory: single-process by construction (every store is a `Ref`), lost on restart; the stores need
-// `Crypto` for their ids and `Encryption` for the sealed connection secret.
+// `SecureRandom` for their ids and `Encryption` for the sealed connection secret.
 // sql: every store over the one `SqlClient`; `Encryption` seals the connection client secret.
 
 import type { Encryption } from "@awthaq/ports";

@@ -49,7 +49,7 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -114,7 +114,7 @@ export const peekTyp = (token: string): Option.Option<string> => {
   ) {
     return Option.none();
   }
-  return Encoding.decodeBase64UrlString(header).pipe(
+  return Base64Url.decodeString(header).pipe(
     Option.getSuccess,
     Option.flatMap(Schema.decodeUnknownOption(Schema.fromJsonString(HeaderSchema))),
     Option.flatMapNullishOr((decoded) => decoded.typ),

@@ -15,7 +15,7 @@ Behavior is specified in [`spec/behaviors/17-passkey.md`](../../spec/behaviors/1
 | `PasskeyCredentials`                                     | `PasskeyCredentials.layerSql` or `layerMemory`                                                                                  |
 | `PasskeyUserHandles`                                     | `PasskeyUserHandles.layerSql` or `layerMemory`                                                                                  |
 | `RateLimiter` + `RateLimits.layer`, `ClientAddress`      | as for every plugin (`@awthaq/ports`, `@awthaq/core`)                                                                           |
-| Core `Users`/`Accounts`/`Sessions`/`AuthEvents`/`Crypto` | your `Auth.make` composition                                                                                                    |
+| Core `Users`/`Accounts`/`Sessions`/`AuthEvents`, `SecureRandom`/`Mac` | your `Auth.make` composition                                                                                                    |
 
 Run `Passkey.Passkey.migrations` (tables `passkey_credential`, `passkey_challenge`, `passkey_user_handle`) with your other plugin migrations. `Passkey.layer` contributes to core's `Erasure.ErasureRegistry`, so account erasure removes the user's credentials and WebAuthn handle in its transaction; there is nothing to provide separately.
 

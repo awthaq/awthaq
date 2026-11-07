@@ -20,7 +20,7 @@ import type { AuthSubject } from "@qadi/core";
 import { CurrentSubject, permissionKey } from "@qadi/core";
 import type { RequirePermission } from "@qadi/http";
 import * as Effect from "effect/Effect";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Roles from "./Roles.ts";
 import * as RolesAdminApi from "./RolesAdminApi.ts";
 

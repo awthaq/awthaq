@@ -11,28 +11,27 @@
 // failure budget (BCR-006). Codes are shown grouped (`ABCDE-FGHJK`) and normalised (upper-cased,
 // separators stripped) before they are hashed or compared.
 
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
-import type * as PlatformError from "effect/PlatformError";
 
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const GROUP = 5;
 
 const mint = (
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
   length: number,
-): Effect.Effect<string, PlatformError.PlatformError> =>
-  Effect.map(crypto.randomBytes(length), (bytes) =>
+): Effect.Effect<string> =>
+  Effect.map(random.randomBytes(length), (bytes) =>
     Array.from(bytes, (byte) => ALPHABET[byte & 31] ?? "").join(""),
   );
 
 /** `count` fresh codes, normalised (no separators). Independent draws — a duplicate within a set is astronomically unlikely and harmless. */
 export const generate = (
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
   count: number,
   length: number,
-): Effect.Effect<ReadonlyArray<string>, PlatformError.PlatformError> =>
-  Effect.forEach(Array.from({ length: count }), () => mint(crypto, length));
+): Effect.Effect<ReadonlyArray<string>> =>
+  Effect.forEach(Array.from({ length: count }), () => mint(random, length));
 
 /** `ABCDEFGHJK` → `ABCDE-FGHJK`. */
 export const display = (normalized: string): string =>

@@ -9,7 +9,7 @@
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApi from "effect/http-api/HttpApi";
 import type { LoadedAuth } from "./Config.ts";
 import { ConfigUnavailable } from "./CliErrors.ts";
 import * as Output from "./Output.ts";

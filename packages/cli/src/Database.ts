@@ -27,7 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as SqlClient from "effect/sql/SqlClient";
 import { DatabaseUnavailable } from "./CliErrors.ts";
 import type { CliConfig } from "./Config.ts";
 

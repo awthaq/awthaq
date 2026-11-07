@@ -16,14 +16,14 @@
 // `purpose`, `publicId` or `secret` can contain a literal `.`, so splitting on
 // the last `.` round-trips exactly.
 
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import { storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import type { StoreUnavailable } from "./Errors.ts";
 import type { UserId } from "./Users.ts";
 import type { VerificationShape, VerificationTokenView } from "./Verification.ts";
 
@@ -35,8 +35,8 @@ export interface DecodedToken {
 }
 
 /** A fresh, unguessable, user-independent id for one token. */
-export const newPublicId = (crypto: Crypto.Crypto) =>
-  crypto.randomBytes(16).pipe(Effect.map((bytes) => Encoding.encodeBase64Url(bytes)));
+export const newPublicId = (random: SecureRandom.SecureRandom["Service"]) =>
+  random.randomBytes(16).pipe(Effect.map((bytes) => Base64Url.encode(bytes)));
 
 export const identifierOf = (purpose: string, publicId: string): string => `${purpose}:${publicId}`;
 
@@ -80,7 +80,10 @@ export interface IssuedLink {
  * recover it without it ever appearing in the token.
  */
 export const issue = (
-  deps: { readonly verification: VerificationShape; readonly crypto: Crypto.Crypto },
+  deps: {
+    readonly verification: VerificationShape;
+    readonly random: SecureRandom.SecureRandom["Service"];
+  },
   input: {
     readonly purpose: string;
     readonly ttl: Duration.Duration;
@@ -89,9 +92,7 @@ export const issue = (
   },
 ): Effect.Effect<IssuedLink, StoreUnavailable> =>
   Effect.gen(function* () {
-    const publicId = yield* newPublicId(deps.crypto).pipe(
-      Effect.catchTag("PlatformError", storeUnavailable("VerificationLink.issue")),
-    );
+    const publicId = yield* newPublicId(deps.random);
     const { token, value } = yield* deps.verification.issue({
       identifier: identifierOf(input.purpose, publicId),
       ttl: input.ttl,

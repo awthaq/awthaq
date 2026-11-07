@@ -1,6 +1,6 @@
 # @awthaq/cli
 
-The `awthaq` command line: inspect and operate an awthaq authentication runtime. It **reads the plugin manifest and never serves the application**: no command starts an HTTP listener or accepts an inbound request ([BEH-EA-208](../../spec/behaviors/26-cli.md)). Built on `effect/unstable/cli` ([ADR-EA-027](../../spec/decisions/027-cli-on-effect-unstable-cli.md)); every command body is a plain Effect function in its own module, taking typed arguments.
+The `awthaq` command line: inspect and operate an awthaq authentication runtime. It **reads the plugin manifest and never serves the application**: no command starts an HTTP listener or accepts an inbound request ([BEH-EA-208](../../spec/behaviors/26-cli.md)). Built on `effect/cli` ([ADR-EA-027](../../spec/decisions/027-cli-on-effect-unstable-cli.md)); every command body is a plain Effect function in its own module, taking typed arguments.
 
 ```text
 awthaq [--config <path>] [--json]

@@ -11,7 +11,7 @@ import { Erasure, Sessions, Users } from "@awthaq/core";
 import { PasskeyUserHandles } from "@awthaq/passkey";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -338,7 +338,7 @@ export const passkeyRegistrationSteps = defineSteps<World>(({ Given, When, Then 
     function* (_field: string) {
       const { email } = yield* actor();
       const options = yield* decodedBody(CreationOptions, yield* lastAnswer());
-      const decoded = Encoding.decodeBase64Url(options.user.id);
+      const decoded = Base64Url.decode(options.user.id);
       assert.ok(decoded._tag === "Success", "the handle is base64url");
       assert.equal(decoded.success.length, 32);
       const userId = yield* userIdOf(email);

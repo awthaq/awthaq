@@ -5,7 +5,7 @@
 // socket peer — Effect's platform layer does no forwarded-header parsing
 // itself (confirmed against `../effect/packages/platform`'s Node/Deno/Bun
 // implementations), so any trusted-proxy story has to be effect-auth's
-// own. This is a stratum-2 port alongside `RateLimiter`/`Crypto`/
+// own. This is a stratum-2 port alongside `RateLimiter`/`SecureRandom`/
 // `PasswordHasher` (ADR-EA-010): "which proxy hops do I trust" is
 // deployment topology, not something a plugin like `@awthaq/oauth` or
 // `@awthaq/password` can know, so it is a capability the *application*
@@ -44,7 +44,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 export interface ClientAddressShape {
   readonly resolve: (

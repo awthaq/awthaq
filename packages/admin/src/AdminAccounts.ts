@@ -43,11 +43,11 @@ import {
 } from "@awthaq/core";
 import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { makeSubject } from "@qadi/core";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { AdminConfig } from "./Admin.ts";
 import * as AdminAccountsApi from "./AdminAccountsApi.ts";
 import * as AdminApi from "./AdminApi.ts";
@@ -164,7 +164,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
       const events = yield* AuthEvents.AuthEvents;
       const hasher = yield* PasswordHasher.PasswordHasher;
       const mailer = yield* Mailer.Mailer;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const adminConfig = yield* AdminConfig;
       const beforeCredentialReset = yield* Hooks.BeforeCredentialReset;
@@ -240,7 +240,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
             return yield* Effect.fail(new AdminAccountsApi.AdminEmailAlreadyExists());
           }
           yield* EmailChange.request(
-            { verification, crypto, mailer },
+            { verification, random, mailer },
             { userId, newEmail: input.email, link: adminConfig.links.changeEmail },
           ).pipe(
             Effect.catchTag(

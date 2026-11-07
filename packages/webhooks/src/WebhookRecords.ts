@@ -39,8 +39,8 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import type * as WebhookHeaders from "./WebhookHeaders.ts";
 
 const headersSchema = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));

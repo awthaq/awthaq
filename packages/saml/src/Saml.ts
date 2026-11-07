@@ -63,22 +63,23 @@ import {
   OrganizationMembers,
 } from "@awthaq/organization";
 import { TenantScoped } from "@awthaq/sql";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64 from "effect/encoding/Base64";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpEffect from "effect/http/HttpEffect";
+import * as Headers from "effect/http/Headers";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as SafeXml from "./SafeXml.ts";
 import * as SamlAdmin from "./SamlAdmin.ts";
 import * as SamlApi from "./SamlApi.ts";
@@ -842,7 +843,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const authority = yield* OrganizationAuthority.OrganizationAuthority;
       const spKeys = yield* SamlSpKeys.SamlSpKeys;
       const xmlSignature = yield* XmlSignature.XmlSignature;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
+      const hasher = yield* Digest.Digest;
       const settings = yield* SamlConfig.SamlConfig;
       const creation = yield* SignUp.make;
       const completion = yield* SignIn.make;
@@ -902,7 +904,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           const connection = yield* usableConnection(connectionId);
           if (Option.isNone(connection))
             return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
-          const uuid = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+          const uuid = yield* random.uuidV7();
           // The AuthnRequest id is an NCName: a letter or underscore first.
           const requestId = `_${uuid}`;
           const identifier = `${REQUEST_PREFIX}${uuid}`;
@@ -981,7 +983,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         if (compact.length > Math.ceil((settings.maxResponseBytes * 4) / 3) + 4) {
           return yield* Effect.fail(new AssertionInvalid({ reason: "tooLarge" }));
         }
-        const bytes = Encoding.decodeBase64(compact);
+        const bytes = Base64.decode(compact);
         if (Result.isFailure(bytes))
           return yield* Effect.fail(new AssertionInvalid({ reason: "notBase64" }));
         if (bytes.success.length > settings.maxResponseBytes) {
@@ -1047,12 +1049,10 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         }
         // One-time assertion id: kept until the assertion could no longer pass the time window anyway.
         const digest = hexOf(
-          yield* crypto
-            .digest(
-              "SHA-256",
-              new TextEncoder().encode(`${connection.idpEntityId}|${assertion.id}`),
-            )
-            .pipe(Effect.orDie),
+          yield* hasher.digest(
+            Digest.sha256,
+            new TextEncoder().encode(`${connection.idpEntityId}|${assertion.id}`),
+          ),
         );
         const remaining = Math.max(
           0,
@@ -1272,7 +1272,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         events,
         xmlSignature,
         spKeys,
-        crypto,
+        random,
+        hasher,
         rateLimit: (ip) => limits.spend("slo", { ip }),
         resolveCallbackURL: (raw) => resolveCallbackURL(raw, settings),
       });

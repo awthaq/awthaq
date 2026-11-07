@@ -23,7 +23,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import { isSchemaError, type SchemaError } from "effect/Schema";
-import { isSqlError, type SqlError } from "effect/unstable/sql/SqlError";
+import { isSqlError, type SqlError } from "effect/sql/SqlError";
 
 export import StoreUnavailable = Api.StoreUnavailable;
 

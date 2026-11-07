@@ -6,8 +6,8 @@ import { Api } from "@awthaq/api";
 import { AuthClient } from "@awthaq/client";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import type * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as HttpClient from "effect/http/HttpClient";
+import type * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import { AppApi } from "./CsrfWorld.ts";
 
 type Equal<A, B> =

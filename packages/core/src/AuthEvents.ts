@@ -129,7 +129,7 @@ const hex = (value: number, width: number): string => value.toString(16).padStar
  * millisecond are ordered by a 12-bit counter (RFC 9562 §6.2, method 1), so the
  * ids sort in publish order — which `AuditLog.list`'s tiebreak and
  * `AuditLog.replay`'s cursor rely on. Across processes the order is
- * millisecond-granular. Not a secret, so the built-in `Random` (no `Crypto`
+ * millisecond-granular. Not a secret, so the built-in `Random` (no `SecureRandom`
  * requirement in every composition) is enough.
  */
 const makeEventIds = Effect.gen(function* () {

@@ -14,13 +14,13 @@ packages:
 # releases are, so a resolution conflict on mismatch should be loud, not
 # silent. Revisit once effect 4.0.0 ships stable.
 catalog:
-  effect: 4.0.0-rc.116
-  "@effect/platform-node": 4.0.0-rc.116
-  "@effect/sql-sqlite-node": 4.0.0-rc.116
-  "@effect/sql-pg": 4.0.0-rc.116
-  "@effect/sql-libsql": 4.0.0-rc.116
-  "@effect/vitest": 4.0.0-rc.116
-  "@effect/atom-react": 4.0.0-rc.116
+  effect: ^4.1.2
+  "@effect/platform-node": ^4.1.2
+  "@effect/sql-sqlite-node": ^4.1.2
+  "@effect/sql-pg": ^4.1.2
+  "@effect/sql-libsql": ^4.1.2
+  "@effect/vitest": ^4.1.2
+  "@effect/atom-react": ^4.1.2
   vitest: 5.0.2
   "@vitest/coverage-v8": 5.0.2
   # Exact, like `@effect/tsgo` below: `effect-tsgo patch` (the root `prepare`) patches the
@@ -43,14 +43,3 @@ catalog:
 minimumReleaseAgeExclude:
   - "@effect-cucumber/gherkin@0.10.1"
   - "@effect-cucumber/vitest@0.10.1"
-  - "@effect/platform-node-shared@4.0.0-rc.116"
-  - "@effect/platform-node@4.0.0-rc.116"
-  - "@effect/sql-sqlite-node@4.0.0-rc.116"
-  - "@effect/sql-pg@4.0.0-rc.116"
-  - "@effect/sql-libsql@4.0.0-rc.116"
-  - "@effect/vitest@4.0.0-rc.116"
-  - effect@4.0.0-rc.116
-  - "@effect/atom-react@4.0.0-rc.116"
-  - "@qadi/core@0.8.0"
-  - "@qadi/http@0.8.0"
-  - "@qadi/react@0.8.0"

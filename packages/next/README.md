@@ -94,7 +94,7 @@ reject anyway; it is never itself the boundary.
 
 ### A stateless edge check: `@awthaq/next/edge`
 
-On an edge runtime, provide `WebCrypto.layer` (from `@awthaq/ports`) wherever the Node docs show `NodeCrypto.layer`: it is a `Crypto` service over `globalThis.crypto`, so nothing pulls `node:crypto` into the bundle. Keep password hashing (argon2id/scrypt) on the origin; the edge tier does session/JWT verification and redirects.
+On an edge runtime, provide `WebCrypto.layer` (from `@awthaq/ports`) wherever the Node docs show `NodeCrypto.layer`: it provides `SecureRandom`, `Digest` and `Mac` over `globalThis.crypto`, so nothing pulls `node:crypto` into the bundle. Keep password hashing (argon2id/scrypt) on the origin; the edge tier does session/JWT verification and redirects.
 
 Presence lets a forged or long-expired cookie through. If you also run
 `@awthaq/jwt`, turn on its opt-in session-mirror cookie —
@@ -148,9 +148,9 @@ on WebCrypto runtimes as it is. `getSession`, `serverActionClient` and the seed
 helpers need the origin (Sessions, Users, SQL); keep them out of any file your
 `proxy.ts` imports. `@awthaq/api` and `@awthaq/client` are runtime-neutral.
 
-When you do compose awthaq's server pieces on an edge runtime, provide `Crypto.Crypto`
-with `WebCrypto.layer` from `@awthaq/ports` (a `globalThis.crypto`-backed layer with no
-Node built-ins) instead of `NodeCrypto.layer` (ERAS-002).
+When you do compose awthaq's server pieces on an edge runtime, provide the effect crypto
+services (`SecureRandom`, `Digest`, `Mac`) with `WebCrypto.layer` from `@awthaq/ports` (a
+`globalThis.crypto`-backed layer with no Node built-ins) instead of `NodeCrypto.layer` (ERAS-002).
 
 ## The real boundary: `getSession`
 
@@ -246,7 +246,7 @@ composed, and the action's cookies and client metadata ride along:
 ```ts
 // app/lib/handler.ts — built once, next to the pinned runtime
 import "server-only";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpRouter from "effect/http/HttpRouter";
 import { AppRoutesLayer } from "./layer.ts"; // AuthHttp.routes(AppApi, ...) plus your services
 
 declare global {

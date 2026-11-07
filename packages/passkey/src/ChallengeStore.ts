@@ -36,11 +36,12 @@
 import { Hmac } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -48,8 +49,8 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import { concatBytes, constantTimeEqual, hmacSha256 } from "./Hmac.ts";
 
 /** BEH-EA-132: e.g. `registration:<sessionId>`, `authentication:<nonce>` — the plugin's own concern, opaque here. */
@@ -107,8 +108,8 @@ const STATEFUL_GUARANTEES: ChallengeStoreGuarantees = {
  * presented value that is not base64url is simply not a match.
  */
 const challengeMatches = (stored: string, presented: string): boolean => {
-  const storedBytes = Encoding.decodeBase64Url(stored);
-  const presentedBytes = Encoding.decodeBase64Url(presented);
+  const storedBytes = Base64Url.decode(stored);
+  const presentedBytes = Base64Url.decode(presented);
   if (Result.isFailure(storedBytes) || Result.isFailure(presentedBytes)) return false;
   return constantTimeEqual(storedBytes.success, presentedBytes.success);
 };
@@ -120,54 +121,53 @@ interface MemoryEntry {
   readonly expiresAt: DateTime.Utc;
 }
 
-export const layerMemory: Layer.Layer<ChallengeStore, never, Crypto.Crypto> = Layer.effect(
-  ChallengeStore,
-  Effect.gen(function* () {
-    const state = yield* Ref.make(HashMap.empty<ChallengeScope, MemoryEntry>());
-    const crypto = yield* Crypto.Crypto;
+export const layerMemory: Layer.Layer<ChallengeStore, never, SecureRandom.SecureRandom> =
+  Layer.effect(
+    ChallengeStore,
+    Effect.gen(function* () {
+      const state = yield* Ref.make(HashMap.empty<ChallengeScope, MemoryEntry>());
+      const random = yield* SecureRandom.SecureRandom;
 
-    const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
-      const value = Encoding.encodeBase64Url(
-        yield* crypto
-          .randomBytes(RANDOM_BYTES)
-          .pipe(Effect.catch(StoreFailure.storeUnavailable("ChallengeStore.issue"))),
-      );
-      const now = yield* DateTime.now;
-      // WPS-005: drop every already-expired entry in the same atomic update
-      // (bounded by the live set, since anything older than the TTL is gone).
-      yield* Ref.update(state, (s) =>
-        HashMap.set(
-          HashMap.filter(s, (entry) => !isExpired(entry.expiresAt, now)),
-          scope,
-          { value, expiresAt: DateTime.addDuration(now, TTL) },
-        ),
-      );
-      return Redacted.make(value);
-    });
-
-    const consume: ChallengeStoreShape["consume"] = Effect.fnUntraced(function* (scope, challenge) {
-      // BEH-EA-132: popped unconditionally in one atomic step — gone whether or not it turns out to match.
-      const popped = yield* Ref.modify(
-        state,
-        (s) => [HashMap.get(s, scope), HashMap.remove(s, scope)] as const,
-      );
-      if (Option.isNone(popped)) return false;
-      const now = yield* DateTime.now;
-      if (isExpired(popped.value.expiresAt, now)) return false;
-      return challengeMatches(popped.value.value, challenge);
-    });
-
-    const sweepExpired: ChallengeStoreShape["sweepExpired"] = Effect.gen(function* () {
-      const now = yield* DateTime.now;
-      return yield* Ref.modify(state, (s) => {
-        const live = HashMap.filter(s, (entry) => !isExpired(entry.expiresAt, now));
-        return [HashMap.size(s) - HashMap.size(live), live] as const;
+      const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
+        const value = Base64Url.encode(yield* random.randomBytes(RANDOM_BYTES));
+        const now = yield* DateTime.now;
+        // WPS-005: drop every already-expired entry in the same atomic update
+        // (bounded by the live set, since anything older than the TTL is gone).
+        yield* Ref.update(state, (s) =>
+          HashMap.set(
+            HashMap.filter(s, (entry) => !isExpired(entry.expiresAt, now)),
+            scope,
+            { value, expiresAt: DateTime.addDuration(now, TTL) },
+          ),
+        );
+        return Redacted.make(value);
       });
-    });
 
-    return { guarantees: STATEFUL_GUARANTEES, issue, consume, sweepExpired };
-  }),
-);
+      const consume: ChallengeStoreShape["consume"] = Effect.fnUntraced(
+        function* (scope, challenge) {
+          // BEH-EA-132: popped unconditionally in one atomic step — gone whether or not it turns out to match.
+          const popped = yield* Ref.modify(
+            state,
+            (s) => [HashMap.get(s, scope), HashMap.remove(s, scope)] as const,
+          );
+          if (Option.isNone(popped)) return false;
+          const now = yield* DateTime.now;
+          if (isExpired(popped.value.expiresAt, now)) return false;
+          return challengeMatches(popped.value.value, challenge);
+        },
+      );
+
+      const sweepExpired: ChallengeStoreShape["sweepExpired"] = Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        return yield* Ref.modify(state, (s) => {
+          const live = HashMap.filter(s, (entry) => !isExpired(entry.expiresAt, now));
+          return [HashMap.size(s) - HashMap.size(live), live] as const;
+        });
+      });
+
+      return { guarantees: STATEFUL_GUARANTEES, issue, consume, sweepExpired };
+    }),
+  );
 
 // ---- layerSql ---------------------------------------------------------------
 
@@ -178,34 +178,37 @@ const makeChallengeRow = (wire: SqlModels.DialectWire) =>
     expiresAt: wire.dateTime,
   });
 
-export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | Crypto.Crypto> =
-  Layer.effect(
-    ChallengeStore,
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
-      const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
-      const ChallengeRow = makeChallengeRow(wire);
-      const crypto = yield* Crypto.Crypto;
-      const unavailable = (operation: string) =>
-        StoreFailure.orStoreUnavailable(`ChallengeStore.${operation}`);
+export const layerSql: Layer.Layer<
+  ChallengeStore,
+  never,
+  SqlClient.SqlClient | SecureRandom.SecureRandom
+> = Layer.effect(
+  ChallengeStore,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const ChallengeRow = makeChallengeRow(wire);
+    const random = yield* SecureRandom.SecureRandom;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`ChallengeStore.${operation}`);
 
-      /**
-       * ADR-EA-016's technique: one atomic upsert. `scope` is this table's
-       * own primary key, so an ordinary (non-partial) `ON CONFLICT` already
-       * targets the single live row for it — there is no consumed-history
-       * to preserve the way `verification_tokens`' partial index does,
-       * since a consumed challenge is deleted outright, not marked.
-       */
-      const upsert = SqlSchema.findOne({
-        Request: Schema.Struct({
-          scope: Schema.String,
-          value: Schema.String,
-          expiresAt: wire.dateTime,
-          createdAt: wire.dateTime,
-        }),
-        Result: ChallengeRow,
-        execute: (request) => sql`
+    /**
+     * ADR-EA-016's technique: one atomic upsert. `scope` is this table's
+     * own primary key, so an ordinary (non-partial) `ON CONFLICT` already
+     * targets the single live row for it — there is no consumed-history
+     * to preserve the way `verification_tokens`' partial index does,
+     * since a consumed challenge is deleted outright, not marked.
+     */
+    const upsert = SqlSchema.findOne({
+      Request: Schema.Struct({
+        scope: Schema.String,
+        value: Schema.String,
+        expiresAt: wire.dateTime,
+        createdAt: wire.dateTime,
+      }),
+      Result: ChallengeRow,
+      execute: (request) => sql`
           INSERT INTO passkey_challenge (scope, value, "expiresAt", "createdAt")
           VALUES (${request.scope}, ${request.value}, ${request.expiresAt}, ${request.createdAt})
           ON CONFLICT(scope) DO UPDATE SET
@@ -214,66 +217,60 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
             "createdAt" = excluded."createdAt"
           RETURNING scope, value, "expiresAt"
         `,
-      });
+    });
 
-      /** BEH-EA-132: one atomic `DELETE ... RETURNING` — the row is gone the instant this statement runs, whether or not the caller's presented value goes on to match. */
-      const popByScope = SqlSchema.findOneOption({
-        Request: Schema.String,
-        Result: ChallengeRow,
-        execute: (scope) => sql`
+    /** BEH-EA-132: one atomic `DELETE ... RETURNING` — the row is gone the instant this statement runs, whether or not the caller's presented value goes on to match. */
+    const popByScope = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: ChallengeRow,
+      execute: (scope) => sql`
           DELETE FROM passkey_challenge WHERE scope = ${scope}
           RETURNING scope, value, "expiresAt"
         `,
-      });
+    });
 
-      /** WPS-005: `expiresAt` is indexed (`create_passkey_challenge_expires_at_index`), so this stays a range scan. */
-      const deleteExpired = SqlSchema.findAll({
-        Request: wire.dateTime,
-        Result: Schema.Struct({ scope: Schema.String }),
-        execute: (now) => sql`
+    /** WPS-005: `expiresAt` is indexed (`create_passkey_challenge_expires_at_index`), so this stays a range scan. */
+    const deleteExpired = SqlSchema.findAll({
+      Request: wire.dateTime,
+      Result: Schema.Struct({ scope: Schema.String }),
+      execute: (now) => sql`
           DELETE FROM passkey_challenge WHERE "expiresAt" <= ${now}
           RETURNING scope
         `,
-      });
+    });
 
-      const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
-        const value = Encoding.encodeBase64Url(
-          yield* crypto
-            .randomBytes(RANDOM_BYTES)
-            .pipe(Effect.catch(StoreFailure.storeUnavailable("ChallengeStore.issue"))),
-        );
-        const now = yield* DateTime.now;
-        yield* upsert({
-          scope,
-          value,
-          expiresAt: DateTime.addDuration(now, TTL),
-          createdAt: now,
-        }).pipe(unavailable("issue"));
-        // WPS-005: abandoned (anonymous, never-consumed) ceremonies would
-        // otherwise accumulate forever — reclaim them on every issue.
-        yield* deleteExpired(now).pipe(unavailable("issue"));
-        return Redacted.make(value);
-      });
+    const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
+      const value = Base64Url.encode(yield* random.randomBytes(RANDOM_BYTES));
+      const now = yield* DateTime.now;
+      yield* upsert({
+        scope,
+        value,
+        expiresAt: DateTime.addDuration(now, TTL),
+        createdAt: now,
+      }).pipe(unavailable("issue"));
+      // WPS-005: abandoned (anonymous, never-consumed) ceremonies would
+      // otherwise accumulate forever — reclaim them on every issue.
+      yield* deleteExpired(now).pipe(unavailable("issue"));
+      return Redacted.make(value);
+    });
 
-      const consume: ChallengeStoreShape["consume"] = Effect.fnUntraced(
-        function* (scope, challenge) {
-          const popped = yield* popByScope(scope).pipe(unavailable("consume"));
-          if (Option.isNone(popped)) return false;
-          const now = yield* DateTime.now;
-          if (isExpired(popped.value.expiresAt, now)) return false;
-          return challengeMatches(popped.value.value, challenge);
-        },
-      );
+    const consume: ChallengeStoreShape["consume"] = Effect.fnUntraced(function* (scope, challenge) {
+      const popped = yield* popByScope(scope).pipe(unavailable("consume"));
+      if (Option.isNone(popped)) return false;
+      const now = yield* DateTime.now;
+      if (isExpired(popped.value.expiresAt, now)) return false;
+      return challengeMatches(popped.value.value, challenge);
+    });
 
-      const sweepExpired: ChallengeStoreShape["sweepExpired"] = Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        const removed = yield* deleteExpired(now).pipe(unavailable("sweepExpired"));
-        return removed.length;
-      });
+    const sweepExpired: ChallengeStoreShape["sweepExpired"] = Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const removed = yield* deleteExpired(now).pipe(unavailable("sweepExpired"));
+      return removed.length;
+    });
 
-      return { guarantees: STATEFUL_GUARANTEES, issue, consume, sweepExpired };
-    }),
-  );
+    return { guarantees: STATEFUL_GUARANTEES, issue, consume, sweepExpired };
+  }),
+);
 
 // ---- layerCookie --------------------------------------------------------
 
@@ -311,31 +308,30 @@ const unpackExpiryMillis = (bytes: Uint8Array): number =>
 export const layerCookie: Layer.Layer<
   ChallengeStore,
   never,
-  Crypto.Crypto | ChallengeCookieConfig
+  SecureRandom.SecureRandom | Mac.Mac | ChallengeCookieConfig
 > = Layer.effect(
   ChallengeStore,
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const mac = yield* Mac.Mac;
     const config = yield* ChallengeCookieConfig;
     // ACS-007: no composition may sign challenges with a guessable key.
     yield* Hmac.requireMinSecretBytes(config.secret);
     const secretBytes = new TextEncoder().encode(Redacted.value(config.secret));
 
     const sign = (scope: ChallengeScope, payload: Uint8Array) =>
-      hmacSha256(crypto, secretBytes, concatBytes(new TextEncoder().encode(scope), payload));
+      hmacSha256(mac, secretBytes, concatBytes(new TextEncoder().encode(scope), payload));
 
     const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
-      const random = yield* crypto
-        .randomBytes(RANDOM_BYTES)
-        .pipe(Effect.catch(StoreFailure.storeUnavailable("ChallengeStore.issue")));
+      const nonce = yield* random.randomBytes(RANDOM_BYTES);
       const now = yield* DateTime.now;
-      const payload = concatBytes(random, packExpiry(DateTime.addDuration(now, TTL)));
+      const payload = concatBytes(nonce, packExpiry(DateTime.addDuration(now, TTL)));
       const signature = yield* sign(scope, payload);
-      return Redacted.make(Encoding.encodeBase64Url(concatBytes(payload, signature)));
+      return Redacted.make(Base64Url.encode(concatBytes(payload, signature)));
     });
 
     const consume: ChallengeStoreShape["consume"] = Effect.fnUntraced(function* (scope, challenge) {
-      const decoded = Encoding.decodeBase64Url(challenge);
+      const decoded = Base64Url.decode(challenge);
       if (Result.isFailure(decoded)) return false;
       const bytes = decoded.success;
       if (bytes.length !== TOTAL_BYTES) return false;

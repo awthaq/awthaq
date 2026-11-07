@@ -32,7 +32,8 @@ import { SessionCookie } from "@awthaq/core";
 import { Hmac } from "@awthaq/ports";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -40,10 +41,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
+import * as Headers from "effect/http/Headers";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 /** BEH-EA-077: only these methods are subject to any CSRF check at all. */
 const UNSAFE_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -98,9 +99,9 @@ export const layerConfig = Layer.effect(
 
 // BEH-EA-075/ACS-005: HMAC-SHA256 and the constant-time comparison are the
 // shared `@awthaq/ports` `Hmac` primitives, not copies.
-const sign = (crypto: Crypto.Crypto, secret: Redacted.Redacted<string>, token: string) =>
+const sign = (mac: Mac.Mac["Service"], secret: Redacted.Redacted<string>, token: string) =>
   Hmac.hmacSha256(
-    crypto,
+    mac,
     new TextEncoder().encode(Redacted.value(secret)),
     new TextEncoder().encode(token),
   ).pipe(Effect.map(Hmac.toHex));
@@ -111,13 +112,14 @@ const DEFAULT_MAX_AGE = Duration.hours(24);
 
 /** BEH-EA-075/CDS-006: `<iatSeconds>.<random>.<hmac>` — the whole string is both the cookie value and the required header echo. */
 const mint = Effect.fnUntraced(function* (
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
+  mac: Mac.Mac["Service"],
   secret: Redacted.Redacted<string>,
   nowSeconds: number,
 ) {
-  const random = Hmac.toHex(yield* crypto.randomBytes(32));
-  const signed = `${nowSeconds}.${random}`;
-  const signature = yield* sign(crypto, secret, signed);
+  const nonce = Hmac.toHex(yield* random.randomBytes(32));
+  const signed = `${nowSeconds}.${nonce}`;
+  const signature = yield* sign(mac, secret, signed);
   return `${signed}.${signature}`;
 });
 
@@ -127,7 +129,7 @@ const mint = Effect.fnUntraced(function* (
  * malformed, forged, tampered `iat` (the HMAC covers it), or expired.
  */
 const tokenAge = Effect.fnUntraced(function* (
-  crypto: Crypto.Crypto,
+  mac: Mac.Mac["Service"],
   secret: Redacted.Redacted<string>,
   cookieValue: string,
   nowSeconds: number,
@@ -145,7 +147,7 @@ const tokenAge = Effect.fnUntraced(function* (
   }
   const iat = Number(iatText);
   if (!Number.isSafeInteger(iat)) return Option.none<number>();
-  const expected = yield* sign(crypto, secret, `${iatText}.${random}`);
+  const expected = yield* sign(mac, secret, `${iatText}.${random}`);
   if (!Hmac.constantTimeEqualString(signature, expected)) return Option.none<number>();
   const age = nowSeconds - iat;
   return age < -FUTURE_SKEW_SECONDS || age > maxAgeSeconds
@@ -207,12 +209,13 @@ const cookielessSiteCheck = (headers: Headers.Headers, allowedOrigins: ReadonlyA
 export const CsrfProtectionLive: Layer.Layer<
   Api.CsrfProtection,
   never,
-  CsrfConfig | Crypto.Crypto
+  CsrfConfig | SecureRandom.SecureRandom | Mac.Mac
 > = Layer.effect(
   Api.CsrfProtection,
   Effect.gen(function* () {
     const config = yield* CsrfConfig;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const mac = yield* Mac.Mac;
     // ACS-007: no composition may sign CSRF tokens with a guessable key.
     yield* Hmac.requireMinSecretBytes(config.secret);
     const maxAgeSeconds = Duration.toSeconds(config.maxAge ?? DEFAULT_MAX_AGE);
@@ -229,19 +232,15 @@ export const CsrfProtectionLive: Layer.Layer<
         const age =
           existingCookie === undefined
             ? Option.none<number>()
-            : yield* tokenAge(
-                crypto,
-                config.secret,
-                existingCookie,
-                nowSeconds,
-                maxAgeSeconds,
-              ).pipe(Effect.orDie);
+            : yield* tokenAge(mac, config.secret, existingCookie, nowSeconds, maxAgeSeconds).pipe(
+                Effect.orDie,
+              );
         const cookieIsValid = Option.isSome(age);
 
         // CDS-006: mint when there is no valid token, and proactively once a
         // valid one passes half its life, on safe and unsafe requests alike.
         if (Option.isNone(age) || age.value > maxAgeSeconds / 2) {
-          const fresh = yield* mint(crypto, config.secret, nowSeconds).pipe(Effect.orDie);
+          const fresh = yield* mint(random, mac, config.secret, nowSeconds).pipe(Effect.orDie);
           // AGA-004: an embedded (`SameSite=None; Partitioned`) session cookie
           // needs its double-submit companion to travel in the same context.
           const cookieMode = SessionCookie.csrfCookieOptions(

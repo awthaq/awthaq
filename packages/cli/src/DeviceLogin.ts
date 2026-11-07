@@ -25,8 +25,8 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpApi from "effect/http-api/HttpApi";
 import { Browser } from "./Browser.ts";
 import {
   AuthenticationRequired,

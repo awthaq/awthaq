@@ -12,7 +12,7 @@
 import { SealedColumn, StoreFailure } from "@awthaq/sql";
 import type { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -83,18 +83,18 @@ const within = (record: SamlRecords.SpKeyRecord, now: DateTime.Utc) =>
   DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(record.notBefore) &&
   DateTime.toEpochMillis(now) < DateTime.toEpochMillis(record.notAfter);
 
-/** Requires `SamlRecords`, `Crypto` and `SamlConfig`. */
+/** Requires `SamlRecords`, `SecureRandom` and `SamlConfig`. */
 export const layer = Layer.effect(
   SamlSpKeys,
   Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const settings = yield* SamlConfig.SamlConfig;
 
     const store = Effect.fnUntraced(function* (connectionId: string, key: SamlKeys.SigningKey) {
-      const id = yield* crypto.randomUUIDv7.pipe(
-        Effect.catch(StoreFailure.storeUnavailable("SamlSpKeys.store")),
-      );
+      const id = yield* random
+        .uuidV7()
+        .pipe(Effect.catch(StoreFailure.storeUnavailable("SamlSpKeys.store")));
       const saved = yield* records.saveSpKey({
         id,
         connectionId,

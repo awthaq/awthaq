@@ -13,7 +13,9 @@ import { Encryption, HostResolver, RateLimiter, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import { WebhookDelivery, WebhookRecords, WebhookTransport, Webhooks } from "@awthaq/webhooks";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as Mac from "effect/crypto/Mac";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -22,10 +24,10 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as TestClock from "effect/testing/TestClock";
 import { makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
@@ -208,7 +210,9 @@ export type AppServices =
   | AuthEvents.AuthEvents
   | AuditLog.AuditLog
   | EventRelay.RelayCursorStore
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
+  | Digest.Digest
+  | Mac.Mac
   | Erasure.ErasureRegistry
   | DataExport.DataExportRegistry
   | RateLimiter.RateLimiter

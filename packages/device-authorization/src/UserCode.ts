@@ -14,9 +14,10 @@
 // device code, and is looked up by that hash, so a database read yields no usable code.
 
 import { SecretHash } from "@awthaq/core";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 
 export const ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
 export const LENGTH = 8;
@@ -30,11 +31,11 @@ const WELL_FORMED = new RegExp(`^[${ALPHABET}]{${LENGTH}}$`);
 const UNBIASED_BELOW = 256 - (256 % ALPHABET.length);
 
 /** A fresh user code, `LENGTH` symbols of `ALPHABET`, drawn uniformly. */
-export const generate = Effect.fnUntraced(function* (crypto: Crypto.Crypto) {
+export const generate = Effect.fnUntraced(function* (random: SecureRandom.SecureRandom["Service"]) {
   let code = "";
   while (code.length < LENGTH) {
     // Over-draw so one round almost always suffices; a rejected byte costs nothing.
-    const bytes = yield* crypto.randomBytes(LENGTH * 2).pipe(Effect.orDie);
+    const bytes = yield* random.randomBytes(LENGTH * 2);
     for (const byte of bytes) {
       if (byte >= UNBIASED_BELOW || code.length === LENGTH) continue;
       code += ALPHABET.charAt(byte % ALPHABET.length);
@@ -54,13 +55,13 @@ export const normalize = (input: string): string => input.toUpperCase().replace(
 export const isWellFormed = (normalized: string): boolean => WELL_FORMED.test(normalized);
 
 /** SHA-256 hex of the normalised code — the only form persisted, and the row's lookup key. */
-export const hash = (crypto: Crypto.Crypto, input: string) =>
-  SecretHash.digest(crypto, normalize(input)).pipe(Effect.orDie);
+export const hash = (hasher: Digest.Digest["Service"], input: string) =>
+  SecretHash.digest(hasher, normalize(input));
 
 /** A fresh device code: 32 CSPRNG bytes, base64url (43 characters, no padding). Never logged. */
-export const generateDeviceCode = (crypto: Crypto.Crypto) =>
-  crypto.randomBytes(32).pipe(Effect.map(Encoding.encodeBase64Url), Effect.orDie);
+export const generateDeviceCode = (random: SecureRandom.SecureRandom["Service"]) =>
+  random.randomBytes(32).pipe(Effect.map(Base64Url.encode));
 
 /** SHA-256 hex of a device code, the form persisted and looked up by. */
-export const hashDeviceCode = (crypto: Crypto.Crypto, deviceCode: string) =>
-  SecretHash.digest(crypto, deviceCode).pipe(Effect.orDie);
+export const hashDeviceCode = (hasher: Digest.Digest["Service"], deviceCode: string) =>
+  SecretHash.digest(hasher, deviceCode);

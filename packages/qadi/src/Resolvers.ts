@@ -28,7 +28,7 @@ import * as Option from "effect/Option";
 import * as Record from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import type { Obligation, ObligationHandler } from "@qadi/core";
 import { AttributeResolver, AttributeResolveError, obligation } from "@qadi/core";
 

@@ -9,7 +9,7 @@
 // composed one. Its "auth" id is the composed api's own, which is what keys a
 // group's handler service.
 
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApi from "effect/http-api/HttpApi";
 import { AccountGroup } from "./Account.ts";
 import { SessionGroup } from "./Session.ts";
 

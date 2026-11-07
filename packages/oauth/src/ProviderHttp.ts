@@ -13,10 +13,10 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import type * as Schema from "effect/Schema";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
+import type * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 
 /** The provider answered 5xx/429: its failure, not a malformed answer. */
 class ProviderServerError extends Data.TaggedError("ProviderServerError")<{

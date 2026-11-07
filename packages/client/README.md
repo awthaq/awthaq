@@ -19,7 +19,7 @@ endpoint names of *your* composed `auth.api` survive:
 ```ts
 import { AuthClient } from "@awthaq/client";
 import * as Effect from "effect/Effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { auth } from "./auth.ts"; // your Auth.make(...) result
 
 const program = Effect.gen(function* () {

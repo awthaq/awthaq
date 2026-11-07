@@ -30,7 +30,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import assert from "node:assert/strict";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApi from "effect/http-api/HttpApi";
 import { AuthorizedSubject } from "@awthaq/qadi";
 import { Api } from "@awthaq/api";
 import {

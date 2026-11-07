@@ -11,10 +11,10 @@
 import { Api, EmailContract, SessionContract } from "@awthaq/api";
 import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
 
 /** BEH-EA-120: `422 WeakPassword { hints }` — too short, or (when `breachCheck` is on) found in a breach corpus. */
 export class WeakPassword extends Schema.TaggedError<WeakPassword>()(

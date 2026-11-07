@@ -20,8 +20,10 @@
 // external anchor (a periodically exported head hash), which this primitive
 // deliberately leaves to the host.
 
+import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as Mac from "effect/crypto/Mac";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -78,49 +80,11 @@ export class AuditChain extends Context.Service<AuditChain, AuditChainShape>()(
 
 // ---- hashing -----------------------------------------------------------------
 
-const SHA256_BLOCK_SIZE = 64;
-
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
-const concatBytes = (a: Uint8Array, b: Uint8Array): Uint8Array => {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
-};
-
-/**
- * HMAC-SHA256 (RFC 2104) from `Crypto.digest`, as `@awthaq/server`'s CSRF token
- * signing builds it — the platform-neutral `Crypto` service exposes only plain
- * digests, not a keyed-MAC primitive.
- */
-const hmacSha256 = Effect.fnUntraced(function* (
-  crypto: Crypto.Crypto,
-  key: Uint8Array,
-  message: Uint8Array,
-) {
-  let blockKey = key.length > SHA256_BLOCK_SIZE ? yield* crypto.digest("SHA-256", key) : key;
-  if (blockKey.length < SHA256_BLOCK_SIZE) {
-    const padded = new Uint8Array(SHA256_BLOCK_SIZE);
-    padded.set(blockKey);
-    blockKey = padded;
-  }
-  const ipad = new Uint8Array(SHA256_BLOCK_SIZE);
-  const opad = new Uint8Array(SHA256_BLOCK_SIZE);
-  for (let i = 0; i < SHA256_BLOCK_SIZE; i++) {
-    const keyByte = blockKey[i] ?? 0;
-    ipad[i] = keyByte ^ 0x36;
-    opad[i] = keyByte ^ 0x5c;
-  }
-  const inner = yield* crypto.digest("SHA-256", concatBytes(ipad, message));
-  return yield* crypto.digest("SHA-256", concatBytes(opad, inner));
-});
-
 export const layer = Layer.effect(
   AuditChain,
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const hasher = yield* Digest.Digest;
+    const mac = yield* Mac.Mac;
     const { key } = yield* AuditChainConfig;
     const encoder = new TextEncoder();
 
@@ -129,10 +93,10 @@ export const layer = Layer.effect(
       // bytes between the two fields.
       const message = encoder.encode(`${prevHash}\n${payload}`);
       const digest = Option.match(key, {
-        onNone: () => crypto.digest("SHA-256", message),
-        onSome: (secret) => hmacSha256(crypto, encoder.encode(Redacted.value(secret)), message),
+        onNone: () => hasher.digest(Digest.sha256, message),
+        onSome: (secret) => Hmac.hmacSha256(mac, encoder.encode(Redacted.value(secret)), message),
       });
-      return digest.pipe(Effect.map(toHex), Effect.orDie);
+      return digest.pipe(Effect.map(Hmac.toHex), Effect.orDie);
     };
 
     const verify: AuditChainShape["verify"] = Effect.fnUntraced(function* (links) {

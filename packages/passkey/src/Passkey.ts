@@ -45,20 +45,21 @@ import {
 import { ClientAddress, Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/unstable/http/Headers";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Headers from "effect/http/Headers";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ChallengeStore from "./ChallengeStore.ts";
 import { hmacSha256 } from "./Hmac.ts";
 import * as PasskeyApi from "./PasskeyApi.ts";
@@ -265,7 +266,7 @@ type ClientData = typeof ClientDataSchema.Type;
  * the `WebAuthn` port.
  */
 const decodeClientData = (clientDataJSON: string): Option.Option<ClientData> => {
-  const decoded = Encoding.decodeBase64Url(clientDataJSON);
+  const decoded = Base64Url.decode(clientDataJSON);
   if (Result.isFailure(decoded)) return Option.none();
   let parsed: unknown;
   try {
@@ -391,7 +392,7 @@ const toAuthenticationResponseJSON = (
   type: "public-key",
 });
 
-const toBase64Url = (bytes: Uint8Array): string => Encoding.encodeBase64Url(bytes);
+const toBase64Url = (bytes: Uint8Array): string => Base64Url.encode(bytes);
 
 /**
  * TSS-004: a fixed, well-formed COSE ES256 public key nobody holds the private
@@ -404,7 +405,7 @@ const DECOY_COSE_PUBLIC_KEY =
   "pQECAyYgASFYIDUd8pj_isGtVhaCN1Bo9s3jMUGZnyfu_woIMrJon1KjIlggExq74U54Cegms_CY6g320bYfldpa89-O72ccIzqVy9s";
 
 const decoyPublicKey = (): Uint8Array<ArrayBuffer> => {
-  const decoded = Encoding.decodeBase64Url(DECOY_COSE_PUBLIC_KEY);
+  const decoded = Base64Url.decode(DECOY_COSE_PUBLIC_KEY);
   return Result.isSuccess(decoded) ? new Uint8Array(decoded.success) : new Uint8Array();
 };
 
@@ -1090,7 +1091,8 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       // decoy `enumerationSecret` are boot-scoped by nature and read the built value.
       const builtConfig = yield* PasskeyConfig;
       const configNow = Tenant.configInForce(PasskeyConfig, builtConfig);
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
+      const mac = yield* Mac.Mac;
       // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement.
       const signIn = yield* SignIn.make;
 
@@ -1134,7 +1136,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           yield* Effect.logWarning(
             "awthaq: PasskeyConfig.enumerationSecret is not set — a random per-process secret is used for the decoy allowCredentials of unknown emails, so decoys differ across instances/restarts. Set one shared secret for multi-instance deployments.",
           );
-          return Redacted.make(toBase64Url(yield* crypto.randomBytes(32).pipe(Effect.orDie)));
+          return Redacted.make(toBase64Url(yield* random.randomBytes(32)));
         }));
       const enumerationKey = new TextEncoder().encode(Redacted.value(enumerationSecret));
       const decoyCredential = { id: "awthaq-decoy-credential", publicKey: decoyPublicKey() };
@@ -1362,7 +1364,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         Effect.gen(function* () {
           const normalized = email.toLowerCase();
           const seed = yield* hmacSha256(
-            crypto,
+            mac,
             enumerationKey,
             new TextEncoder().encode(`passkey.decoy:${normalized}`),
           );
@@ -1372,7 +1374,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             (i) =>
               Effect.gen(function* () {
                 const digest = yield* hmacSha256(
-                  crypto,
+                  mac,
                   enumerationKey,
                   new TextEncoder().encode(`passkey.decoy:${normalized}:${i}`),
                 );
@@ -1390,7 +1392,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           if (email !== undefined) {
             yield* limits.spend("authenticateOptionsByEmail", { email });
           }
-          const ceremonyId = toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie));
+          const ceremonyId = toBase64Url(yield* random.randomBytes(16));
           const challenge = yield* challengeStore.issue(authenticateScope(ceremonyId));
           let allowCredentials: ReadonlyArray<{
             readonly id: string;

@@ -28,7 +28,8 @@ import { type AuditLog, EventRelay } from "@awthaq/core";
 import { HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
 import { type StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -61,7 +62,7 @@ const relay = TenantScoped.crossTenant("webhooks relay: tenantRoutes decides del
 
 // ---- enqueue: the EventTransport ---------------------------------------------------------------
 
-/** Turns a relayed batch into queued deliveries. Requires the records, `Crypto` (ids) and the plugin config. */
+/** Turns a relayed batch into queued deliveries. Requires the records, `SecureRandom` (ids) and the plugin config. */
 // The explicit types on `enqueue` and `drainDue` are the narrow exception the plugins document
 // (TS2883): declaration emit cannot name `StoreUnavailable` through the records' inferred error.
 export const enqueue = (
@@ -69,11 +70,11 @@ export const enqueue = (
 ): Effect.Effect<
   number,
   StoreFailure.StoreUnavailable,
-  WebhookRecords.WebhookRecords | Crypto.Crypto
+  WebhookRecords.WebhookRecords | SecureRandom.SecureRandom
 > =>
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const settings = yield* WebhooksConfig.WebhooksConfig;
     const endpoints = yield* records.listEnabledEndpoints(relay);
     if (endpoints.length === 0 || events.length === 0) return 0;
@@ -100,7 +101,7 @@ export const enqueue = (
         if (DateTime.toEpochMillis(event.occurredAt) < DateTime.toEpochMillis(endpoint.createdAt))
           continue;
         rows.push({
-          id: yield* crypto.randomUUIDv7.pipe(Effect.orDie),
+          id: yield* random.uuidV7(),
           endpointId: endpoint.id,
           eventId: event.eventId,
           eventTag: event._tag,
@@ -118,13 +119,13 @@ export const transportLayer = Layer.effect(
   EventRelay.EventTransport,
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const settings = yield* WebhooksConfig.WebhooksConfig;
     return EventRelay.EventTransport.of({
       deliver: (events) =>
         enqueue(events).pipe(
           Effect.provideService(WebhookRecords.WebhookRecords, records),
-          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(SecureRandom.SecureRandom, random),
           Effect.provideService(WebhooksConfig.WebhooksConfig, settings),
           Effect.asVoid,
         ),
@@ -135,7 +136,7 @@ export const transportLayer = Layer.effect(
 /**
  * The relay for the webhooks consumer: tails the audit log from its own persisted position
  * (`name: "webhooks"`) into `transportLayer`. Requires what `EventRelay.layer` does (`AuditLog`, a
- * `RelayCursorStore`) plus the records and `Crypto`.
+ * `RelayCursorStore`) plus the records, `SecureRandom` and `Mac`.
  */
 export const relayLayer = (
   options?: Partial<Omit<EventRelay.EventRelayOptions, "name">>,
@@ -144,7 +145,10 @@ export const relayLayer = (
 ): Layer.Layer<
   never,
   never,
-  AuditLog.AuditLog | EventRelay.RelayCursorStore | WebhookRecords.WebhookRecords | Crypto.Crypto
+  | AuditLog.AuditLog
+  | EventRelay.RelayCursorStore
+  | WebhookRecords.WebhookRecords
+  | SecureRandom.SecureRandom
 > => EventRelay.layer({ name: RELAY_NAME, ...options }).pipe(Layer.provide(transportLayer));
 
 // ---- one attempt -------------------------------------------------------------------------------
@@ -302,7 +306,8 @@ const attemptCounted = (delivery: WebhookRecords.DeliveryRecord) =>
 export const drainDue: Effect.Effect<
   number,
   StoreFailure.StoreUnavailable,
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
+  | Mac.Mac
   | HostResolver.HostResolver
   | RateLimiter.RateLimiter
   | WebhookRecords.WebhookRecords

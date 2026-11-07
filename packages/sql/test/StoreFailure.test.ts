@@ -15,7 +15,7 @@ import {
   SqlError,
   SqlSyntaxError,
   UniqueViolation,
-} from "effect/unstable/sql/SqlError";
+} from "effect/sql/SqlError";
 import * as StoreFailure from "../src/StoreFailure.ts";
 
 const sqlError = (reason: ConstructorParameters<typeof SqlError>[0]["reason"]) =>

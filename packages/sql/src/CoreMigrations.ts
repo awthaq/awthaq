@@ -3,7 +3,7 @@
 // Shipping-gap map (.scratch/shipping-gaps), ticket 15. Real, file-free
 // migrations for the core tables `Models.ts` declares (users/accounts/
 // sessions/verification_tokens/verification_reservations), built directly
-// against `effect/unstable/sql`'s own `Migrator` (confirmed real by
+// against `effect/sql`'s own `Migrator` (confirmed real by
 // ticket 00's survey — a forward-only runner, `effect_sql_migrations`
 // tracking table by default, whole batch in one transaction). Branches
 // per dialect via `sql.onDialectOrElse` — one definition, not two
@@ -35,9 +35,9 @@
 
 import { Defects } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 /**
  * `load`'s own *resolved value* must itself be an `Effect` (or a

@@ -20,10 +20,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlModel from "effect/unstable/sql/SqlModel";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlModel from "effect/sql/SqlModel";
+import * as SqlSchema from "effect/sql/SqlSchema";
+import type { SqlError } from "effect/sql/SqlError";
 import * as ReadRouting from "./ReadRouting.ts";
 import * as SealedColumn from "./SealedColumn.ts";
 import {
@@ -63,7 +63,7 @@ type RepositoryError = Schema.SchemaError | SqlError;
 /**
  * EOTS-008: SqlModel names its own CRUD spans `<spanPrefix>.<method>`; every
  * hand-written method gets the same convention so a flame graph reads
- * `Users.findByEmail > sql.execute`. Attributes are ids only — never an
+ * `Users.findByEmail > <statement>`. Attributes are ids only — never an
  * email, identifier, hash, token or payload (BEH-EA-199).
  */
 const traced = (name: string, attributes?: Record<string, unknown>) =>

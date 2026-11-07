@@ -12,7 +12,8 @@ import { Api } from "@awthaq/api";
 import { Hmac, type Ids, LegacySessionBridge, SessionStore, type Store } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -21,7 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as AuthEvents from "./AuthEvents.ts";
-import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import { relabel, type StoreUnavailable } from "./Errors.ts";
 import * as Observability from "./Observability.ts";
 import * as SecretHash from "./SecretHash.ts";
 import * as Tenant from "./Tenant.ts";
@@ -663,7 +664,7 @@ const notFound = (id?: SessionId) =>
   });
 
 /**
- * Written once over `SessionStore` (ADR-EA-041). Needs the store, `Crypto` (the id, the secret and its
+ * Written once over `SessionStore` (ADR-EA-041). Needs the store, `SecureRandom` (the id and the secret), `Digest` (its
  * hash) and `AuthEvents`; the legacy bridge is a `Context.Reference` with a default. The clock is read
  * once per operation and handed to the store, so a row never carries two instants.
  */
@@ -671,7 +672,8 @@ export const layer = Layer.effect(
   Sessions,
   Effect.gen(function* () {
     const store = yield* SessionStore.SessionStore;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const hasher = yield* Digest.Digest;
     // EP-007 (ADR-EA-018 Decision 8): lifetimes are decided per operation: a tenant's `SessionConfig`
     // provided in the calling fiber wins; with none, the build-time value applies.
     const builtConfig = yield* SessionConfig;
@@ -679,75 +681,71 @@ export const layer = Layer.effect(
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
-    const issue: SessionsShape["issue"] = Effect.fnUntraced(
-      function* (input) {
-        const config = yield* configNow;
-        yield* refuseSelfActingAs(input);
-        const id = SessionId(yield* crypto.randomUUIDv7);
-        const secret = toHex(yield* crypto.randomBytes(32));
-        const secretHash = yield* hashSecret(crypto, secret);
-        const now = yield* DateTime.now;
-        const absoluteExpiresAt = DateTime.addDuration(
-          now,
-          input.absoluteDuration ?? config.absolute,
-        );
-        // BEH-EA-210: a session minted with `actingAs` gets a hard expiry: `idleExpiresAt` set equal to
-        // `absoluteExpiresAt` at issuance, never pushed further out by `verify`'s idle-refresh touch.
-        const idleExpiresAt =
+    const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+      const config = yield* configNow;
+      yield* refuseSelfActingAs(input);
+      const id = SessionId(yield* random.uuidV7());
+      const secret = toHex(yield* random.randomBytes(32));
+      const secretHash = yield* hashSecret(hasher, secret);
+      const now = yield* DateTime.now;
+      const absoluteExpiresAt = DateTime.addDuration(
+        now,
+        input.absoluteDuration ?? config.absolute,
+      );
+      // BEH-EA-210: a session minted with `actingAs` gets a hard expiry: `idleExpiresAt` set equal to
+      // `absoluteExpiresAt` at issuance, never pushed further out by `verify`'s idle-refresh touch.
+      const idleExpiresAt =
+        input.actingAs === undefined
+          ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
+          : absoluteExpiresAt;
+      // ESR-002/RRS-004: tombstoning the superseded row and inserting its successor are ONE store
+      // primitive, so no interruption or failure can leave a tombstoned session without its successor
+      // (whose next presentation would read as refresh-token reuse: a false theft alarm and a family
+      // revocation). SMS-003: the cap is enforced in that same step. Impersonation (`actingAs`)
+      // sessions neither count toward nor trigger it.
+      const { inserted, superseded, evicted } = yield* store.insert({
+        session: {
+          id,
+          userId: input.userId,
+          secretHash,
+          at: now,
+          absoluteExpiresAt,
+          idleExpiresAt,
+          ipAddress: Option.fromNullishOr(input.request?.ip),
+          userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
+          actingAs: Option.fromNullishOr(input.actingAs),
+          amr: input.amr ?? [],
+        },
+        supersedes: Option.fromNullishOr(input.supersedes),
+        maxLive:
           input.actingAs === undefined
-            ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
-            : absoluteExpiresAt;
-        // ESR-002/RRS-004: tombstoning the superseded row and inserting its successor are ONE store
-        // primitive, so no interruption or failure can leave a tombstoned session without its successor
-        // (whose next presentation would read as refresh-token reuse: a false theft alarm and a family
-        // revocation). SMS-003: the cap is enforced in that same step. Impersonation (`actingAs`)
-        // sessions neither count toward nor trigger it.
-        const { inserted, superseded, evicted } = yield* store.insert({
-          session: {
-            id,
-            userId: input.userId,
-            secretHash,
-            at: now,
-            absoluteExpiresAt,
-            idleExpiresAt,
-            ipAddress: Option.fromNullishOr(input.request?.ip),
-            userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
-            actingAs: Option.fromNullishOr(input.actingAs),
-            amr: input.amr ?? [],
-          },
-          supersedes: Option.fromNullishOr(input.supersedes),
-          maxLive:
-            input.actingAs === undefined
-              ? Option.map(Option.fromNullishOr(config.maxConcurrent), (policy) => policy.limit)
-              : Option.none(),
+            ? Option.map(Option.fromNullishOr(config.maxConcurrent), (policy) => policy.limit)
+            : Option.none(),
+      });
+      // RRS-008: the rotation's own event, published from `Sessions` so every strategy's `supersedes`
+      // is covered, only when a live ancestor of the same user was tombstoned.
+      if (Option.isSome(superseded)) {
+        yield* events.publish({
+          _tag: "auth.session.superseded",
+          sessionId: superseded.value.id,
+          supersededBy: id,
+          familyId: superseded.value.familyId,
+          userId: superseded.value.userId,
         });
-        // RRS-008: the rotation's own event, published from `Sessions` so every strategy's `supersedes`
-        // is covered, only when a live ancestor of the same user was tombstoned.
-        if (Option.isSome(superseded)) {
-          yield* events.publish({
-            _tag: "auth.session.superseded",
-            sessionId: superseded.value.id,
-            supersededBy: id,
-            familyId: superseded.value.familyId,
-            userId: superseded.value.userId,
-          });
-        }
-        for (const gone of evicted) {
-          yield* events.publish({
-            _tag: "auth.session.revoked",
-            userId: input.userId,
-            sessionId: gone,
-            scope: "one",
-            reason: "limitEvicted",
-          });
-        }
-        const view = toView(inserted);
-        yield* publishIssued(events, view, inserted.familyId, view.actingAs);
-        return { session: view, token: Redacted.make(`${id}.${secret}`) };
-      },
-      Effect.catchTag("PlatformError", storeUnavailable("Sessions.issue")),
-      relabel("Sessions.issue"),
-    );
+      }
+      for (const gone of evicted) {
+        yield* events.publish({
+          _tag: "auth.session.revoked",
+          userId: input.userId,
+          sessionId: gone,
+          scope: "one",
+          reason: "limitEvicted",
+        });
+      }
+      const view = toView(inserted);
+      yield* publishIssued(events, view, inserted.familyId, view.actingAs);
+      return { session: view, token: Redacted.make(`${id}.${secret}`) };
+    }, relabel("Sessions.issue"));
 
     /**
      * BAM-003 (.issues/high): consulted only on a primary-store miss: a still-live legacy (e.g.
@@ -772,148 +770,141 @@ export const layer = Layer.effect(
       return Option.some({ session: minted.session, rotated: Option.some(minted.token) });
     });
 
-    const verify: SessionsShape["verify"] = Effect.fnUntraced(
-      function* (token) {
-        const config = yield* configNow;
-        const raw = Redacted.value(token);
-        const separator = raw.indexOf(".");
-        if (separator < 0) {
-          const bridged = yield* bridgeLegacySession(raw);
-          if (Option.isSome(bridged)) return bridged.value;
-          return yield* notFound();
-        }
-        const id = SessionId(raw.slice(0, separator));
-        const secret = raw.slice(separator + 1);
-        // PIL-007: the id is the public half of the token (cookies, JWT `sid`, error messages): the
-        // secret is proven before ANY row-state branch (tombstone/reuse, expiry), so an id-only caller
-        // can neither trigger reuse-detection side effects nor learn a row's state.
-        const presentedHash = yield* hashSecret(crypto, secret);
-        const found = yield* store.get(id);
-        if (Option.isNone(found)) {
-          secretMatches(presentedHash, UNKNOWN_SESSION_HASH);
-          const bridged = yield* bridgeLegacySession(raw);
-          if (Option.isSome(bridged)) return bridged.value;
-          return yield* notFound(id);
-        }
-        const row = found.value;
-        const now = yield* DateTime.now;
-        const matched = matchedSecret(
-          now,
-          presentedHash,
-          row.secretHash,
-          Option.getOrUndefined(row.previousSecretHash),
-          Option.getOrUndefined(row.previousSecretExpiresAt),
-        );
-        if (matched === "none") return yield* notFound(id);
-        // RRS-003: a tombstoned row is a presented-already-rotated token: reuse. Reached only with the
-        // correct (old) secret (PIL-007), and checked before expiry: a rotated-away row's own expiry
-        // timestamps are stale and not the interesting signal here. The external response stays the
-        // uniform `SessionNotFound` whether this is the first reuse or a later presentation of an
-        // already-flagged row: no distinguishable signal leaked.
-        if (Option.isSome(row.supersededAt)) {
-          // RRS-005: only the row's *current* secret can be reuse: a previous secret inside its grace
-          // window is a stale-but-legitimate holder, never a family-revoking signal.
-          if (matched === "current" && Option.isNone(row.reusedAt)) {
-            // "Published once": the store flags the row and revokes the family in one atomic step and
-            // answers `Some` to exactly one of any number of racing presentations.
-            const flagged = yield* store.flagReuse(id, now);
-            if (Option.isSome(flagged)) {
-              yield* events.publish({
-                _tag: "auth.session.reuse",
-                sessionId: id,
-                familyId: flagged.value.familyId,
-                userId: flagged.value.userId,
-              });
-              yield* events.publish({
-                _tag: "auth.session.revoked",
-                userId: flagged.value.userId,
-                sessionId: null,
-                scope: "family",
-                reason: "reuseDetected",
-              });
-            }
+    const verify: SessionsShape["verify"] = Effect.fnUntraced(function* (token) {
+      const config = yield* configNow;
+      const raw = Redacted.value(token);
+      const separator = raw.indexOf(".");
+      if (separator < 0) {
+        const bridged = yield* bridgeLegacySession(raw);
+        if (Option.isSome(bridged)) return bridged.value;
+        return yield* notFound();
+      }
+      const id = SessionId(raw.slice(0, separator));
+      const secret = raw.slice(separator + 1);
+      // PIL-007: the id is the public half of the token (cookies, JWT `sid`, error messages): the
+      // secret is proven before ANY row-state branch (tombstone/reuse, expiry), so an id-only caller
+      // can neither trigger reuse-detection side effects nor learn a row's state.
+      const presentedHash = yield* hashSecret(hasher, secret);
+      const found = yield* store.get(id);
+      if (Option.isNone(found)) {
+        secretMatches(presentedHash, UNKNOWN_SESSION_HASH);
+        const bridged = yield* bridgeLegacySession(raw);
+        if (Option.isSome(bridged)) return bridged.value;
+        return yield* notFound(id);
+      }
+      const row = found.value;
+      const now = yield* DateTime.now;
+      const matched = matchedSecret(
+        now,
+        presentedHash,
+        row.secretHash,
+        Option.getOrUndefined(row.previousSecretHash),
+        Option.getOrUndefined(row.previousSecretExpiresAt),
+      );
+      if (matched === "none") return yield* notFound(id);
+      // RRS-003: a tombstoned row is a presented-already-rotated token: reuse. Reached only with the
+      // correct (old) secret (PIL-007), and checked before expiry: a rotated-away row's own expiry
+      // timestamps are stale and not the interesting signal here. The external response stays the
+      // uniform `SessionNotFound` whether this is the first reuse or a later presentation of an
+      // already-flagged row: no distinguishable signal leaked.
+      if (Option.isSome(row.supersededAt)) {
+        // RRS-005: only the row's *current* secret can be reuse: a previous secret inside its grace
+        // window is a stale-but-legitimate holder, never a family-revoking signal.
+        if (matched === "current" && Option.isNone(row.reusedAt)) {
+          // "Published once": the store flags the row and revokes the family in one atomic step and
+          // answers `Some` to exactly one of any number of racing presentations.
+          const flagged = yield* store.flagReuse(id, now);
+          if (Option.isSome(flagged)) {
+            yield* events.publish({
+              _tag: "auth.session.reuse",
+              sessionId: id,
+              familyId: flagged.value.familyId,
+              userId: flagged.value.userId,
+            });
+            yield* events.publish({
+              _tag: "auth.session.revoked",
+              userId: flagged.value.userId,
+              sessionId: null,
+              scope: "family",
+              reason: "reuseDetected",
+            });
           }
+        }
+        return yield* notFound(id);
+      }
+      if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
+        yield* events.publish({
+          _tag: "auth.session.expired",
+          sessionId: id,
+          userId: row.userId,
+          kind: "absolute",
+        });
+        return yield* new SessionExpired({ message: "awthaq: session expired", id });
+      }
+      if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
+        yield* events.publish({
+          _tag: "auth.session.expired",
+          sessionId: id,
+          userId: row.userId,
+          kind: "idle",
+        });
+        return yield* new SessionExpired({ message: "awthaq: session idle-expired", id });
+      }
+      // BEH-EA-210: a session carrying `actingAs` never idle-refreshes: its hard expiry is the whole
+      // mechanism, so `verify` never touches it.
+      if (Option.isSome(row.actingAs)) {
+        return { session: toView(row), rotated: Option.none() };
+      }
+      // BEH-EA-052: throttled idle refresh: at most one write per `touchEvery`.
+      const dueForTouch =
+        DateTime.toEpochMillis(now) >=
+        DateTime.toEpochMillis(DateTime.addDuration(row.lastActiveAt, config.touchEvery));
+      // RRS-005: a previous secret presented in its grace window always re-rotates, so the holder that
+      // missed the last delivery is handed a durable credential.
+      if (!dueForTouch && matched === "current") {
+        return { session: toView(row), rotated: Option.none() };
+      }
+      const grace = graceOf(config);
+      const keepPrevious = Duration.toMillis(grace) > 0;
+      // Ticket 01: the same throttled write also rotates the secret, compare-and-swapped against the
+      // hash this call just read, so a losing concurrent request never clobbers a winner's write with
+      // its own independently-generated secret. Losing the race isn't a failure: this call simply
+      // reports no rotation of its own, over whatever the winner's write left behind, re-checked for
+      // liveness (a row tombstoned or expired in the meantime is not authenticated).
+      const newSecret = toHex(yield* random.randomBytes(32));
+      const newSecretHash = yield* hashSecret(hasher, newSecret);
+      const outcome = yield* store.rotate({
+        id,
+        expectedSecretHash: row.secretHash,
+        secretHash: newSecretHash,
+        previous: keepPrevious
+          ? Option.some({ hash: row.secretHash, expiresAt: DateTime.addDuration(now, grace) })
+          : Option.none(),
+        lastActiveAt: now,
+        idleExpiresAt: DateTime.min(DateTime.addDuration(now, config.idle), row.absoluteExpiresAt),
+      });
+      if (outcome._tag === "Lost") {
+        if (Option.isNone(outcome.current) || Option.isSome(outcome.current.value.supersededAt)) {
           return yield* notFound(id);
         }
-        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
-          yield* events.publish({
-            _tag: "auth.session.expired",
-            sessionId: id,
-            userId: row.userId,
-            kind: "absolute",
-          });
+        if (!SessionStore.isLive(outcome.current.value, now)) {
           return yield* new SessionExpired({ message: "awthaq: session expired", id });
         }
-        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
-          yield* events.publish({
-            _tag: "auth.session.expired",
-            sessionId: id,
-            userId: row.userId,
-            kind: "idle",
-          });
-          return yield* new SessionExpired({ message: "awthaq: session idle-expired", id });
-        }
-        // BEH-EA-210: a session carrying `actingAs` never idle-refreshes: its hard expiry is the whole
-        // mechanism, so `verify` never touches it.
-        if (Option.isSome(row.actingAs)) {
-          return { session: toView(row), rotated: Option.none() };
-        }
-        // BEH-EA-052: throttled idle refresh: at most one write per `touchEvery`.
-        const dueForTouch =
-          DateTime.toEpochMillis(now) >=
-          DateTime.toEpochMillis(DateTime.addDuration(row.lastActiveAt, config.touchEvery));
-        // RRS-005: a previous secret presented in its grace window always re-rotates, so the holder that
-        // missed the last delivery is handed a durable credential.
-        if (!dueForTouch && matched === "current") {
-          return { session: toView(row), rotated: Option.none() };
-        }
-        const grace = graceOf(config);
-        const keepPrevious = Duration.toMillis(grace) > 0;
-        // Ticket 01: the same throttled write also rotates the secret, compare-and-swapped against the
-        // hash this call just read, so a losing concurrent request never clobbers a winner's write with
-        // its own independently-generated secret. Losing the race isn't a failure: this call simply
-        // reports no rotation of its own, over whatever the winner's write left behind, re-checked for
-        // liveness (a row tombstoned or expired in the meantime is not authenticated).
-        const newSecret = toHex(yield* crypto.randomBytes(32));
-        const newSecretHash = yield* hashSecret(crypto, newSecret);
-        const outcome = yield* store.rotate({
-          id,
-          expectedSecretHash: row.secretHash,
-          secretHash: newSecretHash,
-          previous: keepPrevious
-            ? Option.some({ hash: row.secretHash, expiresAt: DateTime.addDuration(now, grace) })
-            : Option.none(),
-          lastActiveAt: now,
-          idleExpiresAt: DateTime.min(
-            DateTime.addDuration(now, config.idle),
-            row.absoluteExpiresAt,
-          ),
-        });
-        if (outcome._tag === "Lost") {
-          if (Option.isNone(outcome.current) || Option.isSome(outcome.current.value.supersededAt)) {
-            return yield* notFound(id);
-          }
-          if (!SessionStore.isLive(outcome.current.value, now)) {
-            return yield* new SessionExpired({ message: "awthaq: session expired", id });
-          }
-          return { session: toView(outcome.current.value), rotated: Option.none() };
-        }
-        // RRS-008: only the call that won the rotation announces it.
-        yield* events.publish({
-          _tag: "auth.session.rotated",
-          sessionId: id,
-          familyId: outcome.session.familyId,
-          userId: outcome.session.userId,
-          ...(matched === "previous" ? { viaGrace: true } : {}),
-        });
-        return {
-          session: toView(outcome.session),
-          rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
-        };
-      },
-      Effect.catchTag("PlatformError", storeUnavailable("Sessions.verify")),
-      relabel("Sessions.verify"),
-    );
+        return { session: toView(outcome.current.value), rotated: Option.none() };
+      }
+      // RRS-008: only the call that won the rotation announces it.
+      yield* events.publish({
+        _tag: "auth.session.rotated",
+        sessionId: id,
+        familyId: outcome.session.familyId,
+        userId: outcome.session.userId,
+        ...(matched === "previous" ? { viaGrace: true } : {}),
+      });
+      return {
+        session: toView(outcome.session),
+        rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
+      };
+    }, relabel("Sessions.verify"));
 
     // TIR-008: every revocation primitive is one store call that answers what it removed, and publishes
     // exactly one `auth.session.revoked` for the call, after the delete.

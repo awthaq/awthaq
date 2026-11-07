@@ -16,18 +16,19 @@
 // unknown token gets — nothing reveals which.
 
 import type { Api } from "@awthaq/api";
-import { StoreFailure, TenantScoped } from "@awthaq/sql";
+import { TenantScoped } from "@awthaq/sql";
 import { OrganizationDirectory } from "@awthaq/organization";
 import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import type * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
-import type * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import type * as HttpApiSecurity from "effect/http-api/HttpApiSecurity";
+import type * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import * as ScimApi from "./ScimApi.ts";
 import * as ScimRecords from "./ScimRecords.ts";
 
@@ -84,35 +85,25 @@ export class ScimConnectionStore extends Context.Service<
 >()("awthaq/scim/ScimConnectionStore") {}
 
 /** Hex SHA-256 of a token — the only form of it ever stored or compared. */
-const hashToken = (crypto: Crypto.Crypto, token: string) =>
-  crypto
-    .digest("SHA-256", new TextEncoder().encode(token))
-    .pipe(
-      Effect.map(hexOf),
-      Effect.catch(StoreFailure.storeUnavailable("ScimConnections.hashToken")),
-    );
+const hashToken = (hasher: Digest.Digest["Service"], token: string) =>
+  hasher.digest(Digest.sha256, new TextEncoder().encode(token)).pipe(Effect.map(hexOf));
 
-/** Requires `ScimRecords` and `Crypto`. */
+/** Requires `ScimRecords`, `SecureRandom` and `Digest`. */
 export const layerStore = Layer.effect(
   ScimConnectionStore,
   Effect.gen(function* () {
     const records = yield* ScimRecords.ScimRecords;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const hasher = yield* Digest.Digest;
 
     const create: ScimConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* crypto.randomUUIDv7.pipe(
-        Effect.catch(StoreFailure.storeUnavailable("ScimConnectionStore.create")),
-      );
-      const token = `${TOKEN_PREFIX}${hexOf(
-        yield* crypto
-          .randomBytes(32)
-          .pipe(Effect.catch(StoreFailure.storeUnavailable("ScimConnectionStore.create"))),
-      )}`;
+      const id = yield* random.uuidV7();
+      const token = `${TOKEN_PREFIX}${hexOf(yield* random.randomBytes(32))}`;
       const record = yield* records.createConnection({
         id,
         organizationId: input.organizationId,
         name: input.name.trim(),
-        tokenHash: yield* hashToken(crypto, token),
+        tokenHash: yield* hashToken(hasher, token),
       });
       return { connection: toView(record), token: Redacted.make(token) };
     });
@@ -129,14 +120,14 @@ export const layerStore = Layer.effect(
 
 /**
  * BEH-EA-246: bearer authentication for the `scim` group. Requires `ScimRecords`,
- * the exposed `OrganizationDirectory` and `Crypto`.
+ * the exposed `OrganizationDirectory`, `SecureRandom` and `Digest`.
  */
 export const ScimAuthenticationLive = Layer.effect(
   ScimApi.ScimAuthentication,
   Effect.gen(function* () {
     const records = yield* ScimRecords.ScimRecords;
     const directory = yield* OrganizationDirectory.OrganizationDirectory;
-    const crypto = yield* Crypto.Crypto;
+    const hasher = yield* Digest.Digest;
 
     const bearer: HttpApiMiddleware.HttpApiMiddlewareSecurity<
       { readonly bearer: typeof HttpApiSecurity.bearer },
@@ -147,7 +138,7 @@ export const ScimAuthenticationLive = Layer.effect(
       Effect.gen(function* () {
         const presented = Redacted.value(credential);
         if (!presented.startsWith(TOKEN_PREFIX)) return yield* ScimApi.unauthorized();
-        const hash = yield* hashToken(crypto, presented);
+        const hash = yield* hashToken(hasher, presented);
         const found = yield* records.findConnectionByTokenHash(tokenGrant, hash);
         if (Option.isNone(found)) return yield* ScimApi.unauthorized();
         const connection = found.value;

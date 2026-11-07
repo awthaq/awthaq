@@ -29,7 +29,9 @@ import { EmailOtp, MagicLink } from "@awthaq/magic-link";
 import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
 import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -66,7 +68,9 @@ export type MagicLinkServices =
   | TwoFactor.TwoFactor
   | SecondFactor.SecondFactor
   | PasswordHasher.PasswordHasher
-  | Crypto.Crypto;
+  | SecureRandom.SecureRandom
+  | Digest.Digest
+  | Mac.Mac;
 
 /** ADR-EA-039: while the flag is set, `Sessions.issue` fails with the typed outage, as a down session store would. */
 const sessionsWithOutage = (outage: Ref.Ref<boolean>) =>
@@ -302,12 +306,12 @@ export const enrolSecondFactor = (userId: Users.UserId) =>
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
       const twoFactor = yield* TwoFactor.TwoFactor;
-      const crypto = yield* Crypto.Crypto;
+      const mac = yield* Mac.Mac;
       const fresh = yield* sessions.issue({ userId });
       const enrolment = yield* twoFactor.enable(userId, fresh.session.id);
       const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
       const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
-      const code = yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 });
+      const code = yield* Totp.totp(mac, key, now, { period: 30, digits: 6 });
       yield* twoFactor.confirm(userId, Redacted.make(code));
     }),
   );

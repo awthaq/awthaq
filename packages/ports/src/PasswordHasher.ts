@@ -105,10 +105,10 @@
 import * as Brand from "effect/Brand";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64 from "effect/encoding/Base64";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Semaphore from "effect/Semaphore";
@@ -253,8 +253,7 @@ const wasmBackend = (slots: Semaphore.Semaphore): KdfBackend => ({
 });
 
 /** hash-wasm's own encoded form uses unpadded base64 for the salt and digest. */
-const encodeUnpaddedBase64 = (bytes: Uint8Array): string =>
-  Encoding.encodeBase64(bytes).replace(/=+$/, "");
+const encodeUnpaddedBase64 = (bytes: Uint8Array): string => Base64.encode(bytes).replace(/=+$/, "");
 
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -264,10 +263,10 @@ const toHex = (bytes: Uint8Array): string =>
 const ARGON2ID_PHC =
   /^\$argon2id\$v=(\d+)\$m=(\d+),t=(\d+),p=(\d+)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)$/;
 
-/** hash-wasm emits the salt and digest as unpadded base64; `Encoding.decodeBase64` wants padding. */
+/** hash-wasm emits the salt and digest as unpadded base64; `Base64.decode` wants padding. */
 const decodeUnpaddedBase64 = (value: string): Uint8Array | undefined => {
   if (value.length % 4 === 1) return undefined;
-  const decoded = Encoding.decodeBase64(value.padEnd(Math.ceil(value.length / 4) * 4, "="));
+  const decoded = Base64.decode(value.padEnd(Math.ceil(value.length / 4) * 4, "="));
   return decoded._tag === "Success" ? decoded.success : undefined;
 };
 
@@ -342,7 +341,7 @@ const parseArgon2id = (phc: string, ceilings: Argon2Ceilings) => {
  */
 export const makeArgon2id = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const legacy = yield* LegacyPasswordVerifiers;
     const memorySize = yield* Config.Int("AUTH_ARGON2_MEMORY_KIB").pipe(Config.withDefault(19_456));
     const iterations = yield* Config.Int("AUTH_ARGON2_ITERATIONS").pipe(Config.withDefault(2));
@@ -374,7 +373,7 @@ export const makeArgon2id = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
 
     const hash: PasswordHasherShape["hash"] = (plain) =>
       Effect.gen(function* () {
-        const salt = yield* crypto.randomBytes(SALT_LENGTH);
+        const salt = yield* random.randomBytes(SALT_LENGTH);
         const digest = yield* backend.argon2id({
           password: Redacted.value(plain),
           salt,
@@ -424,14 +423,17 @@ export const makeArgon2id = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
   });
 
 /** argon2id on the calling thread, at most `AUTH_PASSWORD_HASH_CONCURRENCY` hashes in flight (ERS-001). */
-export const layerArgon2id: Layer.Layer<PasswordHasher, Config.ConfigError, Crypto.Crypto> =
-  Layer.effect(
-    PasswordHasher,
-    Effect.gen(function* () {
-      const slots = yield* makeSlots;
-      return yield* makeArgon2id(wasmBackend(slots), slots);
-    }),
-  );
+export const layerArgon2id: Layer.Layer<
+  PasswordHasher,
+  Config.ConfigError,
+  SecureRandom.SecureRandom
+> = Layer.effect(
+  PasswordHasher,
+  Effect.gen(function* () {
+    const slots = yield* makeSlots;
+    return yield* makeArgon2id(wasmBackend(slots), slots);
+  }),
+);
 
 // A de-facto encoding (no PHC spec entry exists for scrypt), mirroring
 // passlib's own `$scrypt$` format: `ln` is log2(costFactor), so the
@@ -477,7 +479,7 @@ const parseScryptHash = (phc: string, ceilings: ScryptCeilings) => {
   ) {
     return undefined;
   }
-  const salt = Encoding.decodeBase64(saltB64);
+  const salt = Base64.decode(saltB64);
   if (salt._tag === "Failure") return undefined;
   return {
     costFactor: 2 ** costLog2,
@@ -499,7 +501,7 @@ const parseScryptHash = (phc: string, ceilings: ScryptCeilings) => {
  */
 export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const legacy = yield* LegacyPasswordVerifiers;
     const costLog2 = yield* Config.Int("AUTH_SCRYPT_COST_LOG2").pipe(Config.withDefault(17));
     const blockSize = yield* Config.Int("AUTH_SCRYPT_BLOCK_SIZE").pipe(Config.withDefault(8));
@@ -540,7 +542,7 @@ export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
 
     const hash: PasswordHasherShape["hash"] = (plain) =>
       Effect.gen(function* () {
-        const salt = yield* crypto.randomBytes(SALT_LENGTH);
+        const salt = yield* random.randomBytes(SALT_LENGTH);
         const digest = yield* backend.scrypt({
           password: Redacted.value(plain),
           salt,
@@ -550,7 +552,7 @@ export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
           hashLength: HASH_LENGTH,
         });
         return PhcHash(
-          `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Encoding.encodeBase64(salt)}$${toHex(digest)}`,
+          `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Base64.encode(salt)}$${toHex(digest)}`,
         );
       }).pipe(Effect.orDie);
 
@@ -590,11 +592,14 @@ export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
   });
 
 /** scrypt on the calling thread, at most `AUTH_PASSWORD_HASH_CONCURRENCY` hashes in flight (ERS-001). */
-export const layerScrypt: Layer.Layer<PasswordHasher, Config.ConfigError, Crypto.Crypto> =
-  Layer.effect(
-    PasswordHasher,
-    Effect.gen(function* () {
-      const slots = yield* makeSlots;
-      return yield* makeScrypt(wasmBackend(slots), slots);
-    }),
-  );
+export const layerScrypt: Layer.Layer<
+  PasswordHasher,
+  Config.ConfigError,
+  SecureRandom.SecureRandom
+> = Layer.effect(
+  PasswordHasher,
+  Effect.gen(function* () {
+    const slots = yield* makeSlots;
+    return yield* makeScrypt(wasmBackend(slots), slots);
+  }),
+);

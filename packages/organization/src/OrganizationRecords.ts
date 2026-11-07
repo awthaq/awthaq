@@ -3,12 +3,12 @@
 // spec.md's "Organization entity & CRUD": persistence for the
 // `organization` table, built the same way `@awthaq/admin`'s own
 // `ImpersonationRecords.ts` builds `admin_impersonation` — directly against
-// `effect/unstable/sql`'s `SqlSchema`, owned by this plugin rather than the
+// `effect/sql`'s `SqlSchema`, owned by this plugin rather than the
 // shared persistence stratum.
 
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -18,8 +18,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 export interface OrganizationRecord {
   readonly id: string;
@@ -117,10 +117,6 @@ const notFound = (id: string): OrganizationRecordNotFound => new OrganizationRec
 const slugTaken = (slug: string): OrganizationRecordSlugTaken =>
   new OrganizationRecordSlugTaken({ slug });
 
-/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
-const mintId = <E>(minted: Effect.Effect<string, E>) =>
-  Effect.catch(minted, StoreFailure.storeUnavailable("OrganizationRecords.create"));
-
 // ---- layerMemory ------------------------------------------------------------
 
 type State = HashMap.HashMap<string, OrganizationRecord>;
@@ -129,13 +125,13 @@ export const layerMemory = Layer.effect(
   OrganizationRecords,
   Effect.gen(function* () {
     const state = yield* Ref.make<State>(HashMap.empty());
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const findBySlugSync = (records: State, slug: string): Option.Option<OrganizationRecord> =>
       Option.fromNullishOr(Array.from(HashMap.values(records)).find((row) => row.slug === slug));
 
     const create: OrganizationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId(crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const outcome = yield* Ref.modify(
         state,
@@ -294,7 +290,7 @@ export const layerSql = Layer.effect(
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const OrganizationRow = makeOrganizationRow(wire);
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const unavailable = (operation: string) =>
       StoreFailure.orStoreUnavailable(`OrganizationRecords.${operation}`);
 
@@ -348,7 +344,7 @@ export const layerSql = Layer.effect(
       });
 
     const create: OrganizationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId(crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const row = yield* insert({
         id,

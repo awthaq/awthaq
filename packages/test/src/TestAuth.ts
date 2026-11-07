@@ -112,14 +112,14 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
+import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 
 /**
  * ETVS-004: a real argon2id hasher at the smallest legal cost, so a sign-up/sign-in suite
@@ -143,13 +143,13 @@ export type RetentionRegistryService = Retention.RetentionRegistry;
 
 /**
  * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's
- * record stores) needs beneath it, as one layer: the platform `Crypto` (ids and secrets),
+ * record stores) needs beneath it, as one layer: the platform crypto services (ids, secrets, hashes, MACs),
  * `AuthEvents` over an in-memory `AuditLog`, and every hook point's default (no-tap) layer.
  * `Users.layer.pipe(Layer.provideMerge(TestAuth.memoryFoundation))` replaces the four
  * `Layer.provideMerge(NodeCrypto.layer | AuthEvents.layer | AuditLog.layer |
  * Hooks.HooksLive)` lines each suite used to repeat. The services stay in the output, so a test
  * can `yield*` the very instances the stores were built over. Raw layers stay available for a
- * suite that injects its own `Crypto` or hook taps. It is the low-level seam for a store suite
+ * suite that injects its own crypto services or hook taps. It is the low-level seam for a store suite
  * that builds one store alone; a whole composition goes through `TestAuth.layer`.
  */
 export const memoryFoundation = AuthEvents.layer.pipe(
@@ -160,7 +160,7 @@ export const memoryFoundation = AuthEvents.layer.pipe(
   // `Hooks.HooksLive`'s own doc comment.
   Layer.provideMerge(Hooks.HooksLive),
   // Plan 08: the hash chain `Admin`'s impersonation records link their rows with (unkeyed unless a test
-  // provides `AuditChain.config`); it needs only `Crypto`, so it rides here, beside the other things stores read.
+  // provides `AuditChain.config`); it needs only `Digest` and `Mac`, so it rides here, beside the other things stores read.
   Layer.provideMerge(AuditChain.layer),
   Layer.provideMerge(NodeCrypto.layer),
 );
@@ -281,7 +281,7 @@ export interface CommonOptions<S, SE, SR, D, DR> {
    * a test that `yield*`s a service only this provides gets the very instance the plugins used (a capturing
    * `Mailer` given here is the one the plugin sends through and the one the test reads). It sits closest to
    * the plugins, so it may override a derived middleware or a base service *for the plugins*; a base service
-   * captured by a core store (a custom `Crypto`) is not seen by it: use `decorate` or `memoryFoundation` for
+   * captured by a core store (a custom `SecureRandom`) is not seen by it: use `decorate` or `memoryFoundation` for
    * that. Never put a core store, a plugin record layer or host middleware here: the harness provides them.
    */
   readonly services?: Layer.Layer<S, SE, SR>;

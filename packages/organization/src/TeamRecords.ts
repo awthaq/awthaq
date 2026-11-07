@@ -29,7 +29,7 @@ import { Users } from "@awthaq/core";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -39,8 +39,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 export interface TeamRecord {
   readonly id: string;
@@ -233,10 +233,6 @@ const teamNotFound = (id: string): TeamRecordNotFound => new TeamRecordNotFound(
 const teamMembershipNotFound = (teamId: string, userId: string): TeamMembershipRecordNotFound =>
   new TeamMembershipRecordNotFound({ teamId, userId });
 
-/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
-const mintId = <E>(operation: string, minted: Effect.Effect<string, E>) =>
-  Effect.catch(minted, StoreFailure.storeUnavailable(`TeamRecords.${operation}`));
-
 // ---- layerMemory ------------------------------------------------------------
 
 interface State {
@@ -252,10 +248,10 @@ export const layerMemory = Layer.effect(
   TeamRecords,
   Effect.gen(function* () {
     const state = yield* Ref.make<State>({ teams: HashMap.empty(), memberships: HashMap.empty() });
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const createTeam: TeamRecordsShape["createTeam"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const record: TeamRecord = {
         id,
@@ -475,7 +471,7 @@ export const layerMemory = Layer.effect(
       });
 
     const addTeamMember: TeamRecordsShape["addTeamMember"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const record = brandTeamMembership({
         id,
@@ -714,7 +710,7 @@ export const layerSql = Layer.effect(
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const TeamRow = makeTeamRow(wire);
     const TeamMembershipRow = makeTeamMembershipRow(wire);
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const insertTeam = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -918,7 +914,7 @@ export const layerSql = Layer.effect(
       );
 
     const createTeam: TeamRecordsShape["createTeam"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       return yield* SqlTransaction.transactional(sql)(
         Effect.gen(function* () {
@@ -1109,7 +1105,7 @@ export const layerSql = Layer.effect(
       ).pipe(unavailable("removeAllTeamsForOrganization"));
 
     const addTeamMember: TeamRecordsShape["addTeamMember"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       return yield* SqlTransaction.transactional(sql)(
         Effect.gen(function* () {

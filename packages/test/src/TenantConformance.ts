@@ -22,7 +22,7 @@ import { TenantScope, TenantScoped } from "@awthaq/sql";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import type { TestFramework } from "./TestFramework.ts";
 import * as TestSql from "./TestSql.ts";
 

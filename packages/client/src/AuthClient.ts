@@ -16,7 +16,7 @@
 // `@effect-atom/atom`, pinned to `effect: ^3.22.1` and therefore unusable
 // against this project's catalog-pinned `effect` — that reasoning no longer
 // holds: `effect` itself now ships `AtomHttpApi`/`Atom`/`AtomRegistry`
-// natively at `effect/unstable/reactivity` (no external package needed).
+// natively at `effect/reactivity` (no external package needed).
 // `@awthaq/react`'s `ReactClient.makeReactClient` builds the actual
 // `AtomHttpApiClient` service over an application's composed api — this
 // module stays the plain, non-reactive `HttpApiClient` binding either way
@@ -39,13 +39,13 @@ import * as Ref from "effect/Ref";
 import type * as Result from "effect/Result";
 import * as Context from "effect/Context";
 import * as Redacted from "effect/Redacted";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import type { HttpApi, HttpApiEndpoint } from "effect/unstable/httpapi";
-import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as Headers from "effect/http/Headers";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import type * as HttpClientResponse from "effect/http/HttpClientResponse";
+import type { HttpApi, HttpApiEndpoint } from "effect/http-api";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 
 // ---------------------------------------------------------------------------
 // BEH-EA-169/173: the generated client and URL builder
@@ -358,9 +358,19 @@ export const SessionStoreLive: Layer.Layer<SessionStore> = Layer.effect(
 
 type AnyClientMethod = (...args: ReadonlyArray<never>) => Effect.Effect<unknown, unknown, never>;
 
+/**
+ * What a generated method returns when called without a `responseMode`. Since effect 4.1 every
+ * `HttpApiClient` method is generic over its response mode, so a plain `ReturnType` would see the
+ * union of all three modes; the facades only ever call the default `"decoded-only"` form.
+ */
+type DecodedReturn<A extends AnyClientMethod> =
+  A extends HttpApiClient.Client.Method<infer Endpoint, infer E, infer R>
+    ? HttpApiClient.Client.MethodReturn<Endpoint, E, R, "decoded-only", never>
+    : ReturnType<A>;
+
 /** Mirrors a generated client's shape, replacing every `R = never` method with a `Promise`-returning one. */
 export type PromiseFacade<A> = A extends AnyClientMethod
-  ? (...args: Parameters<A>) => Promise<Effect.Success<ReturnType<A>>>
+  ? (...args: Parameters<A>) => Promise<Effect.Success<DecodedReturn<A>>>
   : A extends Readonly<Record<string, unknown>>
     ? { readonly [K in keyof A]: PromiseFacade<A[K]> }
     : A;
@@ -372,7 +382,7 @@ export type PromiseFacade<A> = A extends AnyClientMethod
 export type ResultFacade<A> = A extends AnyClientMethod
   ? (
       ...args: Parameters<A>
-    ) => Promise<Result.Result<Effect.Success<ReturnType<A>>, Effect.Error<ReturnType<A>>>>
+    ) => Promise<Result.Result<Effect.Success<DecodedReturn<A>>, Effect.Error<DecodedReturn<A>>>>
   : A extends Readonly<Record<string, unknown>>
     ? { readonly [K in keyof A]: ResultFacade<A[K]> }
     : A;

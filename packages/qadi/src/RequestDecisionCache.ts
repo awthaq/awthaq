@@ -11,7 +11,7 @@
 // `DecisionCacheInvalidation.ts`.
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import { decisionCacheLayer } from "@qadi/core";
 
 /**

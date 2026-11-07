@@ -16,7 +16,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClient from "effect/http/HttpClient";
 import * as CallbackFailure from "./CallbackFailure.ts";
 import * as Jwt from "./Jwt.ts";
 import type * as OAuthApi from "./OAuthApi.ts";

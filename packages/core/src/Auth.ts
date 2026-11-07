@@ -10,13 +10,13 @@
 // migration ordering (BEH-EA-016) — all exercised by `test/AuthPlugin.test.ts`.
 
 import { AuthCore } from "@awthaq/api";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
 import type * as Types from "effect/Types";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import type * as SqlClient from "effect/sql/SqlClient";
 import { TenantScope, type TenantScoped } from "@awthaq/sql";
 import * as AuthPlugin from "./AuthPlugin.ts";
 import * as HookPoint from "./HookPoint.ts";
@@ -251,12 +251,12 @@ type OutOfOrderDep<
  * awthaq port's service key is `awthaq/ports/<Name>` (`PasswordHasher`, `Mailer`,
  * `RateLimiter`, `WebAuthn`, `KeyProvider`, `Encryption`, `SqlTransaction`,
  * `ClientAddress`, ...), so the key prefix names them all without a hand-kept
- * list that a new port could be missing from; `SqlClient` and `Crypto` are
+ * list that a new port could be missing from; `SqlClient` and the crypto services are
  * Effect's own, listed by type.
  */
 type ReservedPort =
   | { readonly key: `awthaq/ports/${string}` }
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | SqlClient.SqlClient;
 
 type PortName<Port> = Port extends { readonly key: infer Key extends string }

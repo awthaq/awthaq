@@ -6,8 +6,8 @@ import { Sessions } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as AliasLegacyCookieMiddleware from "../src/AliasLegacyCookieMiddleware.ts";
 
 const requestWithCookie = (cookie: string | undefined): HttpServerRequest.HttpServerRequest =>

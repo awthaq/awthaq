@@ -13,7 +13,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Runtime from "effect/Runtime";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Database from "../src/Database.ts";
 import * as Migration from "../src/Migration.ts";
 import * as Output from "../src/Output.ts";

@@ -30,8 +30,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpApi from "effect/http-api/HttpApi";
+import type * as SqlClient from "effect/sql/SqlClient";
 import { pathToFileURL } from "node:url";
 import { ConfigUnavailable, LinkProblem } from "./CliErrors.ts";
 

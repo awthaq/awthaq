@@ -18,12 +18,13 @@
 // so a captured request cannot be replayed later) and compares the signatures in constant time.
 
 import { Hmac } from "@awthaq/ports";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Mac from "effect/crypto/Mac";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64 from "effect/encoding/Base64";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 
@@ -33,16 +34,16 @@ export const DEFAULT_TOLERANCE = Duration.minutes(5);
 
 /** A fresh endpoint secret. Shown to the administrator once; only the sealed form is stored. */
 export const generateSecret = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  const bytes = yield* crypto.randomBytes(SECRET_BYTES).pipe(Effect.orDie);
-  return Redacted.make(`${SECRET_PREFIX}${Encoding.encodeBase64(bytes)}`);
+  const random = yield* SecureRandom.SecureRandom;
+  const bytes = yield* random.randomBytes(SECRET_BYTES);
+  return Redacted.make(`${SECRET_PREFIX}${Base64.encode(bytes)}`);
 });
 
 /** The HMAC key: the base64-decoded bytes after the `whsec_` prefix (the whole string, UTF-8, when it has none). */
 const keyBytes = (secret: Redacted.Redacted<string>): Uint8Array => {
   const raw = Redacted.value(secret);
   if (!raw.startsWith(SECRET_PREFIX)) return new TextEncoder().encode(raw);
-  return Result.getOrElse(Encoding.decodeBase64(raw.slice(SECRET_PREFIX.length)), () =>
+  return Result.getOrElse(Base64.decode(raw.slice(SECRET_PREFIX.length)), () =>
     new TextEncoder().encode(raw),
   );
 };
@@ -62,11 +63,11 @@ const signedContent = (message: SignedMessage): Uint8Array =>
 /** `v1,<base64>` for one secret. */
 export const sign = (secret: Redacted.Redacted<string>, message: SignedMessage) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    const mac = yield* Hmac.hmacSha256(crypto, keyBytes(secret), signedContent(message)).pipe(
+    const mac = yield* Mac.Mac;
+    const tag = yield* Hmac.hmacSha256(mac, keyBytes(secret), signedContent(message)).pipe(
       Effect.orDie,
     );
-    return `v1,${Encoding.encodeBase64(mac)}`;
+    return `v1,${Base64.encode(tag)}`;
   });
 
 /** The three request headers, signed under every secret in `secrets` (the current one, and the previous one inside its grace window). */

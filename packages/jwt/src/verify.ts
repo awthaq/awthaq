@@ -7,7 +7,7 @@
 // `@awthaq/server`, `./Jwt.ts`, or `./KeyRing.ts`: the only local
 // import is `./JwtCodec.ts` (already, independently, free of every one of
 // those — see that file's own header comment), plus `effect` itself,
-// `effect/unstable/http`'s `HttpClient` for JWKS retrieval, and
+// `effect/http`'s `HttpClient` for JWKS retrieval, and
 // `@awthaq/ports`' `RefreshingCache` (ECF-002; that package is
 // `sideEffects: false`, so a bundler drops everything but the cache). Confirmed by
 // hand: `grep -E "@awthaq/(core|server)|\./Jwt\.ts|\./KeyRing\.ts"
@@ -41,8 +41,8 @@ import { RefreshingCache } from "@awthaq/ports";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import * as JwtCodec from "./JwtCodec.ts";
 
 /**

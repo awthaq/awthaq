@@ -2,8 +2,8 @@
 //
 // spec/behaviors/17-passkey.md, BEH-EA-130/134. This plugin's own
 // persistence for the `passkey_credential` table (ticket 06) — a real
-// `Model.Class` built directly against `effect/unstable/schema`'s `Model`
-// and `effect/unstable/sql`'s `SqlSchema`, the same primitives
+// `Model.Class` built directly against `effect/schema`'s `Model`
+// and `effect/sql`'s `SqlSchema`, the same primitives
 // `@awthaq/sql`'s own `Models.ts`/`Repositories.ts` are built from, not
 // imported from that package: this table belongs to the plugin, not the
 // shared persistence stratum.
@@ -29,8 +29,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import { Users } from "@awthaq/core";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 

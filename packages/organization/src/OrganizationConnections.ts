@@ -41,7 +41,7 @@ import { OutboundUrl, SqlTransaction } from "@awthaq/ports";
 import { SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -413,7 +413,7 @@ const toView = (record: ConnectionRecords.ConnectionRecord): ConnectionView => (
 
 /**
  * Requires `ConnectionRecords`, `OrganizationConnections` (invalidated on every write), the exposed
- * `OrganizationDirectory` (a connection belongs to an active organization), `AuthEvents` and `Crypto`.
+ * `OrganizationDirectory` (a connection belongs to an active organization), `AuthEvents` and `SecureRandom`.
  */
 export const layerStore = Layer.effect(
   OrganizationConnectionStore,
@@ -424,7 +424,7 @@ export const layerStore = Layer.effect(
     const map = yield* OrganizationConnections;
     const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const events = yield* AuthEvents.AuthEvents;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     /** A domain another organization owns (over any protocol) is a taken domain, worded as this protocol's own refusal. */
     const claimed = <A, E, R>(
@@ -456,9 +456,9 @@ export const layerStore = Layer.effect(
     const create: OrganizationConnectionStoreShape["create"] = Effect.fnUntraced(
       function* (actor, input) {
         yield* requireActiveOrganization(input.organizationId);
-        const id = yield* crypto.randomUUIDv7.pipe(
-          Effect.catch(StoreFailure.storeUnavailable("OrganizationConnectionStore.create")),
-        );
+        const id = yield* random
+          .uuidV7()
+          .pipe(Effect.catch(StoreFailure.storeUnavailable("OrganizationConnectionStore.create")));
         const scopes = input.scopes ?? [];
         yield* validate({
           kind: input.kind,

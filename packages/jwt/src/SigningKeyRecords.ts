@@ -2,7 +2,7 @@
 //
 // .scratch/jwt/spec.md's "Key management" decision. This plugin's own
 // persistence for the `jwt_signing_key` table — built directly against
-// `effect/unstable/sql`'s `SqlSchema`, the same way
+// `effect/sql`'s `SqlSchema`, the same way
 // `@awthaq/admin`'s own `ImpersonationRecords.ts` builds
 // `admin_impersonation`: this table belongs to the plugin, not the shared
 // persistence stratum.
@@ -50,8 +50,8 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import { AlgorithmLiterals } from "./JwtCodec.ts";
 import type { Algorithm } from "./JwtCodec.ts";
 

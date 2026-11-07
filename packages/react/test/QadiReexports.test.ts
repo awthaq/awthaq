@@ -4,14 +4,11 @@
 // re-exported (same binding) or listed below as deliberately withheld.
 import { assert, describe, it } from "@effect/vitest";
 
-/** qadi's devtools instrumentation registry — import it from `@qadi/react` itself. */
-const withheld = new Set([
-  "gateInstances",
-  "subscribeGates",
-  "registerGate",
-  "updateGateState",
-  "clearGatesUnsafe",
-]);
+/**
+ * qadi's devtools gate-instrumentation registry (owned by the atom set since qadi 0.11) —
+ * import it from `@qadi/react` itself.
+ */
+const withheld = new Set(["makeGateRegistry", "useGateInstances"]);
 
 describe("@awthaq/react's @qadi/react re-exports (BO-007)", () => {
   // Dynamic imports: the lint config forbids static barrel imports in tests,
