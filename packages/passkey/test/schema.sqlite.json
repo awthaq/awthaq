@@ -6,7 +6,8 @@
     "create_passkey_challenge_expires_at_index",
     "add_passkey_credential_counter_anomaly_at",
     "add_passkey_credential_counter_anomaly_count",
-    "create_passkey_user_handle"
+    "create_passkey_user_handle",
+    "widen_passkey_credential_counter"
   ],
   "schema": {
     "tables": {

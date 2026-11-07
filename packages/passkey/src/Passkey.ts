@@ -615,6 +615,20 @@ const passkeyMigrations: Migrations.Migrations = [
       });
     }),
   },
+  {
+    // Plan 22, D2: a WebAuthn signature counter is a uint32 (WebAuthn L2 §6.1, `signCount`), but
+    // Postgres `INTEGER` is int4 and refused any counter >= 2^31. SQLite's `INTEGER` is already
+    // 64-bit, so this is Postgres-only. Appended, never edited into the original CREATE TABLE.
+    name: "widen_passkey_credential_counter",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`ALTER TABLE passkey_credential ALTER COLUMN counter TYPE BIGINT`,
+        sqlite: () => Effect.void,
+        orElse: () => Defects.unsupportedDialect("migrations"),
+      });
+    }),
+  },
 ];
 
 /**

@@ -270,7 +270,7 @@ const makePasskeyCredentialRow = (wire: SqlModels.DialectWire) =>
     userId: Schema.String,
     webauthnUserId: Schema.String,
     publicKey: Schema.String,
-    counter: Schema.Int,
+    counter: wire.int64,
     deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
     backedUp: wire.boolean,
     transports: Schema.fromJsonString(Schema.Array(Schema.String)),
@@ -331,7 +331,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
         userId: Schema.String,
         webauthnUserId: Schema.String,
         publicKey: Schema.String,
-        counter: Schema.Int,
+        counter: wire.int64,
         deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
         backedUp: wire.boolean,
         transports: Schema.fromJsonString(Schema.Array(Schema.String)),
@@ -366,7 +366,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
     const recordUsageQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         id: Schema.String,
-        counter: Schema.Int,
+        counter: wire.int64,
         backedUp: wire.boolean,
         lastUsedAt: wire.dateTime,
       }),
