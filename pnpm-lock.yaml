@@ -375,8 +375,8 @@ importers:
         specifier: 'catalog:'
         version: 5.0.2(@types/node@22.20.4)(@vitest/coverage-v8@5.0.2)(happy-dom@20.14.6)(vite@8.3.0(@types/node@22.20.4)(jiti@2.7.0)(yaml@2.9.1))
       xml-crypto:
-        specifier: 6.3.2
-        version: 6.3.2
+        specifier: 6.4.0
+        version: 6.4.0
 
   packages/admin:
     dependencies:
@@ -1166,8 +1166,8 @@ importers:
         specifier: 0.8.15
         version: 0.8.15
       xml-crypto:
-        specifier: 6.3.2
-        version: 6.3.2
+        specifier: 6.4.0
+        version: 6.4.0
     devDependencies:
       '@awthaq/server':
         specifier: workspace:*
@@ -4181,8 +4181,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  xml-crypto@6.3.2:
-    resolution: {integrity: sha512-XoUdpErePlpyFdNYVzG2Sfw5ghvqUCQMT3dQ0tAxs0JKzk9gLzwALFkvHZ/D0OyfD/OyxoXsCcYZzbDzgY18RA==}
+  xml-crypto@6.4.0:
+    resolution: {integrity: sha512-d21ModhBO/+QWWAmOjyDeQJuHNmsR/HtOxyBchiTbKfGNKuHYwQNd+SlLhwyyrwoAGLp4Qc6BQ7nAtnM47dHSQ==}
     engines: {node: '>=16'}
 
   xpath@0.0.33:
@@ -6605,7 +6605,7 @@ snapshots:
 
   ws@8.22.1: {}
 
-  xml-crypto@6.3.2:
+  xml-crypto@6.4.0:
     dependencies:
       '@xmldom/is-dom-node': 1.0.1
       '@xmldom/xmldom': 0.8.15

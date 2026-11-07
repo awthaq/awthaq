@@ -49,7 +49,7 @@
     "react-dom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "xml-crypto": "6.3.2"
+    "xml-crypto": "6.4.0"
   },
   "engines": {
     "node": ">=22.12.0"
