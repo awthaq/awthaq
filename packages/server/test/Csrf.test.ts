@@ -16,19 +16,19 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Schema from "effect/Schema";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
-import * as Etag from "effect/unstable/http/Etag";
-import * as Cookies from "effect/unstable/http/Cookies";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import type * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpApiTest from "effect/http-api/HttpApiTest";
+import * as Etag from "effect/http/Etag";
+import * as Cookies from "effect/http/Cookies";
+import * as HttpEffect from "effect/http/HttpEffect";
+import * as HttpPlatform from "effect/http/HttpPlatform";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import type * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Csrf from "../src/Csrf.ts";
 import * as Wiring from "./support/Wiring.ts";
 
@@ -40,7 +40,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 );
 
 // A reference HMAC computed independently of `Csrf.ts`'s own implementation
-// (Node's `node:crypto`, not `effect/Crypto`) so a passing "valid double-submit"
+// (Node's `node:crypto`, not effect's `Mac`) so a passing "valid double-submit"
 // test actually exercises RFC 2104 compatibility, not just self-consistency.
 const validCookieValue = (iat = 0): string => Wiring.mintCsrfToken(iat);
 

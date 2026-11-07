@@ -17,7 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";

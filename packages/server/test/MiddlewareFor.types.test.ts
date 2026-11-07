@@ -5,10 +5,10 @@ import { Api } from "@awthaq/api";
 import { it } from "@effect/vitest";
 import type * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import * as AuthHttp from "../src/AuthHttp.ts";
 
 type Equals<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;

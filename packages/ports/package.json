@@ -31,14 +31,17 @@
   "dependencies": {
     "@awthaq/api": "workspace:*",
     "@simplewebauthn/server": "^14.0.3",
-    "effect": "catalog:",
     "hash-wasm": "catalog:"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:peer"
   },
   "engines": {
     "node": ">=22.12.0"

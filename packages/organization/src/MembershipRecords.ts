@@ -9,7 +9,7 @@ import { Defects, Users } from "@awthaq/core";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,8 +19,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 interface MembershipFields {
   readonly id: string;
@@ -138,10 +138,6 @@ const applyPage = (
   return limit === undefined ? sliced : sliced.slice(0, limit);
 };
 
-/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
-const mintId = <E>(operation: string, minted: Effect.Effect<string, E>) =>
-  Effect.catch(minted, StoreFailure.storeUnavailable(`MembershipRecords.${operation}`));
-
 // ---- layerMemory ------------------------------------------------------------
 
 type State = HashMap.HashMap<string, MembershipRecord>;
@@ -152,10 +148,10 @@ export const layerMemory = Layer.effect(
   MembershipRecords,
   Effect.gen(function* () {
     const state = yield* Ref.make<State>(HashMap.empty());
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const record = brandMembership({
         id,
@@ -309,7 +305,7 @@ export const layerSql = Layer.effect(
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const MembershipRow = makeMembershipRow(wire);
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -398,7 +394,7 @@ export const layerSql = Layer.effect(
     });
 
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const row = yield* insert({
         id,

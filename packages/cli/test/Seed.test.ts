@@ -11,7 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Runtime from "effect/Runtime";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Output from "../src/Output.ts";
 import * as Seed from "../src/Seed.ts";
 import { configOf, passwordAndRoles } from "./support/TestApp.ts";

@@ -3,7 +3,7 @@
 // BAM-003 (.issues/high): better-auth's session cookie has a different
 // name than `__Host-session` (`Sessions.SESSION_COOKIE_NAME`), and
 // `@awthaq/api`'s `Api.SessionCookie` extraction point (built on
-// `effect/unstable/httpapi`'s own `HttpApiSecurity.apiKey`) only knows the
+// `effect/http-api`'s own `HttpApiSecurity.apiKey`) only knows the
 // latter. Rather than teach the typed contract or `@awthaq/server`'s
 // `Authentication.ts` about a second cookie name — a concern that has
 // nothing to do with either's own job — this is a thin, generic
@@ -23,9 +23,9 @@
 
 import { SessionCookie } from "@awthaq/core";
 import * as Effect from "effect/Effect";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as Headers from "effect/http/Headers";
+import * as HttpMiddleware from "effect/http/HttpMiddleware";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 export const make = (options: {
   readonly legacyCookieName: string;

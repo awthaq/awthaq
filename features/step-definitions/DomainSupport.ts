@@ -4,7 +4,7 @@ import { Users } from "@awthaq/core";
 import type { Mailer } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import { direct, type HeldToken, type Person, World } from "./DomainWorld.ts";
 import { mailedToken } from "./MailedToken.ts";

@@ -14,12 +14,12 @@ import * as Context from "effect/Context";
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { cheapArgon2id } from "./shared/Harness.ts";
 import { Password } from "@awthaq/password";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as Schema from "effect/Schema";
 import {
   DependentFixture,
@@ -219,7 +219,7 @@ export const launchWithoutPorts = (): void => {
 // type-gate: launch-names-mailer
 const withoutMailer = () => Auth.make([PortUserFixture]).layer.pipe(Layer.provide(cheapArgon2id));
 export const stillRequiresOnlyMailer: [
-  Exclude<Layer.Services<ReturnType<typeof withoutMailer>>, Crypto.Crypto>,
+  Exclude<Layer.Services<ReturnType<typeof withoutMailer>>, SecureRandom.SecureRandom>,
 ] extends [Mailer.Mailer]
   ? [Mailer.Mailer] extends [Layer.Services<ReturnType<typeof withoutMailer>>]
     ? true
@@ -269,8 +269,8 @@ export const variantLayerDoesNotRequireMailer: [Mailer.Mailer] extends [
 const twoCryptoUsers = () => Auth.make([CryptoUserOne, CryptoUserTwo]);
 export const cryptoIsTheOnlyRequirement: [
   Layer.Services<ReturnType<typeof twoCryptoUsers>["layer"]>,
-] extends [Crypto.Crypto]
-  ? [Crypto.Crypto] extends [Layer.Services<ReturnType<typeof twoCryptoUsers>["layer"]>]
+] extends [SecureRandom.SecureRandom]
+  ? [SecureRandom.SecureRandom] extends [Layer.Services<ReturnType<typeof twoCryptoUsers>["layer"]>]
     ? true
     : false
   : false = true;

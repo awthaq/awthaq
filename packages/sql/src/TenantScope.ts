@@ -35,7 +35,7 @@
 
 import { SqlTransaction, Tenant } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TenantScoped from "./TenantScoped.ts";
 
 /** The setting the policies read; `withTenant` writes it. */

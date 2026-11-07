@@ -51,7 +51,7 @@ export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";
 // MA-003: re-exported, not wrapped — see this file's own header comment
 // for why a plugin author should import the httpapi contract classes from
-// here rather than straight from `effect/unstable/httpapi/*`.
+// here rather than straight from `effect/http-api/*`.
 export * from "./HttpApiTypes.ts";
 export * as MailDispatch from "./MailDispatch.ts";
 export * as Migrations from "./Migrations.ts";

@@ -20,7 +20,7 @@
 import { SESSION_MIRROR_COOKIE_NAME, makeVerifier } from "@awthaq/jwt/verify";
 import type { Verifier, VerifierOptions } from "@awthaq/jwt/verify";
 import * as Effect from "effect/Effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { findCookieValue } from "@awthaq/web/cookies";
 import type { HeadersLike } from "@awthaq/web/cookies";
 

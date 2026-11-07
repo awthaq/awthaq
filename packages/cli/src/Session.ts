@@ -34,7 +34,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApi from "effect/http-api/HttpApi";
 import { AuthenticationRequired, ServerUnavailable, UsageError } from "./CliErrors.ts";
 import type { Credential } from "./CredentialStore.ts";
 import { CredentialStore } from "./CredentialStore.ts";

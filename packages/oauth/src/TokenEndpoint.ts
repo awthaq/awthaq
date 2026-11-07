@@ -8,7 +8,7 @@
 
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as HttpBody from "effect/unstable/http/HttpBody";
+import * as HttpBody from "effect/http/HttpBody";
 import type * as OAuthProvider from "./OAuthProvider.ts";
 
 /**

@@ -6,7 +6,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApi from "effect/http-api/HttpApi";
 import * as Auth from "../src/Auth.ts";
 import * as AuthPlugin from "../src/AuthPlugin.ts";
 

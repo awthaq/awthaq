@@ -25,13 +25,13 @@
 
 import * as Defects from "./Defects.ts";
 import * as Config from "effect/Config";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Pool from "effect/Pool";
 import * as Schedule from "effect/Schedule";
-import * as Worker from "effect/unstable/workers/Worker";
+import * as Worker from "effect/workers/Worker";
 import {
   type Argon2idJob,
   KdfFailed,
@@ -153,7 +153,7 @@ export const makeBackend = Effect.gen(function* () {
   return backend;
 });
 
-type PoolRequirements = Crypto.Crypto | Worker.WorkerPlatform | Worker.Spawner;
+type PoolRequirements = SecureRandom.SecureRandom | Worker.WorkerPlatform | Worker.Spawner;
 
 /** argon2id with the KDF in a worker pool; see this module's header. */
 export const layerArgon2id: Layer.Layer<PasswordHasher, Config.ConfigError, PoolRequirements> =

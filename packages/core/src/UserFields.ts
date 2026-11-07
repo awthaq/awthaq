@@ -31,7 +31,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as Struct from "effect/Struct";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import type { Migration } from "./Migrations.ts";
 
 /** What a declared field's column holds: the encoded side of its schema. */

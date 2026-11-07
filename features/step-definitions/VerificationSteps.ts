@@ -16,7 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
+import { SqlError, UnknownError } from "effect/sql/SqlError";
 import { direct, directExit, World, type HeldToken } from "./DomainWorld.ts";
 import {
   awaitMail,

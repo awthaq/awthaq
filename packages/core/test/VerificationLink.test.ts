@@ -1,7 +1,7 @@
 // MLO-009/ARF-007/ARF-009: the shared, purpose-checked mailed-token codec.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -68,10 +68,10 @@ describe("VerificationLink.issue", () => {
   it.effect("mints an opaque id: the token carries no user id, and the row keeps it", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const userId = Users.UserId("11111111-1111-7111-8111-111111111111");
       const issued = yield* VerificationLink.issue(
-        { verification, crypto },
+        { verification, random },
         { purpose: "reset-password", ttl: Duration.hours(1), userId },
       );
       assert.notInclude(Redacted.value(issued.token), userId);
@@ -86,10 +86,10 @@ describe("VerificationLink.issue", () => {
   it.effect("two tokens for the same user get distinct public ids", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const input = { purpose: "verify-email", ttl: Duration.hours(1) };
-      const a = yield* VerificationLink.issue({ verification, crypto }, input);
-      const b = yield* VerificationLink.issue({ verification, crypto }, input);
+      const a = yield* VerificationLink.issue({ verification, random }, input);
+      const b = yield* VerificationLink.issue({ verification, random }, input);
       assert.notStrictEqual(a.publicId, b.publicId);
     }).pipe(Effect.provide(TestLayer)),
   );

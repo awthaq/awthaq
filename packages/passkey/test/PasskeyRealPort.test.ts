@@ -10,7 +10,7 @@ import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Option from "effect/Option";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
@@ -26,7 +26,7 @@ const ORIGIN = "https://example.com";
 const GOOGLE_PASSWORD_MANAGER = "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4";
 
 const authenticator = makeAuthenticator(new Uint8Array([7, 7, 7, 7, 7, 7, 7, 7]));
-const credentialId = Encoding.encodeBase64Url(authenticator.credentialId);
+const credentialId = Base64Url.encode(authenticator.credentialId);
 
 const config = {
   attestation: "direct",

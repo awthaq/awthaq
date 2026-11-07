@@ -1,13 +1,13 @@
 // THS-001 step 1 (BEH-EA-260): the pure RFC 4226 / RFC 6238 module, against the published vectors.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Totp from "../src/Totp.ts";
 
 const ascii = (text: string) => new TextEncoder().encode(text);
-const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
+const withCrypto = <A, E>(effect: Effect.Effect<A, E, Mac.Mac>) =>
   Effect.provide(effect, NodeCrypto.layer);
 
 // RFC 4226 Appendix D: secret "12345678901234567890", 6 digits.
@@ -28,10 +28,10 @@ describe("Totp.hotp (RFC 4226 Appendix D)", () => {
   it.effect("matches every published HOTP value for counters 0..9", () =>
     withCrypto(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
+        const mac = yield* Mac.Mac;
         for (const [counter, expected] of rfc4226.entries()) {
           assert.strictEqual(
-            yield* Totp.hotp(crypto, ascii("12345678901234567890"), BigInt(counter), 6),
+            yield* Totp.hotp(mac, ascii("12345678901234567890"), BigInt(counter), 6),
             expected,
           );
         }
@@ -52,10 +52,10 @@ describe("Totp.totp (RFC 6238 Appendix B, SHA-1)", () => {
   it.effect("matches every published 8-digit TOTP value", () =>
     withCrypto(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
+        const mac = yield* Mac.Mac;
         for (const [time, expected] of vectors) {
           assert.strictEqual(
-            yield* Totp.totp(crypto, ascii("12345678901234567890"), time, {
+            yield* Totp.totp(mac, ascii("12345678901234567890"), time, {
               period: 30,
               digits: 8,
             }),
@@ -74,29 +74,25 @@ describe("Totp.verifyTotp", () => {
   it.effect("accepts the current step and the adjacent ones, rejects two steps away", () =>
     withCrypto(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
+        const mac = yield* Mac.Mac;
         const now = 1_700_000_000;
         const at = (offset: number) =>
-          Totp.totp(crypto, key, now + offset * 30, { period: 30, digits: 6 });
+          Totp.totp(mac, key, now + offset * 30, { period: 30, digits: 6 });
         const current = Totp.stepOf(now, 30);
         assert.deepStrictEqual(
-          yield* Totp.verifyTotp(crypto, key, yield* at(0), now, options),
+          yield* Totp.verifyTotp(mac, key, yield* at(0), now, options),
           Option.some(current),
         );
         assert.deepStrictEqual(
-          yield* Totp.verifyTotp(crypto, key, yield* at(-1), now, options),
+          yield* Totp.verifyTotp(mac, key, yield* at(-1), now, options),
           Option.some(current - BigInt(1)),
         );
         assert.deepStrictEqual(
-          yield* Totp.verifyTotp(crypto, key, yield* at(1), now, options),
+          yield* Totp.verifyTotp(mac, key, yield* at(1), now, options),
           Option.some(current + BigInt(1)),
         );
-        assert.isTrue(
-          Option.isNone(yield* Totp.verifyTotp(crypto, key, yield* at(-2), now, options)),
-        );
-        assert.isTrue(
-          Option.isNone(yield* Totp.verifyTotp(crypto, key, yield* at(2), now, options)),
-        );
+        assert.isTrue(Option.isNone(yield* Totp.verifyTotp(mac, key, yield* at(-2), now, options)));
+        assert.isTrue(Option.isNone(yield* Totp.verifyTotp(mac, key, yield* at(2), now, options)));
       }),
     ),
   );
@@ -104,14 +100,14 @@ describe("Totp.verifyTotp", () => {
   it.effect("THS-005: a step at or before lastUsedStep is a replay and is refused", () =>
     withCrypto(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
+        const mac = yield* Mac.Mac;
         const now = 1_700_000_000;
-        const code = yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 });
+        const code = yield* Totp.totp(mac, key, now, { period: 30, digits: 6 });
         const step = Totp.stepOf(now, 30);
         // Already consumed this very step: the same code must not verify twice.
         assert.isTrue(
           Option.isNone(
-            yield* Totp.verifyTotp(crypto, key, code, now, {
+            yield* Totp.verifyTotp(mac, key, code, now, {
               ...options,
               lastUsedStep: Option.some(step),
             }),
@@ -119,7 +115,7 @@ describe("Totp.verifyTotp", () => {
         );
         // A later step than the last used one is still fine.
         assert.deepStrictEqual(
-          yield* Totp.verifyTotp(crypto, key, code, now, {
+          yield* Totp.verifyTotp(mac, key, code, now, {
             ...options,
             lastUsedStep: Option.some(step - BigInt(1)),
           }),
@@ -132,10 +128,10 @@ describe("Totp.verifyTotp", () => {
   it.effect("rejects a malformed code without throwing", () =>
     withCrypto(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
+        const mac = yield* Mac.Mac;
         for (const bad of ["", "12345", "1234567", "abcdef", "12 345"]) {
           assert.isTrue(
-            Option.isNone(yield* Totp.verifyTotp(crypto, key, bad, 1_700_000_000, options)),
+            Option.isNone(yield* Totp.verifyTotp(mac, key, bad, 1_700_000_000, options)),
           );
         }
       }),

@@ -1,19 +1,19 @@
 // THS-001 step 8, BCR-001 (BEH-EA-264): minting, displaying and normalising recovery codes.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as RecoveryCodes from "../src/RecoveryCodes.ts";
 
-const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
+const withCrypto = <A, E>(effect: Effect.Effect<A, E, SecureRandom.SecureRandom>) =>
   Effect.provide(effect, NodeCrypto.layer);
 
 describe("RecoveryCodes", () => {
   it.effect("mints `count` codes of `length` characters from the unambiguous alphabet", () =>
     withCrypto(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
-        const codes = yield* RecoveryCodes.generate(crypto, 10, 10);
+        const random = yield* SecureRandom.SecureRandom;
+        const codes = yield* RecoveryCodes.generate(random, 10, 10);
         assert.strictEqual(codes.length, 10);
         for (const code of codes) {
           assert.match(code, /^[A-HJ-NP-Z2-9]{10}$/);
@@ -28,8 +28,8 @@ describe("RecoveryCodes", () => {
   it.effect("draws every symbol uniformly (32 divides 256, so no modulo bias)", () =>
     withCrypto(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
-        const codes = yield* RecoveryCodes.generate(crypto, 3000, 10);
+        const random = yield* SecureRandom.SecureRandom;
+        const codes = yield* RecoveryCodes.generate(random, 3000, 10);
         const counts = new Map<string, number>();
         for (const char of codes.join("")) counts.set(char, (counts.get(char) ?? 0) + 1);
         assert.strictEqual(counts.size, 32);

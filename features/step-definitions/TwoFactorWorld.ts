@@ -30,7 +30,9 @@ import { SecondFactor, Totp, TwoFactor, TwoFactorConfig, TwoFactorStore } from "
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -41,9 +43,9 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { mailedToken } from "./MailedToken.ts";
 import { awaitMail, makeNamedRegistry, STRONG_PASSWORD } from "./shared/Harness.ts";
@@ -168,7 +170,9 @@ export type TwoFactorServices =
   | Erasure.AccountErasure
   | DataExport.AccountExport
   | Hooks.BeforeSessionIssue
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
+  | Digest.Digest
+  | Mac.Mac
   | PasswordHasher.PasswordHasher;
 
 /** A person a scenario names ("alice"). */
@@ -372,11 +376,11 @@ export const beginEnrolment = Effect.fn("features.twoFactor.beginEnrolment")(fun
 /** The TOTP `secret` yields at the composition's current clock, `steps` time steps away. */
 export const totpFor = (secret: string, steps = 0) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const mac = yield* Mac.Mac;
     const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
     const key = Totp.base32Decode(secret);
     if (Option.isNone(key)) return yield* Effect.die("not base32");
-    return yield* Totp.totp(crypto, key.value, now + steps * 30, { period: 30, digits: 6 });
+    return yield* Totp.totp(mac, key.value, now + steps * 30, { period: 30, digits: 6 });
   });
 
 /** The person's current authenticator code. */

@@ -11,7 +11,7 @@ import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import {
   ALLOWED_ORIGIN,
   AppApi,

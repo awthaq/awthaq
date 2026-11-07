@@ -18,7 +18,7 @@ import { Passkey, PasskeyCredentials } from "@awthaq/passkey";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -34,7 +34,7 @@ export const buildClientDataJSON = (input: {
   readonly challenge: string;
   readonly origin: string;
 }): string =>
-  Encoding.encodeBase64Url(
+  Base64Url.encode(
     JSON.stringify({ type: input.type, challenge: input.challenge, origin: input.origin }),
   );
 

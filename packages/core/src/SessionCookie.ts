@@ -16,8 +16,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpEffect from "effect/http/HttpEffect";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { Api } from "@awthaq/api";
 
 /** BEH-EA-055 modes. The default is `Host`; the others are explicit, typed opt-ins. */

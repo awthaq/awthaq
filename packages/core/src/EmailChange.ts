@@ -13,7 +13,7 @@
 // half lives with the confirming endpoint.
 
 import { Mailer } from "@awthaq/ports";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -52,7 +52,7 @@ export const newEmailOf = (payload: unknown): Option.Option<string> =>
 export const request = (
   deps: {
     readonly verification: VerificationShape;
-    readonly crypto: Crypto.Crypto;
+    readonly random: SecureRandom.SecureRandom["Service"];
     readonly mailer: Mailer.MailerShape;
   },
   input: {

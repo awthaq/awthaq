@@ -21,12 +21,12 @@
 // compile error there.
 import { AuthClient } from "@awthaq/client";
 import * as Layer from "effect/Layer";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import type * as HttpClient from "effect/unstable/http/HttpClient";
-import type * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as AtomHttpApi from "effect/unstable/reactivity/AtomHttpApi";
-import type * as Atom from "effect/unstable/reactivity/Atom";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import type * as HttpClient from "effect/http/HttpClient";
+import type * as HttpApi from "effect/http-api/HttpApi";
+import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as AtomHttpApi from "effect/reactivity/AtomHttpApi";
+import type * as Atom from "effect/reactivity/Atom";
 
 /**
  * The reactivity key every session-changing mutation (sign-in, sign-out,

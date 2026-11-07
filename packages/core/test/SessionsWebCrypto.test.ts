@@ -1,4 +1,4 @@
-// ERAS-002: the core services run on the edge-runtime `Crypto` provider, not only Node's.
+// ERAS-002: the core services run on the edge-runtime crypto provider, not only Node's.
 import { WebCrypto } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

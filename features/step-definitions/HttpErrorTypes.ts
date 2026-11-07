@@ -5,12 +5,12 @@
 // services the host's server provides (`HttpServer.layerServices` / `toWebHandler`). Nothing else:
 // no wiring step beyond the layers themselves.
 import { AuthHttp } from "@awthaq/server";
-import type * as Etag from "effect/unstable/http/Etag";
+import type * as Etag from "effect/http/Etag";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Layer from "effect/Layer";
 import type * as Path from "effect/Path";
-import type * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import type * as HttpRouter from "effect/unstable/http/HttpRouter";
+import type * as HttpPlatform from "effect/http/HttpPlatform";
+import type * as HttpRouter from "effect/http/HttpRouter";
 import { builtPassword } from "./HttpErrorWorld.ts";
 
 type Equal<A, B> =

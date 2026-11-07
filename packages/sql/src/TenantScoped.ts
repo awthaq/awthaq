@@ -15,8 +15,8 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as Statement from "effect/unstable/sql/Statement";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as Statement from "effect/sql/Statement";
 
 /** The transaction-local setting the RLS policies read (`TenantScope` re-exports it). */
 export const TENANT_SETTING = "awthaq.tenant_id";

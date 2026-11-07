@@ -27,7 +27,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClient from "effect/http/HttpClient";
 import * as OAuthApi from "./OAuthApi.ts";
 import * as OAuthConfig from "./OAuthConfig.ts";
 import * as OAuthConnections from "./OAuthConnections.ts";

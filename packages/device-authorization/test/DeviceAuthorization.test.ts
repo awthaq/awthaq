@@ -14,7 +14,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -121,9 +121,9 @@ const deny = (issued: DeviceAuthorization.CodeIssued, caller: DeviceAuthorizatio
 const grantOf = (issued: DeviceAuthorization.CodeIssued) =>
   Effect.gen(function* () {
     const records = yield* DeviceGrantRecords.DeviceGrantRecords;
-    const crypto = yield* Crypto.Crypto;
+    const hasher = yield* Digest.Digest;
     return yield* records.findByDeviceHash(
-      yield* UserCode.hashDeviceCode(crypto, Redacted.value(issued.deviceCode)),
+      yield* UserCode.hashDeviceCode(hasher, Redacted.value(issued.deviceCode)),
     );
   });
 
@@ -169,10 +169,10 @@ for (const options of suites) {
       it.effect("stores only SHA-256 hashes of the two codes, never a code", () =>
         Effect.gen(function* () {
           const records = yield* DeviceGrantRecords.DeviceGrantRecords;
-          const crypto = yield* Crypto.Crypto;
+          const hasher = yield* Digest.Digest;
           const issued = yield* requestCode();
           const found = yield* records.findByUserHash(
-            yield* UserCode.hash(crypto, issued.userCode),
+            yield* UserCode.hash(hasher, issued.userCode),
           );
           if (Option.isNone(found))
             return assert.fail("the grant was not stored under the user-code hash");

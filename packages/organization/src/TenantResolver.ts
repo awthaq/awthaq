@@ -20,7 +20,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Option from "effect/Option";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 export interface TenantResolverShape {
   /** The organization id this request acts for, or `None` for an untenanted (platform / single-tenant) request. */

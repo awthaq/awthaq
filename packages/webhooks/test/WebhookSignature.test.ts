@@ -1,6 +1,7 @@
 // BEH-EA-275 (spec/behaviors/34-webhooks.md): the Standard-Webhooks-style signature — an independent
 // oracle (`node:crypto`), the replay window, rotation overlap and tamper refusals.
 import { createHmac } from "node:crypto";
+import type { WebCrypto } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -15,7 +16,7 @@ const message = { id: "evt_1", timestamp: 1_700_000_000, body: '{"a":1}' };
 const oracle = (key: Buffer, m: typeof message): string =>
   `v1,${createHmac("sha256", key).update(`${m.id}.${m.timestamp}.${m.body}`).digest("base64")}`;
 
-const run = <A, E>(effect: Effect.Effect<A, E, import("effect/Crypto").Crypto>) =>
+const run = <A, E>(effect: Effect.Effect<A, E, WebCrypto.Services>) =>
   effect.pipe(Effect.provide(NodeCrypto.layer));
 
 describe("WebhookSignature.sign", () => {

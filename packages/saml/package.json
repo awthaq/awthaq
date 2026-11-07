@@ -30,17 +30,21 @@
     "@awthaq/organization": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/sql": "workspace:*",
-    "@qadi/core": "^0.8.0",
     "@xmldom/xmldom": "0.8.15",
-    "effect": "catalog:",
     "xml-crypto": "6.3.2"
   },
   "devDependencies": {
     "@awthaq/server": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
+    "@qadi/core": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@qadi/core": "catalog:peer",
+    "effect": "catalog:peer"
   },
   "engines": {
     "node": ">=22.12.0"

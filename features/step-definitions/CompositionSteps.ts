@@ -10,7 +10,7 @@ import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpRouter from "effect/http/HttpRouter";
 import { assertTypeGate, cell, isObject, put, take, World } from "./FoundationsWorld.ts";
 import { migrateSqlite, MigPassword, MigTwoFactor } from "./MigrationFixtures.ts";
 import {

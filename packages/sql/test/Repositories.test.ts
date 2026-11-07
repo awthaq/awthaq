@@ -15,8 +15,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import * as Model from "effect/unstable/schema/Model";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Model from "effect/schema/Model";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Models from "../src/Models.ts";
 import * as Repositories from "../src/Repositories.ts";
 import { contractCases, repositoriesLayer } from "./contract.ts";
@@ -75,45 +75,58 @@ describe("Repositories (SQLite specifics)", () => {
     return { spans, tracer };
   };
 
+  /**
+   * A statement's client span. effect 4.1 names it after the database (OpenTelemetry database
+   * span conventions: `db.namespace`, else `db.system.name`, else `sql.execute`), so it is
+   * recognised by the `db.query.text` attribute every statement span carries, not by name.
+   */
+  const isStatement = (span: Tracer.NativeSpan): boolean => span.attributes.has("db.query.text");
+
   const isChildOf = (child: Tracer.NativeSpan, parent: Tracer.NativeSpan): boolean =>
     Option.isSome(child.parent) && child.parent.value.spanId === parent.spanId;
 
-  it.effect("EOTS-008: hand-written repository methods emit named spans over sql.execute", () =>
-    Effect.gen(function* () {
-      const { spans, tracer } = collectSpans();
-      const users = yield* Repositories.UsersRepository;
-      const sessions = yield* Repositories.SessionsRepository;
-      const verification = yield* Repositories.VerificationRepository;
-      const now = yield* DateTime.now;
-      const user = yield* insertUser("spans@example.com");
-      const session = yield* insertSession(user.id, "hash-1", now);
+  it.effect(
+    "EOTS-008: hand-written repository methods emit named spans over their statements",
+    () =>
+      Effect.gen(function* () {
+        const { spans, tracer } = collectSpans();
+        const users = yield* Repositories.UsersRepository;
+        const sessions = yield* Repositories.SessionsRepository;
+        const verification = yield* Repositories.VerificationRepository;
+        const now = yield* DateTime.now;
+        const user = yield* insertUser("spans@example.com");
+        const session = yield* insertSession(user.id, "hash-1", now);
 
-      yield* Effect.provideService(
-        Effect.gen(function* () {
-          yield* users.findByEmail("spans@example.com");
-          yield* sessions.touch({
-            id: session.id,
-            expectedSecretHash: "hash-1",
-            secretHash: "hash-2",
-            lastActiveAt: now,
-            idleExpiresAt: now,
-          });
-          yield* verification.tryConsume({ identifier: "x:y", valueHash: "h", now });
-        }),
-        Tracer.Tracer,
-        tracer,
-      );
-
-      for (const name of ["Users.findByEmail", "Sessions.touch", "VerificationTokens.tryConsume"]) {
-        const span = spans.find((s) => s.name === name);
-        assert.isDefined(span, `${name} span`);
-        if (span === undefined) continue;
-        assert.isTrue(
-          spans.some((s) => s.name === "sql.execute" && isChildOf(s, span)),
-          `${name} parents a sql.execute span`,
+        yield* Effect.provideService(
+          Effect.gen(function* () {
+            yield* users.findByEmail("spans@example.com");
+            yield* sessions.touch({
+              id: session.id,
+              expectedSecretHash: "hash-1",
+              secretHash: "hash-2",
+              lastActiveAt: now,
+              idleExpiresAt: now,
+            });
+            yield* verification.tryConsume({ identifier: "x:y", valueHash: "h", now });
+          }),
+          Tracer.Tracer,
+          tracer,
         );
-      }
-    }).pipe(Effect.provide(RepositoriesLive)),
+
+        for (const name of [
+          "Users.findByEmail",
+          "Sessions.touch",
+          "VerificationTokens.tryConsume",
+        ]) {
+          const span = spans.find((s) => s.name === name);
+          assert.isDefined(span, `${name} span`);
+          if (span === undefined) continue;
+          assert.isTrue(
+            spans.some((s) => isStatement(s) && isChildOf(s, span)),
+            `${name} parents a statement span`,
+          );
+        }
+      }).pipe(Effect.provide(RepositoriesLive)),
   );
 
   it.effect("EOTS-008: no repository span attribute carries an email, identifier or hash", () =>
@@ -161,12 +174,12 @@ describe("Repositories (SQLite specifics)", () => {
 
   // ---- PPS-007 -----------------------------------------------------------------------
 
-  /** Number of statements `effect` runs, counted from `sql.execute` client spans. */
+  /** Number of statements `effect` runs, counted from their client spans. */
   const statementsOf = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
       const { spans, tracer } = collectSpans();
       yield* Effect.provideService(effect, Tracer.Tracer, tracer);
-      return spans.filter((s) => s.name === "sql.execute").length;
+      return spans.filter(isStatement).length;
     });
 
   it.effect("PPS-007: casIdentity returns the updated row from a single statement", () =>

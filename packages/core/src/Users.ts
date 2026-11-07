@@ -9,7 +9,7 @@
 import { Defects, type Ids, UserStore } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import { now } from "effect/DateTime";
@@ -18,7 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import { relabel, storeUnavailable, StoreUnavailable } from "./Errors.ts";
+import { relabel, StoreUnavailable } from "./Errors.ts";
 import * as Hooks from "./Hooks.ts";
 import type { ErasureClearance } from "./internal/erasureClearance.ts";
 import type * as Phone from "./Phone.ts";
@@ -563,7 +563,7 @@ const profileChange = (value: string | null | undefined): UserStore.Change<strin
       : { _tag: "Set", value };
 
 /**
- * Written once over `UserStore` (ADR-EA-041). Needs the store and `Crypto` (the id); the clock is
+ * Written once over `UserStore` (ADR-EA-041). Needs the store and `SecureRandom` (the id); the clock is
  * read once per operation and handed to the store.
  *
  * BEH-EA-046: deleting a user is `Erasure.AccountErasure`'s job; this layer also provides the row
@@ -572,7 +572,7 @@ const profileChange = (value: string | null | undefined): UserStore.Change<strin
 export const layer = Layer.effectContext(
   Effect.gen(function* () {
     const store = yield* UserStore.UserStore;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const announce = yield* attributesChangedAnnouncer;
     // SAM-004: the composition's declared fields; their columns exist because `Auth.make`'s generated migrations added them.
     const registry = yield* UserFields.UserFieldRegistry;
@@ -603,13 +603,9 @@ export const layer = Layer.effectContext(
         .pipe(relabel("Users.findByPhone"), Effect.flatMap(toUserRecordOption));
 
     /** The row `create` and `createOrGet` hand the store: the domain mints the id and reads the clock. */
-    const newUser = Effect.fnUntraced(function* (input: CreateInput, operation: string) {
+    const newUser = Effect.fnUntraced(function* (input: CreateInput) {
       const identity = normalizeIdentity(input.identity);
-      const id = UserId(
-        yield* crypto.randomUUIDv7.pipe(
-          Effect.catchTag("PlatformError", storeUnavailable(operation)),
-        ),
-      );
+      const id = UserId(yield* random.uuidV7());
       const at = yield* now;
       const row: UserStore.NewUser = {
         id,
@@ -630,7 +626,7 @@ export const layer = Layer.effectContext(
     });
 
     const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
-      const { identity, row } = yield* newUser(input, "Users.create");
+      const { identity, row } = yield* newUser(input);
       const outcome = yield* store.insertOrHolder(row);
       return outcome._tag === "Inserted"
         ? yield* toUserRecord(outcome.user)
@@ -640,7 +636,7 @@ export const layer = Layer.effectContext(
     // SCP-003: the store decides "insert or return the holder" in one atomic primitive, so a
     // concurrent pair cannot both insert.
     const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
-      const { row } = yield* newUser(input, "Users.createOrGet");
+      const { row } = yield* newUser(input);
       const outcome = yield* store.insertOrHolder(row);
       return outcome._tag === "Inserted"
         ? { user: yield* toUserRecord(outcome.user), created: true }

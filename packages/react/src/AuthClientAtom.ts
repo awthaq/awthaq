@@ -5,7 +5,7 @@
 // spec/behaviors/23-react.md, BEH-EA-177/178.
 //
 // `effect` itself ships `AtomHttpApi`/`Atom`/`AtomRegistry` natively at
-// `effect/unstable/reactivity` (in this repo's catalog-pinned `effect`) — no
+// `effect/reactivity` (in this repo's catalog-pinned `effect`) — no
 // external, v3-pinned `@effect-atom/atom` needed; see `@awthaq/client`'s
 // `AuthClient.ts` header comment for the corrected history of that reasoning.
 //
@@ -34,8 +34,8 @@ import type { AccountContract, Api, SessionContract } from "@awthaq/api";
 import * as Data from "effect/Data";
 import type * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import * as Atom from "effect/unstable/reactivity/Atom";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
+import * as Atom from "effect/reactivity/Atom";
 import type { AuthSubject } from "@qadi/core";
 import { SESSION_KEY, makeReactClient } from "./ReactClient.ts";
 import { toSubject } from "./Subject.ts";

@@ -4,7 +4,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { Auth } from "@awthaq/core";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestAuth from "../src/TestAuth.ts";
 import { PinRecords, Pins } from "./support/Pins.ts";
 

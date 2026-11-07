@@ -12,7 +12,6 @@ import { SqlTransaction, VerificationStore } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -21,13 +20,12 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PlatformError from "effect/PlatformError";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
@@ -873,42 +871,6 @@ describe("Verification infrastructure failures (MA-004)", () => {
         "Verification.purgeExpired",
       );
     }).pipe(Effect.provide(DownLayer)),
-  );
-
-  const BrokenCryptoLayer = Verification.layer.pipe(Layer.provide(Persistence.memory)).pipe(
-    Layer.provide(
-      Layer.succeed(
-        Crypto.Crypto,
-        Crypto.make({
-          randomBytes: (size) => new Uint8Array(size),
-          digest: () =>
-            Effect.fail(
-              PlatformError.systemError({
-                module: "Crypto",
-                method: "digest",
-                _tag: "Unknown",
-                description: "provider down",
-              }),
-            ),
-        }),
-      ),
-    ),
-    Layer.provide(AuthEvents.layer),
-    Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-  );
-
-  it.effect("Persistence.memory: a crypto PlatformError surfaces as StoreUnavailable", () =>
-    Effect.gen(function* () {
-      const verification = yield* Verification.Verification;
-      const issueFailure = yield* verification
-        .issue({ identifier: "x", ttl: Duration.minutes(1) })
-        .pipe(Effect.flip);
-      assert.strictEqual(issueFailure._tag, "StoreUnavailable");
-      const consumeFailure = yield* verification
-        .consume("x", Redacted.make("nope"))
-        .pipe(Effect.flip);
-      assert.strictEqual(consumeFailure._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(BrokenCryptoLayer)),
   );
 });
 

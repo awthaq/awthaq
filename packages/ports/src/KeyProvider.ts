@@ -41,10 +41,10 @@
 import * as Defects from "./Defects.ts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64 from "effect/encoding/Base64";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -80,7 +80,7 @@ const KeysetJson = Schema.fromJsonString(
 
 const decodeKey = (label: string, encoded: string) =>
   Effect.gen(function* () {
-    const decoded = Encoding.decodeBase64(encoded);
+    const decoded = Base64.decode(encoded);
     if (decoded._tag === "Failure") {
       return yield* Defects.invalidConfiguration(
         "AWTHAQ_ENCRYPTION_KEYS",
@@ -204,7 +204,7 @@ const EPHEMERAL_KID = "ephemeral";
  * setting) unless `AWTHAQ_ALLOW_EPHEMERAL_KEY=true` says it is intended, and every build logs a
  * warning that says what is lost.
  *
- * Needs `Crypto.Crypto` for the randomness, like `Encryption.layer`.
+ * Needs `SecureRandom.SecureRandom` for the randomness, like `Encryption.layer`.
  */
 export const layerEphemeral = Layer.effect(
   KeyProvider,
@@ -219,8 +219,8 @@ export const layerEphemeral = Layer.effect(
         "awthaq: KeyProvider.layerEphemeral generates a throwaway key and is refused when NODE_ENV=production; use KeyProvider.layerEnv (AWTHAQ_ENCRYPTION_KEY) or set AWTHAQ_ALLOW_EPHEMERAL_KEY=true if losing encrypted data on restart is intended.",
       );
     }
-    const crypto = yield* Crypto.Crypto;
-    const bytes = yield* crypto.randomBytes(AES_256_KEY_LENGTH).pipe(Effect.orDie);
+    const random = yield* SecureRandom.SecureRandom;
+    const bytes = yield* random.randomBytes(AES_256_KEY_LENGTH);
     yield* Effect.logWarning(
       "awthaq: KeyProvider.layerEphemeral is in use: the encryption key is random and ephemeral, so anything encrypted under it (provider tokens, stored secrets) is unreadable after a restart. Development only; use KeyProvider.layerEnv for anything you keep.",
     );

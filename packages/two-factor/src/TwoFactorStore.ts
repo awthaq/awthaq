@@ -2,7 +2,7 @@
 //
 // THS-001 step 3, BCR-002, THS-005 (BEH-EA-264/265): this plugin's own persistence — two records
 // services, each with a `layerMemory` and a `layerSql`, and the migrations for the two tables.
-// Built directly against `effect/unstable/sql`'s `SqlSchema` (the table belongs to the plugin, not
+// Built directly against `effect/sql`'s `SqlSchema` (the table belongs to the plugin, not
 // the shared stratum), with row codecs from the ambient client's dialect (`SqlModels.dialectFields`).
 //
 // - `two_factor_secret`: one row per user. `secret` is a `SealedColumn` (plan 05, ADR-EA-019 decision
@@ -25,7 +25,7 @@ import { Migrations, Users } from "@awthaq/core";
 import { Defects, type Encryption, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, SealedColumn, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
@@ -34,8 +34,8 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 type UserId = Users.UserId;
 
@@ -266,71 +266,75 @@ interface MemoryCode {
   readonly usedAt: Option.Option<DateTime.Utc>;
 }
 
-export const layerRecoveryCodesMemory: Layer.Layer<TwoFactorRecoveryCodes, never, Crypto.Crypto> =
-  Layer.effect(
-    TwoFactorRecoveryCodes,
-    Effect.gen(function* () {
-      const crypto = yield* Crypto.Crypto;
-      const state = yield* Ref.make<ReadonlyArray<MemoryCode>>([]);
+export const layerRecoveryCodesMemory: Layer.Layer<
+  TwoFactorRecoveryCodes,
+  never,
+  SecureRandom.SecureRandom
+> = Layer.effect(
+  TwoFactorRecoveryCodes,
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const state = yield* Ref.make<ReadonlyArray<MemoryCode>>([]);
 
-      const replaceAll: TwoFactorRecoveryCodesShape["replaceAll"] = (userId, hashes) =>
-        Effect.gen(function* () {
-          const fresh: Array<MemoryCode> = [];
-          for (const codeHash of hashes) {
-            fresh.push({
-              id: yield* crypto.randomUUIDv7.pipe(
+    const replaceAll: TwoFactorRecoveryCodesShape["replaceAll"] = (userId, hashes) =>
+      Effect.gen(function* () {
+        const fresh: Array<MemoryCode> = [];
+        for (const codeHash of hashes) {
+          fresh.push({
+            id: yield* random
+              .uuidV7()
+              .pipe(
                 Effect.catch(StoreFailure.storeUnavailable("TwoFactorRecoveryCodes.replaceAll")),
               ),
-              userId,
-              codeHash,
-              usedAt: Option.none(),
-            });
-          }
-          // One `Ref.update`: the swap is atomic, so a reader sees the old set or the new one.
-          yield* Ref.update(state, (rows) => [
-            ...rows.filter((row) => row.userId !== userId),
-            ...fresh,
-          ]);
-        });
-
-      const listUnused: TwoFactorRecoveryCodesShape["listUnused"] = (userId) =>
-        Ref.get(state).pipe(
-          Effect.map((rows) =>
-            rows
-              .filter((row) => row.userId === userId && Option.isNone(row.usedAt))
-              .map((row) => ({ id: row.id, codeHash: Redacted.make(row.codeHash) })),
-          ),
-        );
-
-      const markUsed: TwoFactorRecoveryCodesShape["markUsed"] = (userId, id) =>
-        Effect.gen(function* () {
-          const now = yield* DateTime.now;
-          return yield* Ref.modify(state, (rows) => {
-            const target = rows.find(
-              (row) => row.id === id && row.userId === userId && Option.isNone(row.usedAt),
-            );
-            if (target === undefined) return [false, rows] as const;
-            return [
-              true,
-              rows.map((row) => (row.id === id ? { ...row, usedAt: Option.some(now) } : row)),
-            ] as const;
+            userId,
+            codeHash,
+            usedAt: Option.none(),
           });
+        }
+        // One `Ref.update`: the swap is atomic, so a reader sees the old set or the new one.
+        yield* Ref.update(state, (rows) => [
+          ...rows.filter((row) => row.userId !== userId),
+          ...fresh,
+        ]);
+      });
+
+    const listUnused: TwoFactorRecoveryCodesShape["listUnused"] = (userId) =>
+      Ref.get(state).pipe(
+        Effect.map((rows) =>
+          rows
+            .filter((row) => row.userId === userId && Option.isNone(row.usedAt))
+            .map((row) => ({ id: row.id, codeHash: Redacted.make(row.codeHash) })),
+        ),
+      );
+
+    const markUsed: TwoFactorRecoveryCodesShape["markUsed"] = (userId, id) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        return yield* Ref.modify(state, (rows) => {
+          const target = rows.find(
+            (row) => row.id === id && row.userId === userId && Option.isNone(row.usedAt),
+          );
+          if (target === undefined) return [false, rows] as const;
+          return [
+            true,
+            rows.map((row) => (row.id === id ? { ...row, usedAt: Option.some(now) } : row)),
+          ] as const;
         });
+      });
 
-      const countUnused: TwoFactorRecoveryCodesShape["countUnused"] = (userId) =>
-        Ref.get(state).pipe(
-          Effect.map(
-            (rows) =>
-              rows.filter((row) => row.userId === userId && Option.isNone(row.usedAt)).length,
-          ),
-        );
+    const countUnused: TwoFactorRecoveryCodesShape["countUnused"] = (userId) =>
+      Ref.get(state).pipe(
+        Effect.map(
+          (rows) => rows.filter((row) => row.userId === userId && Option.isNone(row.usedAt)).length,
+        ),
+      );
 
-      const deleteAllByUser: TwoFactorRecoveryCodesShape["deleteAllByUser"] = (userId) =>
-        Ref.update(state, (rows) => rows.filter((row) => row.userId !== userId));
+    const deleteAllByUser: TwoFactorRecoveryCodesShape["deleteAllByUser"] = (userId) =>
+      Ref.update(state, (rows) => rows.filter((row) => row.userId !== userId));
 
-      return { replaceAll, listUnused, markUsed, countUnused, deleteAllByUser };
-    }),
-  );
+    return { replaceAll, listUnused, markUsed, countUnused, deleteAllByUser };
+  }),
+);
 
 // ---- layerSql --------------------------------------------------------------------------
 
@@ -477,12 +481,12 @@ export const layerSecretsSql: Layer.Layer<
 export const layerRecoveryCodesSql: Layer.Layer<
   TwoFactorRecoveryCodes,
   never,
-  SqlClient.SqlClient | Crypto.Crypto
+  SqlClient.SqlClient | SecureRandom.SecureRandom
 > = Layer.effect(
   TwoFactorRecoveryCodes,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const CodeRow = makeCodeRow(wire);
     const unavailable = (operation: string) =>
@@ -536,9 +540,11 @@ export const layerRecoveryCodesSql: Layer.Layer<
         const rows: Array<{ id: string; codeHash: string }> = [];
         for (const codeHash of hashes) {
           rows.push({
-            id: yield* crypto.randomUUIDv7.pipe(
-              Effect.catch(StoreFailure.storeUnavailable("TwoFactorRecoveryCodes.replaceAll")),
-            ),
+            id: yield* random
+              .uuidV7()
+              .pipe(
+                Effect.catch(StoreFailure.storeUnavailable("TwoFactorRecoveryCodes.replaceAll")),
+              ),
             codeHash,
           });
         }

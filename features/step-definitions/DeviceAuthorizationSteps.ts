@@ -5,7 +5,7 @@ import { AuditLog, DataExport, Erasure, Retention, Sessions, Users } from "@awth
 import { DeviceAuthorization, DeviceGrantRecords, UserCode } from "@awthaq/device-authorization";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -121,9 +121,9 @@ export const deviceAuthorizationSteps = defineSteps<World>(({ Given, When, Then 
     direct(
       Effect.gen(function* () {
         const records = yield* DeviceGrantRecords.DeviceGrantRecords;
-        const crypto = yield* Crypto.Crypto;
+        const hasher = yield* Digest.Digest;
         return yield* records.findByDeviceHash(
-          yield* UserCode.hashDeviceCode(crypto, Redacted.value(issued.deviceCode)),
+          yield* UserCode.hashDeviceCode(hasher, Redacted.value(issued.deviceCode)),
         );
       }),
     );

@@ -1,20 +1,16 @@
 // @awthaq/ports — Hmac
 //
 // ACS-005/ACS-007: the one HMAC-SHA256 (RFC 2104), constant-time comparison
-// and hex encoding this repository uses. The platform-neutral `Crypto`
-// service exposes only plain digests, not a keyed MAC, so the primitive is
-// built once here — previously copied into `@awthaq/server`'s `Csrf.ts` and
-// `@awthaq/passkey`'s `ChallengeStore.ts`, with the comparison and hex helpers
-// duplicated again in core — and tested against RFC 4231 vectors and Node's
-// own `createHmac` as an oracle (`test/Hmac.test.ts`).
+// and hex encoding this repository uses. The HMAC itself is effect's `Mac`
+// service (`effect/crypto/Mac`); this module fixes the algorithm and the
+// call shape every awthaq signer shares, and is tested against RFC 4231
+// vectors and Node's own `createHmac` as an oracle (`test/Hmac.test.ts`).
 
-import * as Crypto from "effect/Crypto";
+import type * as CryptoError from "effect/crypto/CryptoError";
+import * as Mac from "effect/crypto/Mac";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
-
-const SHA256_BLOCK_SIZE = 64;
 
 export const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -36,37 +32,24 @@ export const constantTimeEqualBytes = (a: Uint8Array, b: Uint8Array): boolean =>
 export const constantTimeEqualString = (a: string, b: string): boolean =>
   constantTimeEqualBytes(new TextEncoder().encode(a), new TextEncoder().encode(b));
 
-const concatBytes = (a: Uint8Array, b: Uint8Array): Uint8Array => {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
-};
+/**
+ * RFC 2104 zero-pads a key shorter than the hash's block size, so an empty key and a single zero
+ * byte produce the same MAC. effect's `Mac.key` refuses an empty key outright; this keeps the
+ * RFC's behaviour for it instead.
+ */
+export const rfc2104Key = (key: Uint8Array): Uint8Array =>
+  key.length === 0 ? new Uint8Array(1) : key;
 
-/** RFC 2104 HMAC-SHA256 built from `Crypto.digest` — keys longer than the block size are hashed first. */
-export const hmacSha256: (
-  crypto: Crypto.Crypto,
+/**
+ * RFC 2104 HMAC-SHA256 over effect's `Mac` service. Pass the service captured at layer
+ * construction, so the returned effect has no requirement of its own.
+ */
+export const hmacSha256 = (
+  mac: Mac.Mac["Service"],
   key: Uint8Array,
   message: Uint8Array,
-) => Effect.Effect<Uint8Array, PlatformError.PlatformError> = Effect.fnUntraced(
-  function* (crypto, key, message) {
-    let blockKey = key.length > SHA256_BLOCK_SIZE ? yield* crypto.digest("SHA-256", key) : key;
-    if (blockKey.length < SHA256_BLOCK_SIZE) {
-      const padded = new Uint8Array(SHA256_BLOCK_SIZE);
-      padded.set(blockKey);
-      blockKey = padded;
-    }
-    const ipad = new Uint8Array(SHA256_BLOCK_SIZE);
-    const opad = new Uint8Array(SHA256_BLOCK_SIZE);
-    for (let i = 0; i < SHA256_BLOCK_SIZE; i++) {
-      const keyByte = blockKey[i] ?? 0;
-      ipad[i] = keyByte ^ 0x36;
-      opad[i] = keyByte ^ 0x5c;
-    }
-    const inner = yield* crypto.digest("SHA-256", concatBytes(ipad, message));
-    return yield* crypto.digest("SHA-256", concatBytes(opad, inner));
-  },
-);
+): Effect.Effect<Uint8Array, CryptoError.CryptoError> =>
+  Effect.flatMap(Mac.key(Mac.hmacSha256, rfc2104Key(key)), (macKey) => mac.sign(macKey, message));
 
 /** ACS-007: the floor for an HMAC-SHA256 signing secret — the digest's own 32-byte output size. */
 export const MIN_SIGNING_SECRET_BYTES = 32;

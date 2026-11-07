@@ -5,14 +5,14 @@ import { Hmac, VerificationStore } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
+import * as Migrator from "effect/sql/Migrator";
+import { SqlError, UnknownError } from "effect/sql/SqlError";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
 import * as Repositories from "../src/Repositories.ts";
@@ -107,7 +107,7 @@ describe("VerificationStoreSql misses (SOS-004)", () => {
     Repositories.VerificationRepository,
     Effect.gen(function* () {
       const real = yield* Repositories.VerificationRepository;
-      const crypto = yield* Crypto.Crypto;
+      const hasher = yield* Digest.Digest;
       return {
         ...real,
         tryConsume: (input: Parameters<typeof real.tryConsume>[0]) =>
@@ -117,12 +117,9 @@ describe("VerificationStoreSql misses (SOS-004)", () => {
                 ? Effect.void
                 : Effect.gen(function* () {
                     state.reissued = true;
-                    const hash = yield* crypto
-                      .digest("SHA-256", new TextEncoder().encode("654321"))
-                      .pipe(
-                        Effect.map((bytes) => Hmac.toHex(bytes)),
-                        Effect.orDie,
-                      );
+                    const hash = yield* hasher
+                      .digest(Digest.sha256, new TextEncoder().encode("654321"))
+                      .pipe(Effect.map((bytes) => Hmac.toHex(bytes)));
                     yield* real
                       .upsertLive({
                         id: tokenId("reissued"),
@@ -164,8 +161,8 @@ describe("VerificationStoreSql misses (SOS-004)", () => {
       assert.strictEqual(missed._tag, "Miss");
       // The reissued token (budget 2) was not charged for it: one more wrong guess still leaves it
       // usable, and the digest of 654321 claims it.
-      const hash = yield* Effect.flatMap(Crypto.Crypto, (crypto) =>
-        crypto.digest("SHA-256", new TextEncoder().encode("654321")),
+      const hash = yield* Effect.flatMap(Digest.Digest, (hasher) =>
+        hasher.digest(Digest.sha256, new TextEncoder().encode("654321")),
       ).pipe(Effect.map((bytes) => Hmac.toHex(bytes)));
       const second = yield* store.present({
         identifier,

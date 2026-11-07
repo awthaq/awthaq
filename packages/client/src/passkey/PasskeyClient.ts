@@ -71,7 +71,7 @@ import {
   type SendSignalUnknownCredentialOpts,
 } from "@simplewebauthn/browser";
 import * as Effect from "effect/Effect";
-import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
 import * as PasskeyClientError from "./PasskeyClientError.ts";
 
 /** The four `PasskeyApi` group clients this module needs — whatever an app already built against its own composed contract, never fewer. */

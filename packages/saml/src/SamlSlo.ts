@@ -23,7 +23,8 @@
 import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Tenant, Verification } from "@awthaq/core";
 import { XmlSignature } from "@awthaq/ports";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { TenantScoped } from "@awthaq/sql";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -109,14 +110,25 @@ export interface SloDeps {
   readonly events: AuthEvents.AuthEventsShape;
   readonly xmlSignature: XmlSignature.XmlSignatureShape;
   readonly spKeys: SamlSpKeys.SamlSpKeysShape;
-  readonly crypto: Crypto.Crypto;
+  readonly random: SecureRandom.SecureRandom["Service"];
+  readonly hasher: Digest.Digest["Service"];
   /** The `slo` rule of `Saml`'s budget, spent per source address (a closure: this module must not import `Saml.ts`). */
   readonly rateLimit: (ip: string | undefined) => Effect.Effect<void, Api.RateLimited>;
   readonly resolveCallbackURL: (raw: string | undefined) => string;
 }
 
 export const makeSlo = (deps: SloDeps) => {
-  const { settings, records, sessions, verification, events, xmlSignature, spKeys, crypto } = deps;
+  const {
+    settings,
+    records,
+    sessions,
+    verification,
+    events,
+    xmlSignature,
+    spKeys,
+    random,
+    hasher,
+  } = deps;
 
   /** Signs and encodes one outbound message for the IdP's binding, with the SP key when the connection has one. */
   const outbound = Effect.fnUntraced(function* (input: {
@@ -183,7 +195,7 @@ export const makeSlo = (deps: SloDeps) => {
     if (Option.isNone(connection) || Option.isNone(connection.value.sloUrl)) {
       return { _tag: "local", callbackURL } as const;
     }
-    const uuid = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+    const uuid = yield* random.uuidV7();
     const requestId = `_${uuid}`;
     const identifier = `${LOGOUT_PREFIX}${uuid}`;
     const { value } = yield* verification.issue({
@@ -318,9 +330,10 @@ export const makeSlo = (deps: SloDeps) => {
     id: string,
   ) {
     const digest = hexOf(
-      yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(`${connection.idpEntityId}|${id}`))
-        .pipe(Effect.orDie),
+      yield* hasher.digest(
+        Digest.sha256,
+        new TextEncoder().encode(`${connection.idpEntityId}|${id}`),
+      ),
     );
     const fresh = yield* verification.reserve({
       identifier: `${MESSAGE_PREFIX}${digest}`,
@@ -402,7 +415,7 @@ export const makeSlo = (deps: SloDeps) => {
           connectionId: connection.id,
           sessionsEnded: ended,
         });
-        const uuid = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+        const uuid = yield* random.uuidV7();
         const now = yield* DateTime.now;
         const responseId = `_${uuid}`;
         const response = logoutResponseXml({

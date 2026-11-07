@@ -47,10 +47,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Redacted from "effect/Redacted";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
 
 // 1. Compose Password and Organization together — `Auth.make` folds both
 //    plugins' own HttpApi contracts and Layers into one `api`/`layer`
@@ -101,7 +101,7 @@ const DemoCsrfConfig = Layer.succeed(Csrf.CsrfConfig, {
 
 // The in-memory persistence a single-process server runs on: plan 02's `Persistence.memory` bundle (the five
 // stores and the no-op transaction, a matched pair), the core services written over it, and the foundation
-// every store reads (`Crypto`, `AuthEvents` over an in-memory `AuditLog`, every hook point's default layer).
+// every store reads (the crypto services, `AuthEvents` over an in-memory `AuditLog`, every hook point's default layer).
 const Foundation = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),

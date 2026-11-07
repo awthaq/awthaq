@@ -105,8 +105,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import { Models } from "@awthaq/sql"; // Models.dialectFields: Date on pg, ISO string on SQLite
 
 // `sql` here must be a client pointed at the RETAINED, read-mostly Auth.js database —

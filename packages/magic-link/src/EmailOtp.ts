@@ -51,9 +51,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/unstable/http/Headers";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as Headers from "effect/http/Headers";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as EmailOtpApi from "./EmailOtpApi.ts";
 

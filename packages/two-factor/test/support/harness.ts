@@ -8,7 +8,7 @@ import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -113,9 +113,9 @@ export const tokenOf = (mail: Mailer.MailMessage | undefined): string => {
 /** The TOTP the enrolled secret yields at the current (test) clock, optionally `steps` away. */
 export const codeFor = (secret: string, steps = 0) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const mac = yield* Mac.Mac;
     const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
     const key = Totp.base32Decode(secret);
     if (key._tag === "None") return yield* Effect.die("not base32");
-    return yield* Totp.totp(crypto, key.value, now + steps * 30, { period: 30, digits: 6 });
+    return yield* Totp.totp(mac, key.value, now + steps * 30, { period: 30, digits: 6 });
   }).pipe(Effect.provide(NodeCrypto.layer));

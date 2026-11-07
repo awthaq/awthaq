@@ -11,7 +11,7 @@
 
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -21,8 +21,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import type * as PermissionEngine from "./PermissionEngine.ts";
 
 export interface OrgRoleRecord {
@@ -83,10 +83,6 @@ const notFound = (id: string): OrgRoleRecordNotFound => new OrgRoleRecordNotFoun
 const nameTaken = (organizationId: string, role: string): OrgRoleRecordNameTaken =>
   new OrgRoleRecordNameTaken({ organizationId, role });
 
-/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
-const mintId = <E>(operation: string, minted: Effect.Effect<string, E>) =>
-  Effect.catch(minted, StoreFailure.storeUnavailable(`OrgRoleRecords.${operation}`));
-
 // ---- layerMemory ------------------------------------------------------------
 
 type State = HashMap.HashMap<string, OrgRoleRecord>;
@@ -95,7 +91,7 @@ export const layerMemory = Layer.effect(
   OrgRoleRecords,
   Effect.gen(function* () {
     const state = yield* Ref.make<State>(HashMap.empty());
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const nameCollision = (s: State, organizationId: string, role: string): boolean =>
       Array.from(HashMap.values(s)).some(
@@ -103,7 +99,7 @@ export const layerMemory = Layer.effect(
       );
 
     const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const outcome = yield* Ref.modify(
         state,
@@ -224,7 +220,7 @@ export const layerSql = Layer.effect(
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const OrgRoleRow = makeOrgRoleRow(wire);
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -288,7 +284,7 @@ export const layerSql = Layer.effect(
     });
 
     const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const row = yield* insert({
         id,

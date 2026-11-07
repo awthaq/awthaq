@@ -1,14 +1,14 @@
 // MA-003 (.issues/high): proves `@awthaq/core`'s httpapi re-exports are a
 // genuine re-export — the same nominal class Effect's own
-// `effect/unstable/httpapi/*` exports — not a second, awthaq-owned wrapper
+// `effect/http-api/*` exports — not a second, awthaq-owned wrapper
 // type. A wrapper would silently violate ADR-EA-003 ("one contract, no
 // duplication"); this test would fail the moment anyone introduces one.
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
-import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
-import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
+import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
+import * as HttpApiSecurity from "effect/http-api/HttpApiSecurity";
 import { describe, expect, it } from "@effect/vitest";
 import * as Core from "../src/HttpApiTypes.ts";
 

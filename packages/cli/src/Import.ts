@@ -33,7 +33,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { requireService, withApplication } from "./Application.ts";
 import { ImportFailed, UsageError } from "./CliErrors.ts";
 import type { CliConfig } from "./Config.ts";

@@ -18,8 +18,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import * as Model from "effect/unstable/schema/Model";
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Model from "effect/schema/Model";
+import * as Migrator from "effect/sql/Migrator";
 import { TestAuth } from "@awthaq/test";
 
 /** The SQLite-dialect models: what `Repositories` decodes with on this database. */

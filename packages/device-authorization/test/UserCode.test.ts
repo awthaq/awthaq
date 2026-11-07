@@ -3,14 +3,22 @@
 // and matched exactly, and stored only as a hash. The device code is 32 CSPRNG bytes.
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as UserCode from "../src/UserCode.ts";
 
-const run = <A, E>(body: (crypto: Crypto.Crypto) => Effect.Effect<A, E>) =>
+interface Services {
+  readonly random: SecureRandom.SecureRandom["Service"];
+  readonly hasher: Digest.Digest["Service"];
+}
+
+const run = <A, E>(body: (services: Services) => Effect.Effect<A, E>) =>
   Effect.runPromise(
     Effect.gen(function* () {
-      return yield* body(yield* Crypto.Crypto);
+      const random = yield* SecureRandom.SecureRandom;
+      const hasher = yield* Digest.Digest;
+      return yield* body({ random, hasher });
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
@@ -26,8 +34,8 @@ describe("UserCode", () => {
   });
 
   it("generates 8-symbol codes from the alphabet, displayed XXXX-XXXX", async () => {
-    const codes = await run((crypto) =>
-      Effect.all(Array.from({ length: 200 }, () => UserCode.generate(crypto))),
+    const codes = await run(({ random }) =>
+      Effect.all(Array.from({ length: 200 }, () => UserCode.generate(random))),
     );
     for (const code of codes) {
       assert.match(code, /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/);
@@ -38,8 +46,8 @@ describe("UserCode", () => {
   });
 
   it("draws every symbol uniformly (rejection sampling, no modulo bias)", async () => {
-    const codes = await run((crypto) =>
-      Effect.all(Array.from({ length: 2000 }, () => UserCode.generate(crypto))),
+    const codes = await run(({ random }) =>
+      Effect.all(Array.from({ length: 2000 }, () => UserCode.generate(random))),
     );
     const counts = new Map<string, number>();
     for (const symbol of codes.join("")) counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
@@ -64,11 +72,11 @@ describe("UserCode", () => {
   });
 
   it("hashes a code (SHA-256 hex) so the row holds no usable code, and the hash is stable", async () => {
-    const [first, second, other] = await run((crypto) =>
+    const [first, second, other] = await run(({ hasher }) =>
       Effect.all([
-        UserCode.hash(crypto, "BCDFGHJK"),
-        UserCode.hash(crypto, "BCDF-ghjk"),
-        UserCode.hash(crypto, "BCDFGHJL"),
+        UserCode.hash(hasher, "BCDFGHJK"),
+        UserCode.hash(hasher, "BCDF-ghjk"),
+        UserCode.hash(hasher, "BCDFGHJL"),
       ]),
     );
     assert.match(first, /^[0-9a-f]{64}$/);
@@ -78,8 +86,8 @@ describe("UserCode", () => {
   });
 
   it("generates a 32-byte base64url device code that is never the user code", async () => {
-    const codes = await run((crypto) =>
-      Effect.all(Array.from({ length: 50 }, () => UserCode.generateDeviceCode(crypto))),
+    const codes = await run(({ random }) =>
+      Effect.all(Array.from({ length: 50 }, () => UserCode.generateDeviceCode(random))),
     );
     for (const code of codes) {
       // 32 bytes -> 43 base64url characters, no padding.

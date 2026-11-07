@@ -5,11 +5,11 @@ import { Auth } from "@awthaq/core";
 import type { Accounts, Sessions, Users } from "@awthaq/core";
 import type { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import type * as HttpClient from "effect/unstable/http/HttpClient";
+import type * as HttpClient from "effect/http/HttpClient";
 import * as Password from "../src/Password.ts";
 
 export const email = "ada@example.com";
@@ -30,7 +30,7 @@ export const makeTestLayer = <
     readonly config?: Partial<Password.PasswordConfigShape>;
     readonly mailer?: Layer.Layer<Mailer.Mailer>;
     readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
-    readonly hasher?: Layer.Layer<PasswordHasher.PasswordHasher, never, Crypto.Crypto>;
+    readonly hasher?: Layer.Layer<PasswordHasher.PasswordHasher, never, SecureRandom.SecureRandom>;
     /** Application taps on the composition's hook points (a veto or an observer). */
     readonly taps?: Layer.Layer<never, never, unknown>;
     /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */

@@ -17,13 +17,13 @@
 import { AuthRequestContext, Observability } from "@awthaq/core";
 import { ClientAddress } from "@awthaq/ports";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as Headers from "effect/http/Headers";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const TRACEPARENT = /^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/;
@@ -64,7 +64,7 @@ const registration = Layer.effectDiscard(
 
 const middleware = HttpRouter.middleware(
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const address = yield* Effect.serviceOption(ClientAddress.ClientAddress);
     return (app) =>
       Effect.gen(function* () {
@@ -72,7 +72,7 @@ const middleware = HttpRouter.middleware(
         const header = (name: string) => Option.getOrUndefined(Headers.get(request.headers, name));
         const correlationId = yield* Option.match(correlationIdFrom(header), {
           onSome: Effect.succeed,
-          onNone: () => Effect.orDie(crypto.randomUUIDv7),
+          onNone: () => Effect.orDie(random.uuidV7()),
         });
         const ip = yield* Option.match(address, {
           onNone: () => Effect.succeed(request.remoteAddress),

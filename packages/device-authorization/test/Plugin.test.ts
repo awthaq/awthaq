@@ -5,7 +5,8 @@ import { Auth, ConfigDescriptor, HookPoint, Hooks, Sessions, Users } from "@awth
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -25,7 +26,7 @@ const enrolledCaller = (email: string, amr: ReadonlyArray<Sessions.AuthMethod>) 
     const users = yield* Users.Users;
     const sessions = yield* Sessions.Sessions;
     const twoFactor = yield* TwoFactor.TwoFactor;
-    const crypto = yield* Crypto.Crypto;
+    const mac = yield* Mac.Mac;
     const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
     const fresh = yield* sessions.issue({ userId: user.id });
     const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
@@ -33,7 +34,7 @@ const enrolledCaller = (email: string, amr: ReadonlyArray<Sessions.AuthMethod>) 
     const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
     yield* twoFactor.confirm(
       user.id,
-      Redacted.make(yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 })),
+      Redacted.make(yield* Totp.totp(mac, key, now, { period: 30, digits: 6 })),
     );
     const issued = yield* sessions.issue({ userId: user.id, amr });
     const caller: DeviceAuthorization.Caller = {
@@ -72,9 +73,9 @@ const pollOf = (issued: DeviceAuthorization.CodeIssued) =>
 const grantOf = (issued: DeviceAuthorization.CodeIssued) =>
   Effect.gen(function* () {
     const records = yield* DeviceGrantRecords.DeviceGrantRecords;
-    const crypto = yield* Crypto.Crypto;
+    const hasher = yield* Digest.Digest;
     return yield* records.findByDeviceHash(
-      yield* UserCode.hashDeviceCode(crypto, Redacted.value(issued.deviceCode)),
+      yield* UserCode.hashDeviceCode(hasher, Redacted.value(issued.deviceCode)),
     );
   });
 

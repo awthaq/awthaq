@@ -102,7 +102,7 @@ describe("remote signing", () => {
           KeyRing.KeyRing.layer.pipe(
             // `registerRemoteKey` runs before `KeyRing` is ever accessed,
             // so `layerFromStore` finds it via `findCurrent()` directly —
-            // no `mint` call on this path — but `Crypto`/`JwtConfig` are
+            // no `mint` call on this path — but `SecureRandom`/`JwtConfig` are
             // still part of `layerFromStore`'s own *declared* R (Effect's
             // R is the static union across every branch, not just the one
             // actually taken), so both still need providing here.

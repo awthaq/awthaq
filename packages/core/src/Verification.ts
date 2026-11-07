@@ -24,7 +24,8 @@
 import { Defects, Hmac, type Ids, VerificationStore } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -32,10 +33,9 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as AuthEvents from "./AuthEvents.ts";
-import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import { relabel, type StoreUnavailable } from "./Errors.ts";
 import { UserId } from "./Users.ts";
 
 // MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
@@ -82,7 +82,7 @@ export interface VerificationTokenView {
 /**
  * BCR-005: the shape of the value `issue` mints. Absent means today's 256-bit
  * random hex. `Numeric` is a short decimal code a person types (an email OTP);
- * it is drawn inside this module (rejection sampling over `Crypto.randomBytes`,
+ * it is drawn inside this module (rejection sampling over `SecureRandom.randomBytes`,
  * no modulo bias) — a caller never supplies the value itself, so the hashing
  * and single-use guarantees cannot be bypassed with a chosen string.
  */
@@ -252,11 +252,11 @@ const validBudget = (maxAttempts: number | undefined): Effect.Effect<Option.Opti
  * caller bug (too short to be worth a budget; too long to type), so it dies.
  */
 const mintValue = (
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
   format: ValueFormat | undefined,
-): Effect.Effect<string, PlatformError.PlatformError> =>
+): Effect.Effect<string> =>
   Effect.gen(function* () {
-    if (format === undefined) return toHex(yield* crypto.randomBytes(32));
+    if (format === undefined) return toHex(yield* random.randomBytes(32));
     if (!Number.isInteger(format.digits) || format.digits < 4 || format.digits > 10) {
       return yield* Defects.invalidConfiguration(
         "Verification.issue.format",
@@ -265,7 +265,7 @@ const mintValue = (
     }
     let digits = "";
     while (digits.length < format.digits) {
-      const bytes = yield* crypto.randomBytes(format.digits * 2);
+      const bytes = yield* random.randomBytes(format.digits * 2);
       for (const byte of bytes) {
         if (digits.length < format.digits && byte < DIGIT_REJECTION_BOUND)
           digits += String(byte % 10);
@@ -316,13 +316,13 @@ interface ClaimStore {
 
 const makeTokenFlows = (
   store: ClaimStore,
-  crypto: Crypto.Crypto,
+  hasher: Digest.Digest["Service"],
   events: AuthEvents.AuthEventsShape,
 ) => {
-  const hashOf = (value: Redacted.Redacted<string>, operation: string) =>
-    crypto
-      .digest("SHA-256", new TextEncoder().encode(Redacted.value(value)))
-      .pipe(Effect.map(toHex), Effect.catchTag("PlatformError", storeUnavailable(operation)));
+  const hashOf = (value: Redacted.Redacted<string>) =>
+    hasher
+      .digest(Digest.sha256, new TextEncoder().encode(Redacted.value(value)))
+      .pipe(Effect.map(toHex));
 
   const missed = (identifier: string) =>
     new TokenConsumed({ message: "awthaq: token replay or unknown token", identifier });
@@ -334,7 +334,7 @@ const makeTokenFlows = (
     hold: boolean,
     operation: string,
   ) {
-    const valueHash = yield* hashOf(value, operation);
+    const valueHash = yield* hashOf(value);
     const now = yield* DateTime.now;
     const token = yield* store.claim({ identifier, valueHash, now, hold, operation });
     if (Option.isNone(token)) yield* events.publish({ _tag: "auth.token.replay", identifier });
@@ -393,45 +393,42 @@ const makeTokenFlows = (
 };
 
 /**
- * Written once over `VerificationStore` (ADR-EA-041). Needs the store, `Crypto` (the value and its
+ * Written once over `VerificationStore` (ADR-EA-041). Needs the store, `SecureRandom` (the value), `Digest` (its
  * hash) and `AuthEvents` (the replay event).
  */
 export const layer = Layer.effect(
   Verification,
   Effect.gen(function* () {
     const store = yield* VerificationStore.VerificationStore;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const hasher = yield* Digest.Digest;
     const events = yield* AuthEvents.AuthEvents;
 
     const hash = (value: string) =>
-      crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.map(toHex));
+      hasher.digest(Digest.sha256, new TextEncoder().encode(value)).pipe(Effect.map(toHex));
 
-    const issue: VerificationShape["issue"] = Effect.fnUntraced(
-      function* (input) {
-        const id = VerificationTokenId(yield* crypto.randomUUIDv7);
-        const maxAttempts = yield* validBudget(input.maxAttempts);
-        const value = yield* mintValue(crypto, input.format);
-        const valueHash = yield* hash(value);
-        const now = yield* DateTime.now;
-        const payloadJson = yield* encodePayload(input.payload);
-        // BEH-EA-057/ADR-EA-016: one atomic upsert replaces the identifier's one live token, so two
-        // concurrent `issue`s never leave two. Already-consumed history is never touched by `issue`
-        // (only `purgeExpired`, past the forensic window, removes it).
-        const row = yield* store.upsertLive({
-          id,
-          identifier: input.identifier,
-          userId: Option.fromNullishOr(input.userId),
-          valueHash,
-          createdAt: now,
-          expiresAt: DateTime.addDuration(now, input.ttl),
-          payloadJson,
-          maxAttempts,
-        });
-        return { token: viewOf(row), value: Redacted.make(value) };
-      },
-      Effect.catchTag("PlatformError", storeUnavailable("Verification.issue")),
-      relabel("Verification.issue"),
-    );
+    const issue: VerificationShape["issue"] = Effect.fnUntraced(function* (input) {
+      const id = VerificationTokenId(yield* random.uuidV7());
+      const maxAttempts = yield* validBudget(input.maxAttempts);
+      const value = yield* mintValue(random, input.format);
+      const valueHash = yield* hash(value);
+      const now = yield* DateTime.now;
+      const payloadJson = yield* encodePayload(input.payload);
+      // BEH-EA-057/ADR-EA-016: one atomic upsert replaces the identifier's one live token, so two
+      // concurrent `issue`s never leave two. Already-consumed history is never touched by `issue`
+      // (only `purgeExpired`, past the forensic window, removes it).
+      const row = yield* store.upsertLive({
+        id,
+        identifier: input.identifier,
+        userId: Option.fromNullishOr(input.userId),
+        valueHash,
+        createdAt: now,
+        expiresAt: DateTime.addDuration(now, input.ttl),
+        payloadJson,
+        maxAttempts,
+      });
+      return { token: viewOf(row), value: Redacted.make(value) };
+    }, relabel("Verification.issue"));
 
     const claimStore: ClaimStore = {
       claim: ({ identifier, valueHash, now, hold, operation }) =>
@@ -451,7 +448,7 @@ export const layer = Layer.effect(
         ),
     };
 
-    const { consume, redeem } = makeTokenFlows(claimStore, crypto, events);
+    const { consume, redeem } = makeTokenFlows(claimStore, hasher, events);
 
     const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;

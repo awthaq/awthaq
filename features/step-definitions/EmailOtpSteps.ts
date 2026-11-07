@@ -5,7 +5,8 @@ import { AuditLog, AuthEvents, Persistence, Verification } from "@awthaq/core";
 import { EmailOtp, EmailOtpApi } from "@awthaq/magic-link";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -84,7 +85,7 @@ export const emailOtpSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.match(yield* recall("value"), new RegExp(`^[0-9]{${digits}}$`));
   });
 
-  // REQ-EA-1101: a scripted crypto source (`Crypto.make` over the real SHA-256) whose first six-digit
+  // REQ-EA-1101: a scripted random source (`SecureRandom.make`, with the real SHA-256 `Digest`) whose first six-digit
   // draw is the bytes 255 down to 250 and then 0 up to 5. Rejection sampling drops the six bytes at or
   // above 250, so the code is 012345; a plain `byte % 10` would have minted 543210 from them, which is
   // how modulo bias over-draws 0..5.
@@ -98,15 +99,9 @@ export const emailOtpSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("a 6-digit numeric value is minted from it", function* () {
     const script = [255, 254, 253, 252, 251, 250, 0, 1, 2, 3, 4, 5];
-    const scripted = Crypto.make({
-      randomBytes: (size) =>
-        size === script.length ? Uint8Array.from(script) : new Uint8Array(size),
-      digest: (algorithm, data) =>
-        Effect.promise(
-          async () =>
-            new Uint8Array(await globalThis.crypto.subtle.digest(algorithm, new Uint8Array(data))),
-        ),
-    });
+    const scripted = SecureRandom.make((size) =>
+      size === script.length ? Uint8Array.from(script) : new Uint8Array(size),
+    );
     const value = yield* Effect.gen(function* () {
       const verification = yield* Verification.Verification;
       const issued = yield* verification.issue({
@@ -121,7 +116,8 @@ export const emailOtpSteps = defineSteps<World>(({ Given, When, Then }) => {
         Verification.layer
           .pipe(Layer.provide(Persistence.memory))
           .pipe(
-            Layer.provide(Layer.succeed(Crypto.Crypto, scripted)),
+            Layer.provide(Layer.succeed(SecureRandom.SecureRandom, scripted)),
+            Layer.provide(Digest.layerWebCrypto),
             Layer.provide(
               AuthEvents.layer.pipe(
                 Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),

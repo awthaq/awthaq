@@ -9,7 +9,7 @@
 import { Users } from "@awthaq/core";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,8 +19,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 export type InvitationStatus = "pending" | "accepted" | "rejected" | "canceled" | "expired";
 
@@ -134,10 +134,6 @@ export class InvitationRecords extends Context.Service<InvitationRecords, Invita
 
 const notFound = (id: string): InvitationRecordNotFound => new InvitationRecordNotFound({ id });
 
-/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
-const mintId = <E>(operation: string, minted: Effect.Effect<string, E>) =>
-  Effect.catch(minted, StoreFailure.storeUnavailable(`InvitationRecords.${operation}`));
-
 // ---- layerMemory ------------------------------------------------------------
 
 type State = HashMap.HashMap<string, InvitationRecord>;
@@ -146,10 +142,10 @@ export const layerMemory = Layer.effect(
   InvitationRecords,
   Effect.gen(function* () {
     const state = yield* Ref.make<State>(HashMap.empty());
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const create: InvitationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const record: InvitationRecord = {
         id,
@@ -351,7 +347,7 @@ export const layerSql = Layer.effect(
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const InvitationRow = makeInvitationRow(wire);
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -458,7 +454,7 @@ export const layerSql = Layer.effect(
     });
 
     const create: InvitationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId("create", crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const row = yield* insert({
         id,

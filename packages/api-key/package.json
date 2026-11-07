@@ -30,14 +30,17 @@
     "@awthaq/jwt": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/server": "workspace:*",
-    "@awthaq/sql": "workspace:*",
-    "effect": "catalog:"
+    "@awthaq/sql": "workspace:*"
   },
   "devDependencies": {
     "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:peer"
   },
   "engines": {
     "node": ">=22.12.0"

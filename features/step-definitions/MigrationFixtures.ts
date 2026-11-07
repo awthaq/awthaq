@@ -6,9 +6,9 @@ import { AuthPlugin, Migrations } from "@awthaq/core";
 import { CoreMigrations } from "@awthaq/sql";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as Effect from "effect/Effect";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 
 const NoApi = HttpApi.make("auth");
 

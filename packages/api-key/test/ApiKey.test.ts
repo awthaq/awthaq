@@ -2,7 +2,7 @@
 // suite runs against the in-memory records and against real migrated SQL records.
 import { AuditLog, Erasure, SecretHash, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -40,7 +40,7 @@ const suite = (store: HarnessOptions["store"]) => {
         Effect.gen(function* () {
           const apiKey = yield* ApiKey.ApiKey;
           const records = yield* ApiKeyRecords.ApiKeyRecords;
-          const crypto = yield* Crypto.Crypto;
+          const hasher = yield* Digest.Digest;
           const created = yield* apiKey.create(owner, { name: "ci", scopes: ["reports:read"] });
           const key = Redacted.value(created.key);
           assert.isTrue(key.startsWith("ak_"));
@@ -52,7 +52,7 @@ const suite = (store: HarnessOptions["store"]) => {
           assert.match(secret, /^[0-9a-f]{64}$/);
 
           const stored = Option.getOrThrow(yield* records.findById(id));
-          assert.strictEqual(stored.secretHash, yield* SecretHash.digest(crypto, secret));
+          assert.strictEqual(stored.secretHash, yield* SecretHash.digest(hasher, secret));
           // Nothing persisted, and nothing listed, equals the secret or the whole key.
           for (const value of Object.values({ ...stored, secretHash: "" })) {
             assert.notInclude(String(value), secret);

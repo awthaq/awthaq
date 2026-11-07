@@ -41,7 +41,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { betterAuthScryptVerifier } from "./BetterAuthScryptVerifier.ts";
 
 /** better-auth's own provider id for the email + password credential. */

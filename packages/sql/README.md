@@ -109,7 +109,7 @@ The suite proves the compare-and-swap primitives (`Sessions.touch`, `Verificatio
 
 ```ts
 import { CoreMigrations } from "@awthaq/sql";
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Migrator from "effect/sql/Migrator";
 
 yield * Migrator.make({})({ loader: CoreMigrations.coreMigrations });
 ```

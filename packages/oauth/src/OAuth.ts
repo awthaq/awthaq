@@ -48,7 +48,8 @@ import {
   SqlTransaction,
 } from "@awthaq/ports";
 import { Session } from "@awthaq/server";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -56,12 +57,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as Headers from "effect/http/Headers";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpEffect from "effect/http/HttpEffect";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as CallbackFailure from "./CallbackFailure.ts";
 import * as IdToken from "./IdToken.ts";
 import * as OAuthApi from "./OAuthApi.ts";
@@ -232,13 +233,14 @@ const FORBIDDEN_NATIVE_SCHEMES: ReadonlySet<string> = new Set([
 ]);
 
 const generatePkce = (
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
+  hasher: Digest.Digest["Service"],
 ): Effect.Effect<{ readonly verifier: string; readonly challenge: string }> =>
   Effect.gen(function* () {
-    const verifier = toBase64Url(yield* crypto.randomBytes(32));
-    const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier));
+    const verifier = toBase64Url(yield* random.randomBytes(32));
+    const digest = yield* hasher.digest(Digest.sha256, new TextEncoder().encode(verifier));
     return { verifier, challenge: toBase64Url(digest) };
-  }).pipe(Effect.orDie);
+  });
 
 /**
  * FAMS-006: the `(providerId, subject, issuer)` anchor `callback` looks an
@@ -763,7 +765,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // provider registry and the retry policy of the shared read client.
       const config_ = yield* OAuthConfig;
       const configNow = Tenant.configInForce(OAuthConfig, config_);
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
+      const hasher = yield* Digest.Digest;
       const httpClient = yield* HttpClient.HttpClient;
       const providers = yield* OAuthProviders.OAuthProviders;
 
@@ -880,12 +883,10 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
             }),
           );
         }
-        const { verifier, challenge } = yield* generatePkce(crypto);
+        const { verifier, challenge } = yield* generatePkce(random, hasher);
         const nonce =
-          provider.kind === "oidc"
-            ? toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie))
-            : undefined;
-        const identifier = `${FLOW_PREFIX}${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+          provider.kind === "oidc" ? toBase64Url(yield* random.randomBytes(16)) : undefined;
+        const identifier = `${FLOW_PREFIX}${yield* random.uuidV7()}`;
         // Ticket 19: encrypted at rest inside `VerificationToken.payload` —
         // `identifier` (this flow's own unique correlation id, generated
         // just above) is the AAD, binding each ciphertext to the one flow
@@ -942,7 +943,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         // neither where the values differ nor how long they are is observable.
         const decoded = decodeState(input.state);
         const digest = (value: string) =>
-          crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.orDie);
+          hasher.digest(Digest.sha256, new TextEncoder().encode(value));
         const cookieMatches =
           input.cookieState !== undefined &&
           Hmac.constantTimeEqualBytes(yield* digest(input.cookieState), yield* digest(input.state));
@@ -1269,7 +1270,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         // the session goes into a short-lived, single-use exchange record and the
         // redirect carries that record's code: never the session token itself,
         // which would land in OS-level URL history and logs.
-        const exchangeIdentifier = `${EXCHANGE_PREFIX}${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+        const exchangeIdentifier = `${EXCHANGE_PREFIX}${yield* random.uuidV7()}`;
         // MW-008: the DTO holds `DateTime.Utc`; the stored snapshot is its wire (ISO string) form.
         const dto = yield* Schema.encodeEffect(SessionContract.SessionDto)(
           Session.toSessionDto(issued.session),
@@ -1357,12 +1358,10 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
             input.codeVerifier === undefined
               ? undefined
               : toBase64Url(
-                  yield* crypto
-                    .digest("SHA-256", new TextEncoder().encode(input.codeVerifier))
-                    .pipe(Effect.orDie),
+                  yield* hasher.digest(Digest.sha256, new TextEncoder().encode(input.codeVerifier)),
                 );
           const digest = (text: string) =>
-            crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(Effect.orDie);
+            hasher.digest(Digest.sha256, new TextEncoder().encode(text));
           const matches =
             presented !== undefined &&
             Hmac.constantTimeEqualBytes(

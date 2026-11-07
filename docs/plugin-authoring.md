@@ -33,6 +33,10 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 
 Core domain services (`Sessions`, `Users`, `AuthEvents`, `AuditLog`) and the plugin's own records are simply `yield*`ed inside `make`; nothing is declared. Declare `dependsOn: [OtherPlugin]` only when your plugin needs _another plugin's_ contribution to be composed first (it also orders migrations and makes `Auth.make` refuse cycles, BEH-EA-016). `admin/src/Admin.ts` explains why it needs no `dependsOn` despite using three core services. If your plugin also reads a table another plugin owns, list it in `readsTables` on `AuthPlugin.Service`; `Auth.make` then refuses the composition unless that plugin is in `dependsOn` (JH-007). Order the plugin tuple dependencies-first (`Auth.make([Password, TwoFactor])`): a dependent listed before its dependency does not type-check (JH-006). A plugin's layer may only _require_ ports (`PasswordHasher`, `Mailer`, ...), never provide one (JH-008), and two plugins overriding one slot fail the composed layer with `SlotConflict` (MA-005).
 
+### package.json: effect is the host's
+
+List `effect`, any `@effect/*` package and `@qadi/*` under `peerDependencies`, never `dependencies`: your plugin's public types are made of their classes, and a second copy in the application's tree is a silent identity mismatch (a service tag that never matches, a `Schema` that is not the same class). Inside this repository write `"catalog:peer"` for the peer (ranges only, from `pnpm-workspace.yaml`'s `catalogs.peer`) and repeat the name under `devDependencies` with `"catalog:"` so your own build and tests resolve it; `examples/plugin-template/package.json` does exactly this. A third-party plugin outside the repository writes the same range by hand (`"effect": "^4.1.0"`). `pnpm package:smoke` fails a package that bundles one of these as a runtime dependency or publishes an exact or prerelease peer.
+
 ## Exposing a system interface (ADR-EA-040)
 
 When a plugin has trusted callers (another plugin, a job, application code), it does not let them write its tables. It exposes a **system interface** beside its own service: a `Context.Service` keyed `awthaq/plugin/<id>/<Name>` whose methods take an explicit actor (who acted, for audit and hook taps) and never an `Api.UserPrincipal`. The interface owns its invariants, its veto and observe points, its events and its transaction, so every caller gets them. The plugin's own service then shrinks to the authorized layer: who may call what.
@@ -51,7 +55,7 @@ The compiler checks that every exposed key is in the plugin's own namespace and 
 
 ## Ports are required, never provided (ADR-EA-010)
 
-A plugin that needs a mailer, a crypto source, a rate limiter or a transaction boundary declares it in its layer's requirements and never builds one. The application provides the implementation. The template requires `Crypto` and `SqlClient` and provides neither. Inside a records service, do not reach into another plugin's tables.
+A plugin that needs a mailer, a crypto source, a rate limiter or a transaction boundary declares it in its layer's requirements and never builds one. The application provides the implementation. The template requires `SecureRandom` and `SqlClient` and provides neither. Inside a records service, do not reach into another plugin's tables.
 
 ## Hooks
 
@@ -67,7 +71,7 @@ A plugin that needs a mailer, a crypto source, a rate limiter or a transaction b
 
 Two facts about a plugin are read by tooling without building its layer, so the plugin **declares** them (PV-241):
 
-- **`ports`.** `AuthPlugin.layer(Self, { ports: [Mailer.Mailer, RateLimiter.RateLimiter], ... })` lists the port classes (`@awthaq/ports`) the layer requires. They join the layer's `RIn` like `dependsOn`, and the compiler checks the list is complete: a service whose key is `.../ports/...` that `make`, the handlers or `contributes` require but `ports` omits fails to type-check, naming the missing key. `awthaq plugin list --graph` prints them (`Manifest.ports`). Core services, effect's own (`Crypto`, `SqlClient`) and your own records need no entry.
+- **`ports`.** `AuthPlugin.layer(Self, { ports: [Mailer.Mailer, RateLimiter.RateLimiter], ... })` lists the port classes (`@awthaq/ports`) the layer requires. They join the layer's `RIn` like `dependsOn`, and the compiler checks the list is complete: a service whose key is `.../ports/...` that `make`, the handlers or `contributes` require but `ports` omits fails to type-check, naming the missing key. `awthaq plugin list --graph` prints them (`Manifest.ports`). Core services, effect's own (`SecureRandom`, `Digest`, `Mac`, `SqlClient`) and your own records need no entry.
 - **`rateLimitRules`.** A plugin that throttles declares its rules once, as a typed table, and spends them by name (BEH-EA-105 to 111):
 
   ```ts
