@@ -6,13 +6,21 @@ packages:
   # quickstart.
   - examples/*
 
-# `effect` is pinned exact, not a caret range, and (once packages exist) every
-# @awthaq package is expected to publish that exact pin as its own
-# runtime dependency, the same discipline qadi (../qadi) follows. This is
-# deliberate for as long as effect ships as an rc: two different rc builds
-# are not guaranteed ABI-compatible the way two semver-compatible stable
-# releases are, so a resolution conflict on mismatch should be loud, not
-# silent. Revisit once effect 4.0.0 ships stable.
+# Two catalogs, the same model qadi (../qadi/pnpm-workspace.yaml) uses:
+#
+# - `catalog:` is what this repository develops and tests against. Ranges, not exact pins:
+#   `pnpm-lock.yaml` is what makes an install reproducible (`pnpm update -r effect ...` moves it).
+# - `catalogs.peer` is what published @awthaq packages ask the host for. effect, @effect/*, qadi
+#   and React are *peer* dependencies, never runtime ones: awthaq's public API is made of their
+#   classes (`Context.Service`, `Data.TaggedError`, Schema, `HttpApiGroup`), so a second copy in
+#   the host's tree would be a silent type and identity mismatch, not a loud failure. `pnpm pack`
+#   writes `catalog:peer` verbatim into the tarball, so this catalog holds ranges only — an exact
+#   pin here would strand every consumer on one build. Each package also lists the same names
+#   under `devDependencies` (`catalog:`) so this repository's own builds and tests resolve them.
+#
+# The effect floor is the minor this code is built and tested against. effect 4.1 still tags
+# its http, http-api, sql and crypto modules `@stability unstable`, so a later 4.x minor can
+# change them; when it does, this range is where the supported window is narrowed or moved.
 catalog:
   effect: ^4.1.2
   "@effect/platform-node": ^4.1.2
@@ -21,6 +29,9 @@ catalog:
   "@effect/sql-libsql": ^4.1.2
   "@effect/vitest": ^4.1.2
   "@effect/atom-react": ^4.1.2
+  "@qadi/core": ^0.11.0
+  "@qadi/http": ^0.11.0
+  "@qadi/react": ^0.11.0
   vitest: 5.0.2
   "@vitest/coverage-v8": 5.0.2
   # Exact, like `@effect/tsgo` below: `effect-tsgo patch` (the root `prepare`) patches the
@@ -39,6 +50,19 @@ catalog:
   "@types/react-dom": 19.3.0
   "@testing-library/react": ^16.3.2
   happy-dom: ^20.14.6
+
+# Ranges only (see the comment above `catalog:`): what a published package's `peerDependencies`
+# ask the host for.
+catalogs:
+  peer:
+    effect: ^4.1.0
+    "@effect/platform-node": ^4.1.0
+    "@effect/sql-sqlite-node": ^4.1.0
+    "@effect/sql-pg": ^4.1.0
+    "@effect/atom-react": ^4.1.0
+    "@qadi/core": ^0.11.0
+    "@qadi/http": ^0.11.0
+    "@qadi/react": ^0.11.0
 
 minimumReleaseAgeExclude:
   - "@effect-cucumber/gherkin@0.10.1"

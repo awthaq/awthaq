@@ -251,6 +251,58 @@ const dependencyClassificationProblems = (pkgDir, manifest) => {
   return problems;
 };
 
+// Host dependencies: effect, @effect/*, qadi and the UI frameworks are the host application's to
+// install (see the comment above `catalog:` in pnpm-workspace.yaml). awthaq's public API is made of
+// their classes, so a second copy bundled as a runtime dependency would be a silent identity
+// mismatch. A package with a `bin` runs on its own and is exempt: it brings its own effect.
+const isHostLibrary = (name) =>
+  name === "effect" ||
+  name.startsWith("@effect/") ||
+  name.startsWith("@qadi/") ||
+  ["react", "react-dom", "next"].includes(name);
+
+/** `catalogs.peer` from pnpm-workspace.yaml: two-space-indented `name: range` lines under `peer:`. */
+const peerCatalog = (() => {
+  const text = readFileSync(path.join(rootDir, "pnpm-workspace.yaml"), "utf8");
+  const block = /^catalogs:\n {2}peer:\n((?: {4}.*\n)+)/m.exec(text)?.[1] ?? "";
+  return new Map([...block.matchAll(/^ {4}"?([^":]+)"?:\s*(\S+)\s*$/gm)].map((m) => [m[1], m[2]]));
+})();
+
+/** A range a consumer's resolver can satisfy with more than one build: not exact, not a prerelease. */
+const isPublishableRange = (range) => !/^\d+\.\d+\.\d+$/.test(range) && !/-/.test(range);
+
+const hostDependencyProblems = (manifest) => {
+  const problems = [];
+  if (manifest.bin === undefined) {
+    for (const name of Object.keys(manifest.dependencies ?? {})) {
+      if (isHostLibrary(name)) {
+        problems.push(
+          `"${name}" is a runtime dependency; the host provides it, so declare it in peerDependencies ("catalog:peer")`,
+        );
+      }
+    }
+  }
+  for (const [name, spec] of Object.entries(manifest.peerDependencies ?? {})) {
+    if (spec === "catalog:" || spec === "catalog:default") {
+      problems.push(
+        `peer "${name}" uses the default catalog, which holds dev versions; use "catalog:peer"`,
+      );
+      continue;
+    }
+    const range = spec === "catalog:peer" ? peerCatalog.get(name) : spec;
+    if (range === undefined) {
+      problems.push(
+        `peer "${name}" is "catalog:peer" but pnpm-workspace.yaml's catalogs.peer has no entry for it`,
+      );
+    } else if (!isPublishableRange(range)) {
+      problems.push(
+        `peer "${name}" resolves to "${range}", an exact or prerelease version; peers must be ranges`,
+      );
+    }
+  }
+  return problems;
+};
+
 for (const packageJsonPath of packageJsonPaths) {
   const pkgDir = path.dirname(packageJsonPath);
   const pkgName = path.basename(pkgDir);
@@ -331,9 +383,11 @@ for (const packageJsonPath of packageJsonPaths) {
   }
 
   // 6. MTS-010: dependency classification against the built output.
-  problems.push(
-    ...dependencyClassificationProblems(pkgDir, JSON.parse(readFileSync(packageJsonPath, "utf8"))),
-  );
+  const manifest = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  problems.push(...dependencyClassificationProblems(pkgDir, manifest));
+
+  // 7. Host libraries are peers with real ranges, never bundled runtime dependencies.
+  problems.push(...hostDependencyProblems(manifest));
 
   if (problems.length > 0) {
     console.error(`package:smoke: FAIL ${pkgName}`);

@@ -35,16 +35,20 @@
     "@awthaq/core": "workspace:*",
     "@awthaq/oauth": "workspace:*",
     "@awthaq/ports": "workspace:*",
-    "@awthaq/sql": "workspace:*",
-    "@qadi/core": "^0.11.0",
-    "effect": "catalog:"
+    "@awthaq/sql": "workspace:*"
   },
   "devDependencies": {
     "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@qadi/core": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@qadi/core": "catalog:peer",
+    "effect": "catalog:peer"
   },
   "engines": {
     "node": ">=22.12.0"

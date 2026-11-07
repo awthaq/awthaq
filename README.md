@@ -450,6 +450,8 @@ Each package lets imported users keep their password: it verifies the old hash o
 
 No `@awthaq/*` package is published to npm — every `package.json` in `packages/` is still `"private": true`. A provenance-publish workflow (`.github/workflows/release.yml`, npm OIDC trusted publishing, no stored tokens) is wired and ready per [`spec/process/definitions-of-done.md`](spec/process/definitions-of-done.md)'s gate 12, but going live needs a one-time, manual trusted-publisher registration on npmjs.com that no automation here can perform. Until then, use this library from a clone: `pnpm install && pnpm build`, then reference packages the way the quickstart above does, or `pnpm link` a package into another project.
 
+Once published, the packages do not bring their own `effect`: `effect`, `@effect/*`, `@qadi/*` and React are `peerDependencies` (ranges such as `effect: ^4.1.0`), so the application installs them once and every `@awthaq/*` package shares that copy. Install them alongside awthaq (`npm install effect @awthaq/core ...`), plus whichever `@effect/sql-*` driver and `@effect/platform-*` runtime your composition provides. The `awthaq` CLI is the exception: it runs on its own and depends on `effect` directly.
+
 ## Documentation
 
 - [`spec/README.md`](spec/README.md) — the canonical specification: requirements, decisions, behaviors, invariants, traceability.

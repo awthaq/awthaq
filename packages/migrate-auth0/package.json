@@ -27,14 +27,17 @@
   "dependencies": {
     "@awthaq/core": "workspace:*",
     "@awthaq/ports": "workspace:*",
-    "bcryptjs": "^3.0.3",
-    "effect": "catalog:"
+    "bcryptjs": "^3.0.3"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:peer"
   },
   "engines": {
     "node": ">=22.12.0"

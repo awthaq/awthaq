@@ -26,17 +26,17 @@
   },
   "dependencies": {
     "@awthaq/api": "workspace:*",
-    "@awthaq/client": "workspace:*",
-    "effect": "catalog:"
+    "@awthaq/client": "workspace:*"
   },
   "devDependencies": {
     "@effect/atom-react": "catalog:",
     "@effect/vitest": "catalog:",
-    "@qadi/core": "^0.11.0",
-    "@qadi/react": "^0.11.0",
+    "@qadi/core": "catalog:",
+    "@qadi/react": "catalog:",
     "@testing-library/react": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "effect": "catalog:",
     "happy-dom": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
@@ -44,9 +44,10 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@effect/atom-react": "catalog:",
-    "@qadi/core": "^0.11.0",
-    "@qadi/react": "^0.11.0",
+    "@effect/atom-react": "catalog:peer",
+    "@qadi/core": "catalog:peer",
+    "@qadi/react": "catalog:peer",
+    "effect": "catalog:peer",
     "react": ">=19.3.0"
   },
   "engines": {
