@@ -1,7 +1,7 @@
 // MLO-009/ARF-007/ARF-009: the shared, purpose-checked mailed-token codec.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -87,8 +87,8 @@ describe("VerificationLink.issue", () => {
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const crypto = yield* Crypto.Crypto;
-        const deps = { verification, crypto };
+        const random = yield* SecureRandom.SecureRandom;
+        const deps = { verification, random };
         const ttl = Duration.hours(1);
         const a = yield* VerificationLink.issue(deps, ResetLink, { ttl, userId: userA });
         const b = yield* VerificationLink.issue(deps, ResetLink, { ttl, userId: userA });
@@ -140,9 +140,9 @@ describe("VerificationLink.redeemer", () => {
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         const { budget } = yield* recording;
-        const issued = yield* VerificationLink.issue({ verification, crypto }, ResetLink, {
+        const issued = yield* VerificationLink.issue({ verification, random }, ResetLink, {
           ttl,
           userId: userA,
         });
@@ -192,9 +192,9 @@ describe("VerificationLink.redeemer", () => {
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         const { budget, spent } = yield* recording;
-        const verifyIssued = yield* VerificationLink.issue({ verification, crypto }, VerifyLink, {
+        const verifyIssued = yield* VerificationLink.issue({ verification, random }, VerifyLink, {
           ttl,
           userId: userA,
         });
@@ -215,9 +215,9 @@ describe("VerificationLink.redeemer", () => {
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         const { budget, spent, note } = yield* recording;
-        const issued = yield* VerificationLink.issue({ verification, crypto }, ResetLink, {
+        const issued = yield* VerificationLink.issue({ verification, random }, ResetLink, {
           ttl,
           userId: userA,
         });
@@ -243,8 +243,8 @@ describe("VerificationLink.redeemer", () => {
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const crypto = yield* Crypto.Crypto;
-        const issued = yield* VerificationLink.issue({ verification, crypto }, ResetLink, {
+        const random = yield* SecureRandom.SecureRandom;
+        const issued = yield* VerificationLink.issue({ verification, random }, ResetLink, {
           ttl,
           userId: userA,
         });
@@ -269,8 +269,8 @@ describe("VerificationLink.redeemer", () => {
   it.effect("ARF-002: a beforeClaim failure surfaces as itself and leaves the token live", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
-      const crypto = yield* Crypto.Crypto;
-      const issued = yield* VerificationLink.issue({ verification, crypto }, ResetLink, {
+      const random = yield* SecureRandom.SecureRandom;
+      const issued = yield* VerificationLink.issue({ verification, random }, ResetLink, {
         ttl,
         userId: userA,
       });
@@ -343,8 +343,8 @@ describe("VerificationLink.redeemer", () => {
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const crypto = yield* Crypto.Crypto;
-        const deps = { verification, crypto };
+        const random = yield* SecureRandom.SecureRandom;
+        const deps = { verification, random };
         const first = yield* VerificationLink.issue(deps, ChallengeLike, { ttl, userId: userA });
         const second = yield* VerificationLink.issue(deps, ChallengeLike, { ttl, userId: userA });
         const redeem = VerificationLink.redeemer(ChallengeLike, {
@@ -363,8 +363,8 @@ describe("VerificationLink.redeemer", () => {
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const crypto = yield* Crypto.Crypto;
-        const deps = { verification, crypto };
+        const random = yield* SecureRandom.SecureRandom;
+        const deps = { verification, random };
         const a = yield* VerificationLink.issue(deps, ChallengeLike, { ttl, userId: userA });
         yield* VerificationLink.issue(deps, ChallengeLike, { ttl, userId: userB });
         const secretOfA = Redacted.value(a.token).split(".").pop() ?? "";
@@ -389,8 +389,8 @@ describe("VerificationLink.redeemer", () => {
     () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const crypto = yield* Crypto.Crypto;
-        const deps = { verification, crypto };
+        const random = yield* SecureRandom.SecureRandom;
+        const deps = { verification, random };
         const redeem = bareRedeem(verification);
 
         const rolledBack = yield* VerificationLink.issue(deps, ResetLink, { ttl, userId: userA });
@@ -431,8 +431,8 @@ describe("VerificationLink.redeemer", () => {
   it.effect("an expired link is refused missed", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
-      const crypto = yield* Crypto.Crypto;
-      const issued = yield* VerificationLink.issue({ verification, crypto }, ResetLink, {
+      const random = yield* SecureRandom.SecureRandom;
+      const issued = yield* VerificationLink.issue({ verification, random }, ResetLink, {
         ttl: Duration.minutes(5),
         userId: userA,
       });
@@ -447,8 +447,8 @@ describe("VerificationLink.redeemer", () => {
   it.effect("a forAddress link with no user hands use None, and its payload typed", () =>
     Effect.gen(function* () {
       const verification = yield* Verification.Verification;
-      const crypto = yield* Crypto.Crypto;
-      const issued = yield* VerificationLink.issue({ verification, crypto }, AddressLink, {
+      const random = yield* SecureRandom.SecureRandom;
+      const issued = yield* VerificationLink.issue({ verification, random }, AddressLink, {
         ttl,
         payload: { note: "to a new address" },
       });

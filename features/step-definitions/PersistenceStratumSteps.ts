@@ -21,12 +21,12 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as SqlClient from "effect/sql/SqlClient";
 import { cell, put, take, type World } from "./FoundationsWorld.ts";
 import {
   collectSpans,
@@ -38,7 +38,7 @@ import {
   sealedStack,
   withDatabase,
 } from "./PersistenceStratumWorld.ts";
-import * as HttpServer from "effect/unstable/http/HttpServer";
+import * as HttpServer from "effect/http/HttpServer";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));

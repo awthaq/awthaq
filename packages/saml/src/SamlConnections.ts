@@ -29,7 +29,7 @@ import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
 import { X509Certificate } from "node:crypto";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -203,7 +203,7 @@ export class SamlConnectionStore extends Context.Service<
   SamlConnectionStoreShape
 >()("awthaq/saml/SamlConnectionStore") {}
 
-/** Requires `SamlRecords`, `DomainClaims` (organization's record store), `SqlTransaction`, the exposed `OrganizationDirectory`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `Crypto` and `SamlConfig`. */
+/** Requires `SamlRecords`, `DomainClaims` (organization's record store), `SqlTransaction`, the exposed `OrganizationDirectory`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `SecureRandom` and `SamlConfig`. */
 export const layerStore = Layer.effect(
   SamlConnectionStore,
   Effect.gen(function* () {
@@ -213,7 +213,7 @@ export const layerStore = Layer.effect(
     const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const settings = yield* SamlConfig.SamlConfig;
 
     /** BEH-EA-317: a domain another organization owns, over any protocol, is a taken domain; the claim and the row are one unit. */
@@ -362,9 +362,9 @@ export const layerStore = Layer.effect(
         input.roleMapping === undefined
           ? undefined
           : yield* validatedRoleMapping(input.organizationId, input.roleMapping);
-      const id = yield* crypto.randomUUIDv7.pipe(
-        Effect.catch(StoreFailure.storeUnavailable("SamlConnectionStore.create")),
-      );
+      const id = yield* random
+        .uuidV7()
+        .pipe(Effect.catch(StoreFailure.storeUnavailable("SamlConnectionStore.create")));
       const created = yield* claimed(
         {
           organizationId: input.organizationId,

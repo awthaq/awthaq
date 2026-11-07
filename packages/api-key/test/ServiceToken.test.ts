@@ -3,7 +3,7 @@
 import { SecretHash, Users } from "@awthaq/core";
 import { Jwt } from "@awthaq/jwt";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -40,12 +40,12 @@ const suite = (store: HarnessOptions["store"]) => {
       Effect.gen(function* () {
         const apiKey = yield* ApiKey.ApiKey;
         const records = yield* ApiKeyClientRecords.ApiKeyClientRecords;
-        const crypto = yield* Crypto.Crypto;
+        const hasher = yield* Digest.Digest;
         const created = yield* apiKey.registerClient(owner, { name: "billing", scopes: ["a:b"] });
         const secret = secretOf(created);
         assert.match(created.view.clientId, /^svc_/);
         const stored = Option.getOrThrow(yield* records.findById(created.view.clientId));
-        assert.strictEqual(stored.secretHash, yield* SecretHash.digest(crypto, secret));
+        assert.strictEqual(stored.secretHash, yield* SecretHash.digest(hasher, secret));
         assert.notInclude(JSON.stringify(stored), secret);
         assert.notInclude(JSON.stringify(yield* apiKey.listClients(owner)), secret);
       }).pipe(provide()),

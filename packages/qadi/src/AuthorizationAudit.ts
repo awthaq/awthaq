@@ -12,8 +12,8 @@ import { PublicEndpoint, RequirePermission, RequiredPermission } from "@qadi/htt
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApi from "effect/http-api/HttpApi";
+import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 
 /** One endpoint in a `RequirePermission`-guarded group that says nothing about who may call it. */
 export interface UnannotatedEndpoint {

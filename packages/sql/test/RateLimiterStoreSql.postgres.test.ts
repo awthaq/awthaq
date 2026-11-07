@@ -8,7 +8,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as RateLimiterStoreSql from "../src/RateLimiterStoreSql.ts";
 
 const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];

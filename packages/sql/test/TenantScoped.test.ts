@@ -5,7 +5,7 @@ import { Tenant } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TenantScope from "../src/TenantScope.ts";
 import * as TenantScoped from "../src/TenantScoped.ts";
 import * as TestSql from "../../test/src/TestSql.ts";

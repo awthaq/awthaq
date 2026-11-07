@@ -8,7 +8,7 @@ import { TestSql } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Saml from "../src/Saml.ts";
 
 const all = Auth.make([Organization.Organization, Saml.Saml]).migrations;

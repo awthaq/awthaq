@@ -9,16 +9,12 @@
 // human-chosen secret; that is `PasswordHasher`'s job.
 
 import { Hmac } from "@awthaq/ports";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
-import type * as PlatformError from "effect/PlatformError";
 
 /** SHA-256 of `secret`'s UTF-8 bytes, lower-case hex — the only form persisted. */
-export const digest = (
-  crypto: Crypto.Crypto,
-  secret: string,
-): Effect.Effect<string, PlatformError.PlatformError> =>
-  crypto.digest("SHA-256", new TextEncoder().encode(secret)).pipe(Effect.map(Hmac.toHex));
+export const digest = (hasher: Digest.Digest["Service"], secret: string): Effect.Effect<string> =>
+  hasher.digest(Digest.sha256, new TextEncoder().encode(secret)).pipe(Effect.map(Hmac.toHex));
 
 /**
  * Constant-time equality of two `digest` outputs (fixed-length hex, so length is

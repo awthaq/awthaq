@@ -6,7 +6,7 @@ import { TestAuth, TestSql } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as DomainClaims from "../src/DomainClaims.ts";
 import * as Organization from "../src/Organization.ts";
 import { ambientOrganization, vitestFramework } from "./support.ts";

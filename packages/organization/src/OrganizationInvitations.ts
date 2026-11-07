@@ -20,7 +20,8 @@ import { AuthEvents, Errors, HookPoint, Users } from "@awthaq/core";
 import { Defects, Hmac, Mailer, SqlTransaction, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -183,7 +184,8 @@ export class OrganizationInvitations extends Context.Service<
       const users = yield* Users.Users;
       const mailer = yield* Mailer.Mailer;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
+      const hasher = yield* Digest.Digest;
       // EP-007 (ADR-EA-018): the configuration in force is decided per operation.
       const builtConfig = yield* OrganizationConfig;
       const configNow = Tenant.configInForce(OrganizationConfig, builtConfig);
@@ -200,12 +202,10 @@ export class OrganizationInvitations extends Context.Service<
 
       /** Hex SHA-256 of an invitation token: the only form of it ever stored. */
       const hashToken = (token: string) =>
-        crypto
-          .digest("SHA-256", new TextEncoder().encode(token))
-          .pipe(Effect.map(hexOf), Effect.orDie);
+        hasher.digest(Digest.sha256, new TextEncoder().encode(token)).pipe(Effect.map(hexOf));
 
       const mintToken = Effect.gen(function* () {
-        const token = hexOf(yield* crypto.randomBytes(32).pipe(Effect.orDie));
+        const token = hexOf(yield* random.randomBytes(32));
         return { token, tokenHash: yield* hashToken(token) };
       });
 

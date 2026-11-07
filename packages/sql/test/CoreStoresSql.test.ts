@@ -24,8 +24,8 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as CoreStoresSql from "../src/CoreStoresSql.ts";
 import * as Models from "../src/Models.ts";
@@ -143,10 +143,17 @@ describe("CoreStoresSql (the bundle)", () => {
 });
 
 describe("CoreStoresSql spans (EOTS-008)", () => {
+  /**
+   * A statement's client span. effect 4.1 names it after the database (OpenTelemetry database
+   * span conventions: `db.namespace`, else `db.system.name`, else `sql.execute`), so it is
+   * recognised by the `db.query.text` attribute every statement span carries, not by name.
+   */
+  const isStatement = (span: Tracer.NativeSpan): boolean => span.attributes.has("db.query.text");
+
   const isChildOf = (child: Tracer.NativeSpan, parent: Tracer.NativeSpan): boolean =>
     Option.isSome(child.parent) && child.parent.value.spanId === parent.spanId;
 
-  it.effect("statement spans are named after the statement and parent sql.execute", () =>
+  it.effect("statement spans are named after the statement and parent the statement span", () =>
     Effect.gen(function* () {
       const { spans, tracer } = collectSpans();
       const users = yield* UserStore.UserStore;
@@ -180,8 +187,8 @@ describe("CoreStoresSql spans (EOTS-008)", () => {
         assert.isDefined(span, `${name} span`);
         if (span === undefined) continue;
         assert.isTrue(
-          spans.some((s) => s.name === "sql.execute" && isChildOf(s, span)),
-          `${name} parents a sql.execute span`,
+          spans.some((s) => isStatement(s) && isChildOf(s, span)),
+          `${name} parents a statement span`,
         );
       }
     }).pipe(Effect.provide(Bundle())),

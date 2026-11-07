@@ -7,7 +7,7 @@
 import * as Rendezvous from "../../../test/src/Rendezvous.ts";
 import type { SqlTransaction } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
-import type * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -30,7 +30,7 @@ type BaseServices =
   | Sessions.Sessions
   | AuthEvents.AuthEvents
   | AuditLog.AuditLog
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | SqlTransaction.SqlTransaction;
 
 export interface EnvOptions {

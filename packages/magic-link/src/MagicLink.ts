@@ -37,15 +37,15 @@ import type { Errors } from "@awthaq/core";
 import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as MagicLinkApi from "./MagicLinkApi.ts";
 
@@ -218,7 +218,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
       const mailer = yield* Mailer.Mailer;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const settings = yield* MagicLinkConfig;
       const channel = yield* Channel.make;
       // ERS-002: mail is dispatched in the background, owned by this plugin's scope.
@@ -259,7 +259,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
             });
             if (!fresh) return;
             const issued = yield* VerificationLink.issue(
-              { verification, crypto },
+              { verification, random },
               MagicLinkPurpose,
               {
                 ttl: settings.ttl,

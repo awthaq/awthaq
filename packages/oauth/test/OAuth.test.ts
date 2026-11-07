@@ -26,7 +26,7 @@ import * as OAuth from "../src/OAuth.ts";
 import * as OAuthConnections from "../src/OAuthConnections.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { FakeReply, fakeHttpClient, hangingRoute, type FakeRoutes } from "./FakeProvider.ts";
 import { Rendezvous, SignInProbe, TestAuth } from "@awthaq/test";
 

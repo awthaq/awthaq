@@ -9,14 +9,14 @@
 import { AccountStore, type Ids, PasswordHasher, type Sealed } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import { relabel, type StoreUnavailable } from "./Errors.ts";
 import * as Tenant from "./Tenant.ts";
 import { UserId } from "./Users.ts";
 
@@ -221,47 +221,43 @@ const toRecord = (identity: AccountStore.AccountIdentity): AccountRecord => ({
 });
 
 /**
- * Written once over `AccountStore` (ADR-EA-041). Needs the store and `Crypto` (the id); the clock is
+ * Written once over `AccountStore` (ADR-EA-041). Needs the store and `SecureRandom` (the id); the clock is
  * read once per operation and handed to the store, so a row never carries two instants.
  */
 export const layer = Layer.effect(
   Accounts,
   Effect.gen(function* () {
     const store = yield* AccountStore.AccountStore;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const policyNow = Tenant.configInForce(AccountsPolicy, yield* AccountsPolicy);
 
     const notFound = (id: AccountId) =>
       new AccountNotFound({ message: "awthaq: no such account", id });
 
-    const link: AccountsShape["link"] = Effect.fnUntraced(
-      function* (input) {
-        const id = AccountId(yield* crypto.randomUUIDv7);
-        const now = yield* DateTime.now;
-        const stored = yield* store.insertIfAbsent({
-          id,
-          userId: input.userId,
+    const link: AccountsShape["link"] = Effect.fnUntraced(function* (input) {
+      const id = AccountId(yield* random.uuidV7());
+      const now = yield* DateTime.now;
+      const stored = yield* store.insertIfAbsent({
+        id,
+        userId: input.userId,
+        providerId: input.providerId,
+        subject: input.subject,
+        issuer: input.issuer ?? "",
+        credentialHash: Option.fromNullishOr(input.credentialHash),
+        tokens: Option.fromNullishOr(input.tokens),
+        createdAt: now,
+        updatedAt: now,
+      });
+      // BEH-EA-043: `(providerId, subject, issuer)` is unique; the store says the key is taken.
+      if (Option.isNone(stored)) {
+        return yield* new AccountAlreadyLinked({
+          message: "awthaq: account already linked",
           providerId: input.providerId,
           subject: input.subject,
-          issuer: input.issuer ?? "",
-          credentialHash: Option.fromNullishOr(input.credentialHash),
-          tokens: Option.fromNullishOr(input.tokens),
-          createdAt: now,
-          updatedAt: now,
         });
-        // BEH-EA-043: `(providerId, subject, issuer)` is unique; the store says the key is taken.
-        if (Option.isNone(stored)) {
-          return yield* new AccountAlreadyLinked({
-            message: "awthaq: account already linked",
-            providerId: input.providerId,
-            subject: input.subject,
-          });
-        }
-        return toRecord(stored.value);
-      },
-      Effect.catchTag("PlatformError", storeUnavailable("Accounts.link")),
-      relabel("Accounts.link"),
-    );
+      }
+      return toRecord(stored.value);
+    }, relabel("Accounts.link"));
 
     const findByProviderSubject: AccountsShape["findByProviderSubject"] = (
       providerId,

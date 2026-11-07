@@ -12,7 +12,7 @@ import { OAuthProvider } from "@awthaq/oauth";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ConfigProvider from "effect/ConfigProvider";
 import {
   World,

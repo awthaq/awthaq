@@ -37,7 +37,8 @@ import { Defects, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { SealedColumn } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -190,7 +191,8 @@ export const layer = Layer.effect(
     const codes = yield* TwoFactorRecoveryCodes;
     const hasher = yield* PasswordHasher.PasswordHasher;
     const verification = yield* Verification.Verification;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const mac = yield* Mac.Mac;
     const limiter = yield* RateLimiter.RateLimiter;
     const events = yield* AuthEvents.AuthEvents;
     const config = yield* TwoFactorConfig;
@@ -265,7 +267,7 @@ export const layer = Layer.effect(
       const key = yield* readSecret(record);
       const now = yield* DateTime.now;
       return yield* Totp.verifyTotp(
-        crypto,
+        mac,
         key,
         presented.replaceAll(/\s/g, ""),
         Math.floor(DateTime.toEpochMillis(now) / 1000),
@@ -294,7 +296,7 @@ export const layer = Layer.effect(
 
     const mintRecoveryCodes = Effect.fnUntraced(function* (userId: Users.UserId) {
       const plain = yield* RecoveryCodes.generate(
-        crypto,
+        random,
         config.recoveryCodeCount,
         config.recoveryCodeLength,
       ).pipe(Effect.orDie);
@@ -310,7 +312,7 @@ export const layer = Layer.effect(
       function* (userId, accountName) {
         if (yield* isEnrolled(userId)) return yield* Effect.fail(new TwoFactorAlreadyEnabled());
         // 160 bits (RFC 4226 §4 R6: at least 128, 160 recommended).
-        const bytes = yield* crypto.randomBytes(20).pipe(Effect.orDie);
+        const bytes = yield* random.randomBytes(20);
         const secret = Totp.base32Encode(bytes);
         // False = a confirmed row appeared meanwhile: still "already enabled", nothing was written.
         if (!(yield* secrets.upsertPending(userId, Redacted.make(secret)))) {
@@ -431,7 +433,7 @@ export const layer = Layer.effect(
 
     const issueChallenge: SecondFactorShape["issueChallenge"] = Effect.fnUntraced(
       function* (input) {
-        const issued = yield* VerificationLink.issue({ verification, crypto }, ChallengeLink, {
+        const issued = yield* VerificationLink.issue({ verification, random }, ChallengeLink, {
           ttl: config.challengeTtl,
           userId: input.userId,
           payload: {

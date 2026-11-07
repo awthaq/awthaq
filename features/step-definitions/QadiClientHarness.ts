@@ -35,8 +35,8 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import type * as Atom from "effect/unstable/reactivity/Atom";
-import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
+import type * as Atom from "effect/reactivity/Atom";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createElement } from "react";
 import type { ReactNode } from "react";
 import { renderToString } from "react-dom/server";
@@ -170,13 +170,18 @@ export const decideOnServer = (fixture: GateFixture, subject: AuthSubject, polic
   Effect.gen(function* () {
     const registry = registryFor(fixture, subject);
     registry.mount(fixture.atoms.decision(policy));
-    const decision: Decision | undefined = yield* waitFor(
+    const decision = yield* waitFor(
       "the server decision",
       () => currentDecision(registry.get(fixture.atoms.decision(policy))),
       (value) => value !== undefined,
     );
     if (decision === undefined) return yield* Effect.die(new Error("no server decision"));
-    return decision;
+    // qadi 0.11: a seeded (server-rendered) decision is its own type; the server only evaluates.
+    if (decision._tag === "SeededAllow" || decision._tag === "SeededDeny") {
+      return yield* Effect.die(new Error("the server decision was seeded, not evaluated"));
+    }
+    const evaluated: Decision = decision;
+    return evaluated;
   });
 
 /** What the page sends the client and what the client turns it into (`initialValues` for the provider). */

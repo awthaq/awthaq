@@ -19,15 +19,15 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Option from "effect/Option";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpRouter from "effect/http/HttpRouter";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import { resolveCredential } from "./shared/ResolveCredential.ts";
 
@@ -172,7 +172,7 @@ const makeApp = <A, E>(appLayer: Layer.Layer<A | TestAuth.AppNeeds, E>) => {
   return { handler, withContext, groups, layer: appLayer };
 };
 
-export const GROUP_KEY_PREFIX = "effect/httpapi/HttpApiGroup/";
+export const GROUP_KEY_PREFIX = "effect/http-api/HttpApiGroup/";
 
 export const passwordRoutes = TestAuth.layer(builtPassword, {
   services: hostServices,

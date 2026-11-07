@@ -13,7 +13,6 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -21,7 +20,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as LayerMap from "effect/LayerMap";
-import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as References from "effect/References";
@@ -1504,41 +1502,6 @@ describe("Sessions infrastructure failures (MA-004)", () => {
         "Sessions.purgeExpired",
       );
     }).pipe(Effect.provide(DownLayer)),
-  );
-
-  const BrokenCrypto = Layer.succeed(
-    Crypto.Crypto,
-    Crypto.make({
-      randomBytes: (size) => new Uint8Array(size),
-      digest: () =>
-        Effect.fail(
-          PlatformError.systemError({
-            module: "Crypto",
-            method: "digest",
-            _tag: "Unknown",
-            description: "provider down",
-          }),
-        ),
-    }),
-  );
-  const BrokenCryptoLayer = Sessions.layer
-    .pipe(Layer.provide(Persistence.memory))
-    .pipe(
-      Layer.provide(BrokenCrypto),
-      Layer.provide(AuthEvents.layer),
-      Layer.provide(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-    );
-
-  it.effect("a crypto PlatformError surfaces as StoreUnavailable", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Sessions.Sessions;
-      const issueFailure = yield* sessions.issue({ userId }).pipe(Effect.flip);
-      assert.strictEqual(issueFailure._tag, "StoreUnavailable");
-      const verifyFailure = yield* sessions
-        .verify(Redacted.make("some-id.some-secret"))
-        .pipe(Effect.flip);
-      assert.strictEqual(verifyFailure._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(BrokenCryptoLayer)),
   );
 });
 

@@ -23,8 +23,8 @@ import { Defects, Ids } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import * as Model from "effect/unstable/schema/Model";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Model from "effect/schema/Model";
+import type * as SqlClient from "effect/sql/SqlClient";
 
 // MA-008: one brand per id, declared at the ports stratum (plan 02) and re-exported here.
 export const UserId = Ids.UserId;

@@ -7,7 +7,7 @@ import { SignInProbe } from "@awthaq/test";
 import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -206,10 +206,10 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
         // Enrol: a fresh session for the user, enable, confirm with a real TOTP.
         const fresh = yield* sessions.issue({ userId: user.id });
         const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
-        const crypto = yield* Crypto.Crypto;
+        const mac = yield* Mac.Mac;
         const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
         const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
-        const code = yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 });
+        const code = yield* Totp.totp(mac, key, now, { period: 30, digits: 6 });
         yield* twoFactor.confirm(user.id, Redacted.make(code));
         const before = (yield* audit.list({ eventTag: "auth.session.issued" })).length;
 
@@ -267,12 +267,12 @@ describe("MagicLink.verify redeems the link (ADR-EA-039)", () => {
         });
         const fresh = yield* sessions.issue({ userId: user.id });
         const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
-        const crypto = yield* Crypto.Crypto;
+        const mac = yield* Mac.Mac;
         const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
         const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
         yield* twoFactor.confirm(
           user.id,
-          Redacted.make(yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 })),
+          Redacted.make(yield* Totp.totp(mac, key, now, { period: 30, digits: 6 })),
         );
         const { token } = yield* requestAndRead("divert@example.com");
         const diverted = yield* magicLink.verify({ token }).pipe(Effect.flip);

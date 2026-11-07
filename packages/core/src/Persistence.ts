@@ -27,7 +27,7 @@ import {
 } from "@awthaq/ports";
 import { CoreStoresSql, type SealedColumn } from "@awthaq/sql";
 import * as Layer from "effect/Layer";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as SqlClient from "effect/sql/SqlClient";
 
 /**
  * TRBS-005: test-grade, single-process. Every store is a `Ref`, and the transaction is `layerNoop`:

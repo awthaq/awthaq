@@ -2,7 +2,7 @@
 // the wire shapes they carry. spec/behaviors/04-contract-stratum.md, BEH-EA-026/031.
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
-import * as OpenApi from "effect/unstable/httpapi/OpenApi";
+import * as OpenApi from "effect/http-api/OpenApi";
 import { describe, expect, it } from "vitest";
 import * as Account from "../src/Account.ts";
 import * as AuthCore from "../src/AuthCore.ts";

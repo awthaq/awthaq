@@ -15,9 +15,9 @@
 import { Api } from "@awthaq/api";
 import { HookPoint } from "@awthaq/core";
 import * as Schema from "effect/Schema";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { AdminActionDenied, LimitSchema, ReasonSchema } from "./AdminApi.ts";
 
 /** An organization id that names no organization — only ever reported to a caller who passed the gate. */

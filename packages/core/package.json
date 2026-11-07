@@ -27,15 +27,18 @@
   "dependencies": {
     "@awthaq/api": "workspace:*",
     "@awthaq/ports": "workspace:*",
-    "@awthaq/sql": "workspace:*",
-    "effect": "catalog:"
+    "@awthaq/sql": "workspace:*"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:peer"
   },
   "engines": {
     "node": ">=22.12.0"

@@ -5,7 +5,7 @@ import { Mailer } from "@awthaq/ports";
 import { SignInProbe } from "@awthaq/test";
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -271,12 +271,12 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
         });
         const fresh = yield* sessions.issue({ userId: user.id });
         const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
-        const crypto = yield* Crypto.Crypto;
+        const mac = yield* Mac.Mac;
         const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
         const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
         yield* twoFactor.confirm(
           user.id,
-          Redacted.make(yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 })),
+          Redacted.make(yield* Totp.totp(mac, key, now, { period: 30, digits: 6 })),
         );
 
         const { code } = yield* codeFor("mfa@example.com");

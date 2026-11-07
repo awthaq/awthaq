@@ -19,16 +19,15 @@
 // schema. The redeemer owns the order every link endpoint follows: per-source budget, decode for
 // exactly this purpose, per-token budget, an optional pre-claim check, then `Verification.redeem`.
 
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { storeUnavailable } from "./Errors.ts";
 import type { UserId } from "./Users.ts";
 import type { Settlement, VerificationShape, VerificationTokenView } from "./Verification.ts";
 
@@ -40,8 +39,8 @@ export interface DecodedToken {
 }
 
 /** A fresh, unguessable, user-independent id for one token. */
-export const newPublicId = (crypto: Crypto.Crypto) =>
-  crypto.randomBytes(16).pipe(Effect.map((bytes) => Encoding.encodeBase64Url(bytes)));
+export const newPublicId = (random: SecureRandom.SecureRandom["Service"]) =>
+  random.randomBytes(16).pipe(Effect.map((bytes) => Base64Url.encode(bytes)));
 
 export const identifierOf = (purpose: string, publicId: string): string => `${purpose}:${publicId}`;
 
@@ -205,7 +204,10 @@ export interface IssuedLink<Name extends string = string> {
  * can recover it without it ever appearing in the token.
  */
 export const issue = <const Name extends string, L, IssueArgs>(
-  deps: { readonly verification: VerificationShape; readonly crypto: Crypto.Crypto },
+  deps: {
+    readonly verification: VerificationShape;
+    readonly random: SecureRandom.SecureRandom["Service"];
+  },
   purpose: Purpose<Name, L, IssueArgs>,
   input: { readonly ttl: Duration.Duration } & IssueArgs,
 ) =>
@@ -214,9 +216,7 @@ export const issue = <const Name extends string, L, IssueArgs>(
     const publicId =
       purpose.keyedBy === "user" && Option.isSome(userId)
         ? userId.value
-        : yield* newPublicId(deps.crypto).pipe(
-            Effect.catchTag("PlatformError", storeUnavailable("VerificationLink.issue")),
-          );
+        : yield* newPublicId(deps.random);
     const { token, value } = yield* deps.verification.issue({
       identifier: identifierOf(purpose.name, publicId),
       ttl: input.ttl,

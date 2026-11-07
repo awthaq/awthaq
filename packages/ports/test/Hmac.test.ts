@@ -3,7 +3,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Redacted from "effect/Redacted";
@@ -14,8 +14,8 @@ const fill = (byte: number, length: number): Uint8Array => new Uint8Array(length
 
 const compute = (key: Uint8Array, message: Uint8Array) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    return Hmac.toHex(yield* Hmac.hmacSha256(crypto, key, message));
+    const mac = yield* Mac.Mac;
+    return Hmac.toHex(yield* Hmac.hmacSha256(mac, key, message));
   }).pipe(Effect.provide(NodeCrypto.layer));
 
 const oracle = (key: Uint8Array, message: Uint8Array): string =>

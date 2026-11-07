@@ -3,7 +3,7 @@
 // runs on Postgres), so the unique (endpoint, event) pair is a real database constraint.
 import { Migrations } from "@awthaq/core";
 import { SealedColumn, TenantScoped } from "@awthaq/sql";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { type Encryption, Tenant } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";

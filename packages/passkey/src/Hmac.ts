@@ -7,7 +7,7 @@
 // package's public surface.
 
 import { Hmac } from "@awthaq/ports";
-import type * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
 import * as Effect from "effect/Effect";
 
 export const concatBytes = (...parts: ReadonlyArray<Uint8Array>): Uint8Array => {
@@ -21,11 +21,11 @@ export const concatBytes = (...parts: ReadonlyArray<Uint8Array>): Uint8Array => 
   return out;
 };
 
-/** A `PlatformError` from the digest is a defect here, as it always was in this plugin. */
+/** A `CryptoError` from the MAC is a defect here, as a digest failure always was in this plugin. */
 export const hmacSha256 = (
-  crypto: Crypto.Crypto,
+  mac: Mac.Mac["Service"],
   key: Uint8Array,
   message: Uint8Array,
-): Effect.Effect<Uint8Array> => Hmac.hmacSha256(crypto, key, message).pipe(Effect.orDie);
+): Effect.Effect<Uint8Array> => Hmac.hmacSha256(mac, key, message).pipe(Effect.orDie);
 
 export const constantTimeEqual = Hmac.constantTimeEqualBytes;

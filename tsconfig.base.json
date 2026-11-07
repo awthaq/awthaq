@@ -89,6 +89,10 @@
         "ignoreEffectErrorsInTscExitCode": false,
         "diagnosticSeverity": {
           "duplicatePackage": "error",
+          // effect 4.1 tags its http, http-api, sql and crypto modules `@stability unstable`; awthaq
+          // is built on all four by design, so this would flag nearly every file. The exposure is
+          // managed by the effect peer range instead (see pnpm-workspace.yaml's `peer` catalog).
+          "unstableApiUsage": "off",
           "genericEffectServices": "error",
           "outdatedApi": "error",
           "effectFnIife": "error",

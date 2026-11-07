@@ -25,7 +25,7 @@ import { Defects, SqlTransaction } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import { isSqlError } from "effect/unstable/sql/SqlError";
+import { isSqlError } from "effect/sql/SqlError";
 import * as Accounts from "./Accounts.ts";
 import * as AuthEvents from "./AuthEvents.ts";
 import * as Errors from "./Errors.ts";

@@ -60,6 +60,7 @@ import {
   hasResourceAttribute,
   hasRole,
   literal,
+  makeDecisionLog,
   obligation,
   obliged,
   permission,
@@ -89,16 +90,16 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import type { OrganizationFixtureServices, WalkProbe } from "./QadiOrganizationFixture.ts";
 import { makeWalkProbe } from "./QadiOrganizationFixture.ts";
 import { makeNamedRegistry } from "./shared/Harness.ts";
-import * as HttpServer from "effect/unstable/http/HttpServer";
+import * as HttpServer from "effect/http/HttpServer";
 
 // ---- the fixture's authorization vocabulary ----
 
@@ -652,7 +653,7 @@ const registryRoute = permissionRegistryRoute(projectAdmin, hasPermission(projec
 const decisionStream = decisionStreamRoute(
   projectAdmin,
   hasPermission(projectAdmin),
-  Stream.never,
+  Effect.runSync(makeDecisionLog({ environment: "awthaq-bdd" })),
   {
     reauth: { interval: "30 seconds" },
   },

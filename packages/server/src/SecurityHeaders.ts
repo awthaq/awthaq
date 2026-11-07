@@ -10,9 +10,9 @@
 // handler already set.
 
 import * as Effect from "effect/Effect";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as Headers from "effect/http/Headers";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 /** Each header is a value to send, or `false` to omit it (e.g. when the edge already sets it). */
 export interface SecurityHeadersOptions {

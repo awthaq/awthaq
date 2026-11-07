@@ -7,10 +7,9 @@
 // plugin has nothing to verify against without it, and it is checked against the published
 // vectors (`test/Totp.test.ts`).
 //
-// HMAC-SHA-1 is built from `Crypto.digest("SHA-1")` (RFC 2104), like `@awthaq/ports`' `Hmac`
-// builds HMAC-SHA-256: the platform-neutral `Crypto` service exposes only plain digests, so the
-// module needs no `node:crypto` and runs wherever the composition's `Crypto` layer does (Node,
-// or the Web Crypto layer on an edge runtime). SHA-1 is fine here: HOTP's security rests on the
+// HMAC-SHA-1 is effect's `Mac` service (`Mac.hmacSha1`), like `@awthaq/ports`' `Hmac` uses
+// `Mac.hmacSha256`, so the module needs no `node:crypto` and runs wherever the composition's
+// `Mac` layer does (`NodeCrypto.layer`, or `WebCrypto.layer` on an edge runtime). SHA-1 is fine here: HOTP's security rests on the
 // HMAC construction, not on SHA-1's collision resistance (RFC 6238 §3, RFC 4226 §7.5).
 //
 // Codes are compared in constant time and *every* candidate step is evaluated, so the time a
@@ -21,35 +20,20 @@
 // attempt of the same OTP).
 
 import { Hmac } from "@awthaq/ports";
-import * as Crypto from "effect/Crypto";
+import type * as CryptoError from "effect/crypto/CryptoError";
+import * as Mac from "effect/crypto/Mac";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 
-const SHA1_BLOCK_SIZE = 64;
-
-const concat = (a: Uint8Array, b: Uint8Array): Uint8Array => {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
-};
-
-/** RFC 2104 HMAC-SHA-1 — keys longer than the block size are hashed first. */
+/** RFC 2104 HMAC-SHA-1 over effect's `Mac` service, the primitive HOTP (RFC 4226) is defined on. */
 const hmacSha1 = (
-  crypto: Crypto.Crypto,
+  mac: Mac.Mac["Service"],
   key: Uint8Array,
   message: Uint8Array,
-): Effect.Effect<Uint8Array, PlatformError.PlatformError> =>
-  Effect.gen(function* () {
-    const hashed = key.length > SHA1_BLOCK_SIZE ? yield* crypto.digest("SHA-1", key) : key;
-    const blockKey = new Uint8Array(SHA1_BLOCK_SIZE);
-    blockKey.set(hashed);
-    const ipad = blockKey.map((byte) => byte ^ 0x36);
-    const opad = blockKey.map((byte) => byte ^ 0x5c);
-    const inner = yield* crypto.digest("SHA-1", concat(ipad, message));
-    return yield* crypto.digest("SHA-1", concat(opad, inner));
-  });
+): Effect.Effect<Uint8Array, CryptoError.CryptoError> =>
+  Effect.flatMap(Mac.key(Mac.hmacSha1, Hmac.rfc2104Key(key)), (macKey) =>
+    mac.sign(macKey, message),
+  );
 
 const counterBytes = (counter: bigint): Uint8Array => {
   const bytes = new Uint8Array(8);
@@ -62,18 +46,18 @@ const counterBytes = (counter: bigint): Uint8Array => {
  * `digits` between 6 and 8 is what RFC 4226 §5.4 allows; 6 is what authenticator apps default to.
  */
 export const hotp = (
-  crypto: Crypto.Crypto,
+  mac: Mac.Mac["Service"],
   key: Uint8Array,
   counter: bigint,
   digits: number,
-): Effect.Effect<string, PlatformError.PlatformError> =>
-  Effect.map(hmacSha1(crypto, key, counterBytes(counter)), (mac) => {
-    const offset = (mac[mac.length - 1] ?? 0) & 0x0f;
+): Effect.Effect<string, CryptoError.CryptoError> =>
+  Effect.map(hmacSha1(mac, key, counterBytes(counter)), (tag) => {
+    const offset = (tag[tag.length - 1] ?? 0) & 0x0f;
     const binary =
-      (((mac[offset] ?? 0) & 0x7f) << 24) |
-      ((mac[offset + 1] ?? 0) << 16) |
-      ((mac[offset + 2] ?? 0) << 8) |
-      (mac[offset + 3] ?? 0);
+      (((tag[offset] ?? 0) & 0x7f) << 24) |
+      ((tag[offset + 1] ?? 0) << 16) |
+      ((tag[offset + 2] ?? 0) << 8) |
+      (tag[offset + 3] ?? 0);
     return String(binary % 10 ** digits).padStart(digits, "0");
   });
 
@@ -88,12 +72,12 @@ export const stepOf = (epochSeconds: number, period: number): bigint =>
   BigInt(Math.floor(epochSeconds / period));
 
 export const totp = (
-  crypto: Crypto.Crypto,
+  mac: Mac.Mac["Service"],
   key: Uint8Array,
   epochSeconds: number,
   options: TotpOptions,
-): Effect.Effect<string, PlatformError.PlatformError> =>
-  hotp(crypto, key, stepOf(epochSeconds, options.period), options.digits);
+): Effect.Effect<string, CryptoError.CryptoError> =>
+  hotp(mac, key, stepOf(epochSeconds, options.period), options.digits);
 
 export interface VerifyOptions extends TotpOptions {
   /** Steps accepted either side of the current one, for clock drift and typing delay (RFC 6238 §5.2 suggests one step). */
@@ -109,12 +93,12 @@ export interface VerifyOptions extends TotpOptions {
  * non-digits) is simply no match, never an error.
  */
 export const verifyTotp = (
-  crypto: Crypto.Crypto,
+  mac: Mac.Mac["Service"],
   key: Uint8Array,
   code: string,
   epochSeconds: number,
   options: VerifyOptions,
-): Effect.Effect<Option.Option<bigint>, PlatformError.PlatformError> =>
+): Effect.Effect<Option.Option<bigint>, CryptoError.CryptoError> =>
   Effect.gen(function* () {
     const wellFormed = code.length === options.digits && /^[0-9]+$/.test(code);
     const current = stepOf(epochSeconds, options.period);
@@ -122,7 +106,7 @@ export const verifyTotp = (
     for (let offset = -options.window; offset <= options.window; offset += 1) {
       const step = current + BigInt(offset);
       if (step < BigInt(0)) continue;
-      const expected = yield* hotp(crypto, key, step, options.digits);
+      const expected = yield* hotp(mac, key, step, options.digits);
       // Compared even when `code` is malformed, so the work does not depend on its shape.
       const equal = Hmac.constantTimeEqualString(
         expected,

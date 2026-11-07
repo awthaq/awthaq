@@ -22,7 +22,7 @@ import { type StoreFailure } from "@awthaq/sql";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as AdminApi from "./AdminApi.ts";
 import * as AdminTenantsApi from "./AdminTenantsApi.ts";
 import * as AdminGate from "./internal/AdminGate.ts";

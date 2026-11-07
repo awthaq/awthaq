@@ -33,9 +33,9 @@
 import { Api } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import type * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import { CurrentSubject } from "@qadi/core";
 import { SubjectResolver } from "./SubjectResolver.ts";
 

@@ -19,7 +19,8 @@ import {
 } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -29,7 +30,7 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as AuthEvents from "./AuthEvents.ts";
-import { relabel, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import { relabel, type StoreUnavailable } from "./Errors.ts";
 import { DEFAULT_ROTATION_GRACE } from "./internal/sessionVerdict.ts";
 import * as SessionVerdict from "./internal/sessionVerdict.ts";
 import * as Observability from "./Observability.ts";
@@ -653,7 +654,7 @@ const notFound = (id?: SessionId) =>
   });
 
 /**
- * Written once over `SessionStore` (ADR-EA-041). Needs the store, `Crypto` (the id, the secret and its
+ * Written once over `SessionStore` (ADR-EA-041). Needs the store, `SecureRandom` (the id and the secret), `Digest` (its
  * hash) and `AuthEvents`; the legacy bridge is a `Context.Reference` with a default. The clock is read
  * once per operation and handed to the store, so a row never carries two instants.
  */
@@ -661,7 +662,8 @@ export const layer = Layer.effect(
   Sessions,
   Effect.gen(function* () {
     const store = yield* SessionStore.SessionStore;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const hasher = yield* Digest.Digest;
     // EP-007 (ADR-EA-018 Decision 8): lifetimes are decided per operation: a tenant's `SessionConfig`
     // provided in the calling fiber wins; with none, the build-time value applies.
     const builtConfig = yield* SessionConfig;
@@ -669,75 +671,71 @@ export const layer = Layer.effect(
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
-    const issue: SessionsShape["issue"] = Effect.fnUntraced(
-      function* (input) {
-        const config = yield* configNow;
-        yield* refuseSelfActingAs(input);
-        const id = SessionId(yield* crypto.randomUUIDv7);
-        const secret = toHex(yield* crypto.randomBytes(32));
-        const secretHash = yield* hashSecret(crypto, secret);
-        const now = yield* DateTime.now;
-        const absoluteExpiresAt = DateTime.addDuration(
-          now,
-          input.absoluteDuration ?? config.absolute,
-        );
-        // BEH-EA-210: a session minted with `actingAs` gets a hard expiry: `idleExpiresAt` set equal to
-        // `absoluteExpiresAt` at issuance, never pushed further out by `verify`'s idle-refresh touch.
-        const idleExpiresAt =
+    const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+      const config = yield* configNow;
+      yield* refuseSelfActingAs(input);
+      const id = SessionId(yield* random.uuidV7());
+      const secret = toHex(yield* random.randomBytes(32));
+      const secretHash = yield* hashSecret(hasher, secret);
+      const now = yield* DateTime.now;
+      const absoluteExpiresAt = DateTime.addDuration(
+        now,
+        input.absoluteDuration ?? config.absolute,
+      );
+      // BEH-EA-210: a session minted with `actingAs` gets a hard expiry: `idleExpiresAt` set equal to
+      // `absoluteExpiresAt` at issuance, never pushed further out by `verify`'s idle-refresh touch.
+      const idleExpiresAt =
+        input.actingAs === undefined
+          ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
+          : absoluteExpiresAt;
+      // ESR-002/RRS-004: tombstoning the superseded row and inserting its successor are ONE store
+      // primitive, so no interruption or failure can leave a tombstoned session without its successor
+      // (whose next presentation would read as refresh-token reuse: a false theft alarm and a family
+      // revocation). SMS-003: the cap is enforced in that same step. Impersonation (`actingAs`)
+      // sessions neither count toward nor trigger it.
+      const { inserted, superseded, evicted } = yield* store.insert({
+        session: {
+          id,
+          userId: input.userId,
+          secretHash,
+          at: now,
+          absoluteExpiresAt,
+          idleExpiresAt,
+          ipAddress: Option.fromNullishOr(input.request?.ip),
+          userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
+          actingAs: Option.fromNullishOr(input.actingAs),
+          amr: input.amr ?? [],
+        },
+        supersedes: Option.fromNullishOr(input.supersedes),
+        maxLive:
           input.actingAs === undefined
-            ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
-            : absoluteExpiresAt;
-        // ESR-002/RRS-004: tombstoning the superseded row and inserting its successor are ONE store
-        // primitive, so no interruption or failure can leave a tombstoned session without its successor
-        // (whose next presentation would read as refresh-token reuse: a false theft alarm and a family
-        // revocation). SMS-003: the cap is enforced in that same step. Impersonation (`actingAs`)
-        // sessions neither count toward nor trigger it.
-        const { inserted, superseded, evicted } = yield* store.insert({
-          session: {
-            id,
-            userId: input.userId,
-            secretHash,
-            at: now,
-            absoluteExpiresAt,
-            idleExpiresAt,
-            ipAddress: Option.fromNullishOr(input.request?.ip),
-            userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
-            actingAs: Option.fromNullishOr(input.actingAs),
-            amr: input.amr ?? [],
-          },
-          supersedes: Option.fromNullishOr(input.supersedes),
-          maxLive:
-            input.actingAs === undefined
-              ? Option.map(Option.fromNullishOr(config.maxConcurrent), (policy) => policy.limit)
-              : Option.none(),
+            ? Option.map(Option.fromNullishOr(config.maxConcurrent), (policy) => policy.limit)
+            : Option.none(),
+      });
+      // RRS-008: the rotation's own event, published from `Sessions` so every strategy's `supersedes`
+      // is covered, only when a live ancestor of the same user was tombstoned.
+      if (Option.isSome(superseded)) {
+        yield* events.publish({
+          _tag: "auth.session.superseded",
+          sessionId: superseded.value.id,
+          supersededBy: id,
+          familyId: superseded.value.familyId,
+          userId: superseded.value.userId,
         });
-        // RRS-008: the rotation's own event, published from `Sessions` so every strategy's `supersedes`
-        // is covered, only when a live ancestor of the same user was tombstoned.
-        if (Option.isSome(superseded)) {
-          yield* events.publish({
-            _tag: "auth.session.superseded",
-            sessionId: superseded.value.id,
-            supersededBy: id,
-            familyId: superseded.value.familyId,
-            userId: superseded.value.userId,
-          });
-        }
-        for (const gone of evicted) {
-          yield* events.publish({
-            _tag: "auth.session.revoked",
-            userId: input.userId,
-            sessionId: gone,
-            scope: "one",
-            reason: "limitEvicted",
-          });
-        }
-        const view = yield* toView(inserted);
-        yield* publishIssued(events, view, inserted.familyId, view.actingAs);
-        return { session: view, token: Redacted.make(SessionVerdict.format(id, secret)) };
-      },
-      Effect.catchTag("PlatformError", storeUnavailable("Sessions.issue")),
-      relabel("Sessions.issue"),
-    );
+      }
+      for (const gone of evicted) {
+        yield* events.publish({
+          _tag: "auth.session.revoked",
+          userId: input.userId,
+          sessionId: gone,
+          scope: "one",
+          reason: "limitEvicted",
+        });
+      }
+      const view = yield* toView(inserted);
+      yield* publishIssued(events, view, inserted.familyId, view.actingAs);
+      return { session: view, token: Redacted.make(SessionVerdict.format(id, secret)) };
+    }, relabel("Sessions.issue"));
 
     /**
      * BAM-003 (.issues/high): consulted only on a primary-store miss: a still-live legacy (e.g.
@@ -816,11 +814,11 @@ export const layer = Layer.effect(
       verdict: Extract<SessionVerdict.Verdict, { readonly _tag: "Rotate" }>,
       now: DateTime.Utc,
     ) {
-      const secret = toHex(yield* crypto.randomBytes(32));
+      const secret = toHex(yield* random.randomBytes(32));
       const outcome = yield* store.rotate({
         id,
         ...verdict.rotation,
-        secretHash: yield* hashSecret(crypto, secret),
+        secretHash: yield* hashSecret(hasher, secret),
       });
       if (outcome._tag === "Lost") {
         return yield* Match.valueTags(SessionVerdict.afterLostRotation(outcome.current, now), {
@@ -844,36 +842,29 @@ export const layer = Layer.effect(
     });
 
     // The rules are `internal/sessionVerdict.ts`; this executes the verdict against the store.
-    const verify: SessionsShape["verify"] = Effect.fnUntraced(
-      function* (token) {
-        const policy = SessionVerdict.policyOf(yield* configNow);
-        const raw = Redacted.value(token);
-        const presented = SessionVerdict.parse(raw);
-        if (presented._tag === "Opaque") return yield* bridgedOr(raw, notFound());
-        const { id, secret } = presented;
-        // PIL-007: the id is the public half of the token (cookies, JWT `sid`, error messages): the
-        // secret is hashed before the row is read and proven before ANY row-state branch.
-        const presentedHash = yield* hashSecret(crypto, secret);
-        const row = yield* store.get(id);
-        const now = yield* DateTime.now;
-        return yield* Match.valueTags(
-          SessionVerdict.classify({ row, presentedHash, now, policy }),
-          {
-            Unknown: () => bridgedOr(raw, notFound(id)),
-            Refused: () => Effect.fail(notFound(id)),
-            Replayed: ({ flagReuse: attempt }) =>
-              (attempt ? flagReuse(id, now) : Effect.void).pipe(
-                Effect.andThen(Effect.fail(notFound(id))),
-              ),
-            Expired: ({ kind, row }) => expire(id, row, kind),
-            Accepted: ({ row }) => accepted(row),
-            Rotate: (verdict) => rotate(id, verdict, now),
-          },
-        );
-      },
-      Effect.catchTag("PlatformError", storeUnavailable("Sessions.verify")),
-      relabel("Sessions.verify"),
-    );
+    const verify: SessionsShape["verify"] = Effect.fnUntraced(function* (token) {
+      const policy = SessionVerdict.policyOf(yield* configNow);
+      const raw = Redacted.value(token);
+      const presented = SessionVerdict.parse(raw);
+      if (presented._tag === "Opaque") return yield* bridgedOr(raw, notFound());
+      const { id, secret } = presented;
+      // PIL-007: the id is the public half of the token (cookies, JWT `sid`, error messages): the
+      // secret is hashed before the row is read and proven before ANY row-state branch.
+      const presentedHash = yield* hashSecret(hasher, secret);
+      const row = yield* store.get(id);
+      const now = yield* DateTime.now;
+      return yield* Match.valueTags(SessionVerdict.classify({ row, presentedHash, now, policy }), {
+        Unknown: () => bridgedOr(raw, notFound(id)),
+        Refused: () => Effect.fail(notFound(id)),
+        Replayed: ({ flagReuse: attempt }) =>
+          (attempt ? flagReuse(id, now) : Effect.void).pipe(
+            Effect.andThen(Effect.fail(notFound(id))),
+          ),
+        Expired: ({ kind, row }) => expire(id, row, kind),
+        Accepted: ({ row }) => accepted(row),
+        Rotate: (verdict) => rotate(id, verdict, now),
+      });
+    }, relabel("Sessions.verify"));
 
     // TIR-008: every revocation primitive is one store call that answers what it removed, and publishes
     // exactly one `auth.session.revoked` for the call, after the delete.

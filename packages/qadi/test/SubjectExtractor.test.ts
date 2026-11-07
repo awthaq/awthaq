@@ -13,10 +13,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
-import * as Cookies from "effect/unstable/http/Cookies";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as Cookies from "effect/http/Cookies";
+import * as HttpEffect from "effect/http/HttpEffect";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { makeSubject } from "@qadi/core";
 import { SubjectExtractor as QadiSubjectExtractor } from "@qadi/http";
 import { SubjectResolver } from "../src/SubjectResolver.ts";
@@ -174,13 +174,16 @@ describe("SubjectExtractor (Path B adapter)", () => {
               headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
             }),
           );
-          const subject = yield* extractor.extract(request);
-          assert.strictEqual(subject.id, `user:${user.id}`);
-
-          // Pre-response handlers run when the request's response is written.
+          // Pre-response handlers run when the request's response is written. Since effect 4.1
+          // they live in the request state `toHandled` installs, so the extraction runs inside
+          // the handled request, as it does behind a real router.
           let written: HttpServerResponse.HttpServerResponse | undefined;
           yield* HttpEffect.toHandled(
-            Effect.succeed(HttpServerResponse.empty()),
+            Effect.gen(function* () {
+              const subject = yield* extractor.extract(request);
+              assert.strictEqual(subject.id, `user:${user.id}`);
+              return HttpServerResponse.empty();
+            }),
             (_request, response) =>
               Effect.sync(() => {
                 written = response;

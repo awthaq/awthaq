@@ -26,7 +26,7 @@ export const csrfConfig = (
     ...extra,
   });
 
-/** `CsrfProtection` over `csrfConfig(allowedOrigins)`; the platform `Crypto` is provided, `CsrfConfig` is not left in the output. */
+/** `CsrfProtection` over `csrfConfig(allowedOrigins)`; the platform crypto services are provided, `CsrfConfig` is not left in the output. */
 export const csrfLive = (allowedOrigins: ReadonlyArray<string> = []) =>
   Csrf.CsrfProtectionLive.pipe(
     Layer.provide(csrfConfig(allowedOrigins)),

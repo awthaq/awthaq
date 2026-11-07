@@ -32,12 +32,18 @@
 export {
   Can,
   Cannot,
+  DecisionOutcome,
   MissingQadiProviderError,
   QadiProvider,
+  SeededAllow,
+  SeededDeny,
   currentDecision,
   dehydrateDecisions,
   hydrateDecisions,
+  isSeeded,
   makeQadiAtoms,
+  outcomeOf,
+  permits,
   useAtomValue,
   useCan,
   useDecision,
@@ -52,6 +58,7 @@ export type {
   AskedQuestion,
   CanProps,
   CannotProps,
+  ClientDecision,
   DecisionEntry,
   DecisionResult,
   DehydrateOptions,
@@ -70,6 +77,7 @@ export type {
   QadiLayer,
   QadiProviderProps,
   QadiRuntimeServices,
+  SeededDecision,
 } from "@qadi/react";
 export * as AuthClientAtom from "./AuthClientAtom.ts";
 export * from "./Hooks.ts";

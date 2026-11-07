@@ -27,12 +27,12 @@ import * as Predicate from "effect/Predicate";
 import * as Record from "effect/Record";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as Cookies from "effect/unstable/http/Cookies";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import type * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
+import * as Cookies from "effect/http/Cookies";
+import * as Headers from "effect/http/Headers";
+import * as HttpEffect from "effect/http/HttpEffect";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import type * as HttpApiSecurity from "effect/http-api/HttpApiSecurity";
 
 // ---- the principal resolver and the claimed-credential registry (moved from Authentication.ts) ----------
 
@@ -646,9 +646,11 @@ const rotationDelivery =
 export const httpScope = (request: HttpServerRequest.HttpServerRequest) =>
   ({
     key: request.source,
+    // effect 4.1 keeps pre-response handlers in the request state `HttpEffect.toHandled` puts
+    // in the fiber context, so the handler is registered from inside the request's fiber.
     deliver: (rotation) =>
-      Effect.sync(() =>
-        HttpEffect.appendPreResponseHandlerUnsafe(request, rotationDelivery(rotation)),
+      HttpEffect.appendPreResponseHandler(rotationDelivery(rotation)).pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
       ),
     claim: (carrier, credential) =>
       resolveClaimed(carrier, credential).pipe(

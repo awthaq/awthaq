@@ -18,7 +18,7 @@ import { WebAuthn } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -147,7 +147,7 @@ const NO_CHALLENGE = "";
  * the latter, never about reading a JSON field).
  */
 const decodeClientData = (clientDataJSON: string): Option.Option<ClientData> => {
-  const decoded = Encoding.decodeBase64Url(clientDataJSON);
+  const decoded = Base64Url.decode(clientDataJSON);
   if (Result.isFailure(decoded)) return Option.none();
   let parsed: unknown;
   try {
@@ -280,7 +280,7 @@ const DECOY_COSE_PUBLIC_KEY =
   "pQECAyYgASFYIDUd8pj_isGtVhaCN1Bo9s3jMUGZnyfu_woIMrJon1KjIlggExq74U54Cegms_CY6g320bYfldpa89-O72ccIzqVy9s";
 
 const decoyPublicKey = (): Uint8Array<ArrayBuffer> => {
-  const decoded = Encoding.decodeBase64Url(DECOY_COSE_PUBLIC_KEY);
+  const decoded = Base64Url.decode(DECOY_COSE_PUBLIC_KEY);
   return Result.isSuccess(decoded) ? new Uint8Array(decoded.success) : new Uint8Array();
 };
 

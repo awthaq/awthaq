@@ -1,6 +1,6 @@
 // @awthaq/cli — Cli
 //
-// ADR-EA-027: the command tree, declared with `effect/unstable/cli`. This file is only
+// ADR-EA-027: the command tree, declared with `effect/cli`. This file is only
 // *declaration and wiring*: every command body is a plain Effect function in its own module
 // (`Doctor.ts`, `Routes.ts`, `Migration.ts`, ...), taking typed arguments. That seam is what
 // isolates the release-candidate churn of the unstable CLI API — when `Command`/`Flag` change, only
@@ -30,10 +30,10 @@ import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as CliError from "effect/unstable/cli/CliError";
-import * as Command from "effect/unstable/cli/Command";
-import * as Flag from "effect/unstable/cli/Flag";
-import * as Prompt from "effect/unstable/cli/Prompt";
+import * as CliError from "effect/cli/CliError";
+import * as Command from "effect/cli/Command";
+import * as Flag from "effect/cli/Flag";
+import * as Prompt from "effect/cli/Prompt";
 import type * as CliErrors from "./CliErrors.ts";
 import { isCliError, UsageError } from "./CliErrors.ts";
 import * as CliConfig from "./Config.ts";

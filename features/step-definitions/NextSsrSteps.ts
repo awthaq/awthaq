@@ -381,11 +381,16 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     const traceChildren = (wire: string) => {
       const entries = Reflect.get(Object(JSON.parse(wire)), "entries");
       assert.ok(Array.isArray(entries) && entries.length === 1);
-      const trace = Reflect.get(Object(entries[0]), "trace");
+      // qadi 0.11: the trace travels in the decision's `disclosure` — `Withheld` by default (no
+      // trace at all), `Disclosed` with the trace only under `includeTrace`.
+      const decision = Reflect.get(Object(entries[0]), "decision");
+      const disclosure = Reflect.get(Object(decision), "disclosure");
+      if (Reflect.get(Object(disclosure), "_tag") === "Withheld") return 0;
+      const trace = Reflect.get(Object(disclosure), "trace");
       const children = Reflect.get(Object(trace), "children");
       return Array.isArray(children) ? children.length : -1;
     };
-    // By default only a reduced stub crosses: no per-node breakdown of the policy tree...
+    // By default no per-node breakdown of the policy tree crosses...
     assert.equal(traceChildren(yield* outcomes.getAs("wire", isString)), 0);
     // ...whereas the opted-in payload does disclose it (the two children of `allOf`).
     assert.equal(traceChildren(yield* outcomes.getAs("wireWithTrace", isString)), 2);
@@ -974,7 +979,11 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
       const atoms = makeQadiAtoms(EvaluationServicesNone);
       const subjectId = String(Reflect.get(Object(wire), "subjectId"));
       const entries = Reflect.get(Object(wire), "entries");
-      const payload = { subjectId, entries: Array.isArray(entries) ? entries : [] };
+      const payload = {
+        version: 2 as const,
+        subjectId,
+        entries: Array.isArray(entries) ? entries : [],
+      };
       const seeded = hydrateDecisions(atoms, payload, aliceSubject);
       const foreign = hydrateDecisions(atoms, payload, makeSubject({ id: "user:mallory" }));
       yield* outcomes.set("seeded", Array.from(seeded).length);

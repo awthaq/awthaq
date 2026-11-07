@@ -3,7 +3,7 @@
 // the build when the line it covers stops being an error) — with a token runtime test so the file is
 // a suite.
 import { it } from "@effect/vitest";
-import type * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -21,7 +21,10 @@ const AddressLink = VerificationLink.forAddress({
   payload: Schema.Struct({ email: Schema.String }),
 });
 
-declare const deps: { readonly verification: VerificationShape; readonly crypto: Crypto.Crypto };
+declare const deps: {
+  readonly verification: VerificationShape;
+  readonly random: SecureRandom.SecureRandom["Service"];
+};
 declare const userId: UserId;
 declare const wire: Redacted.Redacted<string>;
 const ttl = Duration.hours(1);

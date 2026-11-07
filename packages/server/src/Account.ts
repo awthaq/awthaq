@@ -16,10 +16,10 @@ import {
 } from "@awthaq/core";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpEffect from "effect/http/HttpEffect";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Option from "effect/Option";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { expireSessionCookie } from "./internal/SessionCookie.ts";
 
 /**

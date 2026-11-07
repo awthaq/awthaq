@@ -83,11 +83,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Etag from "effect/unstable/http/Etag";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Etag from "effect/http/Etag";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpPlatform from "effect/http/HttpPlatform";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as Migrator from "effect/sql/Migrator";
 
 // 1. Compose the Password plugin. `Auth.make` validates the plugin tuple at
 //    the type level (no duplicate ids, no missing `dependsOn`) and folds
@@ -333,7 +333,7 @@ const HasherLive = PasswordHasherWorkerPool.layerArgon2id.pipe(
 
 Where to run it: password hash/verify belongs on your origin (long-running) runtime. A verify at the default cost is tens of milliseconds of CPU, above a Cloudflare Workers free-tier budget; let the edge tier verify sessions/JWTs and redirect. There is deliberately no cheaper "edge" storage profile.
 
-Crypto on an edge runtime: the quickstart provides `NodeCrypto.layer` for `Crypto.Crypto`, which does not exist on Workers/Edge. Provide `WebCrypto.layer` from `@awthaq/ports` in its place — the same service over `globalThis.crypto` (`randomBytes`, SHA-1/256/384/512 digests), no Node built-ins. NodeCrypto stays the right choice on Node.
+Crypto on an edge runtime: the quickstart provides `NodeCrypto.layer` for effect's crypto services (`SecureRandom`, `Digest`, `Mac`), and `NodeCrypto` does not exist on Workers/Edge. Provide `WebCrypto.layer` from `@awthaq/ports` in its place — the same three services over `globalThis.crypto`, no Node built-ins. NodeCrypto stays the right choice on Node.
 
 ### Encryption keys
 
@@ -449,6 +449,8 @@ Each package lets imported users keep their password: it verifies the old hash o
 ## Publishing status
 
 No `@awthaq/*` package is published to npm — every `package.json` in `packages/` is still `"private": true`. A provenance-publish workflow (`.github/workflows/release.yml`, npm OIDC trusted publishing, no stored tokens) is wired and ready per [`spec/process/definitions-of-done.md`](spec/process/definitions-of-done.md)'s gate 12, but going live needs a one-time, manual trusted-publisher registration on npmjs.com that no automation here can perform. Until then, use this library from a clone: `pnpm install && pnpm build`, then reference packages the way the quickstart above does, or `pnpm link` a package into another project.
+
+Once published, the packages do not bring their own `effect`: `effect`, `@effect/*`, `@qadi/*` and React are `peerDependencies` (ranges such as `effect: ^4.1.0`), so the application installs them once and every `@awthaq/*` package shares that copy. Install them alongside awthaq (`npm install effect @awthaq/core ...`), plus whichever `@effect/sql-*` driver and `@effect/platform-*` runtime your composition provides. The `awthaq` CLI is the exception: it runs on its own and depends on `effect` directly.
 
 ## Documentation
 

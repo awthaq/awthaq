@@ -9,8 +9,8 @@
 
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as OpenApi from "effect/unstable/httpapi/OpenApi";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as OpenApi from "effect/http-api/OpenApi";
 import { ConfigUnavailable, MigrationFailed } from "./CliErrors.ts";
 import type { LoadedAuth } from "./Config.ts";
 import * as Output from "./Output.ts";

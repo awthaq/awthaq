@@ -48,18 +48,19 @@ import {
 } from "@awthaq/core";
 import { ClientAddress, Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ChallengeStore from "./ChallengeStore.ts";
 import { hmacSha256 } from "./Hmac.ts";
 import * as PasskeyApi from "./PasskeyApi.ts";
@@ -93,7 +94,7 @@ const KNOWN_AAGUID_LABELS: Record<string, string> = {
 
 const friendlyCredentialName = (aaguid: string): string => KNOWN_AAGUID_LABELS[aaguid] ?? "Passkey";
 
-const toBase64Url = (bytes: Uint8Array): string => Encoding.encodeBase64Url(bytes);
+const toBase64Url = (bytes: Uint8Array): string => Base64Url.encode(bytes);
 
 /**
  * TC-001: shapes a decoy descriptor set can take, picked deterministically per
@@ -790,7 +791,8 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       // decoy `enumerationSecret` are boot-scoped by nature and read the built value.
       const builtConfig = yield* PasskeyConfig;
       const configNow = Tenant.configInForce(PasskeyConfig, builtConfig);
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
+      const mac = yield* Mac.Mac;
       // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement.
       const signIn = yield* SignIn.make;
       // The one implementation of what a ceremony verifies and in which order (BEH-EA-132).
@@ -838,7 +840,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           yield* Effect.logWarning(
             "awthaq: PasskeyConfig.enumerationSecret is not set — a random per-process secret is used for the decoy allowCredentials of unknown emails, so decoys differ across instances/restarts. Set one shared secret for multi-instance deployments.",
           );
-          return Redacted.make(toBase64Url(yield* crypto.randomBytes(32).pipe(Effect.orDie)));
+          return Redacted.make(toBase64Url(yield* random.randomBytes(32)));
         }));
       const enumerationKey = new TextEncoder().encode(Redacted.value(enumerationSecret));
 
@@ -1014,7 +1016,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         Effect.gen(function* () {
           const normalized = email.toLowerCase();
           const seed = yield* hmacSha256(
-            crypto,
+            mac,
             enumerationKey,
             new TextEncoder().encode(`passkey.decoy:${normalized}`),
           );
@@ -1024,7 +1026,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             (i) =>
               Effect.gen(function* () {
                 const digest = yield* hmacSha256(
-                  crypto,
+                  mac,
                   enumerationKey,
                   new TextEncoder().encode(`passkey.decoy:${normalized}:${i}`),
                 );
@@ -1042,7 +1044,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           if (email !== undefined) {
             yield* limits.spend("authenticateOptionsByEmail", { email });
           }
-          const ceremonyId = toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie));
+          const ceremonyId = toBase64Url(yield* random.randomBytes(16));
           const challenge = yield* ceremonies.begin(
             PasskeyCeremony.Ceremony.SignIn({ ceremonyId }),
           );

@@ -6,7 +6,7 @@ See [`spec/models/07-api-keys.md`](../../spec/models/07-api-keys.md) and [ADR-EA
 
 ## Composition
 
-`ApiKey` depends on `Jwt` (it signs the service tokens) and needs the credential-resolver registry from `@awthaq/server`. It requires `ApiKeyRecords` and `ApiKeyClientRecords` (`layerMemory` or `layerSql`, migrated with `ApiKey.migrations`), `Crypto`, `RateLimiter`, `RateLimits`, `ClientAddress` and `AuthEvents`; the application provides them.
+`ApiKey` depends on `Jwt` (it signs the service tokens) and needs the credential-resolver registry from `@awthaq/server`. It requires `ApiKeyRecords` and `ApiKeyClientRecords` (`layerMemory` or `layerSql`, migrated with `ApiKey.migrations`), the effect crypto services (`SecureRandom`, `Digest`, `Mac`), `RateLimiter`, `RateLimits`, `ClientAddress` and `AuthEvents`; the application provides them.
 
 ```ts
 import { Auth } from "@awthaq/core";

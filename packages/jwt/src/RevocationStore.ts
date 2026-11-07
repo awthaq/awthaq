@@ -7,7 +7,7 @@
 // `introspectLive` are the new, opt-in path that consults this store.
 //
 // `layerMemory`/`layerSql` mirrors `Sessions`' own backend-neutral-port
-// split (ADR-EA-014), built directly against `effect/unstable/sql`'s
+// split (ADR-EA-014), built directly against `effect/sql`'s
 // `SqlSchema` for the SQL side — the same plugin-owned-table pattern
 // `SigningKeyRecords.ts` already established in this package (this table
 // belongs to `@awthaq/jwt`, not the shared persistence stratum).
@@ -35,8 +35,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 export interface RevocationStoreShape {
   readonly revoke: (

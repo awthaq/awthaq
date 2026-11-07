@@ -17,7 +17,7 @@
 // .scratch/jwt/issues/11-key-rotation.md's own resolved design split: the
 // *mutation* (mark the stale key rotated, mint its replacement) always
 // happens inside `layerFromStore` itself, which already has every service
-// that requires (`SigningKeyRecords`/`Crypto`); the *decision* to trigger
+// that requires (`SigningKeyRecords`/`SecureRandom`); the *decision* to trigger
 // it lives in the cheap, low-requirement `rotateIfDue` below (`KeyRing` +
 // `JwtConfig` only — one in-memory age check against the already-cached
 // snapshot, no store access unless a rotation is actually due), called by
@@ -53,7 +53,7 @@ import type { Api } from "@awthaq/api";
 import { Defects, SqlTransaction } from "@awthaq/ports";
 import { SealedColumn, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -123,10 +123,10 @@ const isStale = (
 /** Generates a fresh key pair and persists it as the current key — the lazy-mint path `layerFromStore` falls back to when no current key exists, and what a rotation always mints as the stale key's replacement. */
 const mint = Effect.fnUntraced(function* (algorithm: Algorithm, rsaModulusLength: number) {
   const records = yield* SigningKeyRecords.SigningKeyRecords;
-  const crypto = yield* Crypto.Crypto;
-  const kid = yield* crypto.randomUUIDv7.pipe(
-    Effect.catch(StoreFailure.storeUnavailable("KeyRing.mint")),
-  );
+  const random = yield* SecureRandom.SecureRandom;
+  const kid = yield* random
+    .uuidV7()
+    .pipe(Effect.catch(StoreFailure.storeUnavailable("KeyRing.mint")));
   const { publicKeyJwk: rawPublicJwk, privateKeyJwk: rawPrivateJwk } =
     yield* JwtCodec.generateKeyJwks(algorithm, { rsaModulusLength });
   return yield* records.create({

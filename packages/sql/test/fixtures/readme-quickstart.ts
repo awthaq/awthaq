@@ -33,11 +33,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Etag from "effect/unstable/http/Etag";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Etag from "effect/http/Etag";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpPlatform from "effect/http/HttpPlatform";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as Migrator from "effect/sql/Migrator";
 
 // 1. Compose the Password plugin. `Auth.make` validates the plugin tuple at
 //    the type level (no duplicate ids, no missing `dependsOn`) and folds

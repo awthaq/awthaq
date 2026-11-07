@@ -10,14 +10,14 @@ import { AuthPlugin, Hooks, HookPoint, Slots } from "@awthaq/core";
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { SubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 
 const endpointApi = <const Group extends string, const Name extends string>(
   group: Group,
@@ -266,7 +266,7 @@ export class CryptoUserOne extends AuthPlugin.Service<CryptoUserOne, Record<stri
 ) {
   static readonly layer = AuthPlugin.layer(CryptoUserOne, {
     make: Effect.gen(function* () {
-      yield* Crypto.Crypto;
+      yield* SecureRandom.SecureRandom;
       return {};
     }),
   });
@@ -278,7 +278,7 @@ export class CryptoUserTwo extends AuthPlugin.Service<CryptoUserTwo, Record<stri
 ) {
   static readonly layer = AuthPlugin.layer(CryptoUserTwo, {
     make: Effect.gen(function* () {
-      yield* Crypto.Crypto;
+      yield* SecureRandom.SecureRandom;
       return {};
     }),
   });

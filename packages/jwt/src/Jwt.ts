@@ -54,7 +54,7 @@ import { Defects, type Encryption, RefreshingCache, type SqlTransaction } from "
 import { Authentication, Credentials } from "@awthaq/server";
 import { SealedColumn } from "@awthaq/sql";
 import * as Arr from "effect/Array";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -63,9 +63,9 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { IntrospectionResponse, JwtApi, TokenResponse } from "./JwtApi.ts";
 import { JwtConfig, type JwtConfigShape } from "./JwtConfig.ts";
 import * as JwtCodec from "./JwtCodec.ts";
@@ -602,7 +602,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         const configNow = Tenant.configInForce(JwtConfig, config);
         const ref = yield* KeyRing.KeyRing;
         const remoteSigner = yield* JwtCodec.RemoteSigner;
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         // Captured here, not left as `introspect`'s own per-call `R` the
         // way `verifyLive`'s `Sessions` is: `introspect` is wired to the
         // `/jwt/introspect` handler below, and `HttpApiBuilder.group`
@@ -665,7 +665,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             // (`Sessions.issue`/`Users.create` mint their own ids the same
             // way) — the handle `RevocationStore`/`introspect` key a
             // denylist entry by.
-            const jti = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+            const jti = yield* random.uuidV7();
             // A key with local private material (every key ticket 07's `mint`
             // produces) signs via `JwtCodec.localSigner`; one with none (a
             // remote-signing key — ticket 15's `KeyRing.registerRemoteKey`)

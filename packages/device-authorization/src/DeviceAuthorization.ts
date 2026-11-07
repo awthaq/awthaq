@@ -45,7 +45,8 @@ import type { Errors } from "@awthaq/core";
 import { ClientAddress, Defects, RateLimiter } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -54,9 +55,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as DeviceAuthorizationApi from "./DeviceAuthorizationApi.ts";
 import * as DeviceClientRecords from "./DeviceClientRecords.ts";
 import * as DeviceGrantRecords from "./DeviceGrantRecords.ts";
@@ -752,7 +753,8 @@ export class DeviceAuthorization extends AuthPlugin.Service<
       const grants = yield* DeviceGrantRecords.DeviceGrantRecords;
       const clients = yield* DeviceClientRecords.DeviceClientRecords;
       const events = yield* AuthEvents.AuthEvents;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
+      const hasher = yield* Digest.Digest;
       const settings = yield* DeviceAuthorizationConfig;
       const beforeApproval = yield* BeforeDeviceApproval;
       const afterApproval = yield* AfterDeviceApproval;
@@ -814,7 +816,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
           if (scopes.some((scope) => !SCOPE_TOKEN.test(scope))) {
             return yield* new ClientInvalid({ reason: "a scope is not an RFC 6749 scope-token" });
           }
-          const clientId = input.clientId ?? `dc_${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+          const clientId = input.clientId ?? `dc_${yield* random.uuidV7()}`;
           if (settings.clients.some((found) => found.clientId === clientId)) {
             return yield* new ClientExists({ clientId });
           }
@@ -851,16 +853,16 @@ export class DeviceAuthorization extends AuthPlugin.Service<
           // Only a registered client's id becomes a bucket key: an attacker cannot mint buckets by inventing ids.
           yield* limits.spend("codeByClient", { clientId: client.value.clientId });
           const now = yield* DateTime.now;
-          const grantId = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+          const grantId = yield* random.uuidV7();
           const interval = Math.max(1, Math.ceil(Duration.toSeconds(settings.interval)));
           // A user-code collision with a live row (20^8 possibilities) draws again; it is not an error.
           for (let attempt = 0; attempt < 5; attempt++) {
-            const userCode = yield* UserCode.generate(crypto);
-            const deviceCode = yield* UserCode.generateDeviceCode(crypto);
+            const userCode = yield* UserCode.generate(random);
+            const deviceCode = yield* UserCode.generateDeviceCode(random);
             const inserted = yield* grants.insert({
               id: grantId,
-              deviceCodeHash: yield* UserCode.hashDeviceCode(crypto, deviceCode),
-              userCodeHash: yield* UserCode.hash(crypto, userCode),
+              deviceCodeHash: yield* UserCode.hashDeviceCode(hasher, deviceCode),
+              userCodeHash: yield* UserCode.hash(hasher, userCode),
               clientId: client.value.clientId,
               scopes: input.scope,
               status: "pending",
@@ -917,7 +919,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
         });
         const normalized = UserCode.normalize(userCode);
         if (!UserCode.isWellFormed(normalized)) return yield* miss;
-        const found = yield* grants.findByUserHash(yield* UserCode.hash(crypto, normalized));
+        const found = yield* grants.findByUserHash(yield* UserCode.hash(hasher, normalized));
         const now = yield* DateTime.now;
         if (Option.isNone(found) || expired(found.value, now)) return yield* miss;
         return found.value;
@@ -961,7 +963,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
             yield* grants.claim(record.id, userId);
           }
           // Re-read: the row is what the claim (ours or a rival's) left, and only its claimer sees the context.
-          const latest = yield* grants.findByUserHash(yield* UserCode.hash(crypto, input.userCode));
+          const latest = yield* grants.findByUserHash(yield* UserCode.hash(hasher, input.userCode));
           if (Option.isNone(latest)) return yield* new DeviceAuthorizationApi.InvalidUserCode();
           const mine = Option.exists(latest.value.userId, (owner) => owner === userId);
           return viewOf(
@@ -1062,7 +1064,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
           return yield* new DeviceAuthorizationApi.InvalidGrant();
         });
         const found = yield* grants.findByDeviceHash(
-          yield* UserCode.hashDeviceCode(crypto, Redacted.value(input.deviceCode)),
+          yield* UserCode.hashDeviceCode(hasher, Redacted.value(input.deviceCode)),
         );
         // Unknown, another client's, or already redeemed: one answer (RFC 8628 §3.5).
         if (Option.isNone(found) || found.value.clientId !== input.clientId)

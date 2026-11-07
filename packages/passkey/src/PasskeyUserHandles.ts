@@ -14,17 +14,17 @@
 // `PasskeyCredentials.ts` and every other domain service here follow.
 
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import type { Users } from "@awthaq/core";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 
@@ -45,94 +45,93 @@ export class PasskeyUserHandles extends Context.Service<
   PasskeyUserHandlesShape
 >()("awthaq/passkey/records/PasskeyUserHandles") {}
 
-const randomHandle = (crypto: Crypto.Crypto) =>
-  crypto
-    .randomBytes(HANDLE_BYTES)
-    .pipe(
-      Effect.map(Encoding.encodeBase64Url),
-      Effect.catch(StoreFailure.storeUnavailable("PasskeyUserHandles.getOrCreate")),
-    );
+const randomHandle = (random: SecureRandom.SecureRandom["Service"]) =>
+  random.randomBytes(HANDLE_BYTES).pipe(Effect.map(Base64Url.encode));
 
 // ---- layerMemory ----------------------------------------------------------
 
-export const layerMemory: Layer.Layer<PasskeyUserHandles, never, Crypto.Crypto> = Layer.effect(
-  PasskeyUserHandles,
-  Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    const state = yield* Ref.make(HashMap.empty<UserId, string>());
-
-    const getOrCreate: PasskeyUserHandlesShape["getOrCreate"] = Effect.fnUntraced(
-      function* (userId) {
-        const candidate = yield* randomHandle(crypto);
-        // First writer wins inside one atomic step; every later caller reads it back.
-        return yield* Ref.modify(state, (s) => {
-          const existing = HashMap.get(s, userId);
-          if (Option.isSome(existing)) return [existing.value, s] as const;
-          return [candidate, HashMap.set(s, userId, candidate)] as const;
-        });
-      },
-    );
-
-    const deleteByUser: PasskeyUserHandlesShape["deleteByUser"] = (userId) =>
-      Ref.update(state, (s) => HashMap.remove(s, userId));
-
-    return { getOrCreate, deleteByUser };
-  }),
-);
-
-// ---- layerSql ---------------------------------------------------------------
-
-export const layerSql: Layer.Layer<PasskeyUserHandles, never, SqlClient.SqlClient | Crypto.Crypto> =
+export const layerMemory: Layer.Layer<PasskeyUserHandles, never, SecureRandom.SecureRandom> =
   Layer.effect(
     PasskeyUserHandles,
     Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const unavailable = (operation: string) =>
-        StoreFailure.orStoreUnavailable(`PasskeyUserHandles.${operation}`);
-      // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
-      const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
-      const crypto = yield* Crypto.Crypto;
-
-      const insertIfAbsent = SqlSchema.void({
-        Request: Schema.Struct({
-          userId: Schema.String,
-          webauthnUserId: Schema.String,
-          createdAt: wire.dateTime,
-        }),
-        execute: (r) => sql`
-          INSERT INTO passkey_user_handle ("userId", "webauthnUserId", "createdAt")
-          VALUES (${r.userId}, ${r.webauthnUserId}, ${r.createdAt})
-          ON CONFLICT("userId") DO NOTHING
-        `,
-      });
-
-      const findByUser = SqlSchema.findOne({
-        Request: Schema.String,
-        Result: Schema.Struct({ webauthnUserId: Schema.String }),
-        execute: (userId) =>
-          sql`SELECT "webauthnUserId" FROM passkey_user_handle WHERE "userId" = ${userId}`,
-      });
+      const random = yield* SecureRandom.SecureRandom;
+      const state = yield* Ref.make(HashMap.empty<UserId, string>());
 
       const getOrCreate: PasskeyUserHandlesShape["getOrCreate"] = Effect.fnUntraced(
         function* (userId) {
-          const candidate = yield* randomHandle(crypto);
-          const now = yield* DateTime.now;
-          // ON CONFLICT DO NOTHING then SELECT: whichever concurrent insert
-          // won is the row every caller (including the losers) reads back.
-          yield* insertIfAbsent({ userId, webauthnUserId: candidate, createdAt: now }).pipe(
-            unavailable("getOrCreate"),
-          );
-          const row = yield* findByUser(userId).pipe(unavailable("getOrCreate"));
-          return row.webauthnUserId;
+          const candidate = yield* randomHandle(random);
+          // First writer wins inside one atomic step; every later caller reads it back.
+          return yield* Ref.modify(state, (s) => {
+            const existing = HashMap.get(s, userId);
+            if (Option.isSome(existing)) return [existing.value, s] as const;
+            return [candidate, HashMap.set(s, userId, candidate)] as const;
+          });
         },
       );
 
       const deleteByUser: PasskeyUserHandlesShape["deleteByUser"] = (userId) =>
-        sql`DELETE FROM passkey_user_handle WHERE "userId" = ${userId}`.pipe(
-          unavailable("deleteByUser"),
-          Effect.asVoid,
-        );
+        Ref.update(state, (s) => HashMap.remove(s, userId));
 
       return { getOrCreate, deleteByUser };
     }),
   );
+
+// ---- layerSql ---------------------------------------------------------------
+
+export const layerSql: Layer.Layer<
+  PasskeyUserHandles,
+  never,
+  SqlClient.SqlClient | SecureRandom.SecureRandom
+> = Layer.effect(
+  PasskeyUserHandles,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const unavailable = (operation: string) =>
+      StoreFailure.orStoreUnavailable(`PasskeyUserHandles.${operation}`);
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const random = yield* SecureRandom.SecureRandom;
+
+    const insertIfAbsent = SqlSchema.void({
+      Request: Schema.Struct({
+        userId: Schema.String,
+        webauthnUserId: Schema.String,
+        createdAt: wire.dateTime,
+      }),
+      execute: (r) => sql`
+          INSERT INTO passkey_user_handle ("userId", "webauthnUserId", "createdAt")
+          VALUES (${r.userId}, ${r.webauthnUserId}, ${r.createdAt})
+          ON CONFLICT("userId") DO NOTHING
+        `,
+    });
+
+    const findByUser = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({ webauthnUserId: Schema.String }),
+      execute: (userId) =>
+        sql`SELECT "webauthnUserId" FROM passkey_user_handle WHERE "userId" = ${userId}`,
+    });
+
+    const getOrCreate: PasskeyUserHandlesShape["getOrCreate"] = Effect.fnUntraced(
+      function* (userId) {
+        const candidate = yield* randomHandle(random);
+        const now = yield* DateTime.now;
+        // ON CONFLICT DO NOTHING then SELECT: whichever concurrent insert
+        // won is the row every caller (including the losers) reads back.
+        yield* insertIfAbsent({ userId, webauthnUserId: candidate, createdAt: now }).pipe(
+          unavailable("getOrCreate"),
+        );
+        const row = yield* findByUser(userId).pipe(unavailable("getOrCreate"));
+        return row.webauthnUserId;
+      },
+    );
+
+    const deleteByUser: PasskeyUserHandlesShape["deleteByUser"] = (userId) =>
+      sql`DELETE FROM passkey_user_handle WHERE "userId" = ${userId}`.pipe(
+        unavailable("deleteByUser"),
+        Effect.asVoid,
+      );
+
+    return { getOrCreate, deleteByUser };
+  }),
+);

@@ -6,7 +6,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as Schema from "effect/Schema";
 import { AttributeResolver, exists, hasAttribute, makeSubjectId, obligation } from "@qadi/core";
 import * as Resolvers from "../src/Resolvers.ts";

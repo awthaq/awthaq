@@ -5,8 +5,8 @@ import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { ConnectionError, UnknownError } from "effect/unstable/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import { ConnectionError, UnknownError } from "effect/sql/SqlError";
 import * as FaultySql from "./support/FaultySql.ts";
 
 const Faulty = FaultySql.layer(SqliteClient.layer({ filename: ":memory:" }));

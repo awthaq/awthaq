@@ -3,7 +3,7 @@
 // Runs on SQLite, and on Postgres under `pnpm test:pg` (the same file, `TestSql.layer` picks the database).
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlDdl from "../src/SqlDdl.ts";
 import * as TestSql from "../../test/src/TestSql.ts";
 

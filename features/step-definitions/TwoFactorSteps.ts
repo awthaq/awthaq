@@ -6,7 +6,7 @@ import { Hooks, Users, VerificationLink } from "@awthaq/core";
 import { Challenge, SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
-import * as Crypto from "effect/Crypto";
+import * as Mac from "effect/crypto/Mac";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -51,8 +51,8 @@ export const twoFactorSteps = defineSteps<World>(({ Given, When, Then }) => {
     const key = ascii(yield* strings.get("key"));
     const code = yield* direct(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
-        return yield* Totp.hotp(crypto, key, BigInt(counter), 6);
+        const mac = yield* Mac.Mac;
+        return yield* Totp.hotp(mac, key, BigInt(counter), 6);
       }),
     );
     yield* strings.set("code", code);
@@ -63,8 +63,8 @@ export const twoFactorSteps = defineSteps<World>(({ Given, When, Then }) => {
     const key = ascii(yield* strings.get("key"));
     const code = yield* direct(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
-        return yield* Totp.totp(crypto, key, time, { period: 30, digits: 8 });
+        const mac = yield* Mac.Mac;
+        return yield* Totp.totp(mac, key, time, { period: 30, digits: 8 });
       }),
     );
     yield* strings.set("code", code);
@@ -96,8 +96,8 @@ export const twoFactorSteps = defineSteps<World>(({ Given, When, Then }) => {
     );
     const exit = yield* directExit(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
-        return yield* Totp.verifyTotp(crypto, key, code, now, {
+        const mac = yield* Mac.Mac;
+        return yield* Totp.verifyTotp(mac, key, code, now, {
           period: 30,
           digits: 6,
           window: 1,
@@ -114,8 +114,8 @@ export const twoFactorSteps = defineSteps<World>(({ Given, When, Then }) => {
     const now = yield* numbers.get("now");
     return yield* direct(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
-        return yield* Totp.totp(crypto, key, now + offset * 30, { period: 30, digits: 6 });
+        const mac = yield* Mac.Mac;
+        return yield* Totp.totp(mac, key, now + offset * 30, { period: 30, digits: 6 });
       }),
     );
   });

@@ -33,7 +33,7 @@
 
 import { Hmac, PasswordHasher } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64 from "effect/encoding/Base64";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import { scrypt } from "hash-wasm";
@@ -77,7 +77,7 @@ export const encodeHash = (input: {
 
 const decode = (value: string | undefined): Uint8Array | undefined => {
   if (value === undefined) return undefined;
-  const decoded = Encoding.decodeBase64(value);
+  const decoded = Base64.decode(value);
   return decoded._tag === "Success" && decoded.success.length <= MAX_KEY_BYTES
     ? decoded.success
     : undefined;

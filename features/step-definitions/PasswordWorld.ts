@@ -25,15 +25,15 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 /** Which fault, if any, the fault-injecting `Sessions` wrapper raises when the flow reaches it (TIR-005). */
 export type Fault = "none" | "sessionIssue" | "revokeAll";
@@ -88,7 +88,11 @@ const neverAnsweringMailer = Layer.succeed(
 );
 
 export interface AppOptions {
-  readonly hasher?: Layer.Layer<PasswordHasher.PasswordHasher, Config.ConfigError, Crypto.Crypto>;
+  readonly hasher?: Layer.Layer<
+    PasswordHasher.PasswordHasher,
+    Config.ConfigError,
+    SecureRandom.SecureRandom
+  >;
   readonly breachHttpClient?: Layer.Layer<HttpClient.HttpClient>;
   /** AH-007: the `Password.config` overrides in force, merged (not replaced) by successive `configureApp` calls. */
   readonly passwordConfig?: Partial<Password.PasswordConfigShape>;

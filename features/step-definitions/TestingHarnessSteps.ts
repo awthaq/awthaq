@@ -23,10 +23,10 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpPlatform from "effect/http/HttpPlatform";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpServer from "effect/http/HttpServer";
+import * as SqlClient from "effect/sql/SqlClient";
 import assert from "node:assert/strict";
 import {
   composable,

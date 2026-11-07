@@ -16,8 +16,8 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import { SqlError } from "effect/sql/SqlError";
 import { direct, directExit, World } from "./DomainWorld.ts";
 import {
   bodyText,

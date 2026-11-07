@@ -11,7 +11,7 @@ import { CurrentUser, AuthPlugin, HookPoint, Migrations, RateLimits } from "@awt
 import { RateLimiter, Tenant } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -19,9 +19,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import * as TemplateApi from "./TemplateApi.ts";
 
 // ---- config: a Context.Reference with a default (BEH-EA-017) -----------------------
@@ -97,18 +97,14 @@ export class NoteRecords extends Context.Service<NoteRecords, NoteRecordsShape>(
   "example/notes/records/NoteRecords",
 ) {}
 
-/** Id minting is a `Crypto` call that can fail: an outage, never a defect. */
-const mintId = <E>(minted: Effect.Effect<string, E>) =>
-  Effect.catch(minted, StoreFailure.storeUnavailable("NoteRecords.create"));
-
 export const layerMemory = Layer.effect(
   NoteRecords,
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const state = yield* Ref.make<ReadonlyArray<NoteRecord>>([]);
 
     const create: NoteRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId(crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const created = yield* DateTime.now;
       const stamped = yield* TenantScoped.stamp({ tenantId: null });
       const record: NoteRecord = {
@@ -161,7 +157,7 @@ export const layerSql = Layer.effect(
   NoteRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const NoteRow = noteRow(SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql)));
 
     const insert = SqlSchema.findOne({
@@ -177,7 +173,7 @@ export const layerSql = Layer.effect(
       );
 
     const create: NoteRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId(crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const created = yield* DateTime.now;
       const stamped = yield* TenantScoped.stamp({ tenantId: null });
       return yield* insert({

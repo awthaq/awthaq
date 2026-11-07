@@ -9,7 +9,7 @@ import { AuthCore, Api, SessionContract } from "@awthaq/api";
 import { CurrentUser, Sessions } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { expireSessionCookie } from "./internal/SessionCookie.ts";
 
 /**

@@ -19,7 +19,7 @@ import {
   type VerificationStore,
 } from "@awthaq/ports";
 import * as Layer from "effect/Layer";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as SqlClient from "effect/sql/SqlClient";
 import * as AccountStoreSql from "./AccountStoreSql.ts";
 import * as AuditLogStoreSql from "./AuditLogStoreSql.ts";
 import * as CoreSealedColumns from "./CoreSealedColumns.ts";

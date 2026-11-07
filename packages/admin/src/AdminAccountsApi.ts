@@ -14,10 +14,10 @@
 import { Api, EmailContract } from "@awthaq/api";
 import { HookPoint } from "@awthaq/core";
 import * as Schema from "effect/Schema";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
 import { AdminActionDenied, AdminTargetNotFound, UserIdParams } from "./AdminApi.ts";
 
 /** BAM-005: an administrator may not delete their own account, or overwrite their own password through the admin surface (the user's own endpoints, with their current password, exist for that). */

@@ -13,7 +13,7 @@
 // confirming endpoint redeems `EmailChange.Link`.
 
 import { Mailer } from "@awthaq/ports";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -51,7 +51,7 @@ export const Link = VerificationLink.forUser({ name: PURPOSE, payload: Payload }
 export const request = (
   deps: {
     readonly verification: VerificationShape;
-    readonly crypto: Crypto.Crypto;
+    readonly random: SecureRandom.SecureRandom["Service"];
     readonly mailer: Mailer.MailerShape;
   },
   input: {

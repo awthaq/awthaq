@@ -40,14 +40,14 @@ import {
 import { Defects, type Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
 import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import { makeSubject } from "@qadi/core";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as WebhookDelivery from "./WebhookDelivery.ts";
 import * as WebhookHeaders from "./WebhookHeaders.ts";
 import * as WebhookPayload from "./WebhookPayload.ts";
@@ -502,7 +502,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
     contributes: Layer.mergeAll(webhooksErasure, webhooksExport, webhooksRetention),
     make: Effect.gen(function* () {
       const records = yield* WebhookRecords.WebhookRecords;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const events = yield* AuthEvents.AuthEvents;
       const resolver = yield* HostResolver.HostResolver;
       // EP-007: the knobs are decided per operation, so a tenant's `Webhooks.config(...)` in the calling
@@ -611,9 +611,9 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           yield* validateTarget(input.url, settings);
           yield* validateTags(input.eventTags);
           if (input.headers !== undefined) yield* validateHeaders(input.headers);
-          const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+          const id = yield* random.uuidV7();
           const secret = yield* WebhookSignature.generateSecret.pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(SecureRandom.SecureRandom, random),
           );
           const record = yield* records.createEndpoint({
             id,
@@ -728,7 +728,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           // The current secret becomes the previous one — the records re-seal it, because the AAD names the column.
           const previous = yield* SealedColumn.option(endpoint.secret.open);
           const secret = yield* WebhookSignature.generateSecret.pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(SecureRandom.SecureRandom, random),
           );
           const record = yield* records
             .setSecrets(endpointId, {
@@ -809,8 +809,8 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             );
           }
           const now = yield* DateTime.now;
-          const eventId = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
-          const deliveryId = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+          const eventId = yield* random.uuidV7();
+          const deliveryId = yield* random.uuidV7();
           yield* records.enqueue([
             {
               id: deliveryId,
@@ -862,7 +862,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
    * Opt-in delivery machinery: the relay that tails the audit log into the delivery queue, and the worker
    * that sends what is queued. Requires `AuditLog`, a `RelayCursorStore` (both `Persistence` bundles provide one), the records, `Encryption`,
    * `RateLimiter`, `HostResolver`, a `WebhookTransport` (`WebhookTransport.layerNodePinned` connects to the
-   * address the host was pinned to; `layerHttpClient` wraps any `HttpClient` and cannot pin) and `Crypto`;
+   * address the host was pinned to; `layerHttpClient` wraps any `HttpClient` and cannot pin), `SecureRandom` and `Mac`;
    * run one per deployment.
    */
   static readonly background = WebhookDelivery.backgroundLayer;

@@ -9,9 +9,9 @@
 import { Defects } from "@awthaq/ports";
 import { SqlDdl } from "@awthaq/sql";
 import * as Effect from "effect/Effect";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 export interface Migration {
   readonly name: string;

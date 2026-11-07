@@ -56,7 +56,8 @@ import { Jwt, JwtCodec } from "@awthaq/jwt";
 import { ClientAddress, Defects, Hmac, RateLimiter } from "@awthaq/ports";
 import { Credentials } from "@awthaq/server";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -65,10 +66,10 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Headers from "effect/http/Headers";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ApiKeyApi from "./ApiKeyApi.ts";
 import * as ApiKeyClientRecords from "./ApiKeyClientRecords.ts";
 import * as ApiKeyRecords from "./ApiKeyRecords.ts";
@@ -792,7 +793,8 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
         const records = yield* ApiKeyRecords.ApiKeyRecords;
         const clients = yield* ApiKeyClientRecords.ApiKeyClientRecords;
         const settings = yield* ApiKeyConfig;
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
+        const hasher = yield* Digest.Digest;
         const events = yield* AuthEvents.AuthEvents;
         const jwt = yield* Jwt.Jwt;
         const users = yield* Users.Users;
@@ -813,8 +815,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           }),
         });
 
-        const randomHex = (bytes: number) =>
-          crypto.randomBytes(bytes).pipe(Effect.map(Hmac.toHex), Effect.orDie);
+        const randomHex = (bytes: number) => random.randomBytes(bytes).pipe(Effect.map(Hmac.toHex));
 
         const grantable = (scopes: ReadonlyArray<string>) => {
           const refused =
@@ -855,10 +856,10 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           readonly rotatedFrom: Option.Option<string>;
         }) {
           const now = yield* DateTime.now;
-          const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+          const id = yield* random.uuidV7();
           const secret = yield* randomHex(32);
           const key = `${settings.prefix}${id}.${secret}`;
-          const secretHash = yield* SecretHash.digest(crypto, secret).pipe(Effect.orDie);
+          const secretHash = yield* SecretHash.digest(hasher, secret).pipe(Effect.orDie);
           const record: ApiKeyRecords.ApiKeyRecord = {
             id,
             ownerId: input.ownerId,
@@ -964,7 +965,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           // A string that is not shaped like a key costs nothing and says nothing.
           if (Option.isNone(parsed)) return Option.none();
           const { id, secret } = parsed.value;
-          const presentedHash = yield* SecretHash.digest(crypto, secret).pipe(Effect.orDie);
+          const presentedHash = yield* SecretHash.digest(hasher, secret).pipe(Effect.orDie);
           const found = yield* records.findById(id);
           // The same hash and constant-time compare whether or not the id exists (PIL-007).
           const storedHash = Option.match(found, {
@@ -1001,14 +1002,14 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
             const scopes = dedupe(input.scopes);
             yield* grantable(scopes);
             const now = yield* DateTime.now;
-            const clientId = `svc_${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+            const clientId = `svc_${yield* random.uuidV7()}`;
             const secret = yield* mintClientSecret;
             const record: ApiKeyClientRecords.ApiKeyClientRecord = {
               clientId,
               ownerId,
               name: input.name,
               scopes,
-              secretHash: yield* SecretHash.digest(crypto, secret).pipe(Effect.orDie),
+              secretHash: yield* SecretHash.digest(hasher, secret).pipe(Effect.orDie),
               previousSecretHash: Option.none(),
               previousExpiresAt: Option.none(),
               createdAt: now,
@@ -1056,7 +1057,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
             const secret = yield* mintClientSecret;
             yield* clients.rotateSecret({
               clientId: record.clientId,
-              secretHash: yield* SecretHash.digest(crypto, secret).pipe(Effect.orDie),
+              secretHash: yield* SecretHash.digest(hasher, secret).pipe(Effect.orDie),
               previousExpiresAt: DateTime.addDuration(now, grace),
             });
             yield* events.publish({
@@ -1071,7 +1072,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
         const issueServiceToken: ApiKeyShape["issueServiceToken"] = Effect.fnUntraced(
           function* (input) {
             const presentedHash = yield* SecretHash.digest(
-              crypto,
+              hasher,
               Redacted.value(input.clientSecret),
             ).pipe(Effect.orDie);
             const found = yield* clients.findById(input.clientId);

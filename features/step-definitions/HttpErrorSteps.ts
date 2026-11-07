@@ -16,13 +16,13 @@ import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as OpenApi from "effect/unstable/httpapi/OpenApi";
-import * as NetAddress from "effect/unstable/net/NetAddress";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as OpenApi from "effect/http-api/OpenApi";
+import * as NetAddress from "effect/net/NetAddress";
 import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import {
   DOCS_PATH,
@@ -61,8 +61,8 @@ import { STRONG_PASSWORD } from "./shared/Harness.ts";
 const isAnswer = (value: unknown): value is Answer =>
   typeof value === "object" && value !== null && "status" in value && "body" in value;
 
-/** `effect/httpapi/HttpApiGroup/<id>` — the key a group's service lives under, derived from the id alone (BEH-EA-082). */
-const keyOf = (groupId: string) => `effect/httpapi/HttpApiGroup/${groupId}`;
+/** `effect/http-api/HttpApiGroup/<id>` — the key a group's service lives under, derived from the id alone (BEH-EA-082). */
+const keyOf = (groupId: string) => `effect/http-api/HttpApiGroup/${groupId}`;
 
 const contractGroupIds = (api: { readonly groups: Readonly<Record<string, unknown>> }) =>
   Object.keys(api.groups);

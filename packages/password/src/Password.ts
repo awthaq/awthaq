@@ -40,15 +40,17 @@ import {
 } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
+import * as Mac from "effect/crypto/Mac";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -563,17 +565,17 @@ const HIBP_LINE = /^[0-9A-F]{35}:\d+$/i;
  */
 const isBreached = (
   httpClient: HttpClient.HttpClient,
-  crypto: Crypto.Crypto,
+  digest: Digest.Digest["Service"],
   password: Redacted.Redacted<string>,
   onUnavailable: "allow" | "reject",
   timeout: Duration.Duration,
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
-    const digest = yield* crypto.digest(
-      "SHA-1",
+    const sha1 = yield* digest.digest(
+      Digest.sha1,
       new TextEncoder().encode(Redacted.value(password)),
     );
-    const hex = toHex(digest).toUpperCase();
+    const hex = toHex(sha1).toUpperCase();
     const prefix = hex.slice(0, 5);
     const suffix = hex.slice(5);
     // CSD-001: `HttpClient` resolves for any status — a 429/503 from HIBP
@@ -607,7 +609,7 @@ const isBreached = (
 
 const checkPolicy = (
   httpClient: HttpClient.HttpClient,
-  crypto: Crypto.Crypto,
+  digest: Digest.Digest["Service"],
   password: Redacted.Redacted<string>,
   config: PasswordConfigShape,
 ): Effect.Effect<ReadonlyArray<string>> =>
@@ -620,7 +622,7 @@ const checkPolicy = (
       const onUnavailable =
         config.breachCheck === true ? "allow" : config.breachCheck.onUnavailable;
       if (
-        yield* isBreached(httpClient, crypto, password, onUnavailable, config.breachCheckTimeout)
+        yield* isBreached(httpClient, digest, password, onUnavailable, config.breachCheckTimeout)
       ) {
         hints.push("appears in known breaches");
       }
@@ -927,7 +929,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // function, the identifier-digest key, and the calibrated timing-floor measurement.
       const builtConfig = yield* PasswordConfig;
       const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
+      const digest = yield* Digest.Digest;
+      const mac = yield* Mac.Mac;
       const httpClient = yield* HttpClient.HttpClient;
       // ERS-002: mail is dispatched in the background (BEH-EA-064/113) by a
       // dispatcher this layer owns — supervised, retried, bounded, observable
@@ -939,10 +943,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // be dictionary-reversed from the audit table.
       const digestKey = Option.isSome(builtConfig.identifierDigestKey)
         ? new TextEncoder().encode(Redacted.value(builtConfig.identifierDigestKey.value))
-        : yield* crypto.randomBytes(32).pipe(Effect.orDie);
+        : yield* random.randomBytes(32);
       const identifierDigest = (email: string) =>
         Hmac.hmacSha256(
-          crypto,
+          mac,
           digestKey,
           new TextEncoder().encode(`signin-identifier:${builtConfig.rateLimitEmailKey(email)}`),
         ).pipe(Effect.map(Hmac.toHex), Effect.orDie);
@@ -1055,7 +1059,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         return yield* mailDispatcher.dispatch(
           { template: "verify-email", userId: user.id },
           Effect.gen(function* () {
-            const issued = yield* VerificationLink.issue({ verification, crypto }, VerifyLink, {
+            const issued = yield* VerificationLink.issue({ verification, random }, VerifyLink, {
               ttl: VERIFY_TTL,
               userId: user.id,
             });
@@ -1088,7 +1092,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
         // account creation from one source before the per-email check.
         yield* limits.spend(["signUpByIp", "signUp"], input);
-        const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
+        const hints = yield* checkPolicy(httpClient, digest, input.password, config);
         if (hints.length > 0) {
           return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
         }
@@ -1306,7 +1310,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 yield* mailer.send({ to: to.value, template: "reset-password-unavailable" });
                 return;
               }
-              const issued = yield* VerificationLink.issue({ verification, crypto }, ResetLink, {
+              const issued = yield* VerificationLink.issue({ verification, random }, ResetLink, {
                 ttl: config.resetTtl,
                 userId: user.id,
               });
@@ -1457,7 +1461,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             // ARF-002: the policy (including the breach check's network call) is decided before
             // the token is touched, so a weak password never burns the single-use token under any
             // `Verification` store, and no network I/O happens while the transaction is open.
-            beforeClaim: checkPolicy(httpClient, crypto, input.password, config).pipe(
+            beforeClaim: checkPolicy(httpClient, digest, input.password, config).pipe(
               Effect.flatMap((hints) =>
                 hints.length > 0
                   ? Effect.fail(new PasswordApi.WeakPassword({ hints }))
@@ -1514,7 +1518,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           // `Users` stores addresses lower-cased (BEH-EA-041): the same address in another case is no change.
           if (current.value.toLowerCase() === input.newEmail.toLowerCase()) return;
           yield* EmailChange.request(
-            { verification, crypto, mailer },
+            { verification, random, mailer },
             { userId: input.userId, newEmail: input.newEmail, link: config.links.changeEmail },
           ).pipe(
             Effect.catchTag("MailDeliveryFailed", () => new PasswordApi.EmailDeliveryFailed()),
@@ -1593,7 +1597,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         }
         const account = accountOpt.value;
 
-        const hints = yield* checkPolicy(httpClient, crypto, input.newPassword, config);
+        const hints = yield* checkPolicy(httpClient, digest, input.newPassword, config);
         if (hints.length > 0) {
           return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
         }

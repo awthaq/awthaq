@@ -23,7 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { permission, role } from "@qadi/core";
 import { Api } from "@awthaq/api";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";

@@ -11,9 +11,9 @@
 
 import { Defects } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
-import type * as Statement from "effect/unstable/sql/Statement";
+import type * as SqlClient from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
+import type * as Statement from "effect/sql/Statement";
 import type * as Models from "./Models.ts";
 
 /**

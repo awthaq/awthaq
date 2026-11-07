@@ -3,7 +3,7 @@
 // spec/behaviors/27-admin-impersonation.md, BEH-EA-215/219. This plugin's
 // own persistence for the `admin_impersonation` table — a durable audit
 // trail independent of the `Session` row's own lifecycle, built directly
-// against `effect/unstable/sql`'s `SqlSchema` the same way
+// against `effect/sql`'s `SqlSchema` the same way
 // `@awthaq/passkey`'s own `PasskeyCredentials.ts` builds its table:
 // this table belongs to the plugin, not the shared persistence stratum.
 //
@@ -23,7 +23,7 @@ import { SqlTransaction } from "@awthaq/ports";
 import { AuditChain, Users } from "@awthaq/core";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -34,8 +34,8 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 type UserId = Users.UserId;
 
@@ -184,10 +184,6 @@ const notFound = (sessionId: string): ImpersonationRecordNotFound =>
     message: `awthaq: no active impersonation episode for session: ${sessionId}`,
   });
 
-/** A store outage is the typed `StoreUnavailable`; the id minting is a `Crypto` call that can fail too. */
-const mintId = <E>(minted: Effect.Effect<string, E>) =>
-  Effect.catch(minted, StoreFailure.storeUnavailable("ImpersonationRecords.create"));
-
 /** Newest-first with `id` as the tiebreak, the same total order the SQL `ORDER BY startedAt DESC, id DESC` gives. */
 const newestFirst = (
   records: ReadonlyArray<ImpersonationRecord>,
@@ -332,7 +328,7 @@ export const layerMemory = Layer.effect(
     const state = yield* Ref.make<RecordsState>(HashMap.empty());
     const ledger = yield* Ref.make<ReadonlyArray<LedgerEntry>>([]);
     const appendLock = yield* Semaphore.make(1);
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const chain = yield* AuditChain.AuditChain;
 
     /** Reads the tail and appends as one step, so two writers cannot chain off the same predecessor. */
@@ -350,7 +346,7 @@ export const layerMemory = Layer.effect(
       );
 
     const create: ImpersonationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId(crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const tenantId = Option.fromNullishOr(
         (yield* TenantScoped.stamp({ tenantId: null })).tenantId,
@@ -542,7 +538,7 @@ export const layerSql = Layer.effect(
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const ImpersonationRow = makeImpersonationRow(wire);
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const chain = yield* AuditChain.AuditChain;
     /** Lifts RLS for the one statement when (and only when) the caller presents a witness. */
     const liftFor =
@@ -704,7 +700,7 @@ export const layerSql = Layer.effect(
     });
 
     const create: ImpersonationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* mintId(crypto.randomUUIDv7);
+      const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const { tenantId } = yield* TenantScoped.stamp({ tenantId: null });
       return yield* inTransaction(

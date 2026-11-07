@@ -3,16 +3,18 @@
 // plus the silencing switch the in-process test harness uses.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpRouter from "effect/http/HttpRouter";
 import * as AuthHttp from "../src/AuthHttp.ts";
 import * as RequestContext from "../src/RequestContext.ts";
 
 /** Builds the check beside `extra` on one router and returns the warnings it logged. */
-const warningsFor = (extra: Layer.Layer<never, never, HttpRouter.HttpRouter | Crypto.Crypto>) =>
+const warningsFor = (
+  extra: Layer.Layer<never, never, HttpRouter.HttpRouter | SecureRandom.SecureRandom>,
+) =>
   Effect.gen(function* () {
     const messages: Array<string> = [];
     const capture = Logger.make<unknown, void>((options) => {

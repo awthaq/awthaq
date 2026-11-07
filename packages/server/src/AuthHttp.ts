@@ -14,7 +14,7 @@
 // (`Layer.mergeAll(AuthHttp.routes(api, {openapiPath: "/openapi.json"}), AuthHttp.docs(api), AppRoutes)`).
 // BEH-EA-085's two serving paths (`HttpRouter.serve`, `HttpRouter.toWebHandler`)
 // and BEH-EA-087's `ManagedRuntime` escape hatch need no wrapper at all —
-// they are ordinary `effect`/`effect/unstable/http` calls made against
+// they are ordinary `effect`/`effect/http` calls made against
 // whatever `Layer` `AuthHttp.routes` (and an application's own handlers)
 // produce; see `test/AuthHttp.test.ts` for both exercised end to end.
 
@@ -30,18 +30,18 @@ import type {
   Verification,
 } from "@awthaq/core";
 import type { RateLimiter, SqlTransaction } from "@awthaq/ports";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Headers from "effect/unstable/http/Headers";
-import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import type * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
+import * as Headers from "effect/http/Headers";
+import * as HttpMiddleware from "effect/http/HttpMiddleware";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import type * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpApiScalar from "effect/http-api/HttpApiScalar";
 import * as Account from "./Account.ts";
 import * as Authentication from "./Authentication.ts";
 import * as Credentials from "./Credentials.ts";
@@ -160,7 +160,11 @@ export function middlewareFor<
 >(
   api: HttpApi.HttpApi<"auth", Groups>,
   options: MiddlewareOptions<CE, CR, PR>,
-): Layer.Layer<DeclaredMiddleware<Groups>, CE, Sessions.Sessions | Crypto.Crypto | CR | PR>;
+): Layer.Layer<
+  DeclaredMiddleware<Groups>,
+  CE,
+  Sessions.Sessions | SecureRandom.SecureRandom | CR | PR
+>;
 export function middlewareFor(
   api: HttpApi.HttpApi<"auth", HttpApiGroup.Constraint>,
   options: MiddlewareOptions<unknown, unknown, unknown>,

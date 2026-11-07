@@ -6,11 +6,11 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Reactivity from "effect/unstable/reactivity/Reactivity";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type * as Connection from "effect/unstable/sql/SqlConnection";
-import { SqlError, type SqlErrorReason } from "effect/unstable/sql/SqlError";
-import * as Statement from "effect/unstable/sql/Statement";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
+import type * as Connection from "effect/sql/SqlConnection";
+import { SqlError, type SqlErrorReason } from "effect/sql/SqlError";
+import * as Statement from "effect/sql/Statement";
 
 export interface Faults {
   /** The next `count` statements whose SQL matches `matching` fail with `reason` (default: any statement). */
@@ -118,6 +118,7 @@ export const layer = <E, R>(real: Layer.Layer<SqlClient.SqlClient, E, R>) =>
         acquirer: Effect.map(inner.reserve, decorate),
         compiler: Statement.makeCompilerSqlite(),
         beginTransaction: "BEGIN IMMEDIATE",
+        driver: inner.driver,
         spanAttributes: [],
       });
 
