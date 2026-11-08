@@ -56,6 +56,7 @@ import {
   SqlTransaction,
   Tenant,
 } from "@awthaq/ports";
+import { Password } from "@awthaq/password";
 import { AuditLogStoreSql, CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -208,17 +209,15 @@ const buildOrganizationStack = () =>
 
 // ---- the admin-accounts stack (BEH-EA-236, plan 13) ---------------------------------------
 
-/** The tenant "acme" keeps credential administration and requires a digit in a password, but configures no deletion. */
+/** The tenant "acme" keeps credential administration and requires 40-character passwords, but configures no deletion. */
 export class AdminAccountsTenantConfig extends LayerMap.Service<AdminAccountsTenantConfig>()(
   "features/TenancyWorld/AdminAccountsTenantConfig",
   {
     lookup: (tenantId: string) =>
-      Layer.merge(
-        Admin.config({
-          canManageCredentials: () => Effect.succeed(true),
-          passwordPolicy: (password) =>
-            Effect.succeed(/\d/.test(Redacted.value(password)) ? [] : ["must contain a digit"]),
-        }),
+      Layer.mergeAll(
+        Admin.config({ canManageCredentials: () => Effect.succeed(true) }),
+        // ADR-EA-048: an administrator-set password obeys the tenant's Password.config.
+        Password.config({ minLength: 40 }),
         Tenant.configApplied(tenantId),
       ),
     idleTimeToLive: "1 minute",
@@ -236,11 +235,14 @@ export type AdminAccountsServices =
 const buildAdminAccountsStack = () =>
   AdminAccountsTenantConfig.layer.pipe(
     Layer.provideMerge(
-      TestAuth.layer(Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]), {
-        services: Admin.config({
-          canDeleteUsers: () => Effect.succeed(true),
-          canManageCredentials: () => Effect.succeed(true),
-        }),
+      TestAuth.layer(Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]), {
+        services: Layer.merge(
+          Admin.config({
+            canDeleteUsers: () => Effect.succeed(true),
+            canManageCredentials: () => Effect.succeed(true),
+          }),
+          TestAuth.httpClient.noBreach,
+        ),
       }),
     ),
   );

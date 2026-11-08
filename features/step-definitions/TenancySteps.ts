@@ -1122,7 +1122,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Given(
-    "the tenant {string} configures credential administration and a password policy, but no account deletion",
+    "the tenant {string} configures credential administration and a Password policy, but no account deletion",
     function* (_tenant: string) {
       // The lookup in `AdminAccountsTenantConfig` is the configuration; nothing to arrange per scenario.
     },
@@ -1160,7 +1160,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   When(
-    "an administrator sets a password with no digit for {string} in a request naming the tenant {string}",
+    "an administrator sets a password shorter than the tenant's minimum for {string} in a request naming the tenant {string}",
     function* (name: string, tenant: string) {
       const { outcomes } = yield* World;
       const id = Users.UserId(yield* outcomes.get(`${name}:id`));
@@ -1170,7 +1170,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
           outcomeTag(
             Effect.flatMap(AdminAccounts.AdminAccounts, (accounts) =>
               accounts.setUserPassword(callerOf("an-administrator"), id, {
-                password: Redacted.make("a thirty character password no digit"),
+                password: Redacted.make("a thirty-six character password, short"),
               }),
             ).pipe(Effect.provide(AdminAccountsTenantConfig.get(tenant))),
           ),

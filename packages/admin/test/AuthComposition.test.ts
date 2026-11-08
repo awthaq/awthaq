@@ -4,6 +4,7 @@
 import { Auth, AuthPlugin } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import { Organization } from "@awthaq/organization";
+import { Password } from "@awthaq/password";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 import * as AdminTenants from "../src/AdminTenants.ts";
@@ -52,9 +53,20 @@ describe("Auth.make([Organization, Admin, AdminTenants])", () => {
 });
 
 // BAM-005/BAM-009: destructive and credential administration is its own opt-in plugin, admin tier,
-// so `Admin` alone composes without the erasure cascade, hasher and mailer it needs.
-describe("Auth.make([Admin, AdminAccounts])", () => {
-  const auth = Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]);
+// so `Admin` alone composes without the erasure cascade, the password credential and mailer it needs.
+describe("Auth.make([Admin, Password, AdminAccounts])", () => {
+  const auth = Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]);
+
+  // ADR-EA-048: an administrator-set password goes through Password's credential module and policy,
+  // so a tuple without Password is refused before it is built (BEH-EA-329).
+  it("refuses AdminAccounts without Password, and orders Password before it", () => {
+    // @ts-expect-error -- plugin "admin.accounts" depends on plugin "password", which is not in the list
+    Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]);
+    const ids = auth.manifest.plugins.map((plugin) => plugin.id);
+    assert.isBelow(ids.indexOf("password"), ids.indexOf("admin.accounts"));
+    const accounts = auth.manifest.plugins.find((plugin) => plugin.id === "admin.accounts");
+    assert.deepStrictEqual(accounts?.dependsOn, ["password"]);
+  });
 
   it("puts the accounts group on the admin tier, out of the public API", () => {
     assert.include(Object.keys(auth.adminApi.groups), "admin.accounts");

@@ -395,6 +395,9 @@ importers:
       '@awthaq/organization':
         specifier: workspace:*
         version: link:../organization
+      '@awthaq/password':
+        specifier: workspace:*
+        version: link:../password
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
