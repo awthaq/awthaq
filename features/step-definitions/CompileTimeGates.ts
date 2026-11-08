@@ -6,7 +6,7 @@
 // gutted without its scenario failing. A gate is a `// type-gate: <name>` line followed by its
 // block (up to the next blank line).
 // @effect-diagnostics missingEffectContext:off
-import { Api } from "@awthaq/api";
+import { Api, SessionLifecycle } from "@awthaq/api";
 import {
   Auth,
   EmailChange,
@@ -20,7 +20,7 @@ import { TwoFactor } from "@awthaq/two-factor";
 import { OAuthProvider } from "@awthaq/oauth";
 import { Password } from "@awthaq/password";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
-import { AuthHost, Csrf } from "@awthaq/server";
+import { AuthHost, Csrf, SessionDelivery } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { AuthorizedSubject } from "@awthaq/qadi";
@@ -33,6 +33,8 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 
@@ -283,3 +285,42 @@ export const hostWithEveryPort = () =>
       hostedPassword.pipe(Layer.provide(everyPortButMailer), Layer.provide(Mailer.layerMemory)),
     ),
   );
+
+// ---- 04-contract-stratum.feature: BEH-EA-343 (plan 21, ADR-EA-045) ----
+
+const lifecycleApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("gate")
+    .add(
+      HttpApiEndpoint.post("mint", "/gate/mint", { success: Schema.String }).middleware(
+        SessionLifecycle.Mints,
+      ),
+    )
+    .add(HttpApiEndpoint.post("plain", "/gate/plain", { success: Schema.String })),
+);
+
+// type-gate: session-delivery-needs-a-declared-endpoint
+export const undeclaredDelivery = HttpApiBuilder.group(lifecycleApi, "gate", (handlers) =>
+  handlers
+    .handle("mint", () => Effect.as(SessionDelivery.decline(SessionLifecycle.MintGrant), "ok"))
+    .handle("plain", () => Effect.as(SessionDelivery.decline(SessionLifecycle.MintGrant), "ok")),
+);
+export const undeclaredLeavesTheGrant: [
+  Extract<
+    Layer.Services<typeof undeclaredDelivery>,
+    HttpRouter.Request<"Requires", SessionLifecycle.MintGrant>
+  >,
+] extends [never]
+  ? false
+  : true = true;
+
+// type-gate: a-declared-endpoint-gets-its-grant
+export const declaredDelivery = HttpApiBuilder.group(lifecycleApi, "gate", (handlers) =>
+  handlers
+    .handle("mint", () => Effect.as(SessionDelivery.decline(SessionLifecycle.MintGrant), "ok"))
+    .handle("plain", () => Effect.succeed("ok")),
+);
+export const declaredLeavesNothing: [
+  Extract<Layer.Services<typeof declaredDelivery>, HttpRouter.Request<"Requires", unknown>>,
+] extends [never]
+  ? true
+  : false = true;
