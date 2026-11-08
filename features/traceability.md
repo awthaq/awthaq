@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1325 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1334; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1326 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1335; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1343,3 +1343,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1332 | [BEH-EA-344](../spec/behaviors/24-nextjs-ssr.md#beh-ea-344-an-in-process-user-agent-keeps-cookie-state-the-way-a-browser-does) | [07-client-integration/24-nextjs-ssr.feature](features/07-client-integration/24-nextjs-ssr.feature) | A server action's client honours an expiring Set-Cookie within the action |
 | REQ-EA-1333 | [BEH-EA-333](../spec/behaviors/25-testing-harness.md#beh-ea-333-testauthapp-serves-the-composition-and-its-context-together) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | Each agent of a TestAuth.app keeps its own cookies |
 | REQ-EA-1334 | [BEH-EA-333](../spec/behaviors/25-testing-harness.md#beh-ea-333-testauthapp-serves-the-composition-and-its-context-together) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | A signed-in agent's session follows the composition's cookie configuration |
+| REQ-EA-1335 | [BEH-EA-284](../spec/behaviors/35-organization.md#beh-ea-284-organization-data-is-member-only-and-a-non-member-cannot-tell-an-organization-that-exists-from-one-that-does-not) | [10-organization/35-organization.feature](features/10-organization/35-organization.feature) | With dynamic access control disabled a non-member still gets the same 404 for a role endpoint as for an unknown organization |

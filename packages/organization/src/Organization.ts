@@ -165,6 +165,46 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const effectivePermissionsOf = authority.effectivePermissions;
 
+      /** PERS-005: every PermissionEngine denial leaves a durable who/what/why. */
+      const denied = (
+        callerId: Users.UserId,
+        organizationId: string,
+        resource: string,
+        action: string,
+        reason: "notMember" | "missingStatement",
+      ) =>
+        events.publish({
+          _tag: "auth.organization.permissionDenied",
+          organizationId,
+          userId: callerId,
+          resource,
+          action,
+          reason,
+        });
+
+      /**
+       * MTI-009 for a statement-gated operation: a non-member fails `OrganizationNotFound` and is
+       * recorded `notMember`. Run before a feature gate (PV-300), so a non-member's answer never
+       * depends on an optional feature (BEH-EA-284).
+       */
+      const requireMembershipFor = (
+        callerId: Users.UserId,
+        organizationId: string,
+        resource: string,
+        action: string,
+      ) =>
+        memberSystem.find(organizationId, callerId).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                denied(callerId, organizationId, resource, action, "notMember").pipe(
+                  Effect.andThen(Effect.fail(new OrganizationApi.OrganizationNotFound())),
+                ),
+              onSome: Effect.succeed,
+            }),
+          ),
+        );
+
       /**
        * `teamId`, when given, widens the check for the `team` resource with the
        * caller's team-scoped roles (`OrganizationAuthority.teamAuthority`) — org-level statements are
@@ -178,22 +218,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         teamId?: string,
       ) =>
         Effect.gen(function* () {
-          // PERS-005: every PermissionEngine denial leaves a durable who/what/why.
-          const denied = (reason: "notMember" | "missingStatement") =>
-            events.publish({
-              _tag: "auth.organization.permissionDenied",
-              organizationId,
-              userId: callerId,
-              resource,
-              action,
-              reason,
-            });
-          const membership = yield* memberSystem.find(organizationId, callerId);
-          if (Option.isNone(membership)) {
-            yield* denied("notMember");
-            return yield* Effect.fail(new OrganizationApi.OrganizationNotFound());
-          }
-          const orgEffective = yield* effectivePermissionsOf(organizationId, membership.value);
+          const membership = yield* requireMembershipFor(
+            callerId,
+            organizationId,
+            resource,
+            action,
+          );
+          const orgEffective = yield* effectivePermissionsOf(organizationId, membership);
           const effective =
             teamId !== undefined && resource === "team"
               ? PermissionEngine.mergeStatements(
@@ -202,10 +233,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 )
               : orgEffective;
           if (!PermissionEngine.hasPermission(effective, resource, action)) {
-            yield* denied("missingStatement");
+            yield* denied(callerId, organizationId, resource, action, "missingStatement");
             return yield* Effect.fail(new OrganizationApi.OrganizationPermissionDenied());
           }
-          return membership.value;
+          return membership;
         });
 
       /** Fails `OrganizationNotFound` (MTI-009) if the caller isn't a member — no statement check, for read endpoints any member may use. */
@@ -529,6 +560,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       //
       // `role:*` statements and the caller's grant ceiling are decided here; the feature gate, the
       // reserved names, the quota, the veto and the write are the module's.
+      // `requireMembershipFor` runs before the feature gate (PV-300 order, as teams do), so a
+      // non-member's answer never depends on whether dynamic access control is enabled (BEH-EA-284).
 
       const ceilingOfMember = Effect.fnUntraced(function* (
         organizationId: string,
@@ -542,6 +575,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const createRole: OrganizationShape["createRole"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
           yield* requireOrganization(organizationId);
+          yield* requireMembershipFor(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "role",
+            "create",
+          );
           yield* roleSystem.requireEnabled;
           const membership = yield* requirePermission(
             Users.UserId(caller.ref.id),
@@ -561,6 +600,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const listRoles: OrganizationShape["listRoles"] = Effect.fnUntraced(
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
+          yield* requireMembershipFor(Users.UserId(caller.ref.id), organizationId, "role", "read");
           yield* roleSystem.requireEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "read");
           return yield* roleSystem.list(organizationId);
@@ -570,6 +610,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const getRole: OrganizationShape["getRole"] = Effect.fnUntraced(
         function* (caller, organizationId, roleId) {
           yield* requireOrganization(organizationId);
+          yield* requireMembershipFor(Users.UserId(caller.ref.id), organizationId, "role", "read");
           yield* roleSystem.requireEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "read");
           return yield* roleSystem.find(organizationId, roleId);
@@ -579,6 +620,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const updateRole: OrganizationShape["updateRole"] = Effect.fnUntraced(
         function* (caller, organizationId, roleId, permission) {
           yield* requireOrganization(organizationId);
+          yield* requireMembershipFor(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "role",
+            "update",
+          );
           yield* roleSystem.requireEnabled;
           const membership = yield* requirePermission(
             Users.UserId(caller.ref.id),
@@ -598,6 +645,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const deleteRole: OrganizationShape["deleteRole"] = Effect.fnUntraced(
         function* (caller, organizationId, roleId) {
           yield* requireOrganization(organizationId);
+          yield* requireMembershipFor(
+            Users.UserId(caller.ref.id),
+            organizationId,
+            "role",
+            "delete",
+          );
           yield* roleSystem.requireEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "delete");
           yield* roleSystem.remove(OrganizationActor.user(caller), { organizationId, roleId });
