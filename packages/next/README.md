@@ -17,6 +17,10 @@ in-process client — lives in [`@awthaq/web`](../web/README.md) (BO-004), which
 an Astro or SvelteKit adapter reuses; this package adds only what is
 Next-specific: the `React.cache` per-render dedup on `getSession`, the
 `withNextCookies`/`serverActionClient` names, the RSC seeds and the `edge` tier.
+The in-process client is `@awthaq/web`'s `UserAgent` under its `trusted`
+policy, so within one action it honours a cookie's `Expires` and `Path`
+(a cookie expired by `Expires` alone, or scoped to another path, is not sent
+on the action's later calls).
 
 This package deliberately ships no `ManagedRuntime` construction of its
 own — every function below takes an explicit runtime (or, for

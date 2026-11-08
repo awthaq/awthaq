@@ -830,3 +830,31 @@ No new ADR. ADR-EA-003 and ADR-EA-005 are untouched. If the executor finds the p
 5. **`signInAs`.** Return the rendered `setCookie` and drop `cookieHeader` (recommended: one representation, with attributes, under the composition's config), or keep `cookieHeader` too (computed from the configured name, which at least fixes the `SecureDomain` bug)?
 6. **Example smoke tests.** Move `examples/memory-server`'s real-network smoke test onto `UserAgent.make({ handler: fetch })` (recommended: the same agent over a real socket, one dev dependency), or keep its hand-written helper as an independent check?
 7. **Cross-site simulation.** Ship `site`/`navigation` on the agent (recommended: the PV-016 OAuth tests and `CsrfSteps.ts` build these headers and rules by hand today), or leave cross-site requests to raw `handler` calls?
+
+---
+
+## Decisions taken (implementation, 2026-11-08, effect 4.1.2)
+
+Every open question took the plan's recommended default (the user said "use recommended defaults"):
+
+1. **Q1 — placement:** `@awthaq/web` (`CookieStore.ts`, edge-safe on `@awthaq/web/cookies`; `UserAgent.ts` on the main entry). `@awthaq/test` depends on `@awthaq/web` and re-exports `UserAgent`.
+2. **Q2 — `request`'s `cookie` option:** removed (with `SignedInSession.cookieHeader`) at the end of phase 4; phases 2–3 kept both deprecated so every commit stayed green. A forged cookie travels in `extraCookies`.
+3. **Q3 — refusals:** a `Set-Cookie` the `browser` policy refuses rejects the request by default (`onRefused: "record"` opts out). No suite or world hit one during the migration.
+4. **Q4 — CSRF seeding:** every `TestAuth.app` agent is seeded with a `__Host-csrf` minted by `csrfToken` from the composition's own `CsrfConfig`, attributes from `SessionCookie.csrfCookieOptions`.
+5. **Q5 — `signInAs`:** returns `{ userId, token, setCookie }`; `cookieHeader` is gone.
+6. **Q6 — example smoke tests:** moot as written. Since plan 15 `examples/memory-server/test/smoke.test.ts` runs in-process on `TestAuth.app`, not over a listening socket, so it moved onto `await app.agent()` (no `@awthaq/web` dev dependency needed; `UserAgent` comes through `@awthaq/test`). `demoCsrfSecret` is no longer exported.
+7. **Q7 — cross-site simulation:** shipped (`site`, `navigation`); the OAuth PV-016 landing (`browserLanding` deleted) and SAML's IdP legs use it. `CsrfSteps.ts` keeps raw headers: every one of its scenarios asserts a specific or malformed `Sec-Fetch-Site`/`Origin` value.
+
+Ids allocated: BEH-EA-344, REQ-EA-1332..1334. No ADR.
+
+What differs from the plan text (stale against effect 4.1.2 or the tree after plans 15 and 21):
+
+- **Module paths:** `effect/http/*`, `effect/http-api/*`. `Cookies.makeCookie` (returns a `Result`) and `Cookies.serializeCookie` *do* exist in 4.1.2's `effect/http/Cookies`; `TestAuth` serialises through them with `Effect.fromResult`.
+- **`app.agent()` is asynchronous** (`Promise<UserAgent>`): the seed reads `CsrfConfig`, `SessionCookieConfig` and (under `testClock`) the clock through `run`. The clock is mirrored into `clockMs`, re-read at every `agent()` and after `advance`.
+- **Added:** `TestAuth.csrfSetCookie(secret)` (seed an agent over a hand-wired handler), `TestAuth.sessionSetCookie(issued)` (an existing user's or a second session as a `Set-Cookie`; four suites and one world duplicated it), `UserAgent.layer(agent)` (transport + `csrfClientLayer`), `agent.baseUrl`/`origin`, `parseCookieHeader` and `decodeCookieValue` exports, and `agentOver(handler)` in `features/step-definitions/shared/Csrf.ts`.
+- **`fetch` reads a body into an `ArrayBuffer`** before dispatch (no stream re-wrapping); an explicit `cookie` header in `init.headers` replaces the store's cookies.
+- **`CookieAssertions.ParsedSetCookie`** is a flattening of web's parser (plus `partitioned`); its own parser is gone and `assertHostPrefixedCookie` also takes a `StoredCookie`.
+- **`features` gained a `@awthaq/web` devDependency** (`findCookieValue` in `HttpErrorWorld.ts`).
+- **Exempt from the helper-grep gate:** `packages/server/test/AuthHttp.test.ts` and `AuthHost.test.ts` keep their CSRF recipe: `@awthaq/server` sits below `@awthaq/web` and `@awthaq/test` and depends on neither. `server/test/Authentication.test.ts`'s `cookieOf` (non-goal), `jwt/test/BearerReentry.test.ts` (presents minted JWTs). `server/test/SessionLifecycle.test.ts` reads a named line with a local `setCookieNamed` over `getSetCookie()` instead of `CookieAssertions`.
+- **Partly migrated worlds:** the Domain, Password and Passkey worlds send through agents but their actors still carry a session pair string (read from the agent's store, never cut from `Set-Cookie`), because that actor model is shared with `DomainWorld.ts`, `VerificationSteps.ts`, `UserFieldsSteps.ts` and `PasswordTransactionSteps.ts`. `TestingHarnessSteps.ts` dispatches through the ambient router and builds its pair with `parseSetCookie`. SessionWorld agents read the real clock while the server reads the world's `TestClock` (expiry is still the server's verdict).
+- **No `.scratch/in-process-user-agent/issues/` tickets** (`.scratch/` is never staged).
