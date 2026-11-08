@@ -418,6 +418,7 @@ Feature: Multi-Tenancy
       And a platform administrator "superadmin"
       When "superadmin" suspends the organization "acme"
       Then "alice" has no active member
+      And the active context of "alice" reads no organization
       And "alice" making the organization "acme" her active organization is refused with "MembershipNotFound"
 
     @REQ-EA-1336
@@ -436,10 +437,12 @@ Feature: Multi-Tenancy
     @REQ-EA-856
     Scenario: Reinstating an organization restores access exactly as it was
       Given a signed-in user "alice" who owns the organization "acme"
+      And "alice" has made the organization "acme" her active organization
       And a platform administrator "superadmin"
       And "superadmin" has suspended the organization "acme"
       When "superadmin" reinstates the organization "acme"
       Then "alice" can read the organization "acme"
+      And the active context of "alice" reads the organization "acme"
 
     @REQ-EA-857
     Scenario: Suspension is idempotent and keeps the original time

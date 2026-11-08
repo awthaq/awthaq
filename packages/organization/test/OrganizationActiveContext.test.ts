@@ -123,6 +123,71 @@ describe("OrganizationActiveContext", () => {
     }).pipe(Effect.provide(Live)),
   );
 
+  // BEH-EA-237 (plan 30, A-F5): a suspended organization does not remain the active one.
+  it.effect(
+    "get reads no pointers while the organization is suspended, and reinstating restores them",
+    () =>
+      Effect.gen(function* () {
+        const { org, active, directory } = yield* arrange;
+        const teams = yield* OrganizationTeams.OrganizationTeams;
+        const { team } = yield* teams.create(application, {
+          organizationId: org.id,
+          name: "Eng",
+          initialMembers: [owner],
+        });
+        yield* active.setOrganization(session("s1"), Option.some(org.id));
+        yield* active.setTeam(session("s1"), Option.some(team.id));
+        const admin = OrganizationActor.platformAdmin(Users.UserId("admin"));
+        yield* directory.suspend(admin, { organizationId: org.id });
+        const suspended = yield* active.get(session("s1"));
+        assert.deepStrictEqual(suspended.activeOrganizationId, Option.none());
+        assert.deepStrictEqual(suspended.activeTeamId, Option.none());
+        yield* directory.reinstate(admin, { organizationId: org.id });
+        const restored = yield* active.get(session("s1"));
+        assert.deepStrictEqual(restored.activeOrganizationId, Option.some(org.id));
+        assert.deepStrictEqual(restored.activeTeamId, Option.some(team.id));
+      }).pipe(Effect.provide(Live)),
+  );
+
+  it.effect("get reads no team pointer while the team's organization is suspended", () =>
+    Effect.gen(function* () {
+      const { org, active, directory } = yield* arrange;
+      const teams = yield* OrganizationTeams.OrganizationTeams;
+      const { team } = yield* teams.create(application, {
+        organizationId: org.id,
+        name: "Eng",
+        initialMembers: [owner],
+      });
+      // A team pointer without an organization pointer: the team names its organization.
+      yield* active.setTeam(session("s1"), Option.some(team.id));
+      const admin = OrganizationActor.platformAdmin(Users.UserId("admin"));
+      yield* directory.suspend(admin, { organizationId: org.id });
+      assert.deepStrictEqual((yield* active.get(session("s1"))).activeTeamId, Option.none());
+      yield* directory.reinstate(admin, { organizationId: org.id });
+      assert.deepStrictEqual((yield* active.get(session("s1"))).activeTeamId, Option.some(team.id));
+    }).pipe(Effect.provide(Live)),
+  );
+
+  it.effect("setTeam refuses a team of a suspended organization", () =>
+    Effect.gen(function* () {
+      const { org, active, directory } = yield* arrange;
+      const teams = yield* OrganizationTeams.OrganizationTeams;
+      const { team } = yield* teams.create(application, {
+        organizationId: org.id,
+        name: "Eng",
+        initialMembers: [owner],
+      });
+      yield* directory.suspend(OrganizationActor.platformAdmin(Users.UserId("admin")), {
+        organizationId: org.id,
+      });
+      assert.strictEqual(
+        yield* flipTag(active.setTeam(session("s1"), Option.some(team.id))),
+        "TeamMembershipNotFound",
+      );
+      assert.deepStrictEqual((yield* active.get(session("s1"))).activeTeamId, Option.none());
+    }).pipe(Effect.provide(Live)),
+  );
+
   it.effect(
     "get re-validates: a pointer at an organization the user left reads as cleared, and is cleared for real",
     () =>

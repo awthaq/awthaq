@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-28 |
-> | Revision | 1.10 |
+> | Revision | 1.11 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) <br> 1.3 (2026-10-13): BEH-EA-328: Keyed tables take their organization id explicitly, and BEH-EA-235: a connection's client secret is a sealed column (plan 05 phase 6) <br> 1.4 (2026-10-13): BEH-EA-233: the plugin-table RLS rollout is documented (`packages/sql/README.md`) and exercised by every plugin conformance call with `rls` (plan 05 phase 12) <br> 1.5 (2026-10-13): BEH-EA-237: suspension and reinstatement are `OrganizationDirectory` operations with veto and observe points, and the decision cache is cleared on both (ADR-EA-040, architecture plan 04 phase 4) <br> 1.6 (2026-10-13): BEH-EA-235: the connection store refuses an inactive organization and publishes connection events with an actor; deleting an organization removes its OIDC, SAML and SCIM connections in its transaction (OrganizationDeletion registry, ADR-EA-040, architecture plan 04 phase 5) <br> 1.7 (2026-10-13): BEH-EA-231: every store adapter stamps the ambient tenant through `Tenant.resolve`, the `Ref` adapters included (plan 02 phases 3 and 4) <br> 1.8 (2026-10-18): BEH-EA-236: admin reads every `AdminConfig` field per operation through one internal gate; the adopter list is corrected and a tenant's `config(...)` is a whole configuration (plan 13) <br> 1.9 (2026-10-18): BEH-EA-231: the stamp is in the store adapter through `Tenant.resolve`; the explicit-tenant clause applies to the audit log, the one port that carries one (ADR-EA-041 revision 1.3, plan 16) <br> 1.10 (2026-11-08): BEH-EA-237 names the invitation paths: cancelling, reading, accepting and rejecting an invitation of a suspended organization answer `InvitationNotFound` and write nothing (REQ-EA-1336, plan 30 ticket 03) |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) <br> 1.1 (2026-10-13): BEH-EA-326 (store-level filtering) and BEH-EA-327 (the cross-tenant witness lifts RLS); BEH-EA-233 covers plugin tables (plan 05) <br> 1.2 (2026-10-13): BEH-EA-328: every plugin table declares its tenancy (plan 05) <br> 1.3 (2026-10-13): BEH-EA-328: Keyed tables take their organization id explicitly, and BEH-EA-235: a connection's client secret is a sealed column (plan 05 phase 6) <br> 1.4 (2026-10-13): BEH-EA-233: the plugin-table RLS rollout is documented (`packages/sql/README.md`) and exercised by every plugin conformance call with `rls` (plan 05 phase 12) <br> 1.5 (2026-10-13): BEH-EA-237: suspension and reinstatement are `OrganizationDirectory` operations with veto and observe points, and the decision cache is cleared on both (ADR-EA-040, architecture plan 04 phase 4) <br> 1.6 (2026-10-13): BEH-EA-235: the connection store refuses an inactive organization and publishes connection events with an actor; deleting an organization removes its OIDC, SAML and SCIM connections in its transaction (OrganizationDeletion registry, ADR-EA-040, architecture plan 04 phase 5) <br> 1.7 (2026-10-13): BEH-EA-231: every store adapter stamps the ambient tenant through `Tenant.resolve`, the `Ref` adapters included (plan 02 phases 3 and 4) <br> 1.8 (2026-10-18): BEH-EA-236: admin reads every `AdminConfig` field per operation through one internal gate; the adopter list is corrected and a tenant's `config(...)` is a whole configuration (plan 13) <br> 1.9 (2026-10-18): BEH-EA-231: the stamp is in the store adapter through `Tenant.resolve`; the explicit-tenant clause applies to the audit log, the one port that carries one (ADR-EA-041 revision 1.3, plan 16) <br> 1.10 (2026-11-08): BEH-EA-237 names the invitation paths: cancelling, reading, accepting and rejecting an invitation of a suspended organization answer `InvitationNotFound` and write nothing (REQ-EA-1336, plan 30 ticket 03) <br> 1.11 (2026-11-08): BEH-EA-237: a suspended organization's active pointers read as none without being cleared, and a team of a suspended organization cannot become the active team (REQ-EA-855, REQ-EA-856, plan 30 ticket 04) |
 ---
 
 > A tenant is an `Organization` row ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)); everything below is opt-in and zero-cost for a single-tenant deployment.
@@ -134,30 +134,34 @@ _Previous: [BEH-EA-235](28-tenancy.md#beh-ea-235-organization-oauth-connections-
 ```text
 REQUIREMENT: An organization with `suspendedAt` set MUST refuse every
              organization-scoped operation of the organization plugin —
-             members and outsiders alike — with the same `OrganizationNotFound`
-             an unknown id gets (MTI-009: a denial never reveals a tenant), MUST
-             not become or remain a member's active organization, and MUST
-             confer no qadi relationship (`member`, `has-role:*`,
+             members and outsiders alike — with the same
+             `OrganizationNotFound` an unknown id gets (MTI-009: a denial
+             never reveals a tenant), MUST not become or remain a member's
+             active organization (its active organization and team pointers
+             read as none, and none of its teams can become the active team),
+             and MUST confer no qadi relationship (`member`, `has-role:*`,
              `<resource>:<action>`, `team-member`, `team-role:*`) through its
              memberships. A path that names the organization through one of
              its invitations (cancelling or reading it by id, reading it by
              its emailed token, and the invitee accepting or rejecting it)
              MUST answer `InvitationNotFound`, the answer an unknown
              invitation gets, and write nothing. The member's own `list` MUST
-             still return it, flagged `suspended`. Suspension and reinstatement are performed
-             only by `AdminTenants` (`Auth.make([Organization, Admin,
-             AdminTenants])`), gated by `canAdministerTenants` (fail-closed by
-             default, gate before existence), published as
-             `auth.admin.organizationSuspended` / `organizationUnsuspended`.
-             Both are `OrganizationDirectory.suspend` / `reinstate`, which take a
-             platform-administrator actor and run the `BeforeSuspendOrganization` /
-             `BeforeReinstateOrganization` veto points (an abort is the typed
-             `HookAborted`, `403`, and the organization stays as it was) and their
-             observe points, so `DecisionCacheInvalidationLive` clears a long-lived
-             decision cache on both.
+             still return it, flagged `suspended`. Suspension and
+             reinstatement are performed only by `AdminTenants`
+             (`Auth.make([Organization, Admin, AdminTenants])`), gated by
+             `canAdministerTenants` (fail-closed by default, gate before
+             existence), published as `auth.admin.organizationSuspended` /
+             `organizationUnsuspended`. Both are
+             `OrganizationDirectory.suspend` / `reinstate`, which take a
+             platform-administrator actor and run the
+             `BeforeSuspendOrganization` / `BeforeReinstateOrganization` veto
+             points (an abort is the typed `HookAborted`, `403`, and the
+             organization stays as it was) and their observe points, so
+             `DecisionCacheInvalidationLive` clears a long-lived decision
+             cache on both.
 ```
 
-Suspension is reversible and never a deletion: every row stays, and reinstating restores access exactly as it was. An invitation is not cancelled by a suspension: it stays pending, and after reinstatement the same emailed capability works again (the invitee's token is checked first, then the organization, then the status, so a suspended organization does not reveal whether the invitation is still pending). Using the existing not-found error rather than a new typed one keeps every endpoint's error contract unchanged; the suspended flag on the member's own listing is how a member learns why.
+Suspension is reversible and never a deletion: every row stays, and reinstating restores access exactly as it was. A session's active pointers are not cleared by a suspension either: they read as none while it lasts and come back on reinstatement. An invitation is not cancelled by a suspension: it stays pending, and after reinstatement the same emailed capability works again (the invitee's token is checked first, then the organization, then the status, so a suspended organization does not reveal whether the invitation is still pending). Using the existing not-found error rather than a new typed one keeps every endpoint's error contract unchanged; the suspended flag on the member's own listing is how a member learns why.
 
 Impersonation records are stamped with the ambient tenant and confined to it unless the caller passes `canAdministerTenants` ([BEH-EA-215](27-admin-impersonation.md#beh-ea-215-admin_impersonation-is-a-durable-audit-trail), [BEH-EA-217](27-admin-impersonation.md#beh-ea-217-forcestop-lets-another-admin-end-someone-elses-impersonation), [BEH-EA-219](27-admin-impersonation.md#beh-ea-219-the-audit-trail-is-queryable)).
 

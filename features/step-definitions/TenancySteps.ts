@@ -1369,6 +1369,33 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(outcome, "NoActiveOrganization");
   });
 
+  Then("the active context of {string} reads no organization", function* (who: string) {
+    const caller = yield* callerNamed(who);
+    const context = yield* organization(
+      Effect.gen(function* () {
+        const plugin = yield* Organization.Organization;
+        return yield* plugin.getActive(caller);
+      }),
+    );
+    assert.ok(Option.isNone(context.activeOrganizationId));
+    assert.ok(Option.isNone(context.activeTeamId));
+  });
+
+  Then(
+    "the active context of {string} reads the organization {string}",
+    function* (who: string, name: string) {
+      const caller = yield* callerNamed(who);
+      const id = yield* organizationNamed(name);
+      const context = yield* organization(
+        Effect.gen(function* () {
+          const plugin = yield* Organization.Organization;
+          return yield* plugin.getActive(caller);
+        }),
+      );
+      assert.deepEqual(context.activeOrganizationId, Option.some(id));
+    },
+  );
+
   Then(
     "{string} making the organization {string} her active organization is refused with {string}",
     function* (who: string, name: string, tag: string) {
