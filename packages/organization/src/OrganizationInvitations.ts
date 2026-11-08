@@ -10,9 +10,10 @@
 //   create  — suspension, the per-inviter quota, the team, the veto, role names and the `Bound`, the
 //             member check (a stale pending invitation is cancelled, and says so), resend rotation,
 //             the mail (EEM-002)
-//   accept  — veto first, the token (MTI-010), expiry, the invitee's address (FAMS-002), email
+//   accept  — veto first, the token (MTI-010), the organization is active (BEH-EA-237), expiry, the invitee's address (FAMS-002), email
 //             verification (EP-010), the membership and team limits, then ONE transaction: the
-//             membership, the status and the team membership (D3); events; observe points (D7)
+//             membership, the status and the team membership (D3); events; observe points (D7).
+//             `reject` checks the token and the organization the same way
 //
 // Events and observe points run after the module's own transaction ends.
 
@@ -120,7 +121,8 @@ export interface OrganizationInvitationsShape {
     | Errors.StoreUnavailable
   >;
   /**
-   * The invitee's act. The veto point runs first (unchanged), then the token, expiry (an expired invitation
+   * The invitee's act. The veto point runs first (unchanged), then the token, the organization (a suspended
+   * one answers `InvitationNotFound`, BEH-EA-237), expiry (an expired invitation
    * becomes `expired` and `invitationExpired` is published), the invitee's address, email verification
    * (EP-010), the membership and team-member limits, then ONE transaction for the membership, the status and
    * the team membership (D3), `invitationAccepted`, `memberAdded`, `teamMemberAdded`, and the observe points
@@ -229,8 +231,23 @@ export class OrganizationInvitations extends Context.Service<
           return found.value;
         });
 
+      /**
+       * The invitee's capability, checked in this order: the token (MTI-010), then the invitation's
+       * organization is active (BEH-EA-237: a suspended one answers like an unknown invitation, so its
+       * status is not revealed either), then the invitation is pending.
+       */
       const requirePendingInvitation = (invitationId: string, token: string) =>
         requireInvitationToken(invitationId, token).pipe(
+          Effect.tap((record) =>
+            directory.findActive(record.organizationId).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.fail(new OrganizationErrors.InvitationNotFound()),
+                  onSome: () => Effect.void,
+                }),
+              ),
+            ),
+          ),
           Effect.flatMap((record) =>
             record.status === "pending"
               ? Effect.succeed(record)

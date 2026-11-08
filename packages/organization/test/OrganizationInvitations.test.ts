@@ -485,6 +485,37 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
     ),
   );
 
+  // BEH-EA-237 (plan 30, A-F4): the invitee's acts name an organization through the invitation.
+  it.effect(
+    "accept and reject answer InvitationNotFound while the organization is suspended, and write nothing",
+    () =>
+      Effect.gen(function* () {
+        const { org, invitations, invite } = yield* arrange;
+        const directory = yield* OrganizationDirectory.OrganizationDirectory;
+        const invitee = yield* verifiedUser("invitee@example.com");
+        const invitation = yield* invite("invitee@example.com");
+        const token = yield* mailedToken(invitation.id);
+        yield* directory.suspend(OrganizationActor.platformAdmin(Users.UserId("admin")), {
+          organizationId: org.id,
+        });
+        const input = { invitationId: invitation.id, token, userId: invitee.id };
+        assert.strictEqual(yield* flipTag(invitations.accept(input)), "InvitationNotFound");
+        assert.strictEqual(yield* flipTag(invitations.reject(input)), "InvitationNotFound");
+        assert.strictEqual(
+          Option.getOrThrow(yield* invitations.find(invitation.id)).status,
+          "pending",
+        );
+        assert.isTrue(
+          Option.isNone(
+            yield* (yield* MembershipRecords.MembershipRecords).findByUserAndOrg(
+              invitee.id,
+              org.id,
+            ),
+          ),
+        );
+      }).pipe(Effect.provide(buildLayer())),
+  );
+
   it.effect("reject needs the token and the invitee's address, and creates no membership", () =>
     Effect.gen(function* () {
       const { org, invitations, invite } = yield* arrange;
