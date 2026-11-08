@@ -756,12 +756,13 @@ export const layerSql: Layer.Layer<
         domains,
         (domain) =>
           sql`INSERT INTO saml_connection_domain (domain, "connectionId") VALUES (${domain}, ${connectionId})`.pipe(
-            // Postgres reports a duplicate key as a unique violation; SQLite reports a PRIMARY KEY clash as a
-            // generic constraint error (the domain IS the key), so both mean "taken".
-            Effect.mapError((error) =>
-              error.reason._tag === "UniqueViolation" || error.reason._tag === "ConstraintError"
-                ? new SamlDomainTaken({ domain })
-                : error,
+            // The domain IS the key. Postgres reports a clash as a unique violation; SQLite and libSQL report it
+            // as a generic constraint error whose message says "UNIQUE constraint failed", which
+            // `isUniqueViolation` also accepts. Any other constraint failure is a store failure (ADR-EA-028).
+            // A plain predicate, not the refinement itself, so the other `SqlError`s stay in the error channel.
+            Effect.catchIf(
+              (error) => StoreFailure.isUniqueViolation(error),
+              () => Effect.fail(new SamlDomainTaken({ domain })),
             ),
           ),
         { discard: true },
