@@ -161,12 +161,12 @@ export const startSessionServer = (options?: { readonly device?: boolean }) =>
           impersonated: false,
           amr: ["pwd" as const],
         };
-        const source = { userCode, ip: "198.51.100.20" };
+        const source = { userCode };
         yield* plugin.verify(source, Option.some(caller));
         yield* decision === "approve"
           ? plugin.approve(source, caller)
           : plugin.deny(source, caller);
-      }).pipe(Effect.orDie, Effect.asVoid);
+      }).pipe(TestAuth.withRequest({ ip: "198.51.100.20" }), Effect.orDie, Effect.asVoid);
 
     const started: SessionServer = {
       baseUrl: `http://127.0.0.1:${server.address.port}`,

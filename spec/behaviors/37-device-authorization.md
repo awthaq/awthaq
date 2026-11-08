@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-37 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-013](../models/13-device-authorization.md) as `@awthaq/device-authorization`; DAG-004, DAG-005, DAG-007, wayfinder tickets 06 and 10) <br> 1.1 (2026-10-13): Rate-limit rules renamed and tunable with `RateLimits.overrides` (plan 06) <br> 1.2 (2026-10-13): BEH-EA-300: redemption is `SignIn.clear`, the atomic consume, then `SignIn.issue` (ADR-EA-038, architecture plan 01) <br> 1.3 (2026-10-14): grants are swept through `Retention.sweep`'s plugin contribution (BEH-EA-337, plan 10 item 6) <br> 1.4 (2026-11-08): `token` declares `SessionLifecycle.Mints`; the token response carries `set-auth-token` (ADR-EA-045, architecture plan 21) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-013](../models/13-device-authorization.md) as `@awthaq/device-authorization`; DAG-004, DAG-005, DAG-007, wayfinder tickets 06 and 10) <br> 1.1 (2026-10-13): Rate-limit rules renamed and tunable with `RateLimits.overrides` (plan 06) <br> 1.2 (2026-10-13): BEH-EA-300: redemption is `SignIn.clear`, the atomic consume, then `SignIn.issue` (ADR-EA-038, architecture plan 01) <br> 1.3 (2026-10-14): grants are swept through `Retention.sweep`'s plugin contribution (BEH-EA-337, plan 10 item 6) <br> 1.4 (2026-11-08): `token` declares `SessionLifecycle.Mints`; the token response carries `set-auth-token` (ADR-EA-045, architecture plan 21) <br> 1.5 (2026-11-08): signature snippets: no `ip` or `{ userAgent }`; the per-source rules and the session read the request context (ADR-EA-047, architecture plan 26 ticket 18) |
 ---
 
 > `@awthaq/device-authorization` composes as `Auth.make([DeviceAuthorization])` and serves three groups: `device_authorization` (`POST /device/code`, `POST /device/token`, the anonymous back channel a device speaks), `device_authorization.verification` (`POST /device/verify`, under `OptionalAuthentication`) and `device_authorization.decision` (`POST /device/approve`, `POST /device/deny`, behind `Api.Authentication`). It is the OAuth 2.0 Device Authorization Grant ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)): an input-constrained client shows a short code, the person approves it on a second, signed-in device, and the client's poll receives an ordinary bearer session. It is the login backend of `@awthaq/cli` ([BEH-EA-227](26-cli.md), [BEH-EA-307](26-cli.md#beh-ea-307-interactive-login-is-the-device-authorization-grant-polled-with-backoff)). The numbers and the state machine are fixed in [MOD-EA-013](../models/13-device-authorization.md) "Security parameters" and "Design constraints"; this file is where they become requirements.
@@ -17,7 +17,7 @@
 ## BEH-EA-299: A code request mints a hashed device code and an unambiguous user code for a registered client
 
 ```ts
-DeviceAuthorization.requestCode({ clientId, scope, ip }, { verificationBase }): Effect<CodeIssued, InvalidClient | InvalidScope | RateLimited>
+DeviceAuthorization.requestCode({ clientId, scope }, { verificationBase }): Effect<CodeIssued, InvalidClient | InvalidScope | RateLimited, AuthRequestContext>
 // POST /device/code  client_id=…&scope=…  ->  { device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval }
 ```
 
@@ -48,7 +48,7 @@ _Next: [BEH-EA-300](37-device-authorization.md#beh-ea-300-the-poll-answers-the-r
 ## BEH-EA-300: The poll answers the RFC 8628 states, enforces its interval and cleans up on discovery
 
 ```ts
-DeviceAuthorization.poll({ deviceCode, clientId, ip }, { userAgent }): Effect<RedeemedGrant, AuthorizationPending | SlowDown | AccessDenied | ExpiredToken | InvalidGrant | …>
+DeviceAuthorization.poll({ deviceCode, clientId }): Effect<RedeemedGrant, AuthorizationPending | SlowDown | AccessDenied | ExpiredToken | InvalidGrant | …, AuthRequestContext>
 // POST /device/token  grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=…
 ```
 
@@ -79,7 +79,7 @@ _Previous: [BEH-EA-299](37-device-authorization.md#beh-ea-299-a-code-request-min
 ## BEH-EA-301: Opening the verification page claims an unclaimed code for the first user and shows context only to them
 
 ```ts
-DeviceAuthorization.verify({ userCode, ip }, caller: Option<Caller>): Effect<VerificationView, InvalidUserCode | RateLimited>
+DeviceAuthorization.verify({ userCode }, caller: Option<Caller>): Effect<VerificationView, InvalidUserCode | RateLimited, AuthRequestContext>
 // POST /device/verify  { user_code }  ->  { user_code, status, client?, scope?, expires_at? }
 ```
 
@@ -100,8 +100,8 @@ _Previous: [BEH-EA-300](37-device-authorization.md#beh-ea-300-the-poll-answers-t
 ## BEH-EA-302: Approve and deny are compare-and-swap decisions by the claiming user only
 
 ```ts
-DeviceAuthorization.approve({ userCode, ip }, caller): Effect<VerificationView, InvalidUserCode | UserCodeNotClaimed | DeviceApprovalRefused | RateLimited | HookAborted>
-DeviceAuthorization.deny({ userCode, ip }, caller): Effect<VerificationView, InvalidUserCode | UserCodeNotClaimed | DeviceApprovalRefused | RateLimited>
+DeviceAuthorization.approve({ userCode }, caller): Effect<VerificationView, InvalidUserCode | UserCodeNotClaimed | DeviceApprovalRefused | RateLimited | HookAborted, AuthRequestContext>
+DeviceAuthorization.deny({ userCode }, caller): Effect<VerificationView, InvalidUserCode | UserCodeNotClaimed | DeviceApprovalRefused | RateLimited, AuthRequestContext>
 // POST /device/approve | /device/deny  { user_code }  ->  { user_code, status }
 ```
 

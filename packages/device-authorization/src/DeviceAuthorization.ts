@@ -42,7 +42,7 @@ import {
   Users,
 } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
-import { ClientAddress, Defects, RateLimiter } from "@awthaq/ports";
+import { Defects, RateLimiter } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
@@ -379,10 +379,6 @@ export interface Caller {
   readonly amr: ReadonlyArray<Sessions.AuthMethod>;
 }
 
-interface Source {
-  readonly ip?: string | undefined;
-}
-
 export interface DeviceClientView {
   readonly clientId: string;
   readonly name: string;
@@ -406,31 +402,33 @@ export type PollError =
 export interface DeviceAuthorizationShape {
   /** BEH-EA-299: a fresh grant for a registered client. */
   readonly requestCode: (
-    input: Source & { readonly clientId: string; readonly scope: ReadonlyArray<string> },
+    input: { readonly clientId: string; readonly scope: ReadonlyArray<string> },
     context: { readonly verificationBase: string },
   ) => Effect.Effect<
     CodeIssued,
     | DeviceAuthorizationApi.InvalidClient
     | DeviceAuthorizationApi.InvalidScope
     | Api.RateLimited
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /** BEH-EA-300/315: one poll. Resolves only for the poll that wins the redemption claim. */
-  readonly poll: (
-    input: Source & { readonly deviceCode: Redacted.Redacted<string>; readonly clientId: string },
-    context?: { readonly userAgent?: string | undefined },
-  ) => Effect.Effect<RedeemedGrant, PollError | Errors.StoreUnavailable>;
+  readonly poll: (input: {
+    readonly deviceCode: Redacted.Redacted<string>;
+    readonly clientId: string;
+  }) => Effect.Effect<RedeemedGrant, PollError | Errors.StoreUnavailable, Api.AuthRequestContext>;
   /** BEH-EA-301: the verification page — claims an unclaimed pending code for `caller`, when there is one. */
   readonly verify: (
-    input: Source & { readonly userCode: string },
+    input: { readonly userCode: string },
     caller: Option.Option<Caller>,
   ) => Effect.Effect<
     VerificationView,
-    DeviceAuthorizationApi.InvalidUserCode | Api.RateLimited | Errors.StoreUnavailable
+    DeviceAuthorizationApi.InvalidUserCode | Api.RateLimited | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /** BEH-EA-302: approves a code the caller has claimed; a `BeforeDeviceApproval` tap can refuse it. */
   readonly approve: (
-    input: Source & { readonly userCode: string },
+    input: { readonly userCode: string },
     caller: Caller,
   ) => Effect.Effect<
     VerificationView,
@@ -439,11 +437,12 @@ export interface DeviceAuthorizationShape {
     | DeviceAuthorizationApi.DeviceApprovalRefused
     | Api.RateLimited
     | HookPoint.HookAborted
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /** BEH-EA-302: denies a code the caller has claimed. */
   readonly deny: (
-    input: Source & { readonly userCode: string },
+    input: { readonly userCode: string },
     caller: Caller,
   ) => Effect.Effect<
     VerificationView,
@@ -451,7 +450,8 @@ export interface DeviceAuthorizationShape {
     | DeviceAuthorizationApi.UserCodeNotClaimed
     | DeviceAuthorizationApi.DeviceApprovalRefused
     | Api.RateLimited
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /** BEH-EA-305: registers a public client at runtime (an operator or seed script, never an end user). */
   readonly registerClient: (input: {
@@ -512,7 +512,6 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
     Effect.fnUntraced(function* (handlers) {
       const deviceAuthorization = yield* DeviceAuthorization;
       const settings = yield* DeviceAuthorizationConfig;
-      const clientAddress = yield* ClientAddress.ClientAddress;
       return handlers.handleAll({
         code: Effect.fnUntraced(function* ({
           payload,
@@ -521,9 +520,8 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
           payload: DeviceAuthorizationApi.CodePayload;
           request: HttpServerRequest.HttpServerRequest;
         }) {
-          const { ip } = yield* ClientAddress.address(clientAddress, request);
           const issued = yield* deviceAuthorization.requestCode(
-            { clientId: payload.client_id, scope: scopesOf(payload.scope), ip },
+            { clientId: payload.client_id, scope: scopesOf(payload.scope) },
             { verificationBase: settings.verificationUri ?? `${originOf(request)}/device` },
           );
           return new DeviceAuthorizationApi.CodeResponse({
@@ -537,10 +535,8 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
         }),
         token: Effect.fnUntraced(function* ({
           payload,
-          request,
         }: {
           payload: DeviceAuthorizationApi.TokenPayload;
-          request: HttpServerRequest.HttpServerRequest;
         }) {
           if (payload.grant_type !== DeviceAuthorizationApi.DEVICE_CODE_GRANT_TYPE) {
             return yield* new DeviceAuthorizationApi.UnsupportedGrantType();
@@ -548,15 +544,10 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
           if (payload.device_code === "" || payload.client_id === "") {
             return yield* new DeviceAuthorizationApi.InvalidRequest();
           }
-          const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
-          const redeemed = yield* deviceAuthorization.poll(
-            {
-              deviceCode: Redacted.make(payload.device_code),
-              clientId: payload.client_id,
-              ip,
-            },
-            context,
-          );
+          const redeemed = yield* deviceAuthorization.poll({
+            deviceCode: Redacted.make(payload.device_code),
+            clientId: payload.client_id,
+          });
           // MNA-001/RFC 8628: a device has no cookie jar — the session always travels as a bearer token
           // (`SessionLifecycle.Mints` makes the response `no-store`).
           const delivered = yield* SessionDelivery.deliverBearer(redeemed);
@@ -589,19 +580,15 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
     "device_authorization.verification",
     Effect.fnUntraced(function* (handlers) {
       const deviceAuthorization = yield* DeviceAuthorization;
-      const clientAddress = yield* ClientAddress.ClientAddress;
       return handlers.handleAll({
         verify: Effect.fnUntraced(function* ({
           payload,
-          request,
         }: {
           payload: DeviceAuthorizationApi.UserCodePayload;
-          request: HttpServerRequest.HttpServerRequest;
         }) {
-          const { ip } = yield* ClientAddress.address(clientAddress, request);
           const caller = yield* currentCaller;
           const view = yield* deviceAuthorization.verify(
-            { userCode: payload.user_code, ip },
+            { userCode: payload.user_code },
             // An impersonation session may look at a code's status but must not claim it.
             Option.filter(caller, (found) => !found.impersonated),
           );
@@ -615,7 +602,6 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
     "device_authorization.decision",
     Effect.fnUntraced(function* (handlers) {
       const deviceAuthorization = yield* DeviceAuthorization;
-      const clientAddress = yield* ClientAddress.ClientAddress;
       /** Behind `Authentication` there is always a user principal; anything else is a wiring defect. */
       const decisionCaller = Effect.gen(function* () {
         const caller = yield* currentCaller;
@@ -632,28 +618,22 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
       return handlers.handleAll({
         approve: Effect.fnUntraced(function* ({
           payload,
-          request,
         }: {
           payload: DeviceAuthorizationApi.UserCodePayload;
-          request: HttpServerRequest.HttpServerRequest;
         }) {
-          const { ip } = yield* ClientAddress.address(clientAddress, request);
           const caller = yield* decisionCaller;
           return toDecisionDto(
-            yield* deviceAuthorization.approve({ userCode: payload.user_code, ip }, caller),
+            yield* deviceAuthorization.approve({ userCode: payload.user_code }, caller),
           );
         }),
         deny: Effect.fnUntraced(function* ({
           payload,
-          request,
         }: {
           payload: DeviceAuthorizationApi.UserCodePayload;
-          request: HttpServerRequest.HttpServerRequest;
         }) {
-          const { ip } = yield* ClientAddress.address(clientAddress, request);
           const caller = yield* decisionCaller;
           return toDecisionDto(
-            yield* deviceAuthorization.deny({ userCode: payload.user_code, ip }, caller),
+            yield* deviceAuthorization.deny({ userCode: payload.user_code }, caller),
           );
         }),
       });
@@ -746,7 +726,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
 }) {
   static readonly layer = AuthPlugin.layer(DeviceAuthorization, {
     // PV-241: the handlers and `make` throttle and attribute by address.
-    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
+    ports: [RateLimiter.RateLimiter],
     handlers: DeviceAuthorizationHandlers,
     contributes: Layer.mergeAll(
       deviceAuthorizationErasure,
@@ -848,7 +828,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
 
       const requestCode: DeviceAuthorizationShape["requestCode"] = Effect.fnUntraced(
         function* (input, context) {
-          yield* limits.spend("codeByIp", { ip: input.ip });
+          yield* limits.spend("codeByIp", {});
           const client = yield* liveClient(input.clientId);
           if (Option.isNone(client)) return yield* new DeviceAuthorizationApi.InvalidClient();
           if (input.scope.some((scope) => !client.value.scopes.includes(scope))) {
@@ -909,14 +889,14 @@ export class DeviceAuthorization extends AuthPlugin.Service<
       const lookupUserCode = Effect.fnUntraced(function* (
         endpoint: "verify" | "approve" | "deny",
         userCode: string,
-        who: Source & { readonly sessionId?: string | undefined },
+        who: { readonly sessionId?: string | undefined },
       ) {
         const names = lookupRules[endpoint];
-        yield* limits.guard(names.ip, { ip: who.ip });
+        yield* limits.guard(names.ip, {});
         if (who.sessionId !== undefined)
           yield* limits.guard(names.session, { sessionId: who.sessionId });
         const miss = Effect.gen(function* () {
-          yield* limits.charge(names.ip, { ip: who.ip });
+          yield* limits.charge(names.ip, {});
           if (who.sessionId !== undefined)
             yield* limits.charge(names.session, { sessionId: who.sessionId });
           return yield* new DeviceAuthorizationApi.InvalidUserCode();
@@ -956,7 +936,6 @@ export class DeviceAuthorization extends AuthPlugin.Service<
         function* (input, caller) {
           const shown = UserCode.format(UserCode.normalize(input.userCode));
           const record = yield* lookupUserCode("verify", input.userCode, {
-            ip: input.ip,
             sessionId: Option.getOrUndefined(Option.map(caller, (found) => found.sessionId)),
           });
           if (Option.isNone(caller)) return viewOf(record, shown, Option.none(), false);
@@ -986,14 +965,13 @@ export class DeviceAuthorization extends AuthPlugin.Service<
        */
       const decide = Effect.fnUntraced(function* <E>(
         decision: "approve" | "deny",
-        input: Source & { readonly userCode: string },
+        input: { readonly userCode: string },
         caller: Caller,
         gate: (grant: DeviceGrantRecords.DeviceGrantRecord) => Effect.Effect<void, E>,
       ) {
         if (caller.impersonated) return yield* new DeviceAuthorizationApi.DeviceApprovalRefused();
         const shown = UserCode.format(UserCode.normalize(input.userCode));
         const record = yield* lookupUserCode(decision, input.userCode, {
-          ip: input.ip,
           sessionId: caller.sessionId,
         });
         // No prior claim: refused. A code someone else claimed is indistinguishable from an unknown one.
@@ -1061,10 +1039,10 @@ export class DeviceAuthorization extends AuthPlugin.Service<
 
       // ---- polling -----------------------------------------------------------------------------------
 
-      const poll: DeviceAuthorizationShape["poll"] = Effect.fnUntraced(function* (input, context) {
-        yield* limits.guard("invalidGrantByIp", { ip: input.ip });
+      const poll: DeviceAuthorizationShape["poll"] = Effect.fnUntraced(function* (input) {
+        yield* limits.guard("invalidGrantByIp", {});
         const invalidGrant = Effect.gen(function* () {
-          yield* limits.charge("invalidGrantByIp", { ip: input.ip });
+          yield* limits.charge("invalidGrantByIp", {});
           return yield* new DeviceAuthorizationApi.InvalidGrant();
         });
         const found = yield* grants.findByDeviceHash(
@@ -1126,10 +1104,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
         // ...then the atomic claim; the session is minted strictly after it was won.
         const claimed = yield* grants.consume(grant.id, userId);
         if (Option.isNone(claimed)) return yield* invalidGrant;
-        const issued = yield* signIn.issue(cleared, {
-          ip: input.ip,
-          userAgent: context?.userAgent,
-        });
+        const issued = yield* signIn.issue(cleared);
         return { session: issued.session, token: issued.token, scope: claimed.value.scopes };
       });
 

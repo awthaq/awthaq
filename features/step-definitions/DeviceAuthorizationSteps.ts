@@ -1,6 +1,7 @@
 // BEH-EA-299 to BEH-EA-306: steps for features/features/05-authentication-methods/28-device-authorization.feature.
 // The service is driven directly where a clock, a race or an error tag is the point, and over the web handler
 // where the wire is (a form-encoded body, an RFC 6749 error, a bearer answer that sets no cookie).
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, DataExport, Erasure, Retention, Sessions, Users } from "@awthaq/core";
 import { DeviceAuthorization, DeviceGrantRecords, UserCode } from "@awthaq/device-authorization";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -96,14 +97,12 @@ export const deviceAuthorizationSteps = defineSteps<World>(({ Given, When, Then 
     const exit = yield* directExit(
       Effect.gen(function* () {
         const plugin = yield* service;
-        return yield* plugin.requestCode(
-          {
-            clientId: overrides?.clientId ?? CLI,
-            scope: overrides?.scope ?? [],
-            ip: overrides?.ip ?? DEVICE_IP,
-          },
-          { verificationBase: VERIFICATION_BASE },
-        );
+        return yield* plugin
+          .requestCode(
+            { clientId: overrides?.clientId ?? CLI, scope: overrides?.scope ?? [] },
+            { verificationBase: VERIFICATION_BASE },
+          )
+          .pipe(TestAuth.withRequest({ ip: overrides?.ip ?? DEVICE_IP }));
       }),
     );
     yield* remember(exit);
@@ -136,10 +135,9 @@ export const deviceAuthorizationSteps = defineSteps<World>(({ Given, When, Then 
     directExit(
       Effect.gen(function* () {
         const plugin = yield* service;
-        return yield* plugin.verify(
-          { userCode: options?.userCode ?? issued.userCode, ip: options?.ip ?? PAGE_IP },
-          caller,
-        );
+        return yield* plugin
+          .verify({ userCode: options?.userCode ?? issued.userCode }, caller)
+          .pipe(TestAuth.withRequest({ ip: options?.ip ?? PAGE_IP }));
       }),
     );
 
@@ -151,10 +149,10 @@ export const deviceAuthorizationSteps = defineSteps<World>(({ Given, When, Then 
     directExit(
       Effect.gen(function* () {
         const plugin = yield* service;
-        const input = { userCode: issued.userCode, ip: PAGE_IP };
-        return yield* decision === "approve"
-          ? plugin.approve(input, caller)
-          : plugin.deny(input, caller);
+        const input = { userCode: issued.userCode };
+        return yield* (
+          decision === "approve" ? plugin.approve(input, caller) : plugin.deny(input, caller)
+        ).pipe(TestAuth.withRequest({ ip: PAGE_IP }));
       }),
     );
 
@@ -166,10 +164,14 @@ export const deviceAuthorizationSteps = defineSteps<World>(({ Given, When, Then 
     const exit = yield* directExit(
       Effect.gen(function* () {
         const plugin = yield* service;
-        return yield* plugin.poll(
-          { deviceCode: issued.deviceCode, clientId: overrides?.clientId ?? CLI, ip: DEVICE_IP },
-          { userAgent: overrides?.userAgent ?? "smart-tv/9.1" },
-        );
+        return yield* plugin
+          .poll({ deviceCode: issued.deviceCode, clientId: overrides?.clientId ?? CLI })
+          .pipe(
+            TestAuth.withRequest({
+              ip: DEVICE_IP,
+              userAgent: overrides?.userAgent ?? "smart-tv/9.1",
+            }),
+          );
       }),
     );
     yield* Ref.update(world.polls, (polls) => [...polls, exit]);
@@ -498,11 +500,9 @@ export const deviceAuthorizationSteps = defineSteps<World>(({ Given, When, Then 
     const exit = yield* directExit(
       Effect.gen(function* () {
         const plugin = yield* service;
-        return yield* plugin.poll({
-          deviceCode: Redacted.make("never-issued"),
-          clientId: CLI,
-          ip: DEVICE_IP,
-        });
+        return yield* plugin
+          .poll({ deviceCode: Redacted.make("never-issued"), clientId: CLI })
+          .pipe(TestAuth.withRequest({ ip: DEVICE_IP }));
       }),
     );
     yield* Ref.update(world.polls, (polls) => [...polls, exit]);

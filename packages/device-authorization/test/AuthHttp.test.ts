@@ -5,6 +5,8 @@ import { HookPoint, Sessions } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as DeviceAuthorization from "../src/DeviceAuthorization.ts";
 import { CLI_CLIENT_ID, DEVICE_GRANT, makeApp, type HarnessOptions } from "./support/harness.ts";
 
@@ -57,6 +59,49 @@ const codeBody = (body: Record<string, unknown>): CodeBody => {
     interval,
   };
 };
+
+// ADR-EA-047 (plan 26 ticket 18): the wiring probe. The plugin reads no address and no header; the device's session
+// records the request context's facts, and the per-source rule counts per request address.
+describe("DeviceAuthorization and the request context (ADR-EA-047)", () => {
+  it("the redeemed session records the device's address and user agent; /device/code counts per address", async () => {
+    const at = (clientAddress: string) =>
+      makeApp({
+        store: "memory",
+        config: { interval: Duration.seconds(1) },
+        rateLimiter: "enforcing",
+        clientAddress,
+      });
+    const app = at("198.51.100.18");
+    const user = await app.signedInUser("probe-device@example.com", ["pwd"]);
+    const code = () => app.request("POST", "/device/code", { form: { client_id: CLI_CLIENT_ID } });
+    const issued = codeBody(await jsonOf(await code()));
+    await user.browser.request("POST", "/device/verify", { json: { user_code: issued.user_code } });
+    await user.browser.request("POST", "/device/approve", {
+      json: { user_code: issued.user_code },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const redeemed = await app.request("POST", "/device/token", {
+      form: { grant_type: DEVICE_GRANT, device_code: issued.device_code, client_id: CLI_CLIENT_ID },
+      headers: { "user-agent": "smart-tv/9.1" },
+    });
+    assert.strictEqual(redeemed.status, 200);
+    const token = String((await jsonOf(redeemed))["access_token"]);
+    const session = await app.withContext(
+      Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+        sessions.verify(Redacted.make(token)),
+      ).pipe(Effect.orDie),
+    );
+    assert.deepStrictEqual(session.session.ipAddress, Option.some("198.51.100.18"));
+    assert.deepStrictEqual(session.session.userAgent, Option.some("smart-tv/9.1"));
+    // `codeByIp` is 5 per window: one code above, four more, then refused; another address is not.
+    for (let i = 0; i < 4; i++) assert.strictEqual((await code()).status, 200);
+    assert.strictEqual((await code()).status, 429);
+    const elsewhere = await at("198.51.100.19").request("POST", "/device/code", {
+      form: { client_id: CLI_CLIENT_ID },
+    });
+    assert.strictEqual(elsewhere.status, 200);
+  });
+});
 
 for (const options of suites) {
   describe(`DeviceAuthorization over HTTP (${options.store})`, () => {

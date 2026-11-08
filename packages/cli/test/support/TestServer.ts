@@ -138,11 +138,11 @@ export const serveAuth = (options?: { readonly device?: boolean }) =>
       Effect.gen(function* () {
         const { userId, sessionId } = yield* issue(email);
         const caller = { userId, sessionId, impersonated: false, amr: ["pwd" as const] };
-        const source = { userCode, ip: "198.51.100.20" };
+        const source = { userCode };
         yield* plugin.verify(source, Option.some(caller)).pipe(Effect.orDie);
         return yield* (
           decision === "approve" ? plugin.approve(source, caller) : plugin.deny(source, caller)
         ).pipe(Effect.orDie);
-      });
+      }).pipe(TestAuth.withRequest({ ip: "198.51.100.20" }));
     return { baseUrl, issue, revokeAll, decide, plugin };
   });
