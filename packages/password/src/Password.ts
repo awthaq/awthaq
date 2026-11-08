@@ -35,7 +35,6 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Digest from "effect/crypto/Digest";
 import * as Mac from "effect/crypto/Mac";
 import * as Data from "effect/Data";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/http/HttpClient";
@@ -693,8 +692,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // EP-007 (ADR-EA-018 Decision 8): the policy in force is decided per operation, so a
       // tenant's `Password.config(...)` provided in the calling fiber applies to that request;
       // with none, the build-time value applies exactly as before. What is derived once at boot
-      // from the *built* value stays boot-scoped: the rate-limit email-key
-      // function, the identifier-digest key, and the calibrated timing-floor measurement.
+      // from the *built* value stays boot-scoped: the rate-limit email-key function and the
+      // identifier-digest key (the calibrated timing floor is `PasswordCredential`'s).
       const builtConfig = yield* PasswordConfig;
       const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
       const random = yield* SecureRandom.SecureRandom;
@@ -718,17 +717,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           digestKey,
           new TextEncoder().encode(`signin-identifier:${builtConfig.rateLimitEmailKey(email)}`),
         ).pipe(Effect.map(Hmac.toHex), Effect.orDie);
-      /**
-       * EOTS-001/ticket 27 §2: the hash check is its own span (`awthaq.password.verify`),
-       * so a trace shows where sign-in latency goes. No attribute is derived from the
-       * password, the hash or the identifier.
-       */
-      const verifyPassword = (candidate: Redacted.Redacted<string>, hash: PasswordHasher.PhcHash) =>
-        hasher.verify(candidate, hash).pipe(
-          Observability.authSpan(Observability.Span.passwordVerify, {
-            [Observability.Field.strategy]: "password",
-          }),
-        );
       /**
        * EOTS-001: every operation is one `awthaq.password.<operation>` span
        * (`awthaq.plugin`, `auth.strategy`); the handlers annotate `user.id` once the
@@ -774,52 +762,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const limits = yield* RateLimits.budget(Password, {
         emailKey: builtConfig.rateLimitEmailKey,
       });
-
-      // BEH-EA-114: paid once at boot, not once per unsuccessful attempt —
-      // a real PHC/scrypt-encoded string this plugin's own configured
-      // hasher produced, so `hasher.verify` always does the same real
-      // work whether or not a matching account/credential actually
-      // exists.
-      const dummyPassword = Redacted.make("awthaq/password/dummy");
-      const dummyHash = Redacted.make(yield* hasher.hash(dummyPassword));
-
-      // TSS-006: `hasher.hash` above has already warmed the KDF (WASM
-      // instantiation), so this timing is the steady-state verify cost.
-      // EP-007: measured even when the built value fixes the floor, because a tenant's
-      // configuration may ask for `"calibrated"`; skipped only when the built value is `"off"`
-      // (an air-gapped/test posture that never calibrates).
-      const calibratedFloorMillis = yield* Effect.gen(function* () {
-        if (builtConfig.signInTimingFloor === "off") return 0;
-        const start = DateTime.toEpochMillis(yield* DateTime.now);
-        yield* hasher.verify(dummyPassword, Redacted.value(dummyHash));
-        return 1.25 * (DateTime.toEpochMillis(yield* DateTime.now) - start);
-      });
-      const timingFloorFor = (floor: PasswordConfigShape["signInTimingFloor"]) => {
-        if (floor === "off") return 0;
-        if (Duration.isDuration(floor)) return Duration.toMillis(floor);
-        return calibratedFloorMillis;
-      };
-
-      /**
-       * TSS-006: runs `effect` (success or failure alike) and holds its
-       * result back until at least the floor in force has elapsed, so a
-       * cheap-hash path is not faster than the dummy-hash path.
-       */
-      const withTimingFloor = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        Effect.flatMap(configNow, (config) => {
-          const timingFloorMillis = timingFloorFor(config.signInTimingFloor);
-          return timingFloorMillis <= 0
-            ? effect
-            : Effect.gen(function* () {
-                const start = DateTime.toEpochMillis(yield* DateTime.now);
-                const exit = yield* Effect.exit(effect);
-                const elapsed = DateTime.toEpochMillis(yield* DateTime.now) - start;
-                if (elapsed < timingFloorMillis) {
-                  yield* Effect.sleep(Duration.millis(timingFloorMillis - elapsed));
-                }
-                return yield* exit;
-              });
-        });
 
       /** Issues a verify-email token and mails it; dispatched, never awaited. */
       const dispatchVerificationMail = Effect.fnUntraced(function* (user: Users.UserRecord) {
@@ -1311,34 +1253,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // (unlike `signIn`/`requestReset`) there's no need to look up an
         // email first.
         yield* limits.spend("changePassword", input);
-        const accountOpt = yield* accounts.findByProviderSubject(
-          Accounts.PASSWORD_PROVIDER_ID,
-          input.userId,
+        // BEH-EA-114/TSS-006: the same uniform cost as `signIn`, though this endpoint is
+        // authenticated: a caller with no password credential cannot tell "no password set" from
+        // "wrong password" by timing either.
+        const verdict = yield* credential.verify(
+          Effect.succeedSome({ id: input.userId }),
+          input.currentPassword,
         );
-        const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-          // ADR-EA-028: an outage is `StoreUnavailable`; an account unlinked since the lookup has no hash.
-          onSome: (account) =>
-            accounts
-              .findCredentialHash(account.id)
-              .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeedNone)),
-        });
-        // Same uniform-cost shape as `signIn`'s own `dummyHash` check —
-        // this endpoint is authenticated (no enumeration concern), but
-        // there is no reason to let a caller with no password credential
-        // at all distinguish "wrong password" from "no password set" by
-        // timing, so the real hasher call always runs regardless (TSS-006:
-        // held to the same timing floor as `signIn`).
-        const verified = yield* withTimingFloor(
-          verifyPassword(
-            input.currentPassword,
-            Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
-          ),
-        );
-        if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
-          return yield* Effect.fail(new PasswordApi.WrongPassword());
-        }
-        const account = accountOpt.value;
+        if (verdict._tag === "Refused") return yield* Effect.fail(new PasswordApi.WrongPassword());
 
         const hints = yield* checkPolicy(httpClient, digest, input.newPassword, config);
         if (hints.length > 0) {
@@ -1349,7 +1271,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // ADR-EA-028: an outage is `StoreUnavailable`; a credential unlinked since it was verified is
         // the same answer as no credential at all.
         yield* accounts
-          .updateCredentialHash(account.id, Redacted.make(hash))
+          .updateCredentialHash(verdict.proof.accountId, Redacted.make(hash))
           .pipe(
             Effect.catchTag("AccountNotFound", () => Effect.fail(new PasswordApi.WrongPassword())),
           );
@@ -1373,32 +1295,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // Keyed on `userId` directly — this endpoint is authenticated,
         // mirroring `changePassword`'s own posture.
         yield* limits.spend("reauthenticate", input);
-        const accountOpt = yield* accounts.findByProviderSubject(
-          Accounts.PASSWORD_PROVIDER_ID,
-          input.userId,
+        // BEH-EA-114/TSS-006: the same uniform cost as `changePassword`.
+        const verdict = yield* credential.verify(
+          Effect.succeedSome({ id: input.userId }),
+          input.currentPassword,
         );
-        const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-          // ADR-EA-028: an outage is `StoreUnavailable`; an account unlinked since the lookup has no hash.
-          onSome: (account) =>
-            accounts
-              .findCredentialHash(account.id)
-              .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeedNone)),
-        });
-        // Same uniform-cost shape as `changePassword`'s own `dummyHash`
-        // check — this endpoint is authenticated (no enumeration
-        // concern), but there is no reason to let a caller with no
-        // password credential at all distinguish "wrong password" from
-        // "no password set" by timing (TSS-006: same timing floor).
-        const verified = yield* withTimingFloor(
-          verifyPassword(
-            input.currentPassword,
-            Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
-          ),
-        );
-        if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
-          return yield* Effect.fail(new PasswordApi.WrongPassword());
-        }
+        if (verdict._tag === "Refused") return yield* Effect.fail(new PasswordApi.WrongPassword());
         // BEH-EA-319: the middleware proved this session live before the password
         // hash ran; if it ended since (revoked, superseded, expired), the caller
         // is no longer authenticated: 401, the same answer a session revoked

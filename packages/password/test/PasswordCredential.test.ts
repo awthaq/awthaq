@@ -309,10 +309,7 @@ describe("PasswordCredential.verify: the timing floor (TSS-006)", () => {
       return Effect.gen(function* () {
         const credential = yield* PasswordCredential.PasswordCredential;
         const users = yield* Users.Users;
-        assert.isTrue(
-          hasher.verified.length > 0 && hasher.verified.every((phc) => phc === DUMMY),
-          "the boot calibration verifies the dummy",
-        );
+        assert.deepStrictEqual(hasher.verified, [DUMMY], "the boot calibration verifies the dummy");
         const fiber = yield* Effect.forkChild(
           credential.verify(users.findByEmail("nobody@example.com"), secret),
           { startImmediately: true },
@@ -405,10 +402,7 @@ describe("PasswordCredential.rehashIfStale (BEH-EA-116)", () => {
         Option.getOrThrow(yield* storedHash(user.id)),
         `old:${Redacted.value(secret)}`,
       );
-      assert.isTrue(
-        hasher.hashed.every((plain) => plain === "awthaq/password/dummy"),
-        "no hash beyond the boot-time dummy",
-      );
+      assert.deepStrictEqual(hasher.hashed, ["awthaq/password/dummy"], "no hash beyond the dummy");
     }).pipe(Effect.provide(layerWith(hasher, { signInTimingFloor: "off", rehashOnLogin: false })));
   });
 
