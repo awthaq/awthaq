@@ -10,7 +10,6 @@
 import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
-  Accounts,
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
@@ -597,11 +596,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
     handlers: Layer.mergeAll(PasswordHandlers, PasswordAccountHandlers),
     make: Effect.gen(function* () {
       const credential = yield* PasswordCredential.PasswordCredential;
+      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const users = yield* Users.Users;
-      const accounts = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
-      const hasher = yield* PasswordHasher.PasswordHasher;
       const mailer = yield* Mailer.Mailer;
       const events = yield* AuthEvents.AuthEvents;
       // EP-007 (ADR-EA-018 Decision 8): the policy in force is decided per operation, so a
@@ -1145,29 +1143,32 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         );
         if (verdict._tag === "Refused") return yield* Effect.fail(new PasswordApi.WrongPassword());
 
+        // Outside the unit: the breach check is a network call (BEH-EA-117).
         const password = yield* credential.accept(input.newPassword);
-        const hash = yield* hasher.hash(password.candidate);
-        // ADR-EA-028: an outage is `StoreUnavailable`; a credential unlinked since it was verified is
-        // the same answer as no credential at all.
-        yield* accounts
-          .updateCredentialHash(verdict.proof.accountId, Redacted.make(hash))
-          .pipe(
-            Effect.catchTag("AccountNotFound", () => Effect.fail(new PasswordApi.WrongPassword())),
-          );
-        yield* events.publish({ _tag: "auth.password.changed", userId: input.userId });
-
-        // BEH-EA-053: revoke every *other* session first, while
-        // `currentSessionId` still names a live row — then supersede that
-        // row with a freshly minted one. Reversing this order would leave
-        // `revokeOthers` nothing to `keep` (the superseded id no longer
-        // exists once `issue` has run).
-        yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
-        const issued = yield* sessions.issue({
-          userId: input.userId,
-          supersedes: input.currentSessionId,
-          amr: ["pwd"],
-        });
-        return issued;
+        // BEH-EA-053: the new hash, the revocation of every other session and the rotation of the
+        // caller's own commit together, so a failure part-way leaves no session alive under a
+        // password it did not prove. The events are released when the unit commits (ADR-EA-037).
+        return yield* sqlTransaction
+          .withTransaction(
+            Effect.gen(function* () {
+              // A credential unlinked since it was verified is the same answer as none at all.
+              if (!(yield* credential.replace(input.userId, password))) {
+                return yield* Effect.fail(new PasswordApi.WrongPassword());
+              }
+              yield* events.publish({ _tag: "auth.password.changed", userId: input.userId });
+              // Every *other* session first, while `currentSessionId` still names a live row; then
+              // that row is superseded by a fresh one (the other order leaves `revokeOthers`
+              // nothing to keep).
+              yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
+              return yield* sessions.issue({
+                userId: input.userId,
+                supersedes: input.currentSessionId,
+                amr: ["pwd"],
+              });
+            }),
+          )
+          // ADR-EA-028: the transaction's own failure is an outage (503), never a defect.
+          .pipe(Effect.catchTag("SqlError", Errors.storeUnavailable("Password.changePassword")));
       });
 
       const reauthenticate: PasswordShape["reauthenticate"] = Effect.fnUntraced(function* (input) {
