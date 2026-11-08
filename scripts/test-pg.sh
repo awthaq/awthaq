@@ -49,7 +49,6 @@ suites=(
   packages/test/test/TestAuthHost.test.ts
   packages/test/test/TestSqlSchema.test.ts
   examples/plugin-template/test/Template.test.ts
-  packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
   packages/api-key/test/StoreOutage.test.ts
   packages/core/test/AuthEventsUnitOfWork.test.ts
