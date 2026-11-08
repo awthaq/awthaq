@@ -9,6 +9,8 @@
 import { Auth, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import * as Admin from "../src/Admin.ts";
@@ -86,6 +88,46 @@ const post = (browser: Browser, path: string, body: unknown): Promise<Response> 
   browser.request("POST", path, { json: body });
 
 describe("AuthHttp + Admin (real HTTP)", () => {
+  // Plan 26 Q5 (ADR-EA-047): `Sessions.issue` reads the request context, so the impersonation session records the
+  // administrator's own request (it recorded nothing before, in any composition).
+  it.effect("an impersonation session records the administrator's address and user agent", () =>
+    Effect.gen(function* () {
+      const app = TestAuth.app(
+        TestAuth.layer(Auth.make([Admin.Admin]), {
+          services: Admin.config({ canImpersonate: allow }),
+          clientAddress: "198.51.100.77",
+        }),
+        { baseUrl: ORIGIN },
+      );
+      const target = yield* Effect.promise(() =>
+        app.run(
+          Effect.flatMap(Effect.service(Users.Users), (users) =>
+            users.create({ identity: { _tag: "Email", email: "t@example.com" }, name: "T" }),
+          ),
+        ),
+      );
+      const admin = yield* Effect.promise(() => app.signIn("admin@example.com"));
+      const response = yield* Effect.promise(() =>
+        admin.request("POST", `/admin/impersonate/${target.id}`, {
+          json: { reason: "support ticket" },
+          headers: { "user-agent": "admin-console/1" },
+        }),
+      );
+      assert.strictEqual(response.status, 200);
+      const token = admin.cookies.get("__Host-impersonation")?.value ?? "";
+      const verified = yield* Effect.promise(() =>
+        app.run(
+          Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+            sessions.verify(Redacted.make(token)),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.77"));
+      assert.deepStrictEqual(verified.session.userAgent, Option.some("admin-console/1"));
+      yield* Effect.promise(() => app.dispose());
+    }),
+  );
+
   it.effect(
     "BEH-EA-213: a full impersonate call answers 200 with a session cookie for the target",
     () =>

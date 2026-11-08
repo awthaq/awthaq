@@ -139,6 +139,46 @@ const eventsOf = (tag: "auth.user.signInFailed" | "auth.user.signedIn" | "auth.s
     return yield* auditLog.list({ eventTag: tag });
   });
 
+describe("SignIn.failed (ALF-003/CSD-004, ADR-EA-047)", () => {
+  it.effect(
+    "stamps clientIp from the request context, none outside a request, and passes the digest through",
+    () => {
+      const recorder = newRecorder();
+      return Effect.gen(function* () {
+        const signIn = yield* SignIn.make;
+        yield* signIn
+          .failed({ strategy: "passkey", reason: "assertionInvalid", identifierDigest: "d-1" })
+          .pipe(
+            Effect.provideService(
+              Api.AuthRequestContext,
+              Api.AuthRequestContext.request({ correlationId: "c", ip: "203.0.113.4" }),
+            ),
+          );
+        yield* signIn
+          .failed({ strategy: "password", reason: "invalidCredentials" })
+          .pipe(Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest));
+        const payloads = (yield* eventsOf("auth.user.signInFailed")).map((row) => row.payload);
+        const byStrategy = (strategy: string) =>
+          payloads.find(
+            (payload) => payload._tag === "auth.user.signInFailed" && payload.strategy === strategy,
+          );
+        assert.deepStrictEqual(byStrategy("passkey"), {
+          _tag: "auth.user.signInFailed",
+          strategy: "passkey",
+          reason: "assertionInvalid",
+          identifierDigest: "d-1",
+          clientIp: "203.0.113.4",
+        });
+        assert.deepStrictEqual(byStrategy("password"), {
+          _tag: "auth.user.signInFailed",
+          strategy: "password",
+          reason: "invalidCredentials",
+        });
+      }).pipe(Effect.provide(envFor(recorder)));
+    },
+  );
+});
+
 describe("SignIn.clear", () => {
   it.effect(
     "an active user clears: the clearance carries user, strategy and amr, and no session exists yet",

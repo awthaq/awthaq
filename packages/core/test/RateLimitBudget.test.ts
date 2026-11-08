@@ -306,6 +306,36 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
     }).pipe(Effect.provide(Live)),
   );
 
+  it.effect(
+    "ADR-EA-047: an ip rule spent with no ip keys on the request context's address, unknown with none",
+    () =>
+      Effect.gen(function* () {
+        const consumed: Array<string> = [];
+        const recording = Layer.succeed(
+          RateLimiter.RateLimiter,
+          RateLimiter.RateLimiter.of({
+            consume: (input) => Effect.sync(() => void consumed.push(input.key)),
+            check: () => Effect.void,
+          }),
+        );
+        const limits = yield* RateLimits.budget(inviteOwner).pipe(Effect.provide(recording));
+        yield* limits
+          .spend("createByIp", {})
+          .pipe(
+            Effect.provideService(
+              Api.AuthRequestContext,
+              Api.AuthRequestContext.request({ correlationId: "c", ip: "203.0.113.7" }),
+            ),
+            Effect.provide(recording),
+          );
+        yield* limits.spend("createByIp", {}).pipe(Effect.provide(recording));
+        assert.deepStrictEqual(consumed, [
+          "ratelimit:invite.createByIp:ip:203.0.113.7",
+          "ratelimit:invite.createByIp:ip:unknown",
+        ]);
+      }).pipe(Effect.provide(Live)),
+  );
+
   it.effect("consumes in order and stops at the first refusal", () =>
     Effect.gen(function* () {
       const consumed: Array<string> = [];

@@ -10,6 +10,7 @@
 // a computed field name would need a cast to type the struct. Call sites already build these small
 // inputs at the handler edge, where the IP and the principal are resolved.
 
+import { Api } from "@awthaq/api";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Phone from "./Phone.ts";
@@ -17,9 +18,11 @@ import * as Phone from "./Phone.ts";
 /** What a breach is attributed to (`auth.rateLimit.exceeded.dimension`). */
 export type Dimension = "identity" | "ip" | "principal" | "custom";
 
-/** Per-budget settings a key may read; today only the email normaliser (`PasswordConfig.rateLimitEmailKey`). */
+/** What a key may read beyond its input: the budget's email normaliser and the call's request context. */
 export interface KeyContext {
   readonly email: (address: string) => string;
+  /** What the budget read from `Api.AuthRequestContext` for this call (`noRequest` when there was none). ADR-EA-047. */
+  readonly request: Api.RequestFacts | Api.NoRequest;
 }
 
 /** A bucket-key strategy over input `I`: a printable name, a dimension, a guard, and the key part. */
@@ -69,12 +72,16 @@ export const emailKey = (address: string) => {
   return `${plus > 0 ? local.slice(0, plus) : local}${lowered.slice(at)}`;
 };
 
-/** The source address the handler resolved through `ClientAddress`; unresolvable falls into one shared `unknown` bucket. */
+/**
+ * The request's own address, read from `Api.AuthRequestContext` (ADR-EA-047); an unresolvable address falls into one
+ * shared `unknown` bucket. Transitional (plan 26 phases 3–4): an explicit `ip` field still wins.
+ */
 export const ip = make({
   strategy: "ip",
   dimension: "ip",
   input: Schema.Struct({ ip: Schema.optional(Schema.String) }),
-  part: (input) => `ip:${input.ip ?? "unknown"}`,
+  part: (input, context) =>
+    `ip:${input.ip ?? (Api.isRequest(context.request) ? Option.getOrUndefined(context.request.ip) : undefined) ?? "unknown"}`,
 });
 
 /** A target address (mail-bombing, enumeration). Normalised by the budget's `KeyContext.email`. */

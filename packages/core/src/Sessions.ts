@@ -50,15 +50,20 @@ const { toHex } = Hmac;
 /** BEH-EA-050: the one hash both `Layer`s persist in place of the plaintext secret (OCM-002: shared with `@awthaq/api-key`). */
 const hashSecret = SecretHash.digest;
 
-/**
- * CSD-003: the persisted `userAgent` is caller-supplied (a request header), so
- * it is capped at the persistence boundary — every issuing plugin benefits,
- * none has to remember.
- */
-export const MAX_USER_AGENT_LENGTH = 512;
+/** CSD-003: what a session row records of the request that minted it. The user agent is capped by its brand. */
+interface Recorded {
+  readonly ipAddress: Option.Option<string>;
+  readonly userAgent: Option.Option<Api.UserAgentHeader>;
+}
 
-const cappedUserAgent = (userAgent: string | undefined): string | undefined =>
-  userAgent?.slice(0, MAX_USER_AGENT_LENGTH);
+/** ADR-EA-047: a session records the facts of the request that minted it; `NoRequest` records none. */
+const recordedFrom = (context: Option.Option<Api.RequestFacts | Api.NoRequest>): Recorded => {
+  const facts = Option.filter(context, Api.isRequest);
+  return {
+    ipAddress: Option.flatMap(facts, (request) => request.ip),
+    userAgent: Option.flatMap(facts, (request) => request.userAgent),
+  };
+};
 
 /**
  * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
@@ -671,7 +676,10 @@ export const layer = Layer.effect(
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
-    const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+    const issueRecording = Effect.fnUntraced(function* (
+      input: Parameters<SessionsShape["issue"]>[0],
+      recorded: Recorded,
+    ) {
       const config = yield* configNow;
       yield* refuseSelfActingAs(input);
       const id = SessionId(yield* random.uuidV7());
@@ -701,8 +709,8 @@ export const layer = Layer.effect(
           at: now,
           absoluteExpiresAt,
           idleExpiresAt,
-          ipAddress: Option.fromNullishOr(input.request?.ip),
-          userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
+          ipAddress: recorded.ipAddress,
+          userAgent: recorded.userAgent,
           actingAs: Option.fromNullishOr(input.actingAs),
           amr: input.amr ?? [],
         },
@@ -735,7 +743,23 @@ export const layer = Layer.effect(
       const view = yield* toView(inserted);
       yield* publishIssued(events, view, inserted.familyId, view.actingAs);
       return { session: view, token: Redacted.make(SessionVerdict.format(id, secret)) };
-    }, relabel("Sessions.issue"));
+    });
+
+    // ADR-EA-047 (plan 26 phase 3, transitional): the facts come from `Api.AuthRequestContext`; an explicit
+    // `request` field still wins until the plugins stop passing one (phase 5 removes it).
+    const issue: SessionsShape["issue"] = (input) =>
+      Effect.flatMap(Effect.serviceOption(Api.AuthRequestContext), (context) => {
+        const ambient = recordedFrom(context);
+        const ip = input.request?.ip;
+        const userAgent = input.request?.userAgent;
+        return issueRecording(input, {
+          ipAddress: ip === undefined ? ambient.ipAddress : Option.some(ip),
+          userAgent:
+            userAgent === undefined
+              ? ambient.userAgent
+              : Option.some(Api.toUserAgentHeader(userAgent)),
+        });
+      }).pipe(relabel("Sessions.issue"));
 
     /**
      * BAM-003 (.issues/high): consulted only on a primary-store miss: a still-live legacy (e.g.
@@ -749,13 +773,14 @@ export const layer = Layer.effect(
       const resolved = yield* bridge.resolve(rawToken);
       if (Option.isNone(resolved)) return Option.none();
       const legacy = resolved.value;
-      const minted = yield* issue({
-        userId: UserId(legacy.userId),
-        request: {
-          ...(Option.isSome(legacy.ipAddress) ? { ip: legacy.ipAddress.value } : {}),
-          ...(Option.isSome(legacy.userAgent) ? { userAgent: legacy.userAgent.value } : {}),
+      // A migrated session keeps its own facts, whatever request presented it.
+      const minted = yield* issueRecording(
+        { userId: UserId(legacy.userId) },
+        {
+          ipAddress: legacy.ipAddress,
+          userAgent: Option.map(legacy.userAgent, Api.toUserAgentHeader),
         },
-      });
+      );
       yield* bridge.consume(rawToken);
       return Option.some({ session: minted.session, rotated: Option.some(minted.token) });
     });

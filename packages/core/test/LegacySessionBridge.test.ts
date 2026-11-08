@@ -6,6 +6,7 @@
 // single-use via `consume`. Runs against both `Persistence.memory` and
 // `Persistence.sql()`, mirroring `Sessions.test.ts`'s own dual-layer pattern.
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
+import { Api } from "@awthaq/api";
 import { LegacySessionBridge } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -105,7 +106,17 @@ const suite = (name: string, layer: Layer.Layer<Sessions.Sessions, unknown, neve
     it.effect("a still-live legacy token bridges into a freshly minted session, once", () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const result = yield* sessions.verify(Redacted.make(LEGACY_TOKEN));
+        // ADR-EA-047: the migrated session keeps the legacy row's own facts, not the presenting request's.
+        const result = yield* sessions.verify(Redacted.make(LEGACY_TOKEN)).pipe(
+          Effect.provideService(
+            Api.AuthRequestContext,
+            Api.AuthRequestContext.request({
+              correlationId: "c",
+              ip: "198.51.100.200",
+              userAgent: "presenter/2",
+            }),
+          ),
+        );
         assert.strictEqual(result.session.userId, LEGACY_USER_ID);
         assert.isTrue(Option.isSome(result.rotated));
         assert.deepStrictEqual(result.session.ipAddress, Option.some("203.0.113.9"));

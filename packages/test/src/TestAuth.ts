@@ -96,6 +96,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -171,15 +172,49 @@ export const memoryFoundation = AuthEvents.layer.pipe(
  * The registries (`RateLimits.layer`, `Slots.layer`, the credential-resolver registry) are not ports: `AuthHost`
  * provides them.
  */
-const testPorts = (rateLimiter: "permissive" | "enforcing" | undefined) =>
+const testPorts = (
+  rateLimiter: "permissive" | "enforcing" | undefined,
+  clientAddress: string | undefined,
+) =>
   Layer.mergeAll(
     TestHasher,
     Mailer.layerMemory,
     rateLimiter === "enforcing" ? RateLimiter.layerMemory : RateLimiter.layerPermissive,
-    // AGA-001/NHS-003: the raw-`remoteAddress` passthrough every zero-config app gets by default.
-    ClientAddress.layerDirect,
+    // AGA-001/NHS-003: the raw-`remoteAddress` passthrough every zero-config app gets by default (a web handler
+    // reports none); ADR-EA-047: a suite that needs a known address over HTTP fixes one.
+    clientAddress === undefined ? ClientAddress.layerDirect : fixedClientAddress(clientAddress),
     TestEncryption.layer,
   ).pipe(Layer.provideMerge(NodeCrypto.layer));
+
+/** A `ClientAddress` that resolves every request to `address`, so a wire test records and keys on a known one. */
+const fixedClientAddress = (address: string) =>
+  Layer.succeed(
+    ClientAddress.ClientAddress,
+    ClientAddress.ClientAddress.of({ resolve: () => Effect.succeed(Option.some(address)) }),
+  );
+
+/**
+ * ADR-EA-047: runs `self` as if it answered an HTTP request with these facts: an in-process unit test of a plugin
+ * operation that records or keys on the request. The correlation id defaults to `"test"`.
+ */
+export const withRequest =
+  (
+    facts: {
+      readonly ip?: string;
+      readonly userAgent?: string;
+      readonly correlationId?: string;
+    } = {},
+  ) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>) =>
+    Effect.provideService(
+      self,
+      Api.AuthRequestContext,
+      Api.AuthRequestContext.request({ ...facts, correlationId: facts.correlationId ?? "test" }),
+    );
+
+/** ADR-EA-047: runs `self` as in-process work that answers no request (a job, a CLI command). */
+export const withoutRequest = <A, E, R>(self: Effect.Effect<A, E, R>) =>
+  Effect.provideService(self, Api.AuthRequestContext, Api.AuthRequestContext.noRequest);
 
 const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGuard.layer));
 
@@ -228,6 +263,11 @@ export interface CommonOptions<S, SE, SR, D, DR, T = never> {
   >;
   /** `"permissive"` (default) never refuses; `"enforcing"` is the real limiter over the in-memory store. */
   readonly rateLimiter?: "permissive" | "enforcing";
+  /**
+   * ADR-EA-047: the address every request resolves to (a fixed `ClientAddress`). By default the socket peer, which a
+   * web handler never reports, so a wire test that asserts a recorded address or a per-address limit sets one.
+   */
+  readonly clientAddress?: string;
   /** P20a (BEH-EA-084): serve the generated OpenAPI document at this path. */
   readonly openapiPath?: `/${string}`;
   /** P20a (BEH-EA-084): serve the Scalar docs page at this path. */
@@ -300,7 +340,7 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
   };
   const platform = <A, E, R>(host: Layer.Layer<A, E, R>) =>
     host.pipe(
-      Layer.provideMerge(testPorts(options.rateLimiter)),
+      Layer.provideMerge(testPorts(options.rateLimiter, options.clientAddress)),
       Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
     );
@@ -429,6 +469,8 @@ export const signInAs = (input: {
   readonly onSignedUp?: (userId: Users.UserId) => Effect.Effect<void>;
   /** How the session says the user authenticated (`["pwd"]`, `["fed"]`, ...); none by default. */
   readonly amr?: ReadonlyArray<Sessions.AuthMethod>;
+  /** ADR-EA-047: the request the session records (`withRequest`'s facts); by default none (`noRequest`). */
+  readonly request?: Parameters<typeof withRequest>[0];
 }): Effect.Effect<SignedInSession, never, Users.Users | Sessions.Sessions> =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
@@ -441,7 +483,10 @@ export const signInAs = (input: {
     }
     const issued = yield* sessions
       .issue({ userId: user.id, ...(input.amr === undefined ? {} : { amr: input.amr }) })
-      .pipe(Effect.orDie);
+      .pipe(
+        input.request === undefined ? withoutRequest : withRequest(input.request),
+        Effect.orDie,
+      );
     return { userId: user.id, token: issued.token, setCookie: yield* sessionSetCookie(issued) };
   });
 
@@ -525,8 +570,13 @@ export interface SignedInAgent extends UserAgent.UserAgent {
 export interface App<A, E = never> {
   /** The raw `(Request) => Promise<Response>` the composition serves. */
   readonly handler: (request: Request) => Promise<Response>;
-  /** Runs an effect against the composition's own context (the instances the plugins use). */
-  readonly run: <X, XE, XR extends A>(effect: Effect.Effect<X, XE, XR>) => Promise<X>;
+  /**
+   * Runs an effect against the composition's own context (the instances the plugins use). ADR-EA-047: it runs as
+   * in-process work that answers no request (`noRequest`) unless `app`'s `request` option names one.
+   */
+  readonly run: <X, XE, XR extends A | Api.AuthRequestContext>(
+    effect: Effect.Effect<X, XE, XR>,
+  ) => Promise<X>;
   /**
    * BEH-EA-333: a fresh browser (or native client) over this composition: its own cookie store, the
    * composition's clock, and a `__Host-csrf` cookie already held (minted from the composition's own
@@ -595,6 +645,8 @@ export const app = <A, E>(
     readonly testClock?: boolean;
     /** An existing memo map to build into, so several apps (or a hand-made router) share the instances they have in common. */
     readonly memoMap?: Layer.MemoMap;
+    /** ADR-EA-047: the request `run` answers (`withRequest`'s facts); by default none (`noRequest`). */
+    readonly request?: Parameters<typeof withRequest>[0];
   } = {},
 ): App<A | AppNeeds, E> => {
   const baseUrl = options.baseUrl ?? "http://localhost";
@@ -610,8 +662,9 @@ export const app = <A, E>(
     context ??= Effect.runPromise(Layer.buildWithMemoMap(appLayer, memoMap, scope));
     return context;
   };
+  const inRequest = options.request === undefined ? withoutRequest : withRequest(options.request);
   const run: App<A | AppNeeds, E>["run"] = (effect) =>
-    built().then((services) => Effect.runPromiseWith(services)(effect));
+    built().then((services) => Effect.runPromiseWith(services)(inRequest(effect)));
   const runtime = ManagedRuntime.make(appLayer, { memoMap });
   const handler = (request: Request) => web.handler(request);
 

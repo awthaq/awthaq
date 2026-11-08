@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Defects } from "@awthaq/ports";
 import { AuthEvents } from "../AuthEvents.ts";
+import type { SignInFailureReason } from "../AuthEventSchemas.ts";
 import { Api } from "@awthaq/api";
 import * as HookPoint from "../HookPoint.ts";
 import * as Hooks from "../Hooks.ts";
@@ -55,6 +56,14 @@ export interface SessionRequest {
   readonly userAgent?: string | undefined;
 }
 
+/** A failed sign-in attempt, announced by `SignIn.failed`. No user id, no email (ALF-003/CSD-004). */
+export interface Failure {
+  readonly strategy: string;
+  readonly reason: SignInFailureReason;
+  /** A keyed digest of the presented identifier, for a stuffing detector; never the identifier itself. */
+  readonly identifierDigest?: string | undefined;
+}
+
 /** The one session-with-token type every sign-in plugin aliases: `Sessions.IssuedSession`. */
 export type IssuedSession = Sessions.IssuedSession;
 
@@ -66,6 +75,27 @@ export const makeSteps = Effect.gen(function* () {
   const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
   const afterSignIn = yield* Hooks.AfterSignIn;
   const continuations = yield* SignInContinuationRegistry;
+
+  /**
+   * ALF-003/CSD-004: the one publisher of `auth.user.signInFailed`. Its `clientIp` is the address of the request the
+   * attempt answered (ADR-EA-047), absent outside a request or when the address is unresolvable.
+   */
+  const failed = (failure: Failure) =>
+    Effect.gen(function* () {
+      const ip = Option.flatMap(
+        Option.filter(yield* Effect.serviceOption(Api.AuthRequestContext), Api.isRequest),
+        (facts) => facts.ip,
+      );
+      yield* events.publish({
+        _tag: "auth.user.signInFailed",
+        strategy: failure.strategy,
+        reason: failure.reason,
+        ...(failure.identifierDigest === undefined
+          ? {}
+          : { identifierDigest: failure.identifierDigest }),
+        ...(Option.isSome(ip) ? { clientIp: ip.value } : {}),
+      });
+    });
 
   /** Lookup + THE gate (SCP-001). A suspended refusal is announced for every strategy (policy 3.6.2). */
   const gate = Effect.fnUntraced(function* (attempt: Attempt) {
@@ -82,20 +112,7 @@ export const makeSteps = Effect.gen(function* () {
     // EOTS-001: the credential is proven, so the span may name the user (an id, never the email).
     yield* Effect.annotateCurrentSpan("user.id", user.id);
     yield* Users.assertCanSignIn(user).pipe(
-      Effect.tapError(() =>
-        Effect.gen(function* () {
-          const ip = Option.flatMap(
-            Option.filter(yield* Effect.serviceOption(Api.AuthRequestContext), Api.isRequest),
-            (facts) => facts.ip,
-          );
-          yield* events.publish({
-            _tag: "auth.user.signInFailed",
-            strategy: attempt.strategy,
-            reason: "suspended",
-            ...(Option.isSome(ip) ? { clientIp: ip.value } : {}),
-          });
-        }),
-      ),
+      Effect.tapError(() => failed({ strategy: attempt.strategy, reason: "suspended" })),
     );
     return user;
   });
@@ -200,5 +217,5 @@ export const makeSteps = Effect.gen(function* () {
     return issued;
   });
 
-  return { gate, clear, resume, mint, announce };
+  return { gate, clear, resume, mint, announce, failed };
 });

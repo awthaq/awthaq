@@ -32,7 +32,13 @@ import { SignInContinuationRegistry } from "./SignInContinuationRegistry.ts";
 import type { ContinuationContext } from "./SignInContinuationRegistry.ts";
 import type * as Users from "./Users.ts";
 
-export type { Attempt, Clearance, IssuedSession, SessionRequest } from "./internal/signInSteps.ts";
+export type {
+  Attempt,
+  Clearance,
+  Failure,
+  IssuedSession,
+  SessionRequest,
+} from "./internal/signInSteps.ts";
 export { UserGone } from "./internal/signInSteps.ts";
 // The registry class and the three hook points `make` requires ride this namespace so a plugin whose
 // inferred layer type mentions them can name them through the `SignIn` import it already has (TS2883).
@@ -68,6 +74,11 @@ export interface SignInShape {
     attempt: Steps.Attempt,
     request?: Steps.SessionRequest,
   ) => Effect.Effect<Steps.IssuedSession, ClearError>;
+  /**
+   * ALF-003/CSD-004: the one publisher of `auth.user.signInFailed` (ADR-EA-047). `clientIp` is the request's address,
+   * read from `Api.AuthRequestContext`; a plugin passes only the strategy, the reason and an optional digest.
+   */
+  readonly failed: (failure: Steps.Failure) => Effect.Effect<void>;
 }
 
 /** Resolves the core services once, at plugin build; the returned closures carry no further requirements. */
@@ -76,7 +87,13 @@ export const make = Effect.map(Steps.makeSteps, (steps) => {
     Effect.flatMap(steps.mint(cleared, request), (issued) => steps.announce(cleared, issued));
   const complete: SignInShape["complete"] = (attempt, request) =>
     Effect.flatMap(steps.clear(attempt), (cleared) => issue(cleared, request));
-  return { clear: steps.clear, resume: steps.resume, issue, complete } satisfies SignInShape;
+  return {
+    clear: steps.clear,
+    resume: steps.resume,
+    issue,
+    complete,
+    failed: steps.failed,
+  } satisfies SignInShape;
 });
 
 /**

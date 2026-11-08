@@ -338,7 +338,15 @@ export const budget = <Limits extends Table>(
     const limiter = yield* RateLimiter.RateLimiter;
     const events = yield* AuthEvents.AuthEvents;
     const table: Table = owner.rateLimitRules ?? {};
-    const context = { email: options.emailKey ?? Key.emailKey };
+    const email = options.emailKey ?? Key.emailKey;
+    // ADR-EA-047: each call's keys read the request context it runs in (an ip rule keys on its address).
+    const keyContext = Effect.map(
+      Effect.serviceOption(Api.AuthRequestContext),
+      (request): Key.KeyContext => ({
+        email,
+        request: Option.getOrElse(request, () => Api.AuthRequestContext.noRequest),
+      }),
+    );
     const tuneNow: Effect.Effect<RateLimitModel.ErasedTuning> =
       options.tune ?? Effect.succeed(noTuning);
     const builtOverrides = yield* RateLimitOverrides;
@@ -403,7 +411,7 @@ export const budget = <Limits extends Table>(
       );
 
     const spendOne = (name: string, input: unknown, spendOptions?: RateLimitModel.SpendOptions) =>
-      Effect.flatMap(now(name), ({ rule, sizing, bucket }) =>
+      Effect.flatMap(Effect.all([now(name), keyContext]), ([{ rule, sizing, bucket }, context]) =>
         refused(
           limiter.consume({ key: rule.keyOf(bucket, input, context), ...sizing }),
           name,
@@ -419,7 +427,7 @@ export const budget = <Limits extends Table>(
           { discard: true },
         ),
       guard: (name, input, spendOptions) =>
-        Effect.flatMap(now(name), ({ rule, sizing, bucket }) =>
+        Effect.flatMap(Effect.all([now(name), keyContext]), ([{ rule, sizing, bucket }, context]) =>
           refused(
             limiter.check({ key: rule.keyOf(bucket, input, context), ...sizing }),
             name,
@@ -428,7 +436,7 @@ export const budget = <Limits extends Table>(
           ),
         ),
       charge: (name, input) =>
-        Effect.flatMap(now(name), ({ rule, sizing, bucket }) =>
+        Effect.flatMap(Effect.all([now(name), keyContext]), ([{ rule, sizing, bucket }, context]) =>
           limiter
             .consume({ key: rule.keyOf(bucket, input, context), ...sizing })
             .pipe(Effect.ignore),
@@ -472,7 +480,7 @@ export const budgetOf = <Limits extends Table>(owner: Owner<Limits>) =>
 export const bucketKey = <I>(
   rule: RateLimitModel.Rule<string, I, RateLimitModel.Mode> & { readonly bucket: string },
   input: NoInfer<I>,
-  context: Key.KeyContext = { email: Key.emailKey },
+  context: Key.KeyContext = { email: Key.emailKey, request: Api.AuthRequestContext.noRequest },
 ) => rule.keyOf(rule.bucket, input, context);
 
 /** A hand-built owner (core's own account group, tests, BDD): groups confined to `contract`'s at compile time. */

@@ -1694,3 +1694,57 @@ describe("Sessions: an unreadable sealed ipAddress/userAgent", () => {
     },
   );
 });
+
+// ADR-EA-047 (plan 26 ticket 09): a session records the facts of the request that minted it, read from
+// `Api.AuthRequestContext`; work that answers no request records none; the user agent is stored capped.
+describe("Sessions.issue and the request context (ADR-EA-047)", () => {
+  const inRequest = (ip: string | undefined, userAgent: string | undefined) =>
+    Effect.provideService(
+      Api.AuthRequestContext,
+      Api.AuthRequestContext.request({ correlationId: "c", ip, userAgent }),
+    );
+
+  it.effect("records the request context's address and user agent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions.issue({ userId }).pipe(inRequest("203.0.113.7", "Agent/1.0"));
+      assert.deepStrictEqual(issued.session.ipAddress, Option.some("203.0.113.7"));
+      assert.deepStrictEqual(issued.session.userAgent, Option.some("Agent/1.0"));
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+
+  it.effect("NoRequest records no address and no user agent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions
+        .issue({ userId })
+        .pipe(Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest));
+      assert.isTrue(Option.isNone(issued.session.ipAddress));
+      assert.isTrue(Option.isNone(issued.session.userAgent));
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+
+  it.effect("a 600-character user agent is stored as 512", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions.issue({ userId }).pipe(inRequest(undefined, "u".repeat(600)));
+      const verified = yield* sessions.verify(issued.token);
+      assert.strictEqual(
+        Option.getOrUndefined(verified.session.userAgent)?.length,
+        Api.MAX_USER_AGENT_LENGTH,
+      );
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+
+  // Transitional (plan 26 phases 3–4): removed with the `request` argument in phase 5.
+  it.effect("an explicit request field still wins over the context, per field", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions
+        .issue({ userId, request: { userAgent: "explicit/1" } })
+        .pipe(inRequest("203.0.113.8", "ambient/1"));
+      assert.deepStrictEqual(issued.session.ipAddress, Option.some("203.0.113.8"));
+      assert.deepStrictEqual(issued.session.userAgent, Option.some("explicit/1"));
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+});

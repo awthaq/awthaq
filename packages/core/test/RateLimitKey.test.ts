@@ -1,11 +1,16 @@
 // spec/behaviors/14-rate-limiting.md, BEH-EA-108 — the key strategies and the one email normaliser
 // (`RateLimits.Key`), plan 06 §5.1.
+import { Api } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 import * as RateLimits from "../src/RateLimits.ts";
 
 const Key = RateLimits.Key;
-const context = { email: Key.emailKey };
+const context = { email: Key.emailKey, request: Api.AuthRequestContext.noRequest };
+const inRequest = (ip?: string) => ({
+  email: Key.emailKey,
+  request: Api.AuthRequestContext.request({ correlationId: "c", ip }),
+});
 
 describe("Key.emailKey (TMS-006)", () => {
   it("trims, lower-cases and strips a +tag from the local part", () => {
@@ -20,11 +25,20 @@ describe("Key.emailKey (TMS-006)", () => {
   });
 });
 
-describe("Key.ip", () => {
+describe("Key.ip (ADR-EA-047)", () => {
+  it("keys on the request context's address", () => {
+    assert.strictEqual(Key.ip.part({}, inRequest("203.0.113.7")), "ip:203.0.113.7");
+  });
+
   it("an unresolved address falls into one shared unknown bucket", () => {
+    assert.strictEqual(Key.ip.part({}, inRequest()), "ip:unknown");
     assert.strictEqual(Key.ip.part({}, context), "ip:unknown");
     assert.strictEqual(Key.ip.part({ ip: undefined }, context), "ip:unknown");
-    assert.strictEqual(Key.ip.part({ ip: "1.2.3.4" }, context), "ip:1.2.3.4");
+  });
+
+  // Transitional (plan 26 phases 3–4): removed with the `ip` input field in phase 5.
+  it("an explicit ip still wins", () => {
+    assert.strictEqual(Key.ip.part({ ip: "1.2.3.4" }, inRequest("203.0.113.7")), "ip:1.2.3.4");
   });
 });
 
