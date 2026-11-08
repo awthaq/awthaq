@@ -1469,3 +1469,32 @@ populator (Phase 2) can stay.
 
 ## Decisions taken (implementation record)
 
+### Implementation (2026-11-08, `main` @ `e8540343`, effect 4.1.2)
+
+Every open question took the plan's recommended default (the user said "take the recommended default"):
+
+1. **Q1, make the request context required through the type:** yes. ADR-EA-047 supersedes plan 01's decision 7.
+2. **Q2, `ClientAddress` required by the populator:** yes; `ClientAddress.layerDirect` restores the socket peer.
+3. **Q3, an ip-keyed rule under `NoRequest`:** (a) not applied; the identity and principal rules still are.
+4. **Q4, which middlewares require the context:** (a) all four authentication middlewares.
+5. **Q5, impersonation sessions record the administrator's request facts:** yes.
+6. **Q6, `auth.user.signInFailed.clientIp`:** (a) kept, stamped by `SignIn.failed` from the context.
+7. **Q7, an unresolvable address:** (a) the shared `ip:unknown` bucket stays; the web-handler caveat is documented.
+8. **Q8, a composed group without `Api.RequestContext`:** (a) `awthaq doctor` warns.
+9. **Q9, correlation for host routes outside awthaq's contracts:** (a) accepted; `RequestContext.capture` or a
+   declared `Api.RequestContext` on the host's own group.
+
+Numbers: ADR-EA-047; new REQ-EA ids start at 1400 (plan 25 runs in parallel from 1500). BEH-EA-345 is plan 27's.
+
+What was stale when work started (the plan's §2.8 "dp2" column is the shipped tree, plus batch-2 plans 15, 20, 21):
+
+- **Plan 15 landed:** `AuthHost.layer` installs `RequestContext.layer` by default (`requestContext: false` turns it
+  off, and `TestAuth` turns it off) and builds `middlewareFor`. Phase 2 removes the dial with the global middleware.
+- **Plan 21 landed:** the five `SessionLifecycle` markers sit in the `HostMiddleware` table and on the session-changing
+  endpoints; `Api.RequestContext` is declared after them, outermost.
+- **Plan 20 landed:** `UserAgent` is `@awthaq/web`'s in-process client, so the header brand is `Api.UserAgentHeader`.
+- **Counts** (`.scratch/26-request-context/baseline.md`): 31 resolutions (24 helper calls of plan 11's
+  `ClientAddress.facts`/`address` plus 7 raw), 33 `readonly ip?`, 28 ip-keyed rules, 4 explicit core request arguments
+  (`VerificationLink`'s `presented.ip` included), 82 + 51 sweep files.
+- **Ticket 02's spike** was not written as local declarations first: the type tests were written against the real
+  classes in the ticket that introduces each one (04, 06, 08, 23).
