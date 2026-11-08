@@ -7,7 +7,9 @@
 // against them in `@awthaq/server`'s Authentication.ts/Csrf.ts, which
 // depends on `@awthaq/core`; this package deliberately does not.
 
+import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import * as HttpApiSecurity from "effect/http-api/HttpApiSecurity";
@@ -81,6 +83,70 @@ export const anonymousPrincipal = new AnonymousPrincipal({
 export class CurrentPrincipal extends Context.Service<CurrentPrincipal, Principal>()(
   "awthaq/api/CurrentPrincipal",
 ) {}
+
+/** CSD-003: `User-Agent` is a header the client controls; it is capped once, where it is captured (ADR-EA-047). */
+export const MAX_USER_AGENT_LENGTH = 512;
+
+/**
+ * A `User-Agent` value of at most `MAX_USER_AGENT_LENGTH` characters. Only `toUserAgentHeader` makes one, so the
+ * session row, the event envelope, the audit row and the webhook payload carry the same capped value. Named
+ * `UserAgentHeader` so "user agent" stays the name of `@awthaq/web`'s in-process client (batch-2 plan 20).
+ */
+export type UserAgentHeader = string & Brand.Brand<"awthaq/UserAgentHeader">;
+const brandUserAgentHeader = Brand.nominal<UserAgentHeader>();
+export const toUserAgentHeader = (raw: string) =>
+  brandUserAgentHeader(raw.slice(0, MAX_USER_AGENT_LENGTH));
+
+/** The HTTP request a piece of work answers, captured once by `@awthaq/server`'s `RequestContext` (ALF-006, CSD-003). */
+export interface RequestFacts {
+  readonly _tag: "Request";
+  /** A sane `x-request-id`, else the `traceparent` trace id, else a fresh uuidv7. */
+  readonly correlationId: string;
+  /** What the `ClientAddress` port resolved; `None` when the platform reports no peer (a web handler under `layerDirect`). */
+  readonly ip: Option.Option<string>;
+  readonly userAgent: Option.Option<UserAgentHeader>;
+}
+
+/** Work that answers no HTTP request: a CLI command, a job, a test. Stated by the caller, never defaulted. */
+export interface NoRequest {
+  readonly _tag: "NoRequest";
+}
+
+/**
+ * ADR-EA-047: the one source of request facts. A required service with no default: a session-minting,
+ * address-keyed or sign-in operation names it in `R`, so serving one without the `RequestContext` middleware, or
+ * calling one in-process without stating `noRequest`, does not compile. Events and audit rows read it optionally.
+ */
+export class AuthRequestContext extends Context.Service<
+  AuthRequestContext,
+  RequestFacts | NoRequest
+>()("awthaq/api/AuthRequestContext") {
+  static readonly noRequest: NoRequest = { _tag: "NoRequest" };
+  static readonly request = (input: {
+    readonly correlationId: string;
+    readonly ip?: string | undefined;
+    readonly userAgent?: string | undefined;
+  }): RequestFacts => ({
+    _tag: "Request",
+    correlationId: input.correlationId,
+    ip: Option.fromUndefinedOr(input.ip),
+    userAgent: Option.map(Option.fromUndefinedOr(input.userAgent), toUserAgentHeader),
+  });
+}
+
+/** Narrows a request context to the facts of a request (never a cast). */
+export const isRequest = (context: RequestFacts | NoRequest): context is RequestFacts =>
+  context._tag === "Request";
+
+/**
+ * ADR-EA-047: declared last (outermost) on every awthaq group. `@awthaq/server`'s `RequestContextLive` captures the
+ * request once and provides its facts. No `security`, no `error` and not `requiredForClient`, so it adds nothing to
+ * the OpenAPI document or to a derived client.
+ */
+export class RequestContext extends HttpApiMiddleware.Service<
+  RequestContext,
+  { provides: AuthRequestContext }
+>()("RequestContext") {}
 
 /** BEH-EA-027/067: no scheme resolved a live session. */
 export class Unauthenticated extends Schema.TaggedError<Unauthenticated>()(

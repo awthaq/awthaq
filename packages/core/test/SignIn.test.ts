@@ -16,7 +16,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
-import * as AuthRequestContext from "../src/AuthRequestContext.ts";
+import { Api } from "@awthaq/api";
 import * as Errors from "../src/Errors.ts";
 import * as Phone from "../src/Phone.ts";
 import * as HookPoint from "../src/HookPoint.ts";
@@ -173,10 +173,10 @@ describe("SignIn.clear", () => {
         const error = yield* signIn
           .clear({ userId: user.id, strategy: "passkey", amr: ["hwk"] })
           .pipe(
-            Effect.provideService(AuthRequestContext.AuthRequestContext, {
-              ...AuthRequestContext.none,
-              ip: Option.some("203.0.113.9"),
-            }),
+            Effect.provideService(
+              Api.AuthRequestContext,
+              Api.AuthRequestContext.request({ correlationId: "c", ip: "203.0.113.9" }),
+            ),
             Effect.flip,
           );
         assert.strictEqual(error._tag, "UserSuspended");
@@ -377,20 +377,26 @@ describe("SignIn.issue", () => {
         assert.isTrue(Option.isNone(bare.session.ipAddress));
         assert.isTrue(Option.isNone(bare.session.userAgent));
         const ambient = yield* signIn.issue(cleared).pipe(
-          Effect.provideService(AuthRequestContext.AuthRequestContext, {
-            ...AuthRequestContext.none,
-            ip: Option.some("198.51.100.1"),
-            userAgent: Option.some("ctx-agent"),
-          }),
+          Effect.provideService(
+            Api.AuthRequestContext,
+            Api.AuthRequestContext.request({
+              correlationId: "c",
+              ip: "198.51.100.1",
+              userAgent: "ctx-agent",
+            }),
+          ),
         );
         assert.deepStrictEqual(Option.getOrUndefined(ambient.session.ipAddress), "198.51.100.1");
         assert.deepStrictEqual(Option.getOrUndefined(ambient.session.userAgent), "ctx-agent");
         const mixed = yield* signIn.issue(cleared, { userAgent: "explicit-agent" }).pipe(
-          Effect.provideService(AuthRequestContext.AuthRequestContext, {
-            ...AuthRequestContext.none,
-            ip: Option.some("198.51.100.1"),
-            userAgent: Option.some("ctx-agent"),
-          }),
+          Effect.provideService(
+            Api.AuthRequestContext,
+            Api.AuthRequestContext.request({
+              correlationId: "c",
+              ip: "198.51.100.1",
+              userAgent: "ctx-agent",
+            }),
+          ),
         );
         assert.deepStrictEqual(Option.getOrUndefined(mixed.session.ipAddress), "198.51.100.1");
         assert.deepStrictEqual(Option.getOrUndefined(mixed.session.userAgent), "explicit-agent");

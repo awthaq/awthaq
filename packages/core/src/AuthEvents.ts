@@ -47,7 +47,7 @@ import {
   isAttemptEvent,
   type Published,
 } from "./AuthEventSchemas.ts";
-import { AuthRequestContext } from "./AuthRequestContext.ts";
+import { Api } from "@awthaq/api";
 import * as Observability from "./Observability.ts";
 import { TenantContext } from "./Tenant.ts";
 
@@ -210,7 +210,11 @@ export const layer = Layer.effect(
 
     const deliver = (event: AuthEvent, parent: Option.Option<Tracer.Span>) =>
       Effect.gen(function* () {
-        const request = yield* AuthRequestContext;
+        // ADR-EA-047: an optional read. Events are enrichment, so a job or the relay publishes with no request.
+        const request = Option.filter(
+          yield* Effect.serviceOption(Api.AuthRequestContext),
+          Api.isRequest,
+        );
         const tenantId = yield* TenantContext;
         const eventId = yield* nextEventId;
         const occurredAt = yield* DateTime.now;
@@ -218,11 +222,11 @@ export const layer = Layer.effect(
           ...event,
           eventId,
           occurredAt,
-          correlationId: request.correlationId,
+          correlationId: Option.map(request, (facts) => facts.correlationId),
           traceId: Option.map(parent, (span) => span.traceId),
           spanId: Option.map(parent, (span) => span.spanId),
-          ip: request.ip,
-          userAgent: request.userAgent,
+          ip: Option.flatMap(request, (facts) => facts.ip),
+          userAgent: Option.flatMap(request, (facts) => facts.userAgent),
           tenantId,
         };
         const record = auditLog

@@ -58,7 +58,7 @@
 // value that originates in third-party tap code.
 
 import { Defects, SqlTransaction } from "@awthaq/ports";
-import { AuthRequestContext } from "./AuthRequestContext.ts";
+import { Api } from "@awthaq/api";
 import { TenantContext } from "./Tenant.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -546,12 +546,14 @@ export const observe =
         const run: ObserveShape<Input>["run"] = (value) =>
           Effect.gen(function* () {
             const tenantId = yield* TenantContext;
-            const request = yield* AuthRequestContext;
+            const request = yield* Effect.serviceOption(Api.AuthRequestContext);
+            const deferred = dispatch(value).pipe(Effect.provideService(TenantContext, tenantId));
             yield* SqlTransaction.onCommit(
-              dispatch(value).pipe(
-                Effect.provideService(TenantContext, tenantId),
-                Effect.provideService(AuthRequestContext, request),
-              ),
+              Option.match(request, {
+                onNone: () => deferred,
+                onSome: (context) =>
+                  Effect.provideService(deferred, Api.AuthRequestContext, context),
+              }),
             );
           });
         return serviceKey.of({

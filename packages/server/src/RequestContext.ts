@@ -14,7 +14,8 @@
 // load balancer); without that port it is the socket peer. Nothing else about the
 // request — no header, cookie or body — is captured.
 
-import { AuthRequestContext, Observability } from "@awthaq/core";
+import { Api } from "@awthaq/api";
+import { Observability } from "@awthaq/core";
 import { ClientAddress } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -79,11 +80,14 @@ const middleware = HttpRouter.middleware(
           onSome: (port) => port.resolve(request),
         });
         return yield* app.pipe(
-          Effect.provideService(AuthRequestContext.AuthRequestContext, {
-            correlationId: Option.some(correlationId),
-            ip,
-            userAgent: Option.fromNullishOr(header("user-agent")),
-          }),
+          Effect.provideService(
+            Api.AuthRequestContext,
+            Api.AuthRequestContext.request({
+              correlationId,
+              ip: Option.getOrUndefined(ip),
+              userAgent: header("user-agent"),
+            }),
+          ),
           Effect.annotateLogs(Observability.Field.correlationId, correlationId),
         );
       });

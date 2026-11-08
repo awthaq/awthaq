@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Defects } from "@awthaq/ports";
 import { AuthEvents } from "../AuthEvents.ts";
-import { AuthRequestContext } from "../AuthRequestContext.ts";
+import { Api } from "@awthaq/api";
 import * as HookPoint from "../HookPoint.ts";
 import * as Hooks from "../Hooks.ts";
 import type * as Sessions from "../Sessions.ts";
@@ -49,7 +49,7 @@ export class UserGone extends Data.TaggedError("SignIn/UserGone")<{
   readonly userId: Users.UserId;
 }> {}
 
-/** Explicit request facts; each field falls back to `AuthRequestContext` when omitted. */
+/** Explicit request facts; each field falls back to `Api.AuthRequestContext` when omitted. */
 export interface SessionRequest {
   readonly ip?: string | undefined;
   readonly userAgent?: string | undefined;
@@ -84,12 +84,15 @@ export const makeSteps = Effect.gen(function* () {
     yield* Users.assertCanSignIn(user).pipe(
       Effect.tapError(() =>
         Effect.gen(function* () {
-          const request = yield* AuthRequestContext;
+          const ip = Option.flatMap(
+            Option.filter(yield* Effect.serviceOption(Api.AuthRequestContext), Api.isRequest),
+            (facts) => facts.ip,
+          );
           yield* events.publish({
             _tag: "auth.user.signInFailed",
             strategy: attempt.strategy,
             reason: "suspended",
-            ...(Option.isSome(request.ip) ? { clientIp: request.ip.value } : {}),
+            ...(Option.isSome(ip) ? { clientIp: ip.value } : {}),
           });
         }),
       ),
@@ -143,9 +146,14 @@ export const makeSteps = Effect.gen(function* () {
   /** Inside or outside a transaction: the row only (plus the core-owned `auth.session.issued`). */
   const mint = (cleared: Clearance, request: SessionRequest | undefined) =>
     Effect.gen(function* () {
-      const context = yield* AuthRequestContext;
-      const ip = request?.ip ?? Option.getOrUndefined(context.ip);
-      const userAgent = request?.userAgent ?? Option.getOrUndefined(context.userAgent);
+      const context = Option.filter(
+        yield* Effect.serviceOption(Api.AuthRequestContext),
+        Api.isRequest,
+      );
+      const ip = request?.ip ?? Option.getOrUndefined(Option.flatMap(context, (facts) => facts.ip));
+      const userAgent =
+        request?.userAgent ??
+        Option.getOrUndefined(Option.flatMap(context, (facts) => facts.userAgent));
       const issue = sessions.issue({
         userId: cleared.user.id,
         request: {
