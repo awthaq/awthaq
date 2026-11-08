@@ -66,14 +66,12 @@ suites=(
   packages/jwt/test/KeyRing.test.ts
   packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
-  packages/organization/test/ActiveContextRecords.test.ts
   packages/organization/test/ConnectionRecords.test.ts
-  packages/organization/test/DomainClaims.test.ts
-  packages/organization/test/InvitationRecords.test.ts
-  packages/organization/test/MembershipRecords.test.ts
   packages/organization/test/OrganizationMembers.test.ts
-  packages/organization/test/OrgRoleRecords.test.ts
-  packages/organization/test/OrganizationRecords.test.ts
+  packages/organization/test/OrganizationDirectory.test.ts
+  packages/organization/test/OrganizationInvitations.test.ts
+  packages/organization/test/OrganizationRoles.test.ts
+  packages/organization/test/OrganizationTeams.test.ts
   packages/organization/test/OrganizationSql.test.ts
   packages/organization/test/TeamRecords.test.ts
   packages/organization/test/TenantMiddleware.test.ts

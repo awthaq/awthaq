@@ -12,7 +12,7 @@
 // long-lived decision cache never keeps answering for a suspended organization (BEH-EA-237).
 
 import { AuthEvents, Errors, HookPoint, Users } from "@awthaq/core";
-import { Defects, SqlTransaction, Tenant } from "@awthaq/ports";
+import { SqlTransaction, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -319,11 +319,9 @@ export class OrganizationDirectory extends Context.Service<
           const record = yield* orgs
             .update(organizationId, { ...changes, name: vetoed.name, slug: vetoed.slug })
             .pipe(
+              // A concurrent deletion won: the sequential answer, not a defect (plan 25, F9).
               Effect.catchTag("OrganizationRecordNotFound", () =>
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: organization vanished between check and write",
-                ),
+                Effect.fail(new OrganizationErrors.OrganizationNotFound()),
               ),
               Effect.catchTag("OrganizationRecordSlugTaken", () =>
                 Effect.fail(new OrganizationErrors.OrganizationSlugTaken()),
@@ -365,16 +363,12 @@ export class OrganizationDirectory extends Context.Service<
                 for (const contribution of contributions) {
                   yield* contribution.handler.inTransaction(organizationId);
                 }
-                yield* orgs
-                  .delete(organizationId)
-                  .pipe(
-                    Effect.catchTag("OrganizationRecordNotFound", () =>
-                      Defects.invariantViolation(
-                        "RowVanished",
-                        "awthaq: organization vanished between check and write",
-                      ),
-                    ),
-                  );
+                yield* orgs.delete(organizationId).pipe(
+                  // A concurrent deletion won: the sequential answer, not a defect (plan 25, F9).
+                  Effect.catchTag("OrganizationRecordNotFound", () =>
+                    Effect.fail(new OrganizationErrors.OrganizationNotFound()),
+                  ),
+                );
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));

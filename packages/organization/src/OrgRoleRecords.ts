@@ -9,7 +9,7 @@
 // permission directly into `PermissionEngine.statementsByRoleFrom`'s
 // `dynamicStatements` argument with no reshaping.
 
-import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
+import { Models as SqlModels, SqlStore, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
@@ -43,12 +43,28 @@ export class OrgRoleRecordNotFound extends Data.TaggedError("OrgRoleRecordNotFou
   readonly id: string;
 }> {}
 
+/** `create`'s `within`: the organization already has that many custom roles (`maximumRolesPerOrganization`). */
+export class OrgRoleRecordLimitReached extends Data.TaggedError("OrgRoleRecords/LimitReached")<{
+  readonly organizationId: string;
+  readonly limit: number;
+}> {}
+
 export interface OrgRoleRecordsShape {
-  readonly create: (input: {
-    readonly organizationId: string;
-    readonly role: string;
-    readonly permission: PermissionEngine.Statements;
-  }) => Effect.Effect<OrgRoleRecord, OrgRoleRecordNameTaken | StoreFailure.StoreUnavailable>;
+  /**
+   * Atomic (plan 25): with `within`, refuses with `OrgRoleRecordLimitReached` when the organization already has
+   * that many roles; the count and the insert are one step (SQL: under the organization's role lock).
+   */
+  readonly create: (
+    input: {
+      readonly organizationId: string;
+      readonly role: string;
+      readonly permission: PermissionEngine.Statements;
+    },
+    options?: { readonly within?: number | undefined },
+  ) => Effect.Effect<
+    OrgRoleRecord,
+    OrgRoleRecordNameTaken | OrgRoleRecordLimitReached | StoreFailure.StoreUnavailable
+  >;
   /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findById: (
     organizationId: string,
@@ -98,14 +114,36 @@ export const layerMemory = Layer.effect(
         (row) => row.organizationId === organizationId && row.role === role,
       );
 
-    const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+    const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input, options) {
+      const within = options?.within;
       const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const outcome = yield* Ref.modify(
         state,
-        (s): readonly [Result.Result<OrgRoleRecord, OrgRoleRecordNameTaken>, State] => {
+        (
+          s,
+        ): readonly [
+          Result.Result<OrgRoleRecord, OrgRoleRecordNameTaken | OrgRoleRecordLimitReached>,
+          State,
+        ] => {
           if (nameCollision(s, input.organizationId, input.role)) {
-            return [Result.fail(nameTaken(input.organizationId, input.role)), s] as const;
+            return [Result.fail(nameTaken(input.organizationId, input.role)), s];
+          }
+          if (
+            within !== undefined &&
+            Array.from(HashMap.values(s)).filter(
+              (row) => row.organizationId === input.organizationId,
+            ).length >= within
+          ) {
+            return [
+              Result.fail(
+                new OrgRoleRecordLimitReached({
+                  organizationId: input.organizationId,
+                  limit: within,
+                }),
+              ),
+              s,
+            ];
           }
           const record: OrgRoleRecord = {
             id,
@@ -115,7 +153,7 @@ export const layerMemory = Layer.effect(
             createdAt: now,
             updatedAt: now,
           };
-          return [Result.succeed(record), HashMap.set(s, id, record)] as const;
+          return [Result.succeed(record), HashMap.set(s, id, record)];
         },
       );
       return yield* Effect.fromResult(outcome);
@@ -283,17 +321,39 @@ export const layerSql = Layer.effect(
         sql`DELETE FROM organization_role WHERE id = ${r.id} AND "organizationId" = ${r.organizationId} RETURNING *`,
     });
 
-    const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+    const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input, options) {
+      const within = options?.within;
       const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
-      const row = yield* insert({
+      const write = insert({
         id,
         organizationId: input.organizationId,
         role: input.role,
         permission: JSON.stringify(input.permission),
         createdAt: now,
         updatedAt: now,
-      }).pipe(
+      });
+      // Plan 25: the organization's role count under its lock, in the transaction that inserts.
+      const guarded =
+        within === undefined
+          ? write
+          : SqlStore.atomically(
+              sql,
+              `organization_role:org:${input.organizationId}`,
+            )(
+              Effect.gen(function* () {
+                if ((yield* countByOrganizationQuery(input.organizationId)).count >= within) {
+                  return yield* Effect.fail(
+                    new OrgRoleRecordLimitReached({
+                      organizationId: input.organizationId,
+                      limit: within,
+                    }),
+                  );
+                }
+                return yield* write;
+              }),
+            );
+      const row = yield* guarded.pipe(
         StoreFailure.orConflict("OrgRoleRecords.create", () =>
           nameTaken(input.organizationId, input.role),
         ),

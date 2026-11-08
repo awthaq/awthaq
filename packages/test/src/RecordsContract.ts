@@ -199,6 +199,8 @@ export interface RunConfig<P> {
   /** Another adapter of some of the stores (passkey's `ChallengeStore.layerCookie`), run on the suites of the keys it provides. */
   readonly adapters?: ReadonlyArray<{
     readonly name: string;
+    /** The `/records/` keys whose suites run on it (it provides those stores, over `recordsFoundation`). */
+    readonly stores: ReadonlyArray<string>;
     readonly layer: Layer.Layer<never, unknown, unknown>;
   }>;
 }
@@ -315,11 +317,13 @@ export const run = <P extends AuthPlugin.Any>(
       }> = [
         { mode: "memory", layer: () => bundle("memory", key), sql: false },
         { mode: "sql", layer: () => bundle("sql", key), sql: true },
-        ...(config.adapters ?? []).map((adapter) => ({
-          mode: adapter.name,
-          layer: () => adapter.layer.pipe(Layer.provideMerge(recordsFoundation)),
-          sql: false,
-        })),
+        ...(config.adapters ?? [])
+          .filter((adapter) => adapter.stores.includes(key))
+          .map((adapter) => ({
+            mode: adapter.name,
+            layer: () => adapter.layer.pipe(Layer.provideMerge(recordsFoundation)),
+            sql: false,
+          })),
       ];
       for (const { mode, layer, sql } of modes) {
         const cases = [
