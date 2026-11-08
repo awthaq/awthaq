@@ -186,3 +186,7 @@ entries:
     file: "047-request-facts-from-auth-request-context.md"
     title: "Request Facts Are Read From AuthRequestContext"
     status: "Accepted — implemented"
+  - id: "ADR-EA-048"
+    file: "048-password-credential-module.md"
+    title: "The Password Credential Is One Module of `@awthaq/password`, Under One Policy"
+    status: "Accepted — implemented"
