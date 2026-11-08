@@ -311,5 +311,10 @@ export const activeContextRecords = RecordsContract.suite<
       ],
     },
   },
-  tenancy: { covers: ["organization_active_context"], cases: [isolationCase] },
+  tenancy: {
+    covers: ["organization_active_context"],
+    cases: [isolationCase],
+    // As on main before plan 25: the policy follows `sessions`, a core table this store never writes.
+    withoutRls: "derived from core's sessions table, which the case cannot seed",
+  },
 });

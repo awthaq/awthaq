@@ -344,5 +344,10 @@ export const organizationRecords = RecordsContract.suite(OrganizationRecords.Org
       ],
     },
   },
-  tenancy: { covers: ["organization_org"], cases: [isolationCase] },
+  tenancy: {
+    covers: ["organization_org"],
+    cases: [isolationCase],
+    // As on main before plan 25: the table is keyed by its own id, so no row's tenant is tenant B.
+    withoutRls: "keyed by its own id; no organization's id is the ambient tenant",
+  },
 });

@@ -123,6 +123,12 @@ export const suite = <Id, Shape, RowId = never, R = never>(
       /** The declared tables this store owns (each needs a case unless Global). */
       readonly covers: ReadonlyArray<string>;
       readonly cases: ReadonlyArray<TenantConformance.TableCase<Shape, RowId, Id | Base | R>>;
+      /**
+       * Why the Postgres RLS backstop cannot be probed for these tables, when it cannot: it confines by
+       * the ambient tenant, so a table whose tenant is the row's own id, or a row of another plugin's
+       * table, never holds a row the case's `insert` can file under tenant B. Shown as a passing test.
+       */
+      readonly withoutRls?: string;
     };
   },
 ): Suite<Id> => {
@@ -161,14 +167,21 @@ export const suite = <Id, Shape, RowId = never, R = never>(
     ...(tenancy === undefined
       ? {}
       : {
-          tenancy: (framework, plugin, adapters, rls) =>
+          tenancy: (framework, plugin, adapters, rls) => {
+            const withoutRls = tenancy.withoutRls;
             TenantConformance.runTenantIsolationWith(framework, {
               plugin,
               adapters,
               cases: tenancy.cases,
               covers: tenancy.covers,
-              rls: { run: rls },
-            }),
+              ...(withoutRls === undefined ? { rls: { run: rls } } : {}),
+            });
+            if (withoutRls !== undefined) {
+              for (const table of tenancy.covers) {
+                framework.it(`rls / ${table} is not probed: ${withoutRls}`, () => {});
+              }
+            }
+          },
         }),
   };
 };
