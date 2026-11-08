@@ -6,7 +6,7 @@ See [`spec/models/13-device-authorization.md`](../../spec/models/13-device-autho
 
 ## Composition
 
-`DeviceAuthorization` has no plugin dependency: it uses core's `Users`, `Sessions`, `AuthEvents`, the hook points and the erasure and export registries, and the ports `RateLimiter` and `ClientAddress`. It requires `DeviceGrantRecords` and `DeviceClientRecords` (`layerMemory`, or `layerSql` migrated with `DeviceAuthorization.migrations`), `RateLimits`, the effect crypto services (`SecureRandom`, `Digest`, `Mac`), and the plugin's own hook points. The application provides them.
+`DeviceAuthorization` has no plugin dependency: it uses core's `Users`, `Sessions`, `AuthEvents`, the hook points and the erasure and export registries, and the port `RateLimiter` (its per-source rules key on the request context's address, ADR-EA-047). It requires `DeviceGrantRecords` and `DeviceClientRecords` (`layerMemory`, or `layerSql` migrated with `DeviceAuthorization.migrations`), `RateLimits`, the effect crypto services (`SecureRandom`, `Digest`, `Mac`), and the plugin's own hook points. The application provides them.
 
 ```ts
 import { Auth } from "@awthaq/core";

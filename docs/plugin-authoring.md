@@ -24,7 +24,7 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 
 - Endpoint errors are `Schema.TaggedError`s with an `httpApiStatus`; anything a client should match on is one of them. Do not make a client parse a message.
 - Wire DTOs are plain strings and numbers (`createdAt` is an ISO string), never a domain object.
-- Behind a session, declare `.middleware(Api.Authentication)` on the group, then `.middleware(Api.CsrfProtection)` last. The last-declared middleware runs first, so a forged request is rejected before any credential work.
+- Behind a session, declare `.middleware(Api.Authentication)` on the group, then `.middleware(Api.CsrfProtection)`, then `.middleware(Api.RequestContext)` last on every group (ADR-EA-047). The last-declared middleware runs first: the request context is captured, then a forged request is rejected before any credential work. `runPluginContractTests` checks that every endpoint of your contract declares `Api.RequestContext` last.
 - A veto hook can abort an endpoint, so list `HookPoint.HookAborted` in that endpoint's `error` array.
 - A records module never turns a database failure into a defect. Pipe each method through `StoreFailure.orStoreUnavailable("<Records>.<method>")` (or `Effect.catchTag("SqlError", StoreFailure.storeUnavailable(op))` beside a domain outcome of its own, and `StoreFailure.orConflict` for a unique violation) so it fails with the typed `StoreUnavailable`, and list `Api.StoreUnavailable` in the `error` array of any endpoint outside `Api.Authentication`'s own list (a public group). A `SchemaError`, and a statement the database refused as malformed or unauthorised, stay defects (ADR-EA-028).
 - Non-members and unknown resources must be indistinguishable: answer `404` for both, and reserve `403` for a caller who is a member but lacks the permission (BEH-EA-147).
@@ -87,7 +87,7 @@ Two facts about a plugin are read by tooling without building its layer, so the 
   yield* limits.charge("lockout", { userId });          // ...and charge only the failures
   ```
 
-  - `group` is confined to your contract's groups at compile time (BEH-EA-107), `spend` accepts only the table's own attempts-rules and `guard`/`charge` only its failure-rules, and each name demands the input its key reads. `RateLimits.Key.*` are the key strategies (`ip`, `email`, `identifier`, `user`, `session`, `client`, `phone`, `custom`); the handler resolves the IP and the principal and passes `{ ip }` or `{ userId }` in, so the bucket never reads the ambient request. `Key.email` normalises with the one shared `Key.emailKey` (trim, lower-case, strip `+tag`), and `Key.custom(dimension, schema, part)` is the explicit opt-in to a key of your own (BEH-EA-108).
+  - `group` is confined to your contract's groups at compile time (BEH-EA-107), `spend` accepts only the table's own attempts-rules and `guard`/`charge` only its failure-rules, and each name demands the input its key reads. `RateLimits.Key.*` are the key strategies (`ip`, `email`, `identifier`, `user`, `session`, `client`, `phone`, `custom`). `Key.ip` reads the request's address from `Api.AuthRequestContext` (ADR-EA-047): pass no address (`limits.spend("xByIp", {})`), and the operation then names `Api.AuthRequestContext` in its requirements. The principal strategies take what the handler passes (`{ userId }`, `{ sessionId }`). `Key.email` normalises with the one shared `Key.emailKey` (trim, lower-case, strip `+tag`), and `Key.custom(dimension, schema, part)` is the explicit opt-in to a key of your own (BEH-EA-108).
   - The static `rateLimits` listing `awthaq plugin list --rules` prints (`Manifest.rateLimits`, with each rule's key strategy and mode) is **derived from that same table**, and `budget` registers it: there is no second list to keep in agreement and no drift test to write. `AuthPlugin.layer` refuses at build a plugin that declares rules but never opens its budget (`RateLimitBudgetNotOpened`), and `budget` takes a narrow owner with no `layer` member, so `RateLimits.budget(Self)` inside `Self`'s own `layer` needs no type annotation.
   - A breach is published (`auth.rateLimit.exceeded`, never carrying the key), logged, counted and answered with `Api.RateLimited` (EOTS-007): declare it in the endpoint's `error` list. Handlers outside `make` and credential contributions read the opened handle with `RateLimits.budgetOf(Self)`; a group-wide rule (`endpoint: "*"`) reports the endpoint you pass in `spend(..., { endpoint })`.
   - Tune in `make` with `budget(Self, { tune })` (an `Effect` of per-rule `{ limit, window, escalation }`, evaluated on every call so a tenant's config in force applies, EP-007). An application tunes or escalates any shipped rule without touching the plugin: `RateLimits.overrides(RateLimits.tune(Password, { signIn: { limit: 3 } }))`.
@@ -101,7 +101,7 @@ A plugin that authenticates callers a session cannot represent (an API key, a se
 Credentials.contribute("apiKey", {                       // or "bearer" for an `Authorization: Bearer` credential
   id: "my-plugin.token",
   claims: (raw) => raw.startsWith("mp_"),                   // a cheap shape check, never a verification
-  resolve: (credential) => /* Effect<Api.Principal, Api.Unauthenticated, HttpServerRequest> */,
+  resolve: (credential) => /* Effect<Api.Principal, Api.Unauthenticated, HttpServerRequest | Api.AuthRequestContext> */,
 });
 ```
 
@@ -197,7 +197,7 @@ Resolve core's modules once, in your plugin's `make`, and let them own the seque
 
 ### Answering the request with the session
 
-A handler behind the user tier (`Api.Authentication`) reads its caller with `CurrentUser.current` (`@awthaq/core`): `const { principal, userId, sessionId } = yield* CurrentUser.current`. It re-brands the principal into the domain and dies with `Defects/InvariantViolation` (`NonUserPrincipal`) if a non-`User` ever reaches the group, so never write that guard yourself. The session a `mint` returns is `Sessions.IssuedSession`, and `ClientAddress.facts(clientAddress, request)` (or `ClientAddress.address` when only the IP is wanted) builds the explicit `ip`/`userAgent` a Shape takes: `const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request)`.
+A handler behind the user tier (`Api.Authentication`) reads its caller with `CurrentUser.current` (`@awthaq/core`): `const { principal, userId, sessionId } = yield* CurrentUser.current`. It re-brands the principal into the domain and dies with `Defects/InvariantViolation` (`NonUserPrincipal`) if a non-`User` ever reaches the group, so never write that guard yourself. The session a `mint` returns is `Sessions.IssuedSession`. A handler never reads the client address or the user agent: see "Request facts" below.
 
 An endpoint whose success changes the caller's session declares it on the contract with one `SessionLifecycle` marker from `@awthaq/api` (ADR-EA-045): `.middleware(SessionLifecycle.Mints)` (sign-in, sign-up, a second factor, a federated callback, a device or native exchange), `Rotates` (the credential is replaced, `changePassword`), `Ends` (the caller's own session ends), `Swaps` (impersonation, cookie only) or `Refreshes` (the session's view or subject changes, the credential does not). `Mints`, `Rotates` and `Swaps` declare `Api.InvalidTokenDelivery` (400) for you, and their server half validates `X-Awthaq-Token-Delivery` before your handler runs, so do not list that error yourself.
 
@@ -222,6 +222,16 @@ Core's own SQL stores have the same one-layer shape (plan 16): each `*StoreSql.l
 - **A bundle that is not only records.** A port, a derived service or a config in a bundle is refused (`a records bundle provides only /records/ stores`). A test-only seam a layer also provides (a `MemoryEnvelopes` tag) is projected out of the bundle: `Layer.effect(Store, Effect.service(Store)).pipe(Layer.provide(layerMemory))`.
 
 A hook point the plugin's layer requires and no one declares (`hookPoints`, or core's own) fails the same way (`declare these hook points`). `AuthHost.layer` provides every declared point once in production, beneath the host's `taps` (so an application tap registers on the instance the plugin runs); `TestAuth.layer` does the same in tests, and `awthaq plugin list` prints them. A store with only derived consumers (a service always built over the plugin's own stores, like `SamlConnectionStore`) is absorbed into the plugin layer instead: `AuthPlugin.layer(...).pipe(Layer.provideMerge(derived))` keeps it in the output.
+
+## Request facts (ADR-EA-047)
+
+The client address and the user agent are read from one place: `Api.AuthRequestContext`, which the `Api.RequestContext` middleware captures once per request (through the host's `ClientAddress` port, `x-request-id`/`traceparent` and `User-Agent`, capped at 512 characters). A plugin never reads `ClientAddress` or a header, and no interface member takes an `ip` or a `userAgent`.
+
+- Declare `.middleware(Api.RequestContext)` last on every group.
+- An operation that mints a session (`SignIn`, `SignUp.createSignedIn`, `Sessions.issue` record the request's facts), spends an ip-keyed rule (`limits.spend("xByIp", {})`) or announces a failed sign-in (`SignIn.failed({ strategy, reason })`, the one publisher of `auth.user.signInFailed`) names `Api.AuthRequestContext` in its requirements. The group's middleware provides it to the handler.
+- Do not list `ClientAddress` in `ports`: the request-context middleware is its one consumer.
+- In-process callers say whether they answer a request: `TestAuth.withRequest({ ip, userAgent })` and `TestAuth.withoutRequest` in a test, `Api.AuthRequestContext.noRequest` in a job (under it a session records no address, an ip-keyed rule does not apply, an event carries no request facts), `RequestContext.capture(request)` on a host route outside your contract. Never provide a fixed `AuthRequestContext` as a layer.
+- A wire test that asserts a recorded address or a per-address limit sets `TestAuth.layer(..., { clientAddress })`: a web handler reports no socket peer otherwise.
 
 ## Testing a plugin
 

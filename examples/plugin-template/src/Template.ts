@@ -288,7 +288,8 @@ export const NotesHandlers = HttpApiBuilder.group(
 // ---- rate limits: declared once, spent by name ---------------------------------------
 // A plugin that throttles declares a typed table of rules; `group` must be one of the plugin's own
 // contract groups (a compile error otherwise) and `key` says what a bucket counts (`Key.user`: the
-// signed-in caller; `Key.ip` for an anonymous endpoint, `Key.email`, `Key.custom`, ...). The static
+// signed-in caller; `Key.ip` for an anonymous endpoint (it reads the request context's address, ADR-EA-047,
+// so the spend passes none), `Key.email`, `Key.custom`, ...). The static
 // `rateLimits` listing (`awthaq plugin list --rules`) is derived from this table, and `make` opens a
 // budget over it; `AuthPlugin.layer` refuses a plugin that declares rules and never opens one.
 
