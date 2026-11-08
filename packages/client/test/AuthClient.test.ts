@@ -311,6 +311,34 @@ describe("bearerTransformClient (MNA-005)", () => {
       }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
   );
 
+  // Plan 21 (ADR-EA-045): the server says when the caller's own session ended; the store forgets it.
+  it.effect.fails("a response carrying x-awthaq-session-ended clears the store", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      yield* store.set(Redacted.make("token-0"));
+      const seen: Array<string | undefined> = [];
+      yield* run(store, fakeTransport(seen, [{ "x-awthaq-session-ended": "1" }, {}]), 2);
+      assert.deepStrictEqual(seen, ["Bearer token-0", undefined]);
+      assert.isTrue(Option.isNone(yield* store.get));
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect.fails("ended wins over a set-auth-token on the same response", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      yield* store.set(Redacted.make("token-0"));
+      yield* run(
+        store,
+        fakeTransport(
+          [],
+          [{ "x-awthaq-session-ended": "1", [Api.ROTATED_TOKEN_HEADER]: "token-dead" }],
+        ),
+        1,
+      );
+      assert.isTrue(Option.isNone(yield* store.get));
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
   it.effect("captureSessionToken stores the body token so the next request is authenticated", () =>
     Effect.gen(function* () {
       const store = yield* AuthClient.BearerTokenStore;

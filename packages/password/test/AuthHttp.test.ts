@@ -762,6 +762,53 @@ describe("AuthHttp + Password (real HTTP)", () => {
       }),
   );
 
+  // Plan 21 (ADR-EA-045): a bearer client follows `set-auth-token`; `changePassword` superseded the presented
+  // token, so presenting it again is refresh-token reuse (RRS-003) and revokes the whole family.
+  it.effect.fails(
+    "a bearer changePassword names the new token in set-auth-token, so a client following the header stays signed in",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = TestAuth.app(AppLayer);
+        const signedUp = yield* Effect.promise(() =>
+          post(
+            handler,
+            "/password/sign-up",
+            { email: "rotating@example.com", password: strongPassword },
+            undefined,
+            { [Api.TOKEN_DELIVERY_HEADER]: "bearer" },
+          ),
+        );
+        const { token } = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => signedUp.json()),
+        );
+        const bearer = (path: string, current: string | undefined, init: RequestInit = {}) =>
+          Effect.promise(() =>
+            handler(
+              new Request(`http://localhost${path}`, {
+                ...init,
+                headers: {
+                  "content-type": "application/json",
+                  authorization: `Bearer ${current}`,
+                  [Api.TOKEN_DELIVERY_HEADER]: "bearer",
+                },
+              }),
+            ),
+          );
+        const changed = yield* bearer("/change-password", token, {
+          method: "POST",
+          body: JSON.stringify({
+            currentPassword: strongPassword,
+            newPassword: "a whole new strong password",
+          }),
+        });
+        assert.strictEqual(changed.status, 200);
+        // What `bearerTransformClient` stores: the header when present, else what it already held.
+        const followed = changed.headers.get(Api.ROTATED_TOKEN_HEADER) ?? token;
+        assert.strictEqual((yield* bearer("/session", followed)).status, 200);
+        assert.strictEqual((yield* bearer("/session", followed)).status, 200);
+      }),
+  );
+
   it.effect("MNA-001: sign-in without the header sets the cookie and carries no body token", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();

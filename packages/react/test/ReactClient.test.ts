@@ -11,7 +11,7 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { afterEach, beforeEach, vi } from "vitest";
-import { ReactAuthClient } from "../src/AuthClientAtom.ts";
+import { ReactAuthClient, sessionAtom } from "../src/AuthClientAtom.ts";
 import { makeReactClient } from "../src/ReactClient.ts";
 import { installFetchStub, jsonResponse, restoreFetch } from "./support/stubFetch.ts";
 
@@ -66,6 +66,24 @@ describe("ReactAuthClient", () => {
       AppClient.query("g1", "n", {});
     };
     assert.isFunction(typeChecks);
+  });
+
+  // Plan 21 (ADR-EA-045, BEH-EA-178): the contract says sign-out ends the session; no call-site key needed.
+  it.fails("a declared mutation refetches sessionAtom with no reactivityKeys", async () => {
+    const requests = installFetchStub({
+      "GET /session": () => jsonResponse({ _tag: "Unauthenticated" }, 401),
+      "POST /session/sign-out": () => new Response(null, { status: 204 }),
+    });
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(sessionAtom);
+    const current = () => requests.filter((request) => request.pathname === "/session").length;
+    await vi.waitFor(() => assert.strictEqual(current(), 1));
+    const signOut = ReactAuthClient.mutation("session", "signOut");
+    registry.mount(signOut);
+    registry.set(signOut, {});
+    await vi.waitFor(() => assert.isTrue(AsyncResult.isSuccess(registry.get(signOut))));
+    await vi.waitFor(() => assert.strictEqual(current(), 2));
+    unmount();
   });
 
   it("CDS-007: a cold browser's first mutation succeeds with no application code handling the 403", async () => {
