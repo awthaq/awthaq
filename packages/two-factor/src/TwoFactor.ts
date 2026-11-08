@@ -37,7 +37,7 @@ import {
   SignIn,
   Users,
 } from "@awthaq/core";
-import { ClientAddress, Defects, type Encryption, RateLimiter } from "@awthaq/ports";
+import { Defects, type Encryption, RateLimiter } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -46,7 +46,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { type TwoFactorMethodUsed, type VerifiedChallenge, verified } from "./Challenge.ts";
 import { SecondFactor, failureRule, type Purpose } from "./SecondFactor.ts";
@@ -119,23 +118,24 @@ export interface TwoFactorShape {
     | Errors.StoreUnavailable
   >;
   /** BEH-EA-262: completes a diverted sign-in with a TOTP code and mints the session. */
-  readonly verify: (
-    input: {
-      readonly challengeId: Redacted.Redacted<string>;
-      readonly code: Redacted.Redacted<string>;
-      readonly ip?: string;
-    },
-    context?: { readonly userAgent?: string },
-  ) => Effect.Effect<Sessions.IssuedSession, VerifyError | Errors.StoreUnavailable>;
+  readonly verify: (input: {
+    readonly challengeId: Redacted.Redacted<string>;
+    readonly code: Redacted.Redacted<string>;
+  }) => Effect.Effect<
+    Sessions.IssuedSession,
+    VerifyError | Errors.StoreUnavailable,
+    /** ADR-EA-047: the per-source rule and the session read the request context. */
+    Api.AuthRequestContext
+  >;
   /** BEH-EA-264: completes a diverted sign-in with a recovery code (spent). */
-  readonly verifyRecovery: (
-    input: {
-      readonly challengeId: Redacted.Redacted<string>;
-      readonly recoveryCode: Redacted.Redacted<string>;
-      readonly ip?: string;
-    },
-    context?: { readonly userAgent?: string },
-  ) => Effect.Effect<Sessions.IssuedSession, VerifyError | Errors.StoreUnavailable>;
+  readonly verifyRecovery: (input: {
+    readonly challengeId: Redacted.Redacted<string>;
+    readonly recoveryCode: Redacted.Redacted<string>;
+  }) => Effect.Effect<
+    Sessions.IssuedSession,
+    VerifyError | Errors.StoreUnavailable,
+    Api.AuthRequestContext
+  >;
   /** BEH-EA-263: needs a fresh session and a valid TOTP or recovery code; removes the factor. */
   readonly disable: (
     userId: Users.UserId,
@@ -296,63 +296,29 @@ export const TwoFactorHandlers = Layer.mergeAll(
     "two_factor",
     Effect.fnUntraced(function* (handlers) {
       const twoFactor = yield* TwoFactor;
-      const clientAddress = yield* ClientAddress.ClientAddress;
 
-      /** Shared shape of the two sign-in completion endpoints: delivery, address, user agent, session cookie or bearer token. */
+      /**
+       * Shared shape of the two sign-in completion endpoints: the session cookie or bearer token. ADR-EA-047: the
+       * address and user agent are the group's request context, read by core.
+       */
       const complete = Effect.fnUntraced(function* (
-        request: HttpServerRequest.HttpServerRequest,
-        run: (
-          ip: string | undefined,
-          context: { readonly userAgent?: string },
-        ) => Effect.Effect<Sessions.IssuedSession, VerifyError>,
+        run: Effect.Effect<Sessions.IssuedSession, VerifyError, Api.AuthRequestContext>,
       ) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          Effect.gen(function* () {
-            const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
-            return yield* run(ip, context);
-          }),
-        );
+        const response: SessionContract.SessionDto = yield* SessionDelivery.respond(run);
         return response;
       });
 
       return handlers.handleAll({
-        verify: Effect.fnUntraced(function* ({
-          payload,
-          request,
-        }: {
-          payload: TwoFactorApi.VerifyPayload;
-          request: HttpServerRequest.HttpServerRequest;
-        }) {
-          return yield* complete(request, (ip, context) =>
-            twoFactor.verify(
-              {
-                challengeId: payload.challengeId,
-                code: payload.code,
-                ...(ip === undefined ? {} : { ip }),
-              },
-              context,
-            ),
-          );
-        }),
-        verifyRecovery: Effect.fnUntraced(function* ({
-          payload,
-          request,
-        }: {
-          payload: TwoFactorApi.VerifyRecoveryPayload;
-          request: HttpServerRequest.HttpServerRequest;
-        }) {
-          return yield* complete(request, (ip, context) =>
-            twoFactor.verifyRecovery(
-              {
-                challengeId: payload.challengeId,
-                recoveryCode: payload.recoveryCode,
-                ...(ip === undefined ? {} : { ip }),
-              },
-              context,
-            ),
-          );
-        }),
+        verify: ({ payload }: { payload: TwoFactorApi.VerifyPayload }) =>
+          complete(twoFactor.verify({ challengeId: payload.challengeId, code: payload.code })),
+        verifyRecovery: ({ payload }: { payload: TwoFactorApi.VerifyRecoveryPayload }) =>
+          complete(
+            twoFactor.verifyRecovery({
+              challengeId: payload.challengeId,
+              recoveryCode: payload.recoveryCode,
+            }),
+          ),
       });
     }),
   ),
@@ -480,7 +446,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
   ],
 }) {
   static readonly layer = AuthPlugin.layer(TwoFactor, {
-    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
+    ports: [RateLimiter.RateLimiter],
     handlers: TwoFactorHandlers,
     contributes: Layer.mergeAll(twoFactorErasure, twoFactorExport),
     make: Effect.gen(function* () {
@@ -529,10 +495,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
        * `[...first-factor amr, "otp", "mfa"]` (AOMS-003), runs the continuation (a SAML session's
        * Single Logout record) and announces the sign-in.
        */
-      const finalizeSignIn = Effect.fnUntraced(function* (
-        challenge: VerifiedChallenge,
-        request: { readonly ip?: string | undefined; readonly userAgent?: string | undefined },
-      ) {
+      const finalizeSignIn = Effect.fnUntraced(function* (challenge: VerifiedChallenge) {
         const cleared = yield* completion
           .resume({
             userId: challenge.userId,
@@ -546,7 +509,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
               Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({})),
             ),
           );
-        return yield* completion.issue(cleared, request);
+        return yield* completion.issue(cleared);
       });
 
       /**
@@ -560,11 +523,9 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         input: {
           readonly challengeId: Redacted.Redacted<string>;
           readonly code: Redacted.Redacted<string>;
-          readonly ip?: string | undefined;
         },
-        context: { readonly userAgent?: string | undefined } | undefined,
       ) {
-        yield* limits.spend("verifyByIp", { ip: input.ip });
+        yield* limits.spend("verifyByIp", {});
         // ADR-EA-039: the challenge, the code check and the session share one transaction. Every
         // refusal (a wrong code and its re-issued challenge, a lockout, a suspension) commits; an
         // outage while finishing the sign-in gives the challenge back.
@@ -591,10 +552,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
               ),
             );
             const verifiedChallenge = yield* verified(consumed, proof);
-            return yield* finalizeSignIn(verifiedChallenge, {
-              ip: input.ip,
-              userAgent: context?.userAgent,
-            });
+            return yield* finalizeSignIn(verifiedChallenge);
           }),
         );
       });
@@ -624,19 +582,11 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         return yield* factor.confirmEnrolment(userId, code);
       });
 
-      const verify: TwoFactorShape["verify"] = (input, context) =>
-        attempt(
-          "totp",
-          { challengeId: input.challengeId, code: input.code, ip: input.ip },
-          context,
-        );
+      const verify: TwoFactorShape["verify"] = (input) =>
+        attempt("totp", { challengeId: input.challengeId, code: input.code });
 
-      const verifyRecovery: TwoFactorShape["verifyRecovery"] = (input, context) =>
-        attempt(
-          "recovery",
-          { challengeId: input.challengeId, code: input.recoveryCode, ip: input.ip },
-          context,
-        );
+      const verifyRecovery: TwoFactorShape["verifyRecovery"] = (input) =>
+        attempt("recovery", { challengeId: input.challengeId, code: input.recoveryCode });
 
       /** Disabling and regenerating share one gate: a fresh session, an enrolled user, a valid code of either kind. */
       const requireFactor = Effect.fnUntraced(function* (

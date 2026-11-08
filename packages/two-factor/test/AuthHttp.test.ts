@@ -3,14 +3,16 @@
 // wire contract is what is proven: a first factor answers 401 `TwoFactorRequired { challengeId }`
 // with no session cookie, `/two-factor/verify` completes it, and the reset endpoint asks for the
 // second factor.
-import { Api } from "@awthaq/api";
-import { Auth } from "@awthaq/core";
+import { Api, SessionContract } from "@awthaq/api";
+import { Auth, Sessions } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as TwoFactor from "../src/TwoFactor.ts";
 import { Gates, codeFor, letForkedFibersRun, tokenOf } from "./support/harness.ts";
@@ -96,6 +98,92 @@ const enrolOverHttp = (browser: UserAgent.UserAgent) =>
 
 // The handler runs on the real clock (a web handler), so the TOTPs are computed on it too (`it.live`).
 describe("TwoFactor over HTTP", () => {
+  // ADR-EA-047 (plan 26 ticket 19): the wiring probe. Two-factor reads no address and no header; the completed
+  // session records the request context's facts, and the per-source rule counts per request address.
+  it.live(
+    "ADR-EA-047: a completed second factor's session records the request's address and user agent; verify counts per address",
+    () =>
+      Effect.gen(function* () {
+        const appAt = (clientAddress: string) =>
+          TestAuth.app(
+            TestAuth.layer(built, {
+              services: Layer.merge(Gates, TestAuth.httpClient.noBreach),
+              rateLimiter: "enforcing",
+              clientAddress,
+            }),
+          );
+        const probe = appAt("198.51.100.19");
+        const email = "probe-2fa@example.com";
+        const browser = yield* Effect.promise(() => probe.agent());
+        const post = (path: string, body: unknown, headers?: Record<string, string>) =>
+          Effect.promise(() =>
+            probe.request("POST", path, {
+              json: body,
+              ...(headers === undefined ? {} : { headers }),
+            }),
+          );
+        assert.strictEqual(
+          (yield* Effect.promise(() =>
+            browser.request("POST", "/password/sign-up", { json: { email, password } }),
+          )).status,
+          200,
+        );
+        yield* letForkedFibersRun;
+        const verifyMail = (yield* Effect.promise(() =>
+          probe.run(Effect.flatMap(Mailer.Mailer, (mailer) => mailer.sent)),
+        )).findLast((mail) => mail.template === "verify-email");
+        assert.strictEqual(
+          (yield* post("/verify-email", { token: tokenOf(verifyMail) })).status,
+          204,
+        );
+        const enrollment = Schema.decodeUnknownSync(Enrollment)(
+          yield* json(yield* Effect.promise(() => browser.request("POST", "/two-factor/enable"))),
+        );
+        const code = yield* codeFor(enrollment.secret);
+        const codes = Schema.decodeUnknownSync(Codes)(
+          yield* json(
+            yield* Effect.promise(() =>
+              browser.request("POST", "/two-factor/confirm", { json: { code } }),
+            ),
+          ),
+        );
+        const divert = Schema.decodeUnknownSync(Divert)(
+          yield* json(yield* post("/password/sign-in", { email, password })),
+        );
+        const recovered = yield* post(
+          "/two-factor/verify-recovery",
+          { challengeId: divert.challengeId, recoveryCode: codes.recoveryCodes[0] },
+          { [Api.TOKEN_DELIVERY_HEADER]: "bearer", "user-agent": "TwoFactorProbe/1" },
+        );
+        assert.strictEqual(recovered.status, 200);
+        const token = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* json(recovered),
+        ).token;
+        const verified = yield* Effect.promise(() =>
+          probe.run(
+            Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+              sessions.verify(Redacted.make(token ?? "")),
+            ),
+          ),
+        );
+        assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.19"));
+        assert.deepStrictEqual(verified.session.userAgent, Option.some("TwoFactorProbe/1"));
+        // `verifyByIp` is 30 per window: one verify above, 29 more (refused codes), then refused; another address
+        // is not.
+        const bogus = (app: typeof probe) =>
+          Effect.promise(() =>
+            app.request("POST", "/two-factor/verify", {
+              json: { challengeId: "not-a-challenge", code: "000000" },
+            }),
+          ).pipe(Effect.map((response) => response.status));
+        for (let i = 0; i < 29; i++) assert.notStrictEqual(yield* bogus(probe), 429);
+        assert.strictEqual(yield* bogus(probe), 429);
+        const other = appAt("198.51.100.20");
+        assert.notStrictEqual(yield* bogus(other), 429);
+        yield* Effect.promise(() => Promise.all([probe.dispose(), other.dispose()]));
+      }),
+  );
+
   it.live("enrol, then a password sign-in is diverted and /two-factor/verify completes it", () =>
     Effect.gen(function* () {
       const email = "ada@example.com";
