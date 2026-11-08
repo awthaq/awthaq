@@ -250,3 +250,99 @@ Each plan's §10 has a recommended default for every question (94 in total). The
 - **Wave B:** 11 Q2 (Path B's tier) and Q3 (a non-`User` principal from a session is a 401 on user-tier groups) · 21 Q1 (keep `token` in the body), Q2 (refuse bearer impersonation), Q4 (an unsettled declared endpoint dies with 500 in production) and Q5 (core's cookie writers move to server) · 18 Q1 (a foreign row is spent) and Q2 (`confirmResetByIp` numbers).
 - **Wave C:** **16 vs 17 order** (above) · 17 Q1 (does any environment hold rows under today's core AADs; decides whether Phase 2b ships a re-key) and Q2 (core ports carry `Sealed` values) · 22 Q3 (rewrite shipped migrations' source, or freeze them) and Q4 (widen the passkey counter to `BIGINT` with a migration, or clamp) · 24 Q1 (accept G1–G5 as the go/no-go) and Q4 (fix the 10 Postgres atomicity bugs inside 24).
 - **Wave D:** 15 Q1 (`AuthHost` in server or a new package), Q2 (`migrations` required in SQL mode), Q6 (move the ledger drift check from the CLI into core) and **Q9 (reverse plan 08 Q5)**.
+
+---
+
+# Batch 3: deepening plans 25–30 (review of 2026-11-08)
+
+Source: the architecture review of 2026-11-08 (`/improve-codebase-architecture`, report at
+https://claude.ai/artifact/PF2z5egsLacVozRDi7PaSe). That review read `chore/effect-4.1-peer-deps`
+(`ede063d8`), which predates batch 2. Every plan was then re-verified on `architecture/deepening-plans-2` @
+`5a0e8df4` with the merge of `main` (`935d15ee`) in progress. Each plan's header says which tree its line numbers
+come from. Two candidates turned out to be already done by batch 2 (plans 16 and 17), so plan 28 and plan 30
+Part B are residual plans only.
+
+The format is unchanged: ten sections, numbered tickets that map onto `.scratch/<NN-slug>/issues/NN-*.md`, an
+acceptance checklist, open questions with recommended defaults, and an empty "Decisions taken" record.
+
+## Plans
+
+| # | Plan | Strength | Dependency category | Live bugs (confirmed unless marked) | Lines | Tickets | Open Qs |
+|---|---|---|---|---|---|---|---|
+| 25 | [Plugin record stores: atomic primitives, data-driven contract](25-record-store-contract/PLAN.md) | Strong | local-substitutable · ports & adapters | **two owners removing each other leave 0 owners** (memory, SQLite, Postgres; Postgres 3/3 runs without a forced interleaving) · concurrent removals leave 0 teams · `membershipLimit` 2 ends with 3 members · crossing `moveTeam` makes a team cycle on Postgres (6–8 of 8 runs) · ~10 more check-then-write shapes by reading | 1,391 | 27 | 10 |
+| 26 | [Request facts are read from `AuthRequestContext` only](26-request-context/PLAN.md) | Strong | in-process | impersonation sessions record no address or user agent (`Admin.ts:1116`) · audit and webhook user agent uncapped (session caps at 512) · the `a232d8e6` build-time warning is wrong about sessions · `Saml.logout` takes an unused `ip`. *Refuted:* no shipped caller forgets `ip` (the risk is latent) | 1,471 | 28 | 9 |
+| 27 | [One password credential module](27-password-credential/PLAN.md) | Worth exploring (plan argues Strong) | in-process | **administrator-set and seeded passwords skip breach screening and `Password.config`** (three policies, not two) · 6 ADR-EA-028 `orDie`s turn a store outage into 500 · `changePassword` is four commits, not one unit · `seed admin` silently keeps an existing password | 1,143 | 18 | 9 |
+| 28 | [SQL store adapters: residual gaps after plan 16](28-sql-store-adapters/PLAN.md) | Residual | local-substitutable | `ConnectionRecords.ts:566` answers 503 instead of `ConnectionDomainTaken` on libSQL (by reading) · `SamlRecords.ts:762` maps every `ConstraintError` to "domain taken" · the store contract never runs on the sealed bundle | 284 | 3 | 3 |
+| 29 | [Plugins own their event definitions](29-plugin-owned-events/PLAN.md) | Strong friction | in-process | the CLI's `linkErrorCodes` misses 5 `Auth.make` link errors. Two design gaps in plan 09 §3.7 caught before shipping (erasure of a removed plugin's personal data; an open `ForeignEvent` kills narrowing) | 1,822 | 25 | 8 |
+| 30 | [Speculative follow-ups](30-speculative-followups/PLAN.md): (A) organization authorization as one primitive · (B) core sealed columns | A: GO · B: superseded by 17 | in-process · local-substitutable | A, by reading, failing tests first in ticket 01: **an outsider can probe organization existence via the role endpoints (403 vs 404, BEH-EA-284)** · suspended organizations can still cancel invitations · read, accept and reject invitations, and the active context, ignore suspension (BEH-EA-237) | 1,099 | 15 | 10 |
+
+## Execution order
+
+```
+Wave 0 (hotfixes, each its own small PR, any branch)
+  25 · tickets 02-03   last-owner race: failing Postgres test + per-organization advisory lock
+  30 · tickets 01-04   organization existence probe (roles) + suspension gaps
+  27 · ticket 04       ADR-EA-028: store outage → 503 on the credential path
+  28 · tickets 01-02   sealed-bundle contract run; unique-violation classification
+
+After the merge of main into architecture/deepening-plans-2 is committed
+  30 · ticket 21       re-run plan 17's sealed-column proofs (the merge rewrites ports/src/Encryption.ts)
+
+Wave E: the deepenings
+  26 request context (phases 0-3 can start now; rebase against batch-2 21, Api.RequestContext outermost)
+    └─► 26 ticket 13 (password) ──► 27 password credential
+  22 (batch 2) ──► 25 record-store contract, per package (replaces 24 Track B) ── 28 ticket 03 lands with it
+  25 + 26 + 27 ──► 29 plugin-owned events, plugin by plugin (password after 27, organization last)
+  30 A1-A3 any time after Wave 0; rebase around 25 and 29
+```
+
+### Status (2026-11-08)
+
+| Item | State |
+|---|---|
+| Batch 2 plans 15, 20, 21 | Landed in PR #46 (with the merge of main). Plan 24: Phases 1–5 superseded by 25 (Q0 accepted); Track A spike not started |
+| Wave 0 · 25 tickets 02–03 | Landed, PR #49 |
+| Wave 0 · 30 tickets 01–04 | Landed, PR #51 |
+| Wave 0 · 27 ticket 04 | Landed, PR #50 |
+| Wave 0 · 28 tickets 01–02 | Landed, PR #48 |
+| 30 ticket 21 | Unblocked (the merge of main landed with PR #46); next |
+| Wave E | Not started |
+
+Each plan's "Decisions taken" section records what its Wave 0 PR decided and where the plan was stale. Numbers
+taken since this batch was written: BEH-EA-340–342 (plan 15), 343 (21), 344 (20); ADR-EA-044 (15), 045 (21);
+REQ-EA-1321–1334 (15, 21, 20), 1335–1336 (30 Wave 0). Plan 27's behaviour is therefore BEH-EA-345.
+
+Why this order:
+- **25's owner fix first**: it is the only confirmed invariant break (an organization with no owner) and it ships without the refactor.
+- **26 before 27**: 26 rewrites `PasswordShape` inputs mechanically, 27 rewrites the bodies. The reverse order rebases every handler twice.
+- **25 before 29**: 29 moves events out of the organization modules that 25 fixes; fixing first keeps the race fixes reviewable.
+- **22 before 25**: 25 edits the same records modules as batch-2 22 and builds on its colocated DDL.
+
+## Numbers assigned
+
+| Item | Plan | Note |
+|---|---|---|
+| ADR-EA-047 | 26 | Request facts are read from `AuthRequestContext`; reverses plan 01 decision 7 (26 Q1) |
+| ADR-EA-048 | 27 | The password credential is one module of `@awthaq/password`, under one policy |
+| ADR-EA-049 | 29 | Plugins own their event definitions; BEH-EA-101 reworded |
+| BEH-EA-345 | 27 | Every path that verifies, sets or rehashes a password goes through one module (338–344 are taken: 340–342 plan 15, 343 plan 21, 344 plan 20) |
+| ADR-EA-041 decision 9 | 25 | Plugin record stores meet a data-driven contract; 28 ticket 03 rewrites decision 5 in the same revision |
+| ADR-EA-040 rev 1.1 | 27, 30 A | Both add a revision note; assign the revision in landing order |
+
+## Reconciliations with batch 2
+
+| Topic | Plans | Resolution |
+|---|---|---|
+| Plugin memory/SQL parity | 24, 25 | **25 subsumes 24 Track B** (R1–R6, `orConflict`, C1–C10 become contract cases). 24 keeps the Track A spike and ADR-EA-046. **25 Q0 accepted (2026-11-08):** 24 Phases 1–5 are marked superseded. |
+| Fold `Repositories` | 16, 28 | 16 did it; 28 is three residual tickets. |
+| Core sealed columns | 17, 30 B | 17 did it; 30 B keeps ticket 21 (re-run proofs) and gates tickets 22–23 (re-key) on a named environment. |
+| Request facts | 11, 20, 21, 26 | 26 deletes 11's `ClientAddress.facts`/`address` helpers; names its brand `Api.UserAgentHeader` to avoid 20's `UserAgent`; shares 21's contract files (second to land rebases). |
+| Admin password policy | 13, 18, 27 | 27 §8.1: 13's per-tenant `cleared.config.passwordPolicy` is replaced by `Password`'s policy; 18's `beforeClaim` calls 27's `accept`. |
+| Organization authorization | 04, 30 A | 30 A builds plan 04's never-made `internal/authorize.ts`; keeps 04's Q7/Q9 decisions. |
+| `eventsLayer` placement | 15, 29 | Either order; the second to land adds one line to `AuthHost`. |
+
+## Stale convention
+
+The shared conventions above say the repo pins `effect@4.0.0-rc.116`. The catalog is now `effect ^4.1.2` (dev) /
+`^4.1.0` (peer), and batch-3 plans checked APIs against the installed 4.1.2. `scripts/test-pg.sh` can't start
+Postgres where the docker socket refuses the user; podman works (25 Q6 proposes a fallback).

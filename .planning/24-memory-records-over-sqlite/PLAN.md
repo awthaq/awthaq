@@ -1,5 +1,7 @@
 # Plan 24: Plugin record stores: one behaviour for memory and SQL (a parity contract by default; SQL over SQLite `:memory:` if the spike says go)
 
+> **Superseded in part (2026-11-08, plan 25 Q0 accepted):** plan 25 subsumes Track B (Phases 1–5: R1–R6, `orConflict`, C1–C10 become plan-25 contract cases). This plan keeps only the Track A spike and ADR-EA-046. Do not implement Phases 1–5 from here.
+
 | Property | Value |
 |---|---|
 | Strength | **Speculative** (batch index). The candidate was "delete the ~3,800 lines of `Ref` adapters; the memory bundle becomes `records.sql` over SQLite `:memory:`". The evidence in §2 does not support that as the default. The drift that matters most is the SQL adapter being *weaker* than memory under Postgres concurrency, which SQLite cannot reproduce. So this plan's default (Track B) keeps the memory adapters and holds them to the SQL adapters with a differential parity contract, and fixes every drift found. Track A, the candidate's move, stays a spike-gated option with explicit go/no-go criteria |
