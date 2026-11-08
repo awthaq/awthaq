@@ -7,8 +7,11 @@ import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
@@ -514,3 +517,161 @@ describe("OrganizationMembers.remove", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 });
+
+/**
+ * A veto handler that holds every caller until `parties` of them have arrived, then lets them all through: each
+ * caller's pre-check has run before any of them writes. A deterministic interleaving, not a timing race.
+ */
+const barrier = (parties: number) => {
+  const arrived = Ref.makeUnsafe(0);
+  const latch = Latch.makeUnsafe(false);
+  return <A>(input: A) =>
+    Ref.updateAndGet(arrived, (count) => count + 1).pipe(
+      Effect.flatMap((count) => (count >= parties ? latch.open : Effect.void)),
+      Effect.andThen(latch.await),
+      Effect.as(input),
+    );
+};
+
+/** The `_tag` of a failure, or "ok". */
+const outcomeOf = <A, E extends { readonly _tag: string }>(result: Result.Result<A, E>): string =>
+  Result.isFailure(result) ? result.failure._tag : "ok";
+
+/** An organization with two owners (arranged through the records). */
+const arrangeTwoOwners = (slug: string) =>
+  Effect.gen(function* () {
+    const orgs = yield* OrganizationRecords.OrganizationRecords;
+    const records = yield* MembershipRecords.MembershipRecords;
+    const members = yield* OrganizationMembers.OrganizationMembers;
+    const org = yield* orgs.create({ name: slug, slug });
+    for (const id of ["owner-1", "owner-2"]) {
+      yield* records.create({ userId: userId(id), organizationId: org.id, role: ["owner"] });
+    }
+    return { org, members, records };
+  });
+
+// BEH-EA-285 under concurrency (plan 25 tickets 02–03): the owner count and the membership write are one step, so
+// two owners racing to remove (or demote) each other leave exactly one owner, on every adapter. The Postgres run
+// (`pnpm test:pg`) is the one that matters: a transaction alone does not serialize the count under READ COMMITTED.
+for (const mode of TestAuth.recordModes) {
+  describe(`OrganizationMembers owner invariant under concurrency (${mode} records)`, () => {
+    const raceLayer = (
+      taps: Layer.Layer<
+        never,
+        never,
+        Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+      > = NoTaps,
+    ) =>
+      mode === "sql"
+        ? TestAuth.layer(built, {
+            records: "sql",
+            suite: "organization_members_race",
+            services: Organization.config({}),
+            taps,
+          })
+        : buildLayer({}, taps);
+
+    it.effect(
+      "two owners removing each other leave exactly one owner; the loser is OwnerInvariantViolation",
+      () => {
+        const hold = barrier(2);
+        return Effect.gen(function* () {
+          const { org, members, records } = yield* arrangeTwoOwners("race-remove");
+          const outcomes = yield* Effect.all(
+            [
+              members.remove(application, { organizationId: org.id, userId: userId("owner-1") }),
+              members.remove(application, { organizationId: org.id, userId: userId("owner-2") }),
+            ].map((removal) => Effect.map(Effect.result(removal), outcomeOf)),
+            { concurrency: "unbounded" },
+          );
+          assert.strictEqual(yield* records.countOwners(org.id), 1);
+          assert.deepStrictEqual([...outcomes].sort(), ["OwnerInvariantViolation", "ok"]);
+        }).pipe(Effect.provide(raceLayer(OrganizationHooks.BeforeRemoveMember.tap(hold))));
+      },
+    );
+
+    it.effect("an owner demoting the other while being removed leaves one owner", () => {
+      const hold = barrier(2);
+      return Effect.gen(function* () {
+        const { org, members, records } = yield* arrangeTwoOwners("race-demote");
+        const outcomes = yield* Effect.all(
+          [
+            Effect.map(
+              Effect.result(
+                members.setRoles(application, {
+                  organizationId: org.id,
+                  userId: userId("owner-1"),
+                  roles: ["admin"],
+                  bound: unbounded,
+                  ifAbsent: "fail",
+                }),
+              ),
+              outcomeOf,
+            ),
+            Effect.map(
+              Effect.result(
+                members.remove(application, { organizationId: org.id, userId: userId("owner-2") }),
+              ),
+              outcomeOf,
+            ),
+          ],
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(yield* records.countOwners(org.id), 1);
+        assert.deepStrictEqual([...outcomes].sort(), ["OwnerInvariantViolation", "ok"]);
+      }).pipe(
+        Effect.provide(
+          raceLayer(
+            Layer.mergeAll(
+              OrganizationHooks.BeforeUpdateMemberRole.tap(hold),
+              OrganizationHooks.BeforeRemoveMember.tap(hold),
+            ),
+          ),
+        ),
+      );
+    });
+
+    it.effect(
+      "two removals of the same member: one succeeds, the other is MembershipNotFound, never a defect",
+      () => {
+        const hold = barrier(2);
+        return Effect.gen(function* () {
+          const { org, members } = yield* arrangeTwoOwners("race-same-member");
+          yield* members.add(application, {
+            organizationId: org.id,
+            userId: userId("u1"),
+            role: ["member"],
+            bound: unbounded,
+          });
+          const removal = members.remove(application, {
+            organizationId: org.id,
+            userId: userId("u1"),
+          });
+          const outcomes = yield* Effect.all(
+            [removal, removal].map((attempt) => Effect.map(Effect.result(attempt), outcomeOf)),
+            { concurrency: "unbounded" },
+          );
+          assert.deepStrictEqual([...outcomes].sort(), ["MembershipNotFound", "ok"]);
+          assert.isTrue(Option.isNone(yield* members.find(org.id, userId("u1"))));
+        }).pipe(Effect.provide(raceLayer(OrganizationHooks.BeforeRemoveMember.tap(hold))));
+      },
+    );
+
+    it.effect("natural race, 8 rounds, no hook: every round leaves an owner", () =>
+      Effect.gen(function* () {
+        for (let round = 0; round < 8; round++) {
+          const { org, members, records } = yield* arrangeTwoOwners(`race-natural-${round}`);
+          yield* Effect.all(
+            ["owner-1", "owner-2"].map((id) =>
+              Effect.result(
+                members.remove(application, { organizationId: org.id, userId: userId(id) }),
+              ),
+            ),
+            { concurrency: "unbounded" },
+          );
+          assert.strictEqual(yield* records.countOwners(org.id), 1, `round ${round}`);
+        }
+      }).pipe(Effect.provide(raceLayer())),
+    );
+  });
+}

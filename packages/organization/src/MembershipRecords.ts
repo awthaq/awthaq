@@ -6,6 +6,7 @@
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
 import { Defects, Users } from "@awthaq/core";
+import { SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -53,6 +54,14 @@ export class MembershipRecordAlreadyExists extends Data.TaggedError(
   readonly organizationId: string;
 }> {}
 
+/**
+ * BEH-EA-285: the write would leave the organization with no member holding `owner` (removing its only owner,
+ * or taking `owner` from that owner's roles).
+ */
+export class MembershipRecordLastOwner extends Data.TaggedError("MembershipRecords/LastOwner")<{
+  readonly organizationId: string;
+}> {}
+
 export interface ListMembersInput {
   readonly limit?: number | undefined;
   readonly offset?: number | undefined;
@@ -89,20 +98,39 @@ export interface MembershipRecordsShape {
   readonly countOwners: (
     organizationId: string,
   ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
+  /**
+   * Atomic (BEH-EA-285): refuses with `MembershipRecordLastOwner` when `role` drops `owner` from the
+   * organization's only owner. The owner count and the write are one step on every adapter (memory: one
+   * `Ref.modify`; SQL: one transaction that takes the organization's membership lock on Postgres first).
+   */
   readonly updateRole: (
     userId: Users.UserId,
     organizationId: string,
     role: ReadonlyArray<string>,
-  ) => Effect.Effect<MembershipRecord, MembershipRecordNotFound | StoreFailure.StoreUnavailable>;
+  ) => Effect.Effect<
+    MembershipRecord,
+    MembershipRecordNotFound | MembershipRecordLastOwner | StoreFailure.StoreUnavailable
+  >;
+  /** Atomic (BEH-EA-285): refuses with `MembershipRecordLastOwner` to remove the organization's only owner. */
   readonly remove: (
     userId: Users.UserId,
     organizationId: string,
-  ) => Effect.Effect<void, MembershipRecordNotFound | StoreFailure.StoreUnavailable>;
-  /** Deletes every membership row for an organization — used by `Organization.delete`'s cascade. */
+  ) => Effect.Effect<
+    void,
+    MembershipRecordNotFound | MembershipRecordLastOwner | StoreFailure.StoreUnavailable
+  >;
+  /**
+   * Deletes every membership row for an organization — used by `Organization.delete`'s cascade. Unguarded by
+   * design: the organization itself is going (BEH-EA-285).
+   */
   readonly removeAllForOrganization: (
     organizationId: string,
   ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
-  /** CSG-001/DRS-002 (.issues/high): deletes every membership row for a user across every organization — the erasure cascade's own `Hooks.BeforeUserDelete` tap needs (`Organization.ts`'s own `layer`). */
+  /**
+   * CSG-001/DRS-002 (.issues/high): deletes every membership row for a user across every organization — the
+   * erasure cascade's own `Hooks.BeforeUserDelete` tap needs (`Organization.ts`'s own `layer`). Unguarded by
+   * design: erasure completes even for a sole owner, whose organization is left ownerless (BEH-EA-285).
+   */
   readonly deleteAllByUser: (
     grant: TenantScoped.CrossTenant,
 
@@ -143,6 +171,20 @@ const applyPage = (
 type State = HashMap.HashMap<string, MembershipRecord>;
 
 const keyOf = (userId: string, organizationId: string): string => `${organizationId}:${userId}`;
+
+const holdsOwner = (role: ReadonlyArray<string>): boolean => role.includes("owner");
+
+const ownersIn = (s: State, organizationId: string): number =>
+  Array.from(HashMap.values(s)).filter(
+    (row) => row.organizationId === organizationId && holdsOwner(row.role),
+  ).length;
+
+/** BEH-EA-285: the write takes `owner` from the organization's last owner. */
+const takesLastOwner = (
+  current: ReadonlyArray<string>,
+  next: ReadonlyArray<string>,
+  owners: number,
+): boolean => holdsOwner(current) && !holdsOwner(next) && owners <= 1;
 
 export const layerMemory = Layer.effect(
   MembershipRecords,
@@ -207,36 +249,51 @@ export const layerMemory = Layer.effect(
       );
 
     const countOwners: MembershipRecordsShape["countOwners"] = (organizationId) =>
-      Ref.get(state).pipe(
-        Effect.map(
-          (s) =>
-            Array.from(HashMap.values(s)).filter(
-              (row) => row.organizationId === organizationId && row.role.includes("owner"),
-            ).length,
-        ),
-      );
+      Ref.get(state).pipe(Effect.map((s) => ownersIn(s, organizationId)));
 
+    // BEH-EA-285: the owner count and the write are decided inside one `Ref.modify`.
     const updateRole: MembershipRecordsShape["updateRole"] = (userId, organizationId, role) =>
       Ref.modify(
         state,
-        (s): readonly [Result.Result<MembershipRecord, MembershipRecordNotFound>, State] => {
+        (
+          s,
+        ): readonly [
+          Result.Result<MembershipRecord, MembershipRecordNotFound | MembershipRecordLastOwner>,
+          State,
+        ] => {
           const key = keyOf(userId, organizationId);
           const existing = HashMap.get(s, key);
           if (Option.isNone(existing)) {
-            return [Result.fail(notFound(userId, organizationId)), s] as const;
+            return [Result.fail(notFound(userId, organizationId)), s];
+          }
+          if (takesLastOwner(existing.value.role, role, ownersIn(s, organizationId))) {
+            return [Result.fail(new MembershipRecordLastOwner({ organizationId })), s];
           }
           const updated: MembershipRecord = { ...existing.value, role };
-          return [Result.succeed(updated), HashMap.set(s, key, updated)] as const;
+          return [Result.succeed(updated), HashMap.set(s, key, updated)];
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
 
     const remove: MembershipRecordsShape["remove"] = (userId, organizationId) =>
-      Ref.modify(state, (s): readonly [Result.Result<void, MembershipRecordNotFound>, State] => {
-        const key = keyOf(userId, organizationId);
-        if (!HashMap.has(s, key))
-          return [Result.fail(notFound(userId, organizationId)), s] as const;
-        return [Result.succeed(undefined), HashMap.remove(s, key)] as const;
-      }).pipe(Effect.flatMap(Effect.fromResult));
+      Ref.modify(
+        state,
+        (
+          s,
+        ): readonly [
+          Result.Result<void, MembershipRecordNotFound | MembershipRecordLastOwner>,
+          State,
+        ] => {
+          const key = keyOf(userId, organizationId);
+          const existing = HashMap.get(s, key);
+          if (Option.isNone(existing)) {
+            return [Result.fail(notFound(userId, organizationId)), s];
+          }
+          if (takesLastOwner(existing.value.role, [], ownersIn(s, organizationId))) {
+            return [Result.fail(new MembershipRecordLastOwner({ organizationId })), s];
+          }
+          return [Result.succeed(undefined), HashMap.remove(s, key)];
+        },
+      ).pipe(Effect.flatMap(Effect.fromResult));
 
     const removeAllForOrganization: MembershipRecordsShape["removeAllForOrganization"] = (
       organizationId,
@@ -449,24 +506,69 @@ export const layerSql = Layer.effect(
         unavailable("countOwners"),
       );
 
-    const updateRole: MembershipRecordsShape["updateRole"] = Effect.fnUntraced(
-      function* (userId, organizationId, role) {
-        const row = yield* updateRoleQuery({
-          userId,
-          organizationId,
-          role: JSON.stringify(role),
-        }).pipe(unavailable("updateRole"));
-        if (Option.isNone(row)) return yield* Effect.fail(notFound(userId, organizationId));
-        return toRecord(row.value);
-      },
-    );
+    /**
+     * BEH-EA-285: one transaction that first takes the organization's membership lock, then reads the target,
+     * counts the owners and writes. On Postgres the lock is what makes it atomic: under READ COMMITTED two
+     * transactions would each count two owners and each remove one. It is transaction-scoped, so inside a caller's
+     * transaction (`OrganizationMembers.remove`'s cascade) it is held until that transaction ends. SQLite already
+     * serializes writers.
+     */
+    const lockedForOrganization = <A, E, R>(
+      organizationId: string,
+      effect: Effect.Effect<A, E, R>,
+    ) =>
+      SqlTransaction.transactional(sql)(
+        Effect.andThen(
+          sql.onDialectOrElse({
+            pg: () =>
+              Effect.asVoid(
+                sql`SELECT pg_advisory_xact_lock(hashtextextended(${`organization_membership:org:${organizationId}`}, 0))`,
+              ),
+            orElse: () => Effect.void,
+          }),
+          effect,
+        ),
+      );
 
-    const remove: MembershipRecordsShape["remove"] = Effect.fnUntraced(
-      function* (userId, organizationId) {
-        const row = yield* removeQuery({ userId, organizationId }).pipe(unavailable("remove"));
-        if (Option.isNone(row)) return yield* Effect.fail(notFound(userId, organizationId));
-      },
-    );
+    const updateRole: MembershipRecordsShape["updateRole"] = (userId, organizationId, role) =>
+      lockedForOrganization(
+        organizationId,
+        Effect.gen(function* () {
+          const target = yield* findByUserAndOrgQuery({ userId, organizationId });
+          if (Option.isNone(target)) return yield* Effect.fail(notFound(userId, organizationId));
+          if (
+            holdsOwner(toRecord(target.value).role) &&
+            !holdsOwner(role) &&
+            (yield* countOwnersQuery(organizationId)).count <= 1
+          ) {
+            return yield* Effect.fail(new MembershipRecordLastOwner({ organizationId }));
+          }
+          const row = yield* updateRoleQuery({
+            userId,
+            organizationId,
+            role: JSON.stringify(role),
+          });
+          if (Option.isNone(row)) return yield* Effect.fail(notFound(userId, organizationId));
+          return toRecord(row.value);
+        }),
+      ).pipe(unavailable("updateRole"));
+
+    const remove: MembershipRecordsShape["remove"] = (userId, organizationId) =>
+      lockedForOrganization(
+        organizationId,
+        Effect.gen(function* () {
+          const target = yield* findByUserAndOrgQuery({ userId, organizationId });
+          if (Option.isNone(target)) return yield* Effect.fail(notFound(userId, organizationId));
+          if (
+            holdsOwner(toRecord(target.value).role) &&
+            (yield* countOwnersQuery(organizationId)).count <= 1
+          ) {
+            return yield* Effect.fail(new MembershipRecordLastOwner({ organizationId }));
+          }
+          const row = yield* removeQuery({ userId, organizationId });
+          if (Option.isNone(row)) return yield* Effect.fail(notFound(userId, organizationId));
+        }),
+      ).pipe(unavailable("remove"));
 
     const removeAllForOrganization: MembershipRecordsShape["removeAllForOrganization"] = (
       organizationId,

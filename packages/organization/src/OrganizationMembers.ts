@@ -13,7 +13,7 @@
 // Events and observe points run after the module's own transaction ends.
 
 import { AuthEvents, Errors, HookPoint, Users } from "@awthaq/core";
-import { Defects, SqlTransaction, Tenant } from "@awthaq/ports";
+import { SqlTransaction, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -176,6 +176,17 @@ export class OrganizationMembers extends Context.Service<
           ? members.countOwners(organizationId).pipe(Effect.map((count) => count <= 1))
           : Effect.succeed(false);
 
+      /**
+       * BEH-EA-285: the pre-checks above only order errors; the record store's write decides. A concurrent write
+       * that won between them gets the sequential answer, never a defect: the member is already gone (404), or
+       * the other owner was removed or demoted first, so this write would leave no owner (409).
+       */
+      const concurrentWriteWon = {
+        MembershipRecordNotFound: () => Effect.fail(new OrganizationErrors.MembershipNotFound()),
+        "MembershipRecords/LastOwner": () =>
+          Effect.fail(new OrganizationErrors.OwnerInvariantViolation()),
+      };
+
       const requireTarget = (organizationId: string, userId: Users.UserId) =>
         members.findByUserAndOrg(userId, organizationId).pipe(
           Effect.flatMap(
@@ -278,14 +289,7 @@ export class OrganizationMembers extends Context.Service<
           yield* requireWithin(bound, PermissionEngine.effectivePermissions(vetoed.role, byRole));
           const updated = yield* members
             .updateRole(userId, organizationId, vetoed.role)
-            .pipe(
-              Effect.catchTag("MembershipRecordNotFound", () =>
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: membership vanished between check and write",
-                ),
-              ),
-            );
+            .pipe(Effect.catchTags(concurrentWriteWon));
           yield* events.publish({
             _tag: "auth.organization.memberRoleUpdated",
             actorUserId: OrganizationActor.userIdOf(actor),
@@ -321,14 +325,7 @@ export class OrganizationMembers extends Context.Service<
               Effect.gen(function* () {
                 yield* members
                   .remove(userId, organizationId)
-                  .pipe(
-                    Effect.catchTag("MembershipRecordNotFound", () =>
-                      Defects.invariantViolation(
-                        "RowVanished",
-                        "awthaq: membership vanished between check and write",
-                      ),
-                    ),
-                  );
+                  .pipe(Effect.catchTags(concurrentWriteWon));
                 yield* activeContext.clearOrganizationForUser(userId, organizationId);
                 return yield* teams.removeUserFromOrganizationTeams(organizationId, userId);
               }),
