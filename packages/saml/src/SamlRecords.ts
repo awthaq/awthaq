@@ -18,7 +18,7 @@
 // - `saml_session` — which local sessions a connection's sign-ins created, with the NameID and SessionIndex the IdP knows
 //   them by (BEH-EA-315): what a Single Logout request from the IdP has to find.
 
-import { type Encryption } from "@awthaq/ports";
+import { type Encryption, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -249,6 +249,10 @@ export class SamlRecords extends Context.Service<SamlRecords, SamlRecordsShape>(
 
 const notFound = (id: string): SamlRecordNotFound => new SamlRecordNotFound({ id });
 
+/** Plan 24 R5: a connection's email domains, as both adapters answer them, ascending. */
+const sortedDomains = (domains: ReadonlyArray<string>): ReadonlyArray<string> =>
+  [...domains].sort();
+
 const byCreation = (rows: ReadonlyArray<ConnectionRecord>): ReadonlyArray<ConnectionRecord> =>
   [...rows].sort(
     (a, b) =>
@@ -275,7 +279,7 @@ const applyPatch = (
   ...(patch.idpEntityId === undefined ? {} : { idpEntityId: patch.idpEntityId }),
   ...(patch.ssoUrl === undefined ? {} : { ssoUrl: patch.ssoUrl }),
   ...(patch.idpCertificates === undefined ? {} : { idpCertificates: patch.idpCertificates }),
-  ...(patch.emailDomains === undefined ? {} : { emailDomains: patch.emailDomains }),
+  ...(patch.emailDomains === undefined ? {} : { emailDomains: sortedDomains(patch.emailDomains) }),
   ...(patch.trustsEmail === undefined ? {} : { trustsEmail: patch.trustsEmail }),
   ...(patch.authnRequestsSigned === undefined
     ? {}
@@ -360,7 +364,7 @@ export const layerMemory: Layer.Layer<SamlRecords | MemoryEnvelopes, never, Encr
             idpEntityId: input.idpEntityId,
             ssoUrl: input.ssoUrl,
             idpCertificates: input.idpCertificates,
-            emailDomains: input.emailDomains,
+            emailDomains: sortedDomains(input.emailDomains),
             trustsEmail: input.trustsEmail,
             authnRequestsSigned: input.authnRequestsSigned ?? false,
             sloUrl: Option.fromNullishOr(input.sloUrl),
@@ -675,6 +679,7 @@ export const layerSql: Layer.Layer<
     const writeMutable = SqlSchema.findOneOption({
       Request: Schema.Struct({
         id: Schema.String,
+        organizationId: Schema.String,
         name: Schema.String,
         idpEntityId: Schema.String,
         ssoUrl: Schema.String,
@@ -693,7 +698,7 @@ export const layerSql: Layer.Layer<
           "idpCertificates" = ${r.idpCertificates}, "trustsEmail" = ${r.trustsEmail},
           "authnRequestsSigned" = ${r.authnRequestsSigned}, "sloUrl" = ${r.sloUrl}, "sloBinding" = ${r.sloBinding},
           "metadataUrl" = ${r.metadataUrl}, "roleMapping" = ${r.roleMapping}, "updatedAt" = ${r.updatedAt}
-        WHERE id = ${r.id}
+        WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
         RETURNING *`,
     });
     const insertKey = SqlSchema.findOne({
@@ -768,6 +773,8 @@ export const layerSql: Layer.Layer<
         { discard: true },
       );
 
+    // Plan 25 ticket 22: the connection row and its domains in one transaction, so a taken domain rolls the
+    // row back instead of a compensating DELETE that a crash (or a concurrent read) could catch half-done.
     const create: SamlRecordsShape["create"] = (input) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
@@ -787,19 +794,15 @@ export const layerSql: Layer.Layer<
           createdAt: now,
           updatedAt: now,
         });
-        // A taken domain leaves no half-created connection behind.
-        yield* claimDomains(input.id, input.emailDomains).pipe(
-          Effect.tapError(() =>
-            sql`DELETE FROM saml_connection WHERE id = ${input.id}`.pipe(
-              Effect.andThen(
-                sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${input.id}`,
-              ),
-            ),
-          ),
-        );
-        return toRecord(row, input.emailDomains);
-      }).pipe(unavailable("create"));
+        // A taken domain fails the transaction: no half-created connection is left behind.
+        const domains = sortedDomains(input.emailDomains);
+        yield* claimDomains(input.id, domains);
+        return toRecord(row, domains);
+      }).pipe(SqlTransaction.transactional(sql), unavailable("create"));
 
+    // Plan 25 ticket 22: the row first (`UPDATE … WHERE id AND organization RETURNING *`, which locks it and
+    // finds a connection removed meanwhile), then the domain set, in one transaction: a taken domain rolls both
+    // back, and `remove` deletes in the same order, so an update racing a removal cannot deadlock on Postgres.
     const update: SamlRecordsShape["update"] = (organizationId, id, patch) =>
       Effect.gen(function* () {
         const current = yield* connectionById(id);
@@ -807,26 +810,10 @@ export const layerSql: Layer.Layer<
           return yield* Effect.fail(notFound(id));
         }
         const now = yield* DateTime.now;
-        if (patch.emailDomains !== undefined) {
-          const before = (yield* domainsOf(id)).map((entry) => entry.domain);
-          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`;
-          yield* claimDomains(id, patch.emailDomains).pipe(
-            // Put the previous set back if a new domain is taken.
-            Effect.tapError(() =>
-              sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`.pipe(
-                Effect.andThen(
-                  claimDomains(id, before).pipe(
-                    // The previous set was held a moment ago: a clash now is a bug, not a domain outcome.
-                    Effect.catchTag("SamlDomainTaken", Effect.die),
-                  ),
-                ),
-              ),
-            ),
-          );
-        }
         const merged = applyPatch(toRecord(current.value, []), patch, now);
         const row = yield* writeMutable({
           id,
+          organizationId,
           name: merged.name,
           idpEntityId: merged.idpEntityId,
           ssoUrl: merged.ssoUrl,
@@ -840,8 +827,12 @@ export const layerSql: Layer.Layer<
           updatedAt: now,
         });
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
+        if (patch.emailDomains !== undefined) {
+          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`;
+          yield* claimDomains(id, sortedDomains(patch.emailDomains));
+        }
         return yield* withDomains(row.value);
-      }).pipe(unavailable("update"));
+      }).pipe(SqlTransaction.transactional(sql), unavailable("update"));
 
     return {
       create,
@@ -873,6 +864,8 @@ export const layerSql: Layer.Layer<
           unavailable("findByDomain"),
         ),
       update,
+      // Plan 25 ticket 22: the connection and everything under it in one transaction, the row first (the
+      // order `update` locks them in); a connection removed meanwhile is `SamlRecordNotFound`.
       remove: (organizationId, id) =>
         Effect.gen(function* () {
           const removed =
@@ -881,7 +874,7 @@ export const layerSql: Layer.Layer<
           yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`;
           yield* sql`DELETE FROM saml_sp_key WHERE "connectionId" = ${id}`;
           yield* sql`DELETE FROM saml_session WHERE "connectionId" = ${id}`;
-        }).pipe(unavailable("remove")),
+        }).pipe(SqlTransaction.transactional(sql), unavailable("remove")),
       saveSpKey: (key) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
@@ -894,14 +887,18 @@ export const layerSql: Layer.Layer<
           Effect.map((rows) => rows.map(toKey)),
           unavailable("listSpKeys"),
         ),
+      // Plan 24 C10: one upsert, not DELETE then INSERT (two saves of one session id raced into a
+      // primary-key violation, and a reader between the two statements saw no row).
       saveSession: (session) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
-          yield* sql`DELETE FROM saml_session WHERE "sessionId" = ${session.sessionId}`;
           yield* sql`
             INSERT INTO saml_session ("sessionId", "connectionId", "nameId", "nameIdFormat", "sessionIndex", "createdAt")
             VALUES (${session.sessionId}, ${session.connectionId}, ${session.nameId}, ${session.nameIdFormat ?? null},
-              ${session.sessionIndex ?? null}, ${wireDate(now)})`;
+              ${session.sessionIndex ?? null}, ${wireDate(now)})
+            ON CONFLICT ("sessionId") DO UPDATE SET "connectionId" = excluded."connectionId",
+              "nameId" = excluded."nameId", "nameIdFormat" = excluded."nameIdFormat",
+              "sessionIndex" = excluded."sessionIndex", "createdAt" = excluded."createdAt"`;
         }).pipe(unavailable("saveSession")),
       findSessions: ({ connectionId, nameId, sessionIndex }) =>
         sessionsOf({ connectionId, nameId, sessionIndex: sessionIndex ?? null }).pipe(

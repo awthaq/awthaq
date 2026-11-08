@@ -11,6 +11,8 @@
 //   3. Plan 25 (BEH-EA-336, ADR-EA-041 decision 9): a `Contract.test.ts` that passes `records:` (the
 //      record-store contract) is listed in `scripts/test-pg.sh`'s suites, so its cases also run on
 //      Postgres, where the race cases are the point.
+//   4. Plan 25 ticket 25: `RecordsContract.pending` is gone (every store has its suite); a test file that
+//      still names it is reported here, before the compiler's less direct error.
 //
 // Runs from `pnpm check`. Exit code 1 on any problem.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -79,6 +81,20 @@ for (const owner of owners) {
     problems.push(
       `${listed} passes records: (the record-store contract) but is not listed in scripts/test-pg.sh`,
     );
+  }
+}
+
+// Rule 4: no test names the removed `RecordsContract.pending` stand-in.
+for (const owner of new Set([
+  ...owners,
+  ...readdirSync(path.join(rootDir, "examples")).map((name) => path.join("examples", name)),
+])) {
+  for (const file of walk(path.join(rootDir, owner, "test")).filter(isSource)) {
+    if (/RecordsContract\.pending\s*\(/.test(read(file))) {
+      problems.push(
+        `${path.relative(rootDir, file)}: uses RecordsContract.pending, removed by plan 25 ticket 25; pass the store's suites`,
+      );
+    }
   }
 }
 

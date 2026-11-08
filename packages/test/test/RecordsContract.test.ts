@@ -103,17 +103,6 @@ describe("RecordsContract.run", () => {
       "stores without a RecordsContract suite: counters/records/NoteRecords",
     );
   });
-
-  it("pending registers one passing test naming the ticket", async () => {
-    const sink = new Recorder();
-    RecordsContract.run(recordingFramework(sink), Counters, [], {
-      suite: "records_contract_pending",
-      suites: RecordsContract.pending("99"),
-    });
-    await sink.settled();
-    assert.deepStrictEqual(sink.failed, []);
-    assert.deepStrictEqual(sink.passed, ["every store: contract pending (plan 25 ticket 99)"]);
-  });
 });
 
 describe("runPluginContractTests with records", () => {

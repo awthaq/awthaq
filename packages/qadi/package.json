@@ -29,7 +29,8 @@
     "@awthaq/core": "workspace:*",
     "@awthaq/organization": "workspace:*",
     "@awthaq/ports": "workspace:*",
-    "@awthaq/server": "workspace:*"
+    "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*"
   },
   "devDependencies": {
     "@awthaq/test": "workspace:*",
