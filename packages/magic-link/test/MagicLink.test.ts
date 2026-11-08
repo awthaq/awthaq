@@ -69,7 +69,10 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
         const token = secretOf(sent[0], "token");
         const userId = Option.getOrThrow(yield* users.findByEmail("ada@example.com")).id;
         assert.notInclude(token, userId);
-        assert.notInclude(token, "ada");
+        // The whole address, plain or base64url-encoded. A bare "ada" would be a coin toss: a
+        // random base64url token contains any given three characters once in a few thousand runs.
+        assert.notInclude(token, "ada@example.com");
+        assert.notInclude(token, Buffer.from("ada@example.com").toString("base64url"));
         assert.isTrue(token.startsWith("magic-link:"));
         // Sign-up is off: asking for a link never created anyone.
         assert.isTrue(Option.isNone(yield* users.findByEmail("nobody@example.com")));
