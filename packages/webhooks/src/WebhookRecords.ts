@@ -26,8 +26,14 @@
 // and the worker, which run with no tenant and serve every tenant's endpoints, present a
 // `TenantScoped.CrossTenant` witness, so a method that spans tenants says so in its signature.
 
-import type { Encryption } from "@awthaq/ports";
-import { Models as SqlModels, SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
+import { type Encryption, SqlTransaction } from "@awthaq/ports";
+import {
+  Models as SqlModels,
+  SealedColumn,
+  SqlStore,
+  StoreFailure,
+  TenantScoped,
+} from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -120,6 +126,11 @@ export class WebhookRecordNotFound extends Data.TaggedError("WebhookRecordNotFou
   readonly id: string;
 }> {}
 
+/** `createEndpoint`'s `within`: the tenant already has that many endpoints (`WebhooksConfig.maxEndpoints`). */
+export class WebhookRecordLimitReached extends Data.TaggedError("WebhookRecords/LimitReached")<{
+  readonly limit: number;
+}> {}
+
 export interface NewDelivery {
   readonly id: string;
   readonly endpointId: string;
@@ -138,17 +149,24 @@ export interface Outcome {
 
 export interface WebhookRecordsShape {
   // ---- endpoints
-  readonly createEndpoint: (input: {
-    readonly id: string;
-    readonly url: string;
-    readonly description?: string | undefined;
-    readonly eventTags: ReadonlyArray<string>;
-    readonly secret: Redacted.Redacted<string>;
-    readonly createdBy: string;
-    readonly headers?:
-      | { readonly value: WebhookHeaders.CustomHeaders; readonly names: ReadonlyArray<string> }
-      | undefined;
-  }) => Effect.Effect<EndpointRecord, StoreFailure.StoreUnavailable>;
+  /**
+   * Atomic (plan 25, BEH-EA-281): with `within`, refuses with `WebhookRecordLimitReached` when the ambient tenant
+   * already has that many endpoints; the count and the insert are one step (SQL: under the tenant's endpoint lock).
+   */
+  readonly createEndpoint: (
+    input: {
+      readonly id: string;
+      readonly url: string;
+      readonly description?: string | undefined;
+      readonly eventTags: ReadonlyArray<string>;
+      readonly secret: Redacted.Redacted<string>;
+      readonly createdBy: string;
+      readonly headers?:
+        | { readonly value: WebhookHeaders.CustomHeaders; readonly names: ReadonlyArray<string> }
+        | undefined;
+    },
+    options?: { readonly within?: number | undefined },
+  ) => Effect.Effect<EndpointRecord, WebhookRecordLimitReached | StoreFailure.StoreUnavailable>;
   /** The ambient tenant's endpoint (`None` for another tenant's, exactly like an unknown id). */
   readonly findEndpoint: (
     id: string,
@@ -167,6 +185,7 @@ export interface WebhookRecordsShape {
     grant: TenantScoped.CrossTenant,
     id: string,
   ) => Effect.Effect<Option.Option<EndpointRecord>, StoreFailure.StoreUnavailable>;
+  /** Writes only the patched columns (one statement), so a concurrent write of other columns is kept. */
   readonly updateEndpoint: (
     id: string,
     patch: {
@@ -189,7 +208,7 @@ export interface WebhookRecordsShape {
       readonly previousSecretExpiresAt: DateTime.Utc | null;
     },
   ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound | StoreFailure.StoreUnavailable>;
-  /** `null` re-enables (and resets `consecutiveDead`). */
+  /** `null` re-enables (and resets `consecutiveDead`); disabling leaves `consecutiveDead` to the worker. One statement. */
   readonly setDisabled: (
     id: string,
     disabled: { readonly at: DateTime.Utc; readonly reason: DisabledReason } | null,
@@ -209,7 +228,7 @@ export interface WebhookRecordsShape {
     grant: TenantScoped.CrossTenant,
     id: string,
   ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
-  /** Removes the endpoint and every delivery row of it. */
+  /** Removes the endpoint and every delivery row of it, in one transaction. */
   readonly deleteEndpoint: (
     id: string,
   ) => Effect.Effect<void, WebhookRecordNotFound | StoreFailure.StoreUnavailable>;
@@ -218,7 +237,10 @@ export interface WebhookRecordsShape {
   readonly enqueue: (
     rows: ReadonlyArray<NewDelivery>,
   ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
-  /** Pending rows due at `now` whose endpoint is enabled, oldest due first; each is leased until `now + lease`. */
+  /**
+   * Pending rows due at `now` whose endpoint is enabled, oldest due first; each is leased until `now + lease`
+   * and handed out as leased (`nextAttemptAt` is the lease's end).
+   */
   readonly claimDue: (
     grant: TenantScoped.CrossTenant,
     input: {
@@ -431,10 +453,12 @@ export const layerMemory: Layer.Layer<
         })),
       );
 
-    const createEndpoint: WebhookRecordsShape["createEndpoint"] = (input) =>
+    const createEndpoint: WebhookRecordsShape["createEndpoint"] = (input, options) =>
       Effect.gen(function* () {
+        const within = options?.within;
         const now = yield* DateTime.now;
         const { tenantId } = yield* TenantScoped.stamp({ tenantId: null });
+        const sameTenant = TenantScoped.Visibility.Tenant({ tenant: Option.fromNullOr(tenantId) });
         const record: StoredEndpoint = {
           id: input.id,
           url: input.url,
@@ -456,8 +480,20 @@ export const layerMemory: Layer.Layer<
           createdAt: now,
           updatedAt: now,
         };
-        yield* Ref.update(state, (s) => ({ ...s, endpoints: [...s.endpoints, record] }));
-        return toRecord(record);
+        // Plan 25: the tenant's endpoint count and the insert in one step.
+        const outcome = yield* Ref.modify(
+          state,
+          (s): [Result.Result<StoredEndpoint, WebhookRecordLimitReached>, State] => {
+            if (
+              within !== undefined &&
+              s.endpoints.filter((row) => seenTenant(row, sameTenant)).length >= within
+            ) {
+              return [Result.fail(new WebhookRecordLimitReached({ limit: within })), s];
+            }
+            return [Result.succeed(record), { ...s, endpoints: [...s.endpoints, record] }];
+          },
+        );
+        return toRecord(yield* Effect.fromResult(outcome));
       });
 
     const enqueue: WebhookRecordsShape["enqueue"] = (rows) =>
@@ -517,16 +553,16 @@ export const layerMemory: Layer.Layer<
             )
             .slice(0, limit);
           const leasedUntil = DateTime.addDuration(now, lease);
-          const claimed = new Set(due.map((row) => row.id));
+          // Plan 24 W-1: the rows are handed out as leased, like SQL's `RETURNING *`.
+          const leased = due.map((row): DeliveryRecord => ({ ...row, nextAttemptAt: leasedUntil }));
+          const claimed = new Map(leased.map((row) => [row.id, row]));
           return [
-            due,
+            leased,
             {
               ...s,
-              deliveries: s.deliveries.map((row) =>
-                claimed.has(row.id) ? { ...row, nextAttemptAt: leasedUntil } : row,
-              ),
+              deliveries: s.deliveries.map((row) => claimed.get(row.id) ?? row),
             },
-          ] as const;
+          ];
         }),
       );
 
@@ -893,6 +929,7 @@ export const layerSql: Layer.Layer<
     );
     const EndpointRow = makeEndpointRow(wire);
     const DeliveryRow = makeDeliveryRow(wire);
+    const decodeEndpoints = Schema.decodeUnknownEffect(Schema.Array(EndpointRow));
     const secretCodec = yield* SealedColumn.codec(
       secretColumn,
       yield* SealedColumn.sqlSwap(secretColumn),
@@ -985,28 +1022,16 @@ export const layerSql: Layer.Layer<
       execute: () =>
         sql`SELECT * FROM webhooks_endpoint WHERE "disabledAt" IS NULL ORDER BY "createdAt", id`,
     });
-    // Read-modify-write over the mutable columns: an administrator's edit, not a hot path.
-    const writeMutable = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        id: Schema.String,
-        url: Schema.String,
-        description: Schema.NullOr(Schema.String),
-        eventTags: Schema.fromJsonString(Schema.Array(Schema.String)),
-        headers: Schema.NullOr(Schema.String),
-        headerNames: Schema.fromJsonString(Schema.Array(Schema.String)),
-        updatedAt: wire.dateTime,
-      }),
-      Result: EndpointRow,
-      execute: (r) =>
-        Effect.flatMap(
-          endpointScope(),
-          (scope) => sql`
-        UPDATE webhooks_endpoint SET url = ${r.url}, description = ${r.description},
-          "eventTags" = ${r.eventTags}, headers = ${r.headers}, "headerNames" = ${r.headerNames},
-          "updatedAt" = ${r.updatedAt}
-        WHERE id = ${r.id} AND ${scope}
-        RETURNING *`,
-        ),
+    /** The endpoints of one tenant (`NULL` for the platform's), counted under that tenant's endpoint lock. */
+    const countForTenant = SqlSchema.findOne({
+      Request: Schema.NullOr(Schema.String),
+      Result: Schema.Struct({ count: Schema.Number }),
+      execute: (tenantId) =>
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM webhooks_endpoint WHERE ${TenantScoped.predicate(
+          sql,
+          "tenantId",
+          TenantScoped.Visibility.Tenant({ tenant: Option.fromNullOr(tenantId) }),
+        )}`,
     });
     const writeSecrets = SqlSchema.findOneOption({
       Request: Schema.Struct({
@@ -1023,25 +1048,6 @@ export const layerSql: Layer.Layer<
           (scope) => sql`
         UPDATE webhooks_endpoint SET secret = ${r.secret}, "previousSecret" = ${r.previousSecret},
           "previousSecretExpiresAt" = ${r.previousSecretExpiresAt}, "updatedAt" = ${r.updatedAt}
-        WHERE id = ${r.id} AND ${scope}
-        RETURNING *`,
-        ),
-    });
-    const writeDisabled = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        id: Schema.String,
-        disabledAt: wire.nullableDateTime,
-        disabledReason: Schema.NullOr(Schema.String),
-        consecutiveDead: Schema.Number,
-        updatedAt: wire.dateTime,
-      }),
-      Result: EndpointRow,
-      execute: (r) =>
-        Effect.flatMap(
-          endpointScope(),
-          (scope) => sql`
-        UPDATE webhooks_endpoint SET "disabledAt" = ${r.disabledAt}, "disabledReason" = ${r.disabledReason},
-          "consecutiveDead" = ${r.consecutiveDead}, "updatedAt" = ${r.updatedAt}
         WHERE id = ${r.id} AND ${scope}
         RETURNING *`,
         ),
@@ -1130,8 +1136,9 @@ export const layerSql: Layer.Layer<
         Option.isSome(row) ? Effect.succeed(row.value) : Effect.fail(notFound(id));
 
     return {
-      createEndpoint: (input) =>
+      createEndpoint: (input, options) =>
         Effect.gen(function* () {
+          const within = options?.within;
           const now = yield* DateTime.now;
           const stamped = yield* TenantScoped.stamp({ tenantId: null });
           const secret = yield* secretCodec.seal(input.id, input.secret);
@@ -1139,7 +1146,7 @@ export const layerSql: Layer.Layer<
             input.headers === undefined
               ? null
               : yield* headersCodec.seal(input.id, Redacted.make(input.headers.value));
-          return yield* insertEndpoint({
+          const write = insertEndpoint({
             id: input.id,
             url: input.url,
             description: input.description ?? null,
@@ -1156,8 +1163,27 @@ export const layerSql: Layer.Layer<
             headerNames: input.headers?.names ?? [],
             createdAt: now,
             updatedAt: now,
-            // `INSERT ... RETURNING` always returns the row it wrote.
-          }).pipe(Effect.catchTag("NoSuchElementError", Effect.die), failing("createEndpoint"));
+          });
+          // Plan 25: the tenant's endpoint count under its lock, in the transaction that inserts.
+          const guarded =
+            within === undefined
+              ? write
+              : SqlStore.atomically(
+                  sql,
+                  `webhooks_endpoint:tenant:${stamped.tenantId ?? "-"}`,
+                )(
+                  Effect.gen(function* () {
+                    if ((yield* countForTenant(stamped.tenantId)).count >= within) {
+                      return yield* Effect.fail(new WebhookRecordLimitReached({ limit: within }));
+                    }
+                    return yield* write;
+                  }),
+                );
+          // `INSERT ... RETURNING` always returns the row it wrote.
+          return yield* guarded.pipe(
+            Effect.catchTag("NoSuchElementError", Effect.die),
+            failing("createEndpoint"),
+          );
         }).pipe(Effect.map(toEndpoint)),
       findEndpoint: (id) =>
         endpointById(id).pipe(failing("findEndpoint"), Effect.map(Option.map(toEndpoint))),
@@ -1182,30 +1208,31 @@ export const layerSql: Layer.Layer<
           sql`UPDATE webhooks_endpoint SET "disabledAt" = ${wireDate(at)}, "disabledReason" = 'failing',
             "updatedAt" = ${wireDate(at)} WHERE id = ${id}`,
         ).pipe(failing("disableFailing"), Effect.asVoid),
+      // Plan 24 C8 (plan 25): one `UPDATE` of only the patched columns, `RETURNING *`. No read-before-write, so a
+      // concurrent write of another column (another PATCH, the worker's `bumpDead`) keeps its change.
       updateEndpoint: (id, patch) =>
         Effect.gen(function* () {
-          const current = yield* endpointById(id).pipe(
-            failing("updateEndpoint"),
-            Effect.flatMap(requireRow(id)),
-          );
           const now = yield* DateTime.now;
-          const headers =
-            patch.headers === undefined
-              ? current.headers
-              : patch.headers === null
+          const columns: Record<string, string | Date | null> = { updatedAt: wireDate(now) };
+          if (patch.url !== undefined) columns["url"] = patch.url;
+          if (patch.description !== undefined) columns["description"] = patch.description;
+          if (patch.eventTags !== undefined) columns["eventTags"] = JSON.stringify(patch.eventTags);
+          if (patch.headers !== undefined) {
+            columns["headers"] =
+              patch.headers === null
                 ? null
                 : yield* headersCodec.seal(id, Redacted.make(patch.headers.value));
-          const updated = yield* writeMutable({
-            id,
-            url: patch.url ?? current.url,
-            description: patch.description === undefined ? current.description : patch.description,
-            eventTags: patch.eventTags ?? current.eventTags,
-            headers,
-            headerNames:
-              patch.headers === undefined ? current.headerNames : (patch.headers?.names ?? []),
-            updatedAt: now,
-          }).pipe(failing("updateEndpoint"), Effect.flatMap(requireRow(id)));
-          return toEndpoint(updated);
+            columns["headerNames"] = JSON.stringify(patch.headers?.names ?? []);
+          }
+          const scope = yield* endpointScope();
+          const rows =
+            yield* sql`UPDATE webhooks_endpoint SET ${sql.update(columns)} WHERE id = ${id} AND ${scope} RETURNING *`.pipe(
+              Effect.flatMap(decodeEndpoints),
+              failing("updateEndpoint"),
+            );
+          const [row] = rows;
+          if (row === undefined) return yield* Effect.fail(notFound(id));
+          return toEndpoint(row);
         }),
       setSecrets: (id, secrets) =>
         Effect.gen(function* () {
@@ -1223,21 +1250,24 @@ export const layerSql: Layer.Layer<
             updatedAt: now,
           }).pipe(failing("setSecrets"));
         }).pipe(Effect.flatMap(requireRow(id)), Effect.map(toEndpoint)),
+      // Plan 24 C8 (plan 25): one statement. Disabling leaves `consecutiveDead` alone (the worker's `bumpDead` may
+      // be adding to it right now); re-enabling resets it in the same statement.
       setDisabled: (id, disabled) =>
         Effect.gen(function* () {
-          const current = yield* endpointById(id).pipe(
-            failing("setDisabled"),
-            Effect.flatMap(requireRow(id)),
-          );
           const now = yield* DateTime.now;
-          const updated = yield* writeDisabled({
-            id,
-            disabledAt: disabled?.at ?? null,
-            disabledReason: disabled?.reason ?? null,
-            consecutiveDead: disabled === null ? 0 : current.consecutiveDead,
-            updatedAt: now,
-          }).pipe(failing("setDisabled"), Effect.flatMap(requireRow(id)));
-          return toEndpoint(updated);
+          const scope = yield* endpointScope();
+          const rows = yield* (
+            disabled === null
+              ? sql`UPDATE webhooks_endpoint SET "disabledAt" = NULL, "disabledReason" = NULL,
+                  "consecutiveDead" = 0, "updatedAt" = ${wireDate(now)}
+                WHERE id = ${id} AND ${scope} RETURNING *`
+              : sql`UPDATE webhooks_endpoint SET "disabledAt" = ${wireDate(disabled.at)},
+                  "disabledReason" = ${disabled.reason}, "updatedAt" = ${wireDate(now)}
+                WHERE id = ${id} AND ${scope} RETURNING *`
+          ).pipe(Effect.flatMap(decodeEndpoints), failing("setDisabled"));
+          const [row] = rows;
+          if (row === undefined) return yield* Effect.fail(notFound(id));
+          return toEndpoint(row);
         }),
       bumpDead: (grant, id) =>
         bump(id).pipe(
@@ -1249,18 +1279,16 @@ export const layerSql: Layer.Layer<
         witnessed(grant)(
           sql`UPDATE webhooks_endpoint SET "consecutiveDead" = 0 WHERE id = ${id}`,
         ).pipe(failing("clearDead"), Effect.asVoid),
+      // Plan 24 C9 (plan 25): both DELETEs in one transaction, the endpoint's row first. Every other write takes one
+      // row lock in one statement (the endpoint's or a delivery's), so none can wait on this in a cycle.
       deleteEndpoint: (id) =>
         Effect.gen(function* () {
           const scope = yield* endpointScope();
           const removed =
-            yield* sql`DELETE FROM webhooks_endpoint WHERE id = ${id} AND ${scope} RETURNING id`.pipe(
-              failing("deleteEndpoint"),
-            );
+            yield* sql`DELETE FROM webhooks_endpoint WHERE id = ${id} AND ${scope} RETURNING id`;
           if (removed.length === 0) return yield* Effect.fail(notFound(id));
-          yield* sql`DELETE FROM webhooks_delivery WHERE "endpointId" = ${id}`.pipe(
-            failing("deleteEndpoint"),
-          );
-        }),
+          yield* sql`DELETE FROM webhooks_delivery WHERE "endpointId" = ${id}`;
+        }).pipe(SqlTransaction.transactional(sql), failing("deleteEndpoint")),
       enqueue: (rows) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
