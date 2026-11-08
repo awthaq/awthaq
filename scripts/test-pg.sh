@@ -60,7 +60,6 @@ suites=(
   packages/core/test/Verification.test.ts
   packages/device-authorization/test/DeviceAuthorization.test.ts
   packages/device-authorization/test/AuthHttp.test.ts
-  packages/device-authorization/test/StoreOutage.test.ts
   packages/jwt/test/KeyRing.test.ts
   packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts

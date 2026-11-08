@@ -2,10 +2,12 @@
 // for `DeviceAuthorization`.
 import { SessionLifecycle } from "@awthaq/api";
 import * as DeviceAuthorizationApi from "../src/DeviceAuthorizationApi.ts";
-import { RecordsContract, TestAuth } from "@awthaq/test";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as DeviceAuthorization from "../src/DeviceAuthorization.ts";
+import { deviceClientRecords } from "./contract/DeviceClientRecords.ts";
+import { deviceGrantRecords } from "./contract/DeviceGrantRecords.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
@@ -13,7 +15,10 @@ TestAuth.runPluginContractTests(framework, () => DeviceAuthorization.DeviceAutho
   options: [{}],
   records: {
     suite: "device_authorization_records_contract",
-    suites: RecordsContract.pending("19"),
+    suites: {
+      "awthaq/device-authorization/records/DeviceGrantRecords": deviceGrantRecords,
+      "awthaq/device-authorization/records/DeviceClientRecords": deviceClientRecords,
+    },
   },
   build: { services: Layer.empty },
 });
