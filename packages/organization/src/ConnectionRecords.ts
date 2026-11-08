@@ -718,10 +718,12 @@ export const layerSql: Layer.Layer<
       function* (organizationId, id) {
         const existing = yield* findStored(organizationId, id).pipe(unavailable("remove"));
         if (Option.isNone(existing)) return yield* Effect.fail(notFound(id));
+        // C6: the connection row first, then its domains, the order `rewrite` locks them in; the opposite
+        // order deadlocks an update racing this removal on Postgres.
         yield* SqlTransaction.transactional(sql)(
           Effect.gen(function* () {
-            yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "connectionId" = ${id} AND "organizationId" = ${organizationId}`;
             yield* sql`DELETE FROM organization_oauth_connection WHERE id = ${id} AND "organizationId" = ${organizationId}`;
+            yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "connectionId" = ${id} AND "organizationId" = ${organizationId}`;
           }),
         ).pipe(
           Effect.catchTag("SqlError", StoreFailure.storeUnavailable("ConnectionRecords.remove")),
@@ -734,8 +736,9 @@ export const layerSql: Layer.Layer<
     ) =>
       SqlTransaction.transactional(sql)(
         Effect.gen(function* () {
-          yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "organizationId" = ${organizationId}`;
+          // Rows before domains, as `remove` and `rewrite` lock them.
           yield* sql`DELETE FROM organization_oauth_connection WHERE "organizationId" = ${organizationId}`;
+          yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "organizationId" = ${organizationId}`;
         }),
       ).pipe(
         Effect.catchTag(
