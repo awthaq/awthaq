@@ -8,26 +8,34 @@ import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Admin } from "@awthaq/admin";
 import { ApiKey } from "@awthaq/api-key";
-import { Auth, Migrations, UserFields } from "@awthaq/core";
+import { Auth, type AuthPlugin, Migrations, UserFields } from "@awthaq/core";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Jwt } from "@awthaq/jwt";
 import { Organization } from "@awthaq/organization";
 import { Passkey } from "@awthaq/passkey";
 import { Roles } from "@awthaq/roles";
 import { Scim } from "@awthaq/scim";
 import { TestAuth } from "@awthaq/test";
-import { UserStore } from "@awthaq/ports";
+import { RateLimiter, UserStore } from "@awthaq/ports";
+import { AuthHost, Csrf } from "@awthaq/server";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CoreMigrations } from "@awthaq/sql";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 import { assertTypeGate, cell, isObject, put, take, type World } from "./FoundationsWorld.ts";
-import { MigOauth, MigPassword, migrateSqlite } from "./MigrationFixtures.ts";
+import { MigOauth, MigPassword, MigTwoFactor, migrateSqlite } from "./MigrationFixtures.ts";
 import { insertUser, withDatabase } from "./PersistenceStratumWorld.ts";
 import { layerEvaluations, PasswordFixture } from "./PluginFixtures.ts";
 import { Profile, fieldKey } from "./UserFieldsFixture.ts";
@@ -48,6 +56,56 @@ const ledger = cell(
     readonly composed: ReadonlyArray<string>;
   } => isObject(value) && "core" in value && "plugin" in value,
 );
+
+/** BEH-EA-341: how an `AuthHost` boot ended: the failure's tag and message, and whether `oauth`'s table appeared. */
+const boot = cell(
+  "boot",
+  (
+    value,
+  ): value is { readonly tag: string; readonly message: string; readonly oauthTable: boolean } =>
+    isObject(value) && "tag" in value && "message" in value,
+);
+
+/** An `AuthHost` server over the given SQLite file, with the fixtures' ports: building it is booting it. */
+const bootServer = <P extends ReadonlyArray<AuthPlugin.Any>>(
+  built: Auth.Built<P>,
+  filename: string,
+  migrations: Migrations.OnBuild,
+) =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
+      Effect.scoped(
+        Layer.build(
+          AuthHost.layer(built, {
+            persistence: { records: "sql", client: SqliteClient.layer({ filename }), migrations },
+            csrf: Layer.succeed(Csrf.CsrfConfig, TestAuth.TestCsrfConfig),
+          }).pipe(
+            Layer.provide(Layer.mergeAll(RateLimiter.layerPermissive, TestAuth.encryption)),
+            Layer.provide(NodeCrypto.layer),
+            Layer.provide(HttpServer.layerServices),
+            Layer.provide(HttpRouter.layer),
+          ),
+        ),
+      ),
+    );
+    const error = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
+    const oauthTable = yield* Migrations.tableExists("oauth_account").pipe(
+      Effect.provide(SqliteClient.layer({ filename })),
+      Effect.orDie,
+    );
+    return Option.match(error, {
+      onNone: () => ({ tag: "built", message: "", oauthTable }),
+      onSome: (failure) => ({
+        tag: isObject(failure) && "_tag" in failure ? String(failure._tag) : "unknown",
+        message: isObject(failure) && "message" in failure ? String(failure.message) : "",
+        oauthTable,
+      }),
+    });
+  });
+
+/** A fresh SQLite file per scenario (the boots under test open their own client on it). */
+const scratchDatabase = () =>
+  path.join(mkdtempSync(path.join(tmpdir(), "awthaq-bdd-host-")), "auth.sqlite");
 
 /** The linker's tuple for BEH-EA-038: `oauth` depends on `password`. */
 const composeLinked = () => Auth.make([MigPassword, MigOauth]);
@@ -666,4 +724,59 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
     assert.deepEqual(Profile.migrations, []);
     assertTypeGate("table-foreign-prefix", GATES_PLUGIN, ["@ts-expect-error"]);
   });
+
+  // ---- BEH-EA-341: a SQL host composition never serves a schema behind it ----
+
+  Given(
+    "an {string} server in {string} mode over an unmigrated database",
+    function* (host: string, mode: string) {
+      yield* Effect.void; // an assertion-only step: the When boots it
+      assert.deepEqual([host, mode], ["AuthHost.layer", "verify"]);
+    },
+  );
+
+  When("the server starts", function* () {
+    yield* put(boot, yield* bootServer(Auth.make([MigPassword]), scratchDatabase(), "verify"));
+  });
+
+  Then(
+    "it refuses to start with {string} naming {string}",
+    function* (tag: string, migration: string) {
+      const outcome = yield* take(boot);
+      assert.equal(outcome.tag, tag);
+      assert.ok(outcome.message.includes(`plugins ${migration}`), outcome.message);
+    },
+  );
+
+  Given("a database migrated for {string}", function* (composition: string) {
+    assert.equal(composition, "Auth.make([password, two_factor])");
+    const filename = scratchDatabase();
+    yield* Migrations.apply(Auth.make([MigPassword, MigTwoFactor]).migrations).pipe(
+      Effect.provide(SqliteClient.layer({ filename })),
+      Effect.orDie,
+    );
+    yield* put(strings, [filename]);
+  });
+
+  When(
+    "a server composing {string} starts in {string} mode",
+    function* (composition: string, mode: string) {
+      assert.deepEqual([composition, mode], ["Auth.make([password, oauth, two_factor])", "apply"]);
+      const [filename = ""] = yield* take(strings);
+      yield* put(
+        boot,
+        yield* bootServer(Auth.make([MigPassword, MigOauth, MigTwoFactor]), filename, "apply"),
+      );
+    },
+  );
+
+  Then(
+    "it refuses to start with {string} and {string} gets no table",
+    function* (tag: string, plugin: string) {
+      const outcome = yield* take(boot);
+      assert.equal(outcome.tag, tag);
+      assert.equal(plugin, "oauth");
+      assert.equal(outcome.oauthTable, false);
+    },
+  );
 });

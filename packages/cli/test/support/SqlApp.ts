@@ -3,6 +3,11 @@
 // client (SQLite), exactly what an application's `awthaq.config.ts` exports as `app`. It is a
 // Layer over a `SqlClient` the *test* owns, so state survives across the separate builds each CLI
 // invocation performs (a fresh runtime per command), the way a database does.
+//
+// Not `AuthHost.layer` (plan 15 phase 4 considered it): these commands need services, not a served composition, and
+// the host module's port block (a hasher with the legacy verifiers, a mailer, a limiter, a client address, a key, a
+// breach-check transport, the HTTP platform) is no shorter than this file. `sqlAppWithoutRoles` also runs over a
+// database migrated for Password + Roles, which `AuthHost`'s `"verify"` mode rightly refuses as ledger drift.
 import { TestEncryption } from "@awthaq/test";
 import {
   Accounts,
@@ -19,11 +24,8 @@ import { PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
 import { BetterAuthScryptVerifier } from "@awthaq/migrate-better-auth";
 import { FirebaseScryptVerifier } from "@awthaq/migrate-firebase";
-import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 import { role } from "@qadi/core";
 import { passwordAndRoles } from "./TestApp.ts";
@@ -79,7 +81,4 @@ export const sqlAppWithoutRoles = (sql: SqlClient.SqlClient) =>
   CoreLive.pipe(Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)));
 
 /** Applies core's migrations and the composition's plugin migrations to the current client, as `migration apply --yes` does. */
-export const migrate = Effect.gen(function* () {
-  yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
-  yield* Migrations.run(passwordAndRoles.migrations);
-});
+export const migrate = Migrations.apply(passwordAndRoles.migrations);

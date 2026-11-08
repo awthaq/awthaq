@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-001 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) <br> 1.2 (2026-11-08): Consequences: composing the servable layer is still `Layer` algebra (`AuthHost`, ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -32,7 +32,7 @@ This decision is the foundation the other eleven ADRs in this set build on: ADR-
 
 ## Consequences
 
-**Positive**: Plugin composition inherits everything Effect already built for layers — memoized construction, scoped acquire/release, typed requirements, and a decade of ecosystem tooling (testing via layer substitution, `ManagedRuntime`, ecosystem familiarity for any Effect developer). There is no second runtime to document, version, or keep in sync with Effect's own semantics.
+**Positive**: Plugin composition inherits everything Effect already built for layers — memoized construction, scoped acquire/release, typed requirements, and a decade of ecosystem tooling (testing via layer substitution, `ManagedRuntime`, ecosystem familiarity for any Effect developer). There is no second runtime to document, version, or keep in sync with Effect's own semantics. Composing the servable layer is still `Layer` algebra: `AuthHost` is one function over the static tuple, with no runtime of its own ([ADR-EA-044](044-host-composition.md)).
 
 **Negative**: Contribution metadata that is not encoded in the Layer's type (human-readable plugin names for error messages, documentation strings, CLI-facing manifests) has to be attached separately, as static properties on the plugin's `Context.Service` class (ADR-EA-008), rather than falling out of a single declarative record the way it would in the rejected alternative.
 

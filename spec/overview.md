@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-OVERVIEW |
-> | Revision | 1.14 |
-> | Effective Date | 2026-10-18 |
+> | Revision | 1.15 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) <br> 1.4 (2026-10-13): the Ports table names the `SqlTransaction` unit of work (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): Ports surface lists `Ids`, `Store` and `PruneExpired` (plan 02 phase 1) <br> 1.6 (2026-10-13): Ports surface lists `VerificationStore` (plan 02 phase 3) <br> 1.7 (2026-10-13): Ports surface lists `AccountStore` (plan 02 phase 4) <br> 1.8 (2026-10-13): Ports surface lists `UserStore` (plan 02 phase 5) <br> 1.9 (2026-10-13): Ports surface lists `SessionStore` (plan 02 phase 6) <br> 1.10 (2026-10-18): core module table gains `FederatedIdentity` (architecture plan 14) <br> 1.11 (2026-10-18): Ports surface lists `RelayCursorStore` (architecture plan 23 phase 1) <br> 1.12 (2026-10-18): the core `EventRelay` row names the position as the `RelayCursorStore` port; the outbox cites ADR-EA-030 (architecture plan 23 phase 3) <br> 1.13 (2026-10-18): Ports surface lists `Sealed` (the value an adapter stores sealed, with its treatments) and the sql row names `CoreSealedColumns` (architecture plan 17) <br> 1.14 (2026-10-18): the Persistence row names the store adapters and the `CoreStoresSql` bundle; there is no repository layer (plan 16) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "planned system, nothing shipped" banner with the shipped state; reconciled the package map and every surface table with the exports in `packages/` (the Ports stratum lists all fifteen modules, the contract stratum its real names, the plugin roster its real packages); the Ports and core-API inventories are diffed against source by `spec/scripts/check-drift.mjs` (DTWS-001, DTWS-008, AVS-008, CCR-EA-006) <br> 1.3 (2026-10-13): The status banner and the plugin roster list `two-factor`, `magic-link`, `saml` and `webhooks` as shipped (plan 10 item 8) <br> 1.4 (2026-10-13): the Ports table names the `SqlTransaction` unit of work (ADR-EA-037, plan 10 item 5) <br> 1.5 (2026-10-13): Ports surface lists `Ids`, `Store` and `PruneExpired` (plan 02 phase 1) <br> 1.6 (2026-10-13): Ports surface lists `VerificationStore` (plan 02 phase 3) <br> 1.7 (2026-10-13): Ports surface lists `AccountStore` (plan 02 phase 4) <br> 1.8 (2026-10-13): Ports surface lists `UserStore` (plan 02 phase 5) <br> 1.9 (2026-10-13): Ports surface lists `SessionStore` (plan 02 phase 6) <br> 1.10 (2026-10-18): core module table gains `FederatedIdentity` (architecture plan 14) <br> 1.11 (2026-10-18): Ports surface lists `RelayCursorStore` (architecture plan 23 phase 1) <br> 1.12 (2026-10-18): the core `EventRelay` row names the position as the `RelayCursorStore` port; the outbox cites ADR-EA-030 (architecture plan 23 phase 3) <br> 1.13 (2026-10-18): Ports surface lists `Sealed` (the value an adapter stores sealed, with its treatments) and the sql row names `CoreSealedColumns` (architecture plan 17) <br> 1.14 (2026-10-18): the Persistence row names the store adapters and the `CoreStoresSql` bundle; there is no repository layer (plan 16) <br> 1.15 (2026-11-08): the composition stratum is `Auth.make`, `AuthHost.layer` and the application's ports; the HTTP stratum and the composition table list `AuthHost`; the worked example points at it (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -47,9 +47,9 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 | 2 Ports | `@awthaq/ports` | The capabilities a plugin requires and the application provides: `PasswordHasher`, `Mailer`, `SmsSender`, `WebAuthn`, `Encryption`, `KeyProvider`, `RateLimiter`, `SqlTransaction`, `ClientAddress`, `LegacySessionBridge`, `WebCrypto`, plus helpers (`Hmac`, `RefreshingCache`, `Defects`, `Tenant`, `PasswordHasherWorkerPool`, `OutboundUrl`, `PinnedHttp`) and the `XmlSignature` and `HostResolver` services. Each service ships the layers its own module documents — not a uniform `layer`/`layerNoop`/`layerMemory` triple. |
 | 3 Persistence | `@awthaq/sql` | Models, the SQL store adapters (`*StoreSql`) and `CoreStoresSql`, migration records, `SealedColumn` and `CoreSealedColumns` (core's six sealed columns). |
 | 4 Domain | `@awthaq/core` | Domain services, hook points, `AuthEvents`, config references, slots, the `Auth` namespace. |
-| 5 HTTP | `@awthaq/server` | Middleware implementations, core handlers, `AuthHttp`. |
+| 5 HTTP | `@awthaq/server` | Middleware implementations, core handlers, `AuthHttp`, `AuthHost` (the servable layer derived from `Auth.make`). |
 | 6 Authorization | `@awthaq/qadi` | `AuthorizedSubject` middleware, `SubjectExtractor` layer, obligation handlers — the bridge to qadi, not an authorizer. |
-| 7 Composition | (application code) | `Auth.make([...])` and the application's own `Layer.provide` stack. |
+| 7 Composition | (application code) | `Auth.make([...])`, `AuthHost.layer(auth, {...})`, and the application's ports. |
 | client | `@awthaq/client`, `@awthaq/react`, `@awthaq/web`, `@awthaq/next` | `HttpApiClient` bindings, reactive atoms, provider glue, framework adapters (`@awthaq/web` is the framework-neutral core; `@awthaq/next` is the Next adapter over it). Headless by design: no drop-in sign-in/sign-up/user-button/organization-switcher components, ever — apps build their own UI against typed contract errors and atoms. |
 | tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, `runPluginContractTests`, the redaction guard; the `awthaq` command line (`doctor`, `config list`, `plugin list`, `routes`, `migration`, `openapi`, `seed admin`, `import`, `login`). |
 | plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim`, `device-authorization`, `magic-link` (magic link and email OTP), `two-factor`, `saml` (with the `Sso` dispatcher), `webhooks` | One or more `AuthPlugin.Service` classes each. |
@@ -66,6 +66,7 @@ Each table lists what the package exports. "Source" is the file under the stratu
 | `Auth.make` | function | `Auth.ts` |
 | `Auth.Validate<P>` | conditional type | `Auth.ts` |
 | `Auth.Built<P>` | interface (`api`, `publicApi`, `adminApi`, `layer`, `migrations`, `manifest`, `tenancy`) | `Auth.ts` |
+| `AuthHost.layer` | function (`@awthaq/server`): the servable layer from `Auth.make`'s result; the host passes `persistence`, `csrf` and its policy layers, and provides its ports | `AuthHost.ts` |
 
 ### Plugin contract (stratum 4, cross-cutting)
 
@@ -186,7 +187,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 
 ## Worked example
 
-Illustrative, not a compiled listing — reproduced from `archive/PRD.md` §26, the product's north-star developer experience. The root [`README.md`](../README.md) carries the runnable, type-checked quickstart:
+Illustrative, not a compiled listing — reproduced from `archive/PRD.md` §26, the product's north-star developer experience, before `AuthHost` existed. The shipped form is `AuthHost.layer(auth, { persistence, csrf, ... })` over the application's ports ([ADR-EA-044](decisions/044-host-composition.md)); the root [`README.md`](../README.md) carries the runnable, type-checked quickstart:
 
 ```ts
 export const auth = Auth.make([Password, Passkey, Organization, Roles])

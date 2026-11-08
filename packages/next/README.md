@@ -250,7 +250,7 @@ composed, and the action's cookies and client metadata ride along:
 // app/lib/handler.ts — built once, next to the pinned runtime
 import "server-only";
 import * as HttpRouter from "effect/http/HttpRouter";
-import { AppRoutesLayer } from "./layer.ts"; // AuthHttp.routes(AppApi, ...) plus your services
+import { AppRoutesLayer } from "./layer.ts"; // AuthHost.layer(auth, { persistence, csrf }) plus your ports and HttpRouter.layer
 
 declare global {
   // eslint-disable-next-line no-var

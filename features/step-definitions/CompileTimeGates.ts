@@ -8,6 +8,7 @@
 // @effect-diagnostics missingEffectContext:off
 import { Api } from "@awthaq/api";
 import {
+  Auth,
   EmailChange,
   HookPoint,
   RateLimits,
@@ -18,7 +19,10 @@ import {
 import { TwoFactor } from "@awthaq/two-factor";
 import { OAuthProvider } from "@awthaq/oauth";
 import { Password } from "@awthaq/password";
-import { PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { AuthHost, Csrf } from "@awthaq/server";
+import { TestAuth } from "@awthaq/test";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { AuthorizedSubject } from "@awthaq/qadi";
 import type { Authorized, Permission } from "@qadi/core";
 import { PublicEndpoint } from "@qadi/http";
@@ -27,6 +31,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 
@@ -250,3 +256,30 @@ export const leakyProvider = OAuthProvider.oauth2({
   },
   mapProfile: () => ({ subject: "x" }),
 });
+
+// ---- 02-plugin-composition-validate.feature: BEH-EA-340 (plan 15) ----
+
+// type-gate: auth-host-missing-port
+const hostedPassword = AuthHost.layer(Auth.make([Password.Password]), {
+  persistence: { records: "memory" },
+  csrf: Csrf.layerConfig,
+});
+const everyPortButMailer = Layer.mergeAll(
+  PasswordHasher.layerArgon2id,
+  RateLimiter.layerPermissive,
+  ClientAddress.layerDirect,
+  TestAuth.httpClient.noBreach,
+).pipe(
+  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(HttpServer.layerServices),
+  Layer.provideMerge(HttpRouter.layer),
+);
+export const hostWithoutMailer = () =>
+  // @ts-expect-error - `Mailer` is still in the layer's requirements: the host omitted a port (BEH-EA-014)
+  Effect.runPromise(Layer.launch(hostedPassword.pipe(Layer.provide(everyPortButMailer))));
+export const hostWithEveryPort = () =>
+  Effect.runPromise(
+    Layer.launch(
+      hostedPassword.pipe(Layer.provide(everyPortButMailer), Layer.provide(Mailer.layerMemory)),
+    ),
+  );

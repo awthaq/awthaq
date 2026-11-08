@@ -275,6 +275,16 @@ Feature: Testing Harness
       When a session is minted through the app's context runner and used on its handler
       Then the handler authenticates the request
 
+  # BEH-EA-342 — spec/behaviors/25-testing-harness.md (ADR-EA-044)
+  @BEH-EA-342
+  Rule: TestAuth.layer is AuthHost.layer over the test ports
+
+    @REQ-EA-1325
+    Scenario: The harness serves the same wiring a host composition serves
+      Given one composition built through "TestAuth.layer" and through "AuthHost.layer" over the same ports
+      When both are built
+      Then the harness holds every service the host composition holds, plus only the redaction guard's
+
   # BEH-EA-336 — spec/behaviors/25-testing-harness.md
   @BEH-EA-336
   Rule: Every shipped plugin runs the contract suite, which checks its records

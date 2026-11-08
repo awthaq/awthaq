@@ -2,14 +2,21 @@
 // composition over memory and over SQL, `TestAuth.app` shares one context between its handler and its runner, and
 // `pnpm check:contract-tests` fails a plugin package with no contract-test call. The compile-time claims of
 // BEH-EA-334/335 are `PluginTypeGates.ts`'s.
-import { TestAuth } from "@awthaq/test";
+import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { AuthHost, Csrf } from "@awthaq/server";
+import { RedactionGuard, TestAuth } from "@awthaq/test";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
   LedgerRecords,
@@ -48,6 +55,34 @@ const isRoundTrip = (value: unknown): value is { added: number; listed: Readonly
   value !== null &&
   isNumber(Reflect.get(value, "added")) &&
   isStringArray(Reflect.get(value, "listed"));
+
+/** The service keys a layer's built context holds. */
+const keysOf = <A, E>(layer: Layer.Layer<A, E>) =>
+  Effect.scoped(
+    Effect.map(Layer.build(layer), (context: Context.Context<A>) =>
+      Array.from(context.mapUnsafe.keys()).sort(),
+    ),
+  );
+
+/** `AuthHost.layer` over the same ports `TestAuth` provides (only the keys matter) and the HTTP platform. */
+const hostedLedger = AuthHost.layer(ledgerBuilt, {
+  persistence: { records: "memory" },
+  csrf: Layer.succeed(Csrf.CsrfConfig, TestAuth.TestCsrfConfig),
+  requestContext: false,
+  bodyLimit: false,
+}).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      PasswordHasher.layerArgon2id.pipe(Layer.orDie),
+      Mailer.layerMemory,
+      RateLimiter.layerPermissive,
+      ClientAddress.layerDirect,
+      TestAuth.encryption,
+    ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+  ),
+  Layer.provideMerge(HttpServer.layerServices),
+  Layer.provideMerge(HttpRouter.layer),
+);
 
 export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-331 -------------------------------------------------------------------------
@@ -242,4 +277,39 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     const { outcomes } = yield* World;
     assert.equal(yield* outcomes.getAs("status", isNumber), 0);
   });
+
+  // ---- BEH-EA-342 ---------------------------------------------------------------------------
+
+  Given(
+    "one composition built through {string} and through {string} over the same ports",
+    function* (harness: string, host: string) {
+      yield* Effect.void; // an assertion-only step: the When builds both
+      assert.deepEqual([harness, host], ["TestAuth.layer", "AuthHost.layer"]);
+    },
+  );
+
+  When("both are built", function* () {
+    const { outcomes } = yield* World;
+    yield* outcomes.set("harnessKeys", yield* keysOf(TestAuth.layer(ledgerBuilt)));
+    yield* outcomes.set("hostKeys", yield* keysOf(hostedLedger));
+    yield* outcomes.set("guardKeys", yield* keysOf(RedactionGuard.layer));
+  });
+
+  Then(
+    "the harness holds every service the host composition holds, plus only the redaction guard's",
+    function* () {
+      const { outcomes } = yield* World;
+      const harness = yield* outcomes.getAs("harnessKeys", isStringArray);
+      const host = yield* outcomes.getAs("hostKeys", isStringArray);
+      const guard = yield* outcomes.getAs("guardKeys", isStringArray);
+      assert.deepEqual(
+        host.filter((key) => !harness.includes(key)),
+        [],
+      );
+      assert.deepEqual(
+        harness.filter((key) => !host.includes(key)),
+        guard.filter((key) => !host.includes(key)),
+      );
+    },
+  );
 });

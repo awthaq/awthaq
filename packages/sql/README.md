@@ -111,7 +111,7 @@ import * as Migrator from "effect/sql/Migrator";
 yield * Migrator.make({})({ loader: CoreMigrations.coreMigrations });
 ```
 
-**Two ledgers, on purpose.** `Migrator` records only a numeric id and skips any id at or below the newest one recorded. Core's ids (1–25) live in the default `effect_sql_migrations` table. The plugin list (`auth.migrations`, run with `@awthaq/core`'s `Migrations.run`) numbers from 1 as well, so it uses its own table, `awthaq_plugin_migrations`; the SQL rate limiter's migration uses `awthaq_rate_limiter_migrations`. Never run two id spaces against one table. Order: core first, then plugins. Plugin ids are positions in the dependency-ordered list, so on a database that has already been migrated, add new plugins at the end of the composition rather than in the middle.
+**Two ledgers, on purpose.** `Migrator` records only a numeric id and skips any id at or below the newest one recorded. Core's ids (1–25) live in the default `effect_sql_migrations` table. The plugin list (`auth.migrations`, run with `@awthaq/core`'s `Migrations.run`) numbers from 1 as well, so it uses its own table, `awthaq_plugin_migrations`; the SQL rate limiter's migration uses `awthaq_rate_limiter_migrations`. Never run two id spaces against one table. Order: core first, then plugins: `AuthHost` (`@awthaq/server`, `migrations: "apply"`) and `awthaq migration apply` run them in this order through `@awthaq/core`'s `Migrations.apply`, refusing a drifted ledger. Plugin ids are positions in the dependency-ordered list, so on a database that has already been migrated, add new plugins at the end of the composition rather than in the middle: a plugin inserted earlier is refused as drift, not skipped.
 
 ### Migrating a populated database
 

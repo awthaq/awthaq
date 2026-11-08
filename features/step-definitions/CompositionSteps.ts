@@ -5,12 +5,16 @@
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Auth, type AuthPlugin } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { Organization } from "@awthaq/organization";
+import { Mailer, RateLimiter } from "@awthaq/ports";
+import { AuthHost, Csrf } from "@awthaq/server";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
 import { assertTypeGate, cell, isObject, put, take, World } from "./FoundationsWorld.ts";
 import { migrateSqlite, MigPassword, MigTwoFactor } from "./MigrationFixtures.ts";
 import {
@@ -34,6 +38,14 @@ import {
 import { cheapArgon2id } from "./shared/Harness.ts";
 
 const GATES = "PluginTypeGates.ts";
+const COMPILE_GATES = "CompileTimeGates.ts";
+
+/** BEH-EA-340: what a host composition of `Organization` over SQL answered when a signed-in user created one. */
+const hostedOrganization = cell(
+  "hostedOrganization",
+  (value): value is { readonly status: number; readonly slug: unknown } =>
+    isObject(value) && "status" in value && "slug" in value,
+);
 
 /** What a scenario needs to know about one `Auth.make` result. */
 interface Composition {
@@ -748,6 +760,90 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.deepEqual(yield* take(cycle), path);
     },
   );
+
+  // ---- BEH-EA-340: AuthHost ----
+
+  Given(
+    "{string} over {string} with every port provided except {string}",
+    function* (host: string, composition: string, port: string) {
+      yield* Effect.void; // an assertion-only step: the gate below is the composition
+      assert.deepEqual(
+        [host, composition, port],
+        ["AuthHost.layer", "Auth.make([Password])", "Mailer"],
+      );
+    },
+  );
+
+  When("the host calls {string} on the result", function* (launch: string) {
+    yield* Effect.void; // an assertion-only step: nothing to await
+    assert.equal(launch, "Layer.launch");
+  });
+
+  Then(
+    "the host composition fails to type-check while {string} is unprovided",
+    function* (port: string) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assertTypeGate("auth-host-missing-port", COMPILE_GATES, [
+        "@ts-expect-error",
+        "Layer.launch(hostedPassword.pipe(Layer.provide(everyPortButMailer)))",
+        `Layer.provide(${port}.layerMemory)`,
+      ]);
+    },
+  );
+
+  Given(
+    "{string} over {string} with {string} records and {string} migrations on an empty database",
+    function* (host: string, composition: string, records: string, migrations: string) {
+      yield* Effect.void; // an assertion-only step: the When builds it
+      assert.deepEqual(
+        [host, composition, records, migrations],
+        ["AuthHost.layer", "Auth.make([Organization])", "sql", "apply"],
+      );
+    },
+  );
+
+  When("a signed-in user creates an organization through the served layer", function* () {
+    // A fresh SQLite database: nothing but `AuthHost` runs a migration (core's, then Organization's).
+    const served = AuthHost.layer(Auth.make([Organization.Organization]), {
+      persistence: {
+        records: "sql",
+        client: SqliteClient.layer({ filename: ":memory:" }),
+        migrations: "apply",
+      },
+      csrf: Layer.succeed(Csrf.CsrfConfig, TestAuth.TestCsrfConfig),
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(Mailer.layerMemory, RateLimiter.layerPermissive, TestAuth.encryption),
+      ),
+      Layer.provideMerge(NodeCrypto.layer),
+      Layer.provideMerge(HttpServer.layerServices),
+      Layer.provideMerge(HttpRouter.layer),
+    );
+    const outcome = yield* Effect.promise(async () => {
+      const app = TestAuth.app(served);
+      try {
+        const { cookieHeader } = await app.signIn("founder@example.com");
+        const response = await app.request("POST", "/organization", {
+          cookie: cookieHeader,
+          json: { name: "Acme", slug: "acme" },
+        });
+        const body: unknown = await response.json();
+        return {
+          status: response.status,
+          slug: isObject(body) ? Reflect.get(body, "slug") : undefined,
+        };
+      } finally {
+        await app.dispose();
+      }
+    });
+    yield* put(hostedOrganization, outcome);
+  });
+
+  Then("the organization is created", function* () {
+    const outcome = yield* take(hostedOrganization);
+    assert.equal(outcome.status, 200);
+    assert.equal(outcome.slug, "acme");
+  });
 });
 
 type FakeA = ReturnType<typeof fakePlugin<"A">>;

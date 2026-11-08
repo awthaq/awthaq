@@ -171,6 +171,25 @@ Feature: Plugin Composition and Validate<P>
       Then the diagnostic is Effect's ordinary "is not assignable to" Layer diagnostic naming the unsatisfied service
       And the diagnostic is not one of "Auth.make"'s curated duplicate-id, missing-dependency, or slot-conflict strings
 
+  # BEH-EA-340 — spec/behaviors/02-plugin-composition-validate.md (ADR-EA-044); see also
+  # INV-EA-002. The compile-time half is the `auth-host-missing-port` gate in
+  # features/step-definitions/CompileTimeGates.ts (compiled by the typecheck gate).
+  @BEH-EA-340
+  Rule: AuthHost derives the servable layer, and the host provides only what it owns
+
+    @compile-time
+    @REQ-EA-1321
+    Scenario: A host that omits a port does not compile
+      Given "AuthHost.layer" over "Auth.make([Password])" with every port provided except "Mailer"
+      When the host calls "Layer.launch" on the result
+      Then the host composition fails to type-check while "Mailer" is unprovided
+
+    @REQ-EA-1322
+    Scenario: A composition with a table-owning plugin is served over SQL with no hand-run migration
+      Given "AuthHost.layer" over "Auth.make([Organization])" with "sql" records and "apply" migrations on an empty database
+      When a signed-in user creates an organization through the served layer
+      Then the organization is created
+
   # BEH-EA-015 — spec/behaviors/02-plugin-composition-validate.md
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the

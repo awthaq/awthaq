@@ -173,6 +173,22 @@ Feature: The Persistence Stratum
       Then it consumes the same "auth.migrations" value the runtime already produces
       And it does not require a separate migration representation from the runtime
 
+  # BEH-EA-341 — spec/behaviors/05-persistence-stratum.md (ADR-EA-044); see also INV-EA-019.
+  @BEH-EA-341
+  Rule: A SQL host composition never serves a schema that is behind it
+
+    @REQ-EA-1323
+    Scenario: A server in verify mode refuses to start while migrations are pending
+      Given an "AuthHost.layer" server in "verify" mode over an unmigrated database
+      When the server starts
+      Then it refuses to start with "Migrations/Pending" naming "0001_password_create_password_account"
+
+    @REQ-EA-1324
+    Scenario: A boot that would skip a plugin migration refuses to start
+      Given a database migrated for "Auth.make([password, two_factor])"
+      When a server composing "Auth.make([password, oauth, two_factor])" starts in "apply" mode
+      Then it refuses to start with "Migrations/LedgerDrift" and "oauth" gets no table
+
   # BEH-EA-040 — spec/behaviors/05-persistence-stratum.md; see also
   # INV-EA-016
   @BEH-EA-040

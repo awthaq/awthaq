@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-INV |
-> | Revision | 1.6 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.7 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) <br> 1.4 (2026-09-29): Replaced the pre-implementation banner and the "(planned)" runtime section; every INV-EA-007..016 Enforcement cell now names the test that exists (or says plainly that none does); the check that keeps them honest is in `spec/scripts/check-drift.mjs` (TMS-009, DTWS-007, DTWS-001, IDS-009, CCR-EA-006) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): INV-EA-015 names `FederatedIdentity` as the one reader-then-writer of the anchor (architecture plan 14) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) <br> 1.4 (2026-09-29): Replaced the pre-implementation banner and the "(planned)" runtime section; every INV-EA-007..016 Enforcement cell now names the test that exists (or says plainly that none does); the check that keeps them honest is in `spec/scripts/check-drift.mjs` (TMS-009, DTWS-007, DTWS-001, IDS-009, CCR-EA-006) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): INV-EA-015 names `FederatedIdentity` as the one reader-then-writer of the anchor (architecture plan 14) <br> 1.7 (2026-11-08): INV-EA-002's Source names `AuthHost.layer`'s `RIn`; INV-EA-019 (a SQL composition served through `AuthHost` is never built over a schema behind it) (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -34,7 +34,7 @@ These are properties that the TypeScript compiler enforces through `Auth.make`'s
 
 ## INV-EA-002: A port with no implementation keeps the application from compiling
 
-**Source**: TypeScript compiler, via `Layer` type algebra at `Layer.launch` — a port (`PasswordHasher`, `Mailer`, `WebAuthn`, `SqlClient`, `Crypto`, `KeyValueStore`, `RateLimiter`) is required (`RIn`) by any plugin that uses it and is never provided (`ROut`) by a plugin (`archive/design/plugins-as-layers.md` §3.3); if the application's `Layer.provide` stack omits an implementation, that port's service remains in the final composed Layer's `RIn`, and `Layer.launch` / `Effect.provide` refuses to type-check against a required environment of `never`.
+**Source**: TypeScript compiler, via `Layer` type algebra at `Layer.launch` — a port (`PasswordHasher`, `Mailer`, `WebAuthn`, `SqlClient`, `Crypto`, `KeyValueStore`, `RateLimiter`) is required (`RIn`) by any plugin that uses it and is never provided (`ROut`) by a plugin (`archive/design/plugins-as-layers.md` §3.3); if the application's `Layer.provide` stack omits an implementation, that port's service remains in the final composed Layer's `RIn`, and `Layer.launch` / `Effect.provide` refuses to type-check against a required environment of `never`. A host on `AuthHost.layer` gets the same guarantee for the whole servable pipeline: its `RIn` is exactly the host-owned ports, adapters and platform services ([BEH-EA-340](behaviors/02-plugin-composition-validate.md#beh-ea-340-authhostlayer-derives-the-servable-layer-from-authmake-and-its-requirements-are-exactly-what-the-host-owns)).
 
 **Implication**: Without this, a missing `Mailer` implementation surfaces only when a password-reset email silently fails to send, in production, to a real user. With it, deleting the `Mailer.layerSes` line from an application's Layer stack (`archive/PRD.md` §26) is a compile error, not an incident.
 
@@ -199,3 +199,13 @@ These are properties that hold at runtime through the domain services, persisten
 **Enforcement**: `Sessions.verify` (`packages/core/test/Sessions.test.ts` — the PIL-007 tests); `Sessions.revokeOwned`/`findOwned` (same file, GC-005/TIR-003 tests). Ids are additionally never used as bearer tokens by any endpoint.
 
 **Related**: [BEH-EA-049](behaviors/07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair), [BEH-EA-056](behaviors/07-sessions.md#beh-ea-056-session-secret-verification-is-a-constant-time-comparison-over-a-fixed-length-hash), [BEH-EA-086](behaviors/11-http-error-mapping.md#beh-ea-086-error-responses-are-enumeration-safe-uniformly-across-the-http-surface).
+
+## INV-EA-019: A SQL composition served through `AuthHost` is never built over a schema behind it
+
+**Source**: plan 15 §2.4 — the migrations are the one part of a composition the compiler cannot guard (an effect someone must run, not a service anything requires). A host that ran only core's migrations type-checked with nothing in `RIn` and answered `503 StoreUnavailable` (`no such table`) for every request to a table-owning plugin; a boot that ran `Migrator` and then `Migrations.run` skipped a plugin inserted before an applied one without an error.
+
+**Implication**: Without this, a schema behind the composition is discovered request by request, in production. With it, `AuthHost`'s SQL mode reaches the client only through a layer that first runs `Migrations.onBuild`: `"apply"` brings the schema current, `"verify"` refuses the build while anything is pending, and both refuse a drifted ledger.
+
+**Enforcement**: `Migrations.onBuild` inside the client's only path (`packages/server/src/AuthHost.ts`); `packages/server/test/AuthHost.test.ts` ("AuthHost.layer migrations (sql)"), `packages/core/test/Migrations.test.ts`, `examples/sql-server/test/smoke.test.ts`.
+
+**Related**: [BEH-EA-341](behaviors/05-persistence-stratum.md#beh-ea-341-a-sql-host-composition-never-serves-a-schema-that-is-behind-it), [ADR-EA-044](decisions/044-host-composition.md).

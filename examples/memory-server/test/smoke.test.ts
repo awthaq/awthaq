@@ -19,7 +19,7 @@ import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { buildApp, demoCsrfSecret } from "../app.ts";
+import { demoCsrfSecret, makeAppLayer } from "../app.ts";
 
 const ORIGIN = "http://localhost:3001";
 const PASSWORD = "Zx9-quartz-Lantern-7431-orbit";
@@ -43,7 +43,13 @@ const CaptureMail = Logger.layer([
   }),
 ]);
 
-const { handler, run: withServices } = buildApp(NoBreachHttpClient, CaptureMail);
+// The production composition, served in-process by the harness's handle: the handler and `run` share every
+// instance, so a role assigned through `run` is the one a request sees.
+const app = TestAuth.app(makeAppLayer(NoBreachHttpClient).pipe(Layer.provideMerge(CaptureMail)), {
+  baseUrl: ORIGIN,
+});
+const handler = app.handler;
+const withServices = app.run;
 
 // The double-submit pair CSRF protection requires on a mutation, minted against the example's own secret.
 const csrfToken = TestAuth.csrfToken(demoCsrfSecret);

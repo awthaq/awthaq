@@ -924,3 +924,37 @@ Revisions:
 7. **A route-less entry point.** Add `AuthHost.application(auth, options)` (the same composition with no routes, for CLI commands, workers and scripts), or document `AuthHost.layer(...).pipe(Layer.provideMerge(HttpRouter.layer))` for them (recommended: the second; the routes cost nothing to register and one overload pair is enough)?
 8. **The CLI's `app` recipe.** Recommend `migrations: "verify"` for `defineConfig({ app })` (recommended: a `seed admin` or `import` run must never migrate behind `migration apply --yes`), or `"apply"` for convenience on a dev database?
 9. **Production hook points (reverses plan 08 Q5).** Plan 08 decided that declared `hookPoints` are not provided in production, for fear that an application tap built elsewhere would bind a second instance. `AuthHost` provides them, beneath its `taps` option, in the same graph. Accept the reversal (recommended), or keep points host-provided and have `AuthHost` require them in `RIn`?
+
+---
+
+## Decisions taken (implementation, 2026-11-08, effect 4.1.2)
+
+Every open question took the plan's recommended default (approved by the user):
+
+1. **Q1 — where the module lives:** `AuthHost` in `@awthaq/server` (`packages/server/src/AuthHost.ts`), no new package.
+2. **Q2 — `migrations` in SQL mode:** required, no default (`@ts-expect-error` in `AuthHost.types.test.ts`).
+3. **Q3 — edge middleware:** `RequestContext.layer` and `BodyLimit.layer` on by default, `requestContext: false` / `bodyLimit: false` dials. `TestAuth` turns both off, as it always served.
+4. **Q4 — `examples/sql-server` keeps `Organization`:** permanently a two-plugin composition.
+5. **Q5 — README quickstart:** rewritten on `AuthHost` (85-line code block, was 180).
+6. **Q6 — the ledger check in the runtime:** moved into core's `Migrations` (`status`/`apply`/`verify`/`onBuild`); BEH-EA-039 revised ("MUST live in the CLI" is now "the key-level check is core's, shared"). Its BDD scenario REQ-EA-103 was retitled (it asserted that no `Migrations` export mentions "drift"/"diff").
+7. **Q7 — route-less entry point:** none; a worker or CLI command builds `AuthHost.layer(...)` with `HttpRouter.layer` provided (README, ADR-EA-044).
+8. **Q8 — the CLI's `app` recipe:** `migrations: "verify"` (`packages/cli/README.md`).
+9. **Q9 — production hook points (reverses plan 08 Q5):** accepted; `AuthHost` provides every declared point beneath `taps` (ADR-EA-044 decision 5, BEH-EA-335 *As shipped*).
+
+Ids allocated: BEH-EA-340 (H1), BEH-EA-341 (H2), BEH-EA-342 (H3), INV-EA-019, ADR-EA-044, REQ-EA-1321..1325.
+
+What differs from the plan text (stale against effect 4.1.2 or the tree after plans 11/16/17/22/23):
+
+- **`Crypto` is gone.** The host-owned set pinned for core + the `Ledger` fixture is `RateLimiter | SecureRandom | Digest | Mac | AuthHost.Serving` in memory mode; SQL mode adds **`Encryption`** (plan 16/17's `Persistence.sql` = `CoreStoresSql.layer` requires it), so type test 26 is "the memory set plus `Encryption`", not "equals the memory set". `Mailer`, `PasswordHasher` and `ClientAddress` are not required by core alone. A runtime case builds the layer with exactly that set to prove the type is sound.
+- **`Requires` adds `SecureRandom`** explicitly (what `middlewareFor` reads), because `Layer.Services<ReturnType<typeof middlewareFor<…>>>` cannot name an overload's instantiation.
+- **The registry is `Credentials.CredentialResolversLive`** (plan 11), not `Authentication.CredentialResolversLive`.
+- **Edge ordering:** `RequestContext.layer` and `BodyLimit.layer` are `Layer.provide`d beneath the core handlers rather than merged beside the routes, so `coreHandlers`' build-time check finds `RequestContext` on the router (merged beside, the check ran first and warned).
+- **Declaration emit (TS2883):** `@awthaq/server` now depends on `@awthaq/sql` (its `.d.ts` names `SealedColumn.Deployed`, which `Persistence.sql` provides), and `AuthHost.ts` exports a `BaseServices` type naming the store namespaces. Both examples export small type aliases (`OrganizationServices`, `BootFailure`) for the same reason; that is why `examples/memory-server/app.ts` is 202 lines (target ≤ 190) and `examples/sql-server/app.ts` 156 (target ≤ 140).
+- **`TestAuth.layer` keeps its error channel `SE`.** Declaring `AuthHost`'s errors (plugin layer errors, `Migrations.OnBuildError`) changed the inferred `A` of every `TestAuth.App<A>` handle built from a mode-dependent layer, so the old contract was kept. `CommonOptions` gains `tier` and a sixth parameter `T` (default `never`) for `taps`; `packages/password/test/harness.ts` types its `taps` by a parameter over core's points (the one caller that typed it `unknown`).
+- **`TestAuth.ts`** is 1,422 lines (was 1,526): the base and pipeline section is ~110 lines including the overload types.
+- **The CLI's `SqlApp.ts` was not converted** (plan's "saving is nil" rule): it is 85 lines today (the plan counted 115), an `AuthHost` port block for a served composition is no shorter, and `sqlAppWithoutRoles` runs over a database migrated for Password + Roles, which `"verify"` correctly refuses as drift. Its `migrate` now calls `Migrations.apply`.
+- **`[Password, Ledger]` type assertion not added:** `@awthaq/server` cannot import `@awthaq/password` (it sits above the server).
+- **Postgres for `Migrations.test.ts`:** the new runner describe uses `TestSql.layer("core_Migrations")`, so `scripts/test-pg.sh` runs it on Postgres; `packages/test/test/TestAuthHost.test.ts` is the Postgres run of `AuthHost`'s SQL mode.
+- **`@awthaq/cli`** moved `@awthaq/sql` to devDependencies (phase 1 left no runtime import; `package:smoke` caught it in phase 2).
+- **No `.scratch/host-composition/issues/` tickets** were written (`.scratch/` is never staged in this repo).
+- **Typecheck wall time** was not measured against a baseline; `pnpm typecheck` (tsgo) stays a few seconds.
