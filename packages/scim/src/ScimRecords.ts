@@ -18,6 +18,7 @@
 //   directory's `userName` for a user (unique per connection); `externalId` is the
 //   directory's own key (unique per connection and kind, when present).
 
+import { SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -61,7 +62,11 @@ export class ScimRecordNotFound extends Data.TaggedError("ScimRecordNotFound")<{
   readonly id: string;
 }> {}
 
-/** `name` or `externalId` is already held by another resource of this connection. */
+/**
+ * `name` or `externalId` is already held by another resource of this connection. A resource that is already
+ * linked (the same connection, kind and resource id) is refused as `name`, the field Postgres names for the
+ * primary key's index (plan 24's SCIM link item: every adapter refuses it).
+ */
 export class ScimLinkConflict extends Data.TaggedError("ScimLinkConflict")<{
   readonly field: "name" | "externalId";
 }> {}
@@ -321,12 +326,19 @@ export const layerMemory = Layer.effect(
           createdAt: now,
           updatedAt: now,
         };
+        // Plan 24 (SCIM link): the full key is checked too, so a resource linked twice is refused here as it
+        // is by SQL's primary key, instead of a second row.
         const outcome = yield* Ref.modify(
           state,
-          (s): readonly [Result.Result<ResourceLink, ScimLinkConflict>, State] => {
-            const taken = clash(s.links, record);
-            if (Option.isSome(taken)) return [Result.fail(conflict(taken.value)), s] as const;
-            return [Result.succeed(record), { ...s, links: [...s.links, record] }] as const;
+          (s): [Result.Result<ResourceLink, ScimLinkConflict>, State] => {
+            const linked = s.links.some((row) =>
+              sameResource(row, record.connectionId, record.kind, record.resourceId),
+            );
+            const taken = linked
+              ? Option.some<"name" | "externalId">("name")
+              : clash(s.links, record);
+            if (Option.isSome(taken)) return [Result.fail(conflict(taken.value)), s];
+            return [Result.succeed(record), { ...s, links: [...s.links, record] }];
           },
         );
         return yield* Effect.fromResult(outcome);
@@ -682,7 +694,9 @@ export const layerSql = Layer.effect(
     const revokeConnection: ScimRecordsShape["revokeConnection"] = Effect.fnUntraced(
       function* (organizationId, id) {
         const now = yield* DateTime.now;
-        const row = yield* revoke({ organizationId, id, revokedAt: now }).pipe(unavailable("row"));
+        const row = yield* revoke({ organizationId, id, revokedAt: now }).pipe(
+          unavailable("revokeConnection"),
+        );
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
         return toConnection(row.value);
       },
@@ -756,8 +770,11 @@ export const layerSql = Layer.effect(
     const removeAllForOrganization: ScimRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
+      // One transaction (a savepoint inside `OrganizationDirectory.delete`'s): the mappings never outlive
+      // their connections, nor the reverse, if the second statement fails.
       sql`DELETE FROM scim_resource WHERE "scimConnectionId" IN (SELECT id FROM scim_connection WHERE "organizationId" = ${organizationId})`.pipe(
         Effect.andThen(sql`DELETE FROM scim_connection WHERE "organizationId" = ${organizationId}`),
+        SqlTransaction.transactional(sql),
         unavailable("removeAllForOrganization"),
         Effect.asVoid,
       );
