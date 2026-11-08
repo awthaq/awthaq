@@ -2,7 +2,8 @@
 // organization row's lifecycle: creating one atomically with its creator's membership, updating, deleting
 // with its cascade, and a platform suspension that runs a veto and an observe point (BEH-EA-237).
 import { Auth, HookPoint, Users } from "@awthaq/core";
-import { TestAuth, TestSql } from "@awthaq/test";
+import { TenantScoped } from "@awthaq/sql";
+import { Rendezvous, TestAuth, TestSql } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -330,3 +331,68 @@ describe("OrganizationDirectory over SQL", () => {
     }).pipe(Effect.provide(SqlSystemLive)),
   );
 });
+
+// BEH-EA-283 under concurrency (plan 25 ticket 10): `organizationLimit` is decided by `MembershipRecords.create`'s
+// `ownedWithin`, inside the transaction that creates the organization. Eight creations held at the veto until all
+// have passed the early check: one organization is created, the other seven are refused and leave no row behind.
+for (const mode of TestAuth.recordModes) {
+  describe(`OrganizationDirectory organizationLimit under concurrency (${mode} records)`, () => {
+    const quotaLayer = () => {
+      const options = {
+        services: Organization.config({ organizationLimit: 2 }),
+        taps: OrganizationHooks.BeforeCreateOrganization.tap(Rendezvous.held(8)),
+      };
+      return mode === "sql"
+        ? TestAuth.layer(built, {
+            ...options,
+            records: "sql",
+            suite: "organization_directory_quota",
+          })
+        : TestAuth.layer(built, options);
+    };
+
+    it.effect("8 creations racing at organizationLimit - 1 create exactly one", () =>
+      Effect.gen(function* () {
+        const members = yield* MembershipRecords.MembershipRecords;
+        // One owned organization, arranged through the records so it does not meet the barrier.
+        yield* members.create({ userId: owner, organizationId: "org-arranged", role: ["owner"] });
+        const outcomes = yield* Effect.all(
+          Array.from({ length: 8 }, (_, n) =>
+            Effect.map(Effect.exit(make(`race-${n}`)), (exit) =>
+              Exit.isSuccess(exit) ? "ok" : "refused",
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(outcomes.filter((outcome) => outcome === "ok").length, 1);
+        const refusals = yield* Effect.all(
+          Array.from({ length: 8 }, (_, n) =>
+            Effect.flatMap(OrganizationDirectory.OrganizationDirectory, (directory) =>
+              directory.isSlugAvailable(`race-${n}`),
+            ),
+          ),
+        );
+        assert.strictEqual(refusals.filter(Boolean).length, 7);
+        const owned = yield* members.listByUser(
+          TenantScoped.crossTenant("organization directory test"),
+          owner,
+        );
+        assert.strictEqual(owned.length, 2);
+      }).pipe(Effect.provide(quotaLayer())),
+    );
+
+    it.effect("a refused creation answers OrganizationLimitReached", () =>
+      Effect.gen(function* () {
+        const members = yield* MembershipRecords.MembershipRecords;
+        for (const id of ["org-a", "org-b"]) {
+          yield* members.create({ userId: owner, organizationId: id, role: ["owner"] });
+        }
+        assert.strictEqual(yield* flipTag(make("over")), "OrganizationLimitReached");
+      }).pipe(
+        Effect.provide(
+          TestAuth.layer(built, { services: Organization.config({ organizationLimit: 2 }) }),
+        ),
+      ),
+    );
+  });
+}

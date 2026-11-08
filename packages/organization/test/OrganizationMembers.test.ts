@@ -3,7 +3,7 @@
 // the hook order are proved here; the SAML role mapping's cases (BEH-EA-316) live here too, since
 // `setRoles` is its one implementation. `Organization.test.ts` keeps only the authorization half.
 import { Auth, AuditLog, HookPoint, Users } from "@awthaq/core";
-import { TestAuth } from "@awthaq/test";
+import { Rendezvous, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -672,6 +672,56 @@ for (const mode of TestAuth.recordModes) {
           assert.strictEqual(yield* records.countOwners(org.id), 1, `round ${round}`);
         }
       }).pipe(Effect.provide(raceLayer())),
+    );
+  });
+}
+
+// BEH-EA-287 under concurrency (plan 25 ticket 10): `membershipLimit` is decided by `MembershipRecords.create`'s
+// `within`, with the insert. Eight adds held at the veto until all have passed the early check: only the store can
+// refuse the extra seven, on memory, SQLite and (under `pnpm test:pg`) Postgres.
+for (const mode of TestAuth.recordModes) {
+  describe(`OrganizationMembers membershipLimit under concurrency (${mode} records)`, () => {
+    const limit = 3;
+    const quotaLayer = () => {
+      const options = {
+        services: Organization.config({ membershipLimit: limit }),
+        taps: OrganizationHooks.BeforeAddMember.tap(Rendezvous.held(8)),
+      };
+      return mode === "sql"
+        ? TestAuth.layer(built, { ...options, records: "sql", suite: "organization_members_quota" })
+        : TestAuth.layer(built, options);
+    };
+
+    it.effect(
+      "8 adds racing at membershipLimit - 1 store exactly one; the rest are MembershipLimitReached",
+      () =>
+        Effect.gen(function* () {
+          const { org, members, records } = yield* arrange;
+          yield* records.create({
+            userId: userId("member-0"),
+            organizationId: org.id,
+            role: ["member"],
+          });
+          const outcomes = yield* Effect.all(
+            Array.from({ length: 8 }, (_, n) =>
+              Effect.map(
+                Effect.result(
+                  members.add(application, {
+                    organizationId: org.id,
+                    userId: userId(`racer-${n}`),
+                    role: ["member"],
+                    bound: unbounded,
+                  }),
+                ),
+                (result) => (Result.isFailure(result) ? result.failure._tag : "ok"),
+              ),
+            ),
+            { concurrency: "unbounded" },
+          );
+          assert.strictEqual(outcomes.filter((tag) => tag === "ok").length, 1);
+          assert.isTrue(outcomes.every((tag) => tag === "ok" || tag === "MembershipLimitReached"));
+          assert.strictEqual(yield* records.countByOrganization(org.id), limit);
+        }).pipe(Effect.provide(quotaLayer())),
     );
   });
 }

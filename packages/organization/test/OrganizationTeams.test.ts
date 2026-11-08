@@ -4,7 +4,7 @@
 // without the authorized layer. `Organization.test.ts` keeps only the authorization half.
 import { Auth, HookPoint, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import { TestAuth, TestSql } from "@awthaq/test";
+import { Rendezvous, TestAuth, TestSql } from "@awthaq/test";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -881,3 +881,120 @@ describe("OrganizationTeams over SQL", () => {
     }).pipe(Effect.provide(SqlSystemLive)),
   );
 });
+
+// Plan 25 ticket 11 (ADR-EA-041 decision 9): the team invariants are decided by the store primitive that writes.
+// Each race holds every caller at the veto until all have passed the system module's early check, so only the
+// store can refuse the extras: on memory, SQLite and (under `pnpm test:pg`) Postgres.
+for (const mode of TestAuth.recordModes) {
+  describe(`OrganizationTeams invariants under concurrency (${mode} records)`, () => {
+    const raceLayer = (
+      teams: Partial<Organization.OrganizationConfigShape["teams"]>,
+      taps: Layer.Layer<
+        never,
+        never,
+        Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+      >,
+    ) => {
+      const options = { services: Organization.config({ teams: teamsOn(teams) }), taps };
+      return mode === "sql"
+        ? TestAuth.layer(built, { ...options, records: "sql", suite: "organization_teams_race" })
+        : TestAuth.layer(built, options);
+    };
+    const tagOf = <A, E extends { readonly _tag: string }>(exit: Exit.Exit<A, E>) =>
+      Exit.isSuccess(exit)
+        ? "ok"
+        : Option.match(Exit.findErrorOption(exit), {
+            onNone: () => "defect",
+            onSome: (e) => e._tag,
+          });
+
+    it.effect(
+      "the last two teams removed concurrently leave one; the loser is LastTeamCannotBeRemoved",
+      () =>
+        Effect.gen(function* () {
+          const { org, teams } = yield* arrange();
+          const records = yield* TeamRecords.TeamRecords;
+          const a = yield* records.createTeam({ organizationId: org.id, name: "A" });
+          const b = yield* records.createTeam({ organizationId: org.id, name: "B" });
+          const outcomes = yield* Effect.all(
+            [a, b].map((team) =>
+              Effect.map(
+                Effect.exit(teams.remove(application, { organizationId: org.id, teamId: team.id })),
+                tagOf,
+              ),
+            ),
+            { concurrency: "unbounded" },
+          );
+          assert.deepStrictEqual([...outcomes].sort(), ["LastTeamCannotBeRemoved", "ok"]);
+          assert.strictEqual(yield* records.countTeamsByOrganization(org.id), 1);
+        }).pipe(
+          Effect.provide(raceLayer({}, OrganizationHooks.BeforeDeleteTeam.tap(Rendezvous.held(2)))),
+        ),
+    );
+
+    it.effect("8 creations racing at maximumTeams - 1 create exactly one", () =>
+      Effect.gen(function* () {
+        const { org, teams } = yield* arrange();
+        const records = yield* TeamRecords.TeamRecords;
+        yield* records.createTeam({ organizationId: org.id, name: "existing" });
+        const outcomes = yield* Effect.all(
+          Array.from({ length: 8 }, (_, n) =>
+            Effect.map(
+              Effect.exit(teams.create(application, { organizationId: org.id, name: `t${n}` })),
+              tagOf,
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(outcomes.filter((tag) => tag === "ok").length, 1);
+        assert.isTrue(outcomes.every((tag) => tag === "ok" || tag === "TeamLimitReached"));
+        assert.strictEqual(yield* records.countTeamsByOrganization(org.id), 2);
+      }).pipe(
+        Effect.provide(
+          raceLayer(
+            { maximumTeams: 2 },
+            OrganizationHooks.BeforeCreateTeam.tap(Rendezvous.held(8)),
+          ),
+        ),
+      ),
+    );
+
+    it.effect("8 adds racing at maximumMembersPerTeam - 1 store exactly one", () =>
+      Effect.gen(function* () {
+        const ids = Array.from({ length: 9 }, (_, n) => `m${n}`);
+        const { org, teams } = yield* arrange(ids);
+        const records = yield* TeamRecords.TeamRecords;
+        const team = yield* records.createTeam({ organizationId: org.id, name: "T" });
+        yield* records.addTeamMember({ teamId: team.id, userId: userId("m0") });
+        const outcomes = yield* Effect.all(
+          ids.slice(1).map((id) =>
+            Effect.map(
+              Effect.exit(
+                teams.addMember(application, {
+                  organizationId: org.id,
+                  teamId: team.id,
+                  userId: userId(id),
+                  bound: unbounded,
+                }),
+              ),
+              tagOf,
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(outcomes.filter((tag) => tag === "ok").length, 1);
+        assert.isTrue(outcomes.every((tag) => tag === "ok" || tag === "TeamMemberLimitReached"));
+        const stored = Option.getOrThrow(yield* records.findTeamById(org.id, team.id));
+        assert.strictEqual(stored.memberCount, 2);
+        assert.strictEqual((yield* records.listTeamMembers(team.id)).length, 2);
+      }).pipe(
+        Effect.provide(
+          raceLayer(
+            { maximumMembersPerTeam: 2 },
+            OrganizationHooks.BeforeAddTeamMember.tap(Rendezvous.held(8)),
+          ),
+        ),
+      ),
+    );
+  });
+}

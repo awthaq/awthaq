@@ -504,6 +504,7 @@ export class OrganizationInvitations extends Context.Service<
         }
 
         const limits = yield* limitsOf(orgConfig, record.organizationId);
+        // An early check (before the team's and the transaction): `create`'s `within` is the authority.
         const count = yield* members.countByOrganization(record.organizationId);
         if (count >= limits.membershipLimit) {
           return yield* new OrganizationErrors.MembershipLimitReached();
@@ -533,15 +534,23 @@ export class OrganizationInvitations extends Context.Service<
           .withTransaction(
             Effect.gen(function* () {
               const created = yield* members
-                .create({
-                  userId,
-                  organizationId: record.organizationId,
-                  role: record.role,
-                })
+                .create(
+                  {
+                    userId,
+                    organizationId: record.organizationId,
+                    role: record.role,
+                  },
+                  { within: limits.membershipLimit },
+                )
                 .pipe(
-                  Effect.catchTag("MembershipRecordAlreadyExists", () =>
-                    Effect.fail(new OrganizationErrors.AlreadyMember()),
-                  ),
+                  Effect.catchTags({
+                    MembershipRecordAlreadyExists: () =>
+                      Effect.fail(new OrganizationErrors.AlreadyMember()),
+                    "MembershipRecords/LimitReached": () =>
+                      Effect.fail(new OrganizationErrors.MembershipLimitReached()),
+                    // No `ownedWithin` was asked for.
+                    "MembershipRecords/OwnedLimitReached": Effect.die,
+                  }),
                 );
               return yield* Effect.gen(function* () {
                 yield* invitations
@@ -550,12 +559,20 @@ export class OrganizationInvitations extends Context.Service<
                 // OHS-003: the team half of accepting stays idempotent: a user who is already on
                 // the team is not double-counted.
                 const joined = Option.isSome(record.teamId)
-                  ? yield* teams.addTeamMember({ teamId: record.teamId.value, userId }).pipe(
-                      Effect.as(true),
-                      Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
-                        Effect.succeed(false),
-                      ),
-                    )
+                  ? yield* teams
+                      .addTeamMember(
+                        { teamId: record.teamId.value, userId },
+                        { within: limits.maximumMembersPerTeam },
+                      )
+                      .pipe(
+                        Effect.as(true),
+                        Effect.catchTags({
+                          TeamMembershipRecordAlreadyExists: () => Effect.succeed(false),
+                          // Plan 25: the team filled up since the early check; the unit rolls back.
+                          "TeamRecords/MemberLimitReached": () =>
+                            Effect.fail(new OrganizationErrors.TeamMemberLimitReached()),
+                        }),
+                      )
                   : false;
                 return { membership: created, joinedTeam: joined };
               }).pipe(

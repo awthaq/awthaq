@@ -223,6 +223,8 @@ export class OrganizationDirectory extends Context.Service<
           const { owner, name, slug, logo, metadata, homeRegion } = input;
           const orgConfig = yield* configNow;
           yield* requireKnownRegion(homeRegion);
+          // An early check, so the refusal comes before the veto (BEH-EA-283). The authority is `create`'s
+          // `ownedWithin` below, decided with the insert: two concurrent creations can both pass this count.
           const owned = yield* members.listByUser(ownMembershipsGrant, owner);
           const ownedCount = owned.filter((m) => m.role.includes(orgConfig.creatorRole)).length;
           if (ownedCount >= orgConfig.organizationLimit) {
@@ -244,14 +246,29 @@ export class OrganizationDirectory extends Context.Service<
                     ),
                   );
                 const first = yield* members
-                  .create({
-                    userId: owner,
-                    organizationId: created.id,
-                    role: [orgConfig.creatorRole],
-                  })
+                  .create(
+                    {
+                      userId: owner,
+                      organizationId: created.id,
+                      role: [orgConfig.creatorRole],
+                    },
+                    {
+                      ownedWithin: {
+                        role: orgConfig.creatorRole,
+                        limit: orgConfig.organizationLimit,
+                        grant: ownMembershipsGrant,
+                      },
+                    },
+                  )
                   .pipe(
-                    // A brand-new organization has no memberships, so this cannot collide.
-                    Effect.catchTag("MembershipRecordAlreadyExists", Effect.die),
+                    Effect.catchTags({
+                      // A brand-new organization has no memberships, so this cannot collide, nor be full.
+                      MembershipRecordAlreadyExists: Effect.die,
+                      "MembershipRecords/LimitReached": Effect.die,
+                      // A concurrent creation by the same owner won (BEH-EA-283): the unit rolls back.
+                      "MembershipRecords/OwnedLimitReached": () =>
+                        Effect.fail(new OrganizationErrors.OrganizationLimitReached()),
+                    }),
                     // A backend without transactions (`layerNoop`) cannot roll back: remove the
                     // organization again so a failed creation leaves nothing behind.
                     Effect.onError(() => Effect.ignore(orgs.delete(created.id))),
