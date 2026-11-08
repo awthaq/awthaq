@@ -589,11 +589,50 @@ describe("PasswordCredential.linkFor", () => {
   });
 });
 
-describe("PasswordCredential.replace and has", () => {
+describe("PasswordCredential.set, replace and has", () => {
   /** An accepted candidate (the test config screens nothing). */
   const acceptedSecret = Effect.flatMap(PasswordCredential.PasswordCredential, (credential) =>
     credential.accept(secret),
   );
+
+  it.effect("W1, W7: set links a credential for a user with none, computing one hash", () => {
+    const hasher = recordingHasher();
+    return Effect.gen(function* () {
+      const credential = yield* PasswordCredential.PasswordCredential;
+      const accounts = yield* Accounts.Accounts;
+      const user = yield* userWith(undefined);
+      yield* credential.set(user.id, yield* acceptedSecret);
+      const account = Option.getOrThrow(
+        yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
+      );
+      assert.strictEqual(account.userId, user.id);
+      assert.strictEqual(account.subject, user.id);
+      assert.isTrue(Option.isNone(account.issuer));
+      assert.strictEqual(
+        Option.getOrThrow(yield* storedHash(user.id)),
+        `h:${Redacted.value(secret)}`,
+      );
+      assert.deepStrictEqual(hasher.hashed, ["awthaq/password/dummy", Redacted.value(secret)]);
+    }).pipe(Effect.provide(layerWith(hasher)));
+  });
+
+  it.effect("W2: set replaces an existing credential's hash", () => {
+    const hasher = recordingHasher();
+    return Effect.gen(function* () {
+      const credential = yield* PasswordCredential.PasswordCredential;
+      const accounts = yield* Accounts.Accounts;
+      const user = yield* userWith("h:the old password");
+      yield* credential.set(user.id, yield* acceptedSecret);
+      assert.strictEqual(
+        Option.getOrThrow(yield* storedHash(user.id)),
+        `h:${Redacted.value(secret)}`,
+      );
+      const passwordAccounts = (yield* accounts.listByUser(user.id)).filter(
+        (account) => account.providerId === Accounts.PASSWORD_PROVIDER_ID,
+      );
+      assert.strictEqual(passwordAccounts.length, 1);
+    }).pipe(Effect.provide(layerWith(hasher)));
+  });
 
   it.effect(
     "W3: replace for a user with none answers false, writes nothing, hashes nothing",
@@ -645,7 +684,7 @@ describe("PasswordCredential.replace and has", () => {
     }).pipe(Effect.provide(layerWith(hasher)));
   });
 
-  it.effect("W8: an Accounts outage during replace or has is StoreUnavailable", () => {
+  it.effect("W8: an Accounts outage during set, replace or has is StoreUnavailable", () => {
     const hasher = recordingHasher();
     const down = { now: false };
     const flaky = accountsWith((real) => ({
@@ -665,8 +704,16 @@ describe("PasswordCredential.replace and has", () => {
       // The write itself fails...
       const writing = yield* credential.replace(user.id, password).pipe(Effect.flip);
       assert.strictEqual(writing._tag, "StoreUnavailable");
+      assert.strictEqual(
+        (yield* credential.set(user.id, password).pipe(Effect.flip))._tag,
+        "StoreUnavailable",
+      );
       // ...and so does the read before it.
       down.now = true;
+      assert.strictEqual(
+        (yield* credential.set(user.id, password).pipe(Effect.flip))._tag,
+        "StoreUnavailable",
+      );
       assert.strictEqual(
         (yield* credential.replace(user.id, password).pipe(Effect.flip))._tag,
         "StoreUnavailable",

@@ -645,7 +645,7 @@ export const verification: ReadonlyArray<VerificationCase> = [
 
 // ---- accounts -------------------------------------------------------------------------------
 
-type AccountCase = Case<AccountStore.AccountStore>;
+type AccountCase = Case<AccountStore.AccountStore | SqlTransaction.SqlTransaction>;
 
 const makeAccountId = Schema.decodeUnknownSync(Ids.AccountId);
 
@@ -710,6 +710,37 @@ export const accounts: ReadonlyArray<AccountCase> = [
       assert.equal(identity.issuer, "https://iss");
       assert.deepEqual(identity.tenantId, Option.some("tenant-a"));
       assert.deepEqual(identity.createdAt, at(0));
+    }),
+  },
+  {
+    // Plan 27: `PasswordCredential`'s write re-reads after a lost link race inside its caller's
+    // transaction, so a refused insert must not abort that transaction (Postgres would otherwise
+    // fail every later statement in it).
+    name: "insertIfAbsent that loses a race inside an enclosing transaction leaves it usable",
+    run: Effect.gen(function* () {
+      const store = yield* AccountStore.AccountStore;
+      const transaction = yield* SqlTransaction.SqlTransaction;
+      const key = { providerId: "password", subject: "u1" };
+      yield* store.insertIfAbsent(newAccount("a1", "u1", key));
+      yield* transaction.withTransaction(
+        Effect.gen(function* () {
+          assert.equal(
+            Option.isNone(yield* store.insertIfAbsent(newAccount("a2", "u1", key))),
+            true,
+          );
+          // A statement after the refused insert still runs: the transaction was not aborted.
+          assert.equal(Option.isSome(yield* store.getByKey("password", "u1", "")), true);
+          assert.equal(
+            Option.isSome(
+              yield* store.insertIfAbsent(
+                newAccount("a3", "u1", { providerId: "github", subject: "g" }),
+              ),
+            ),
+            true,
+          );
+        }),
+      );
+      assert.equal(Option.isSome(yield* store.getByKey("github", "g", "")), true);
     }),
   },
   {

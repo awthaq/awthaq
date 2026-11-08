@@ -79,6 +79,9 @@ export const cannotLinkARawCandidate = (credential: PasswordCredential.PasswordC
   // @ts-expect-error - a raw `Redacted` is not an `Accepted`
   credential.linkFor(Redacted.make("x"));
 
+export const cannotSetARawCandidate = (credential: PasswordCredential.PasswordCredentialShape) =>
+  // @ts-expect-error - `set` takes only an `Accepted`
+  credential.set(Users.UserId("u-1"), Redacted.make("x"));
 export const cannotReplaceWithARawCandidate = (
   credential: PasswordCredential.PasswordCredentialShape,
 ) =>

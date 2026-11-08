@@ -83,6 +83,14 @@ export interface PasswordCredentialShape {
     password: Accepted,
   ) => Effect.Effect<(user: Users.UserRecord) => SignUp.LinkInput>;
   /**
+   * Replaces the user's password credential with `password`, or links one when there is none.
+   * Runs inside the caller's unit of work (an administrator's set, `awthaq seed admin`).
+   */
+  readonly set: (
+    userId: Users.UserId,
+    password: Accepted,
+  ) => Effect.Effect<void, Errors.StoreUnavailable>;
+  /**
    * Replaces the user's password credential with `password`; `false`, with nothing written and no
    * hash computed, when there is none (ARF-004: a reset never links one). Runs inside the caller's
    * unit of work.
@@ -349,6 +357,9 @@ const make = Effect.gen(function* () {
       );
     });
 
+  const set: PasswordCredentialShape["set"] = (userId, password) =>
+    Effect.asVoid(write(userId, password, "link"));
+
   const replace: PasswordCredentialShape["replace"] = (userId, password) =>
     write(userId, password, "refuse");
 
@@ -358,7 +369,7 @@ const make = Effect.gen(function* () {
       Option.isSome,
     );
 
-  return { verify, rehashIfStale, accept, linkFor, replace, has };
+  return { verify, rehashIfStale, accept, linkFor, set, replace, has };
 });
 
 /** The password credential module, exposed by `Password.layer` (ADR-EA-040) under the plugin's namespace. */

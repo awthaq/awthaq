@@ -1148,3 +1148,53 @@ The branch now checked out carries plans 11–24 from the 2026-10-17 review (see
 - No open question applied to ticket 04.
 - Not fixed (outside the ticket): `Seed.ts` `verifyEmail(...).pipe(Effect.orDie)` still turns an outage into a defect.
 - Renumbered: this plan's new behaviour is BEH-EA-345, not 340 (340–344 were taken by plans 15, 21 and 20 before batch 3 landed).
+
+### Wave E: tickets 01–03, 05–11 (branch `feat/password-credential`, on `main` @ `0229a228`)
+
+**Ticket 01, baseline re-taken on `0229a228`** (plans 25 and 26 merged; plan 26's `Api.AuthRequestContext` had already removed `ip`/`userAgent` from `PasswordShape` and the `ClientAddress` port from `Password.layer`, so §3.5's sketches apply without request facts):
+
+| Measure (§2.2) | Plan (`ede063d8`) | `0229a228` |
+|---|---:|---:|
+| `Password.ts` lines | 1,780 | **1,561** (plan 26 shrank it; G7's "≤ 1,590" was met before this wave) |
+| password `src` / `test` lines | 2,195 / 4,163 | 1,978 / 4,268 |
+| `Password.ts` source commits (non-merge) | 71 | 78 (still the most churned; `OAuth.ts`, `Passkey.ts` 61) |
+| `PASSWORD_PROVIDER_ID` (library src, by file) | 12 | `Password.ts` 6, `AdminAccounts.ts` 2, `Seed.ts` 2, `ImportAuth0User.ts` 1, `Accounts.ts` 1, `sql/Models.ts` 1 (comment) |
+| `.findCredentialHash(` / `.updateCredentialHash(` | 3 / 4 | 3 / 4 (`Password.ts` 3+3, `AdminAccounts.ts` 0+1) |
+| `hasher.(hash\|verify\|needsRehash)(` | 10 (+2) | `Password.ts` 8, `AdminAccounts.ts` 1, `Seed.ts` 1 (+ `SecondFactor.ts` 2) |
+| literal `providerId: "password"` | 2 | 2 |
+| policies | 3 | 3 (`checkPolicy`; `AdminGate`'s `passwordPolicy`/`defaultPasswordHints`, read per tenant as `cleared.config.passwordPolicy` (§8.1, batch-2 plan 13 is on `main`); `Seed.MIN_PASSWORD_LENGTH`) |
+| "same uniform-cost shape" comments | 2 | 2 |
+| `orDie` in `Password.ts` | 5 | 1 (ticket 04 removed four; the identifier digest remains) |
+| §5.4 grep on `Password.ts` | 39 | 39 |
+| files testing `onUnavailable` / `signInTimingFloor` | 3 / 2 | 3 / 2 |
+| tests: `@awthaq/password` / `admin` / `cli` | n/a | 146 (15 files, 3.0 s) / 202 (2.7 s) / 120 + 1 skipped (2.6 s) |
+| `it(` per password test file | n/a | `Password.test.ts` 49, `AuthHttp` 28, `PasswordChangeEmail` 12, `PasswordPolicy` 9, `PasswordStoreOutage` 5, `PasswordRecovery` 5, `PasswordTenantConfig` 5, `PasswordMail` 5, `PasswordRateLimitBehaviour` 4, `PasswordHooksBeforeCredentialReset` 4, `PasswordConfigAudit` 3, `PasswordNoCredential` 2, one each `AuthComposition`, `Contract`, `PasswordHooksSignUp` |
+
+**Ticket 02, spike: settled in place, no fallback.** `exposes: { services: [PasswordCredential.PasswordCredential], layer: PasswordCredential.PasswordCredential.layer }` compiles without `as const`. `const verify: PasswordCredentialShape["verify"] = (claimant, candidate) => …` infers generically (no `function` declaration needed). `Brand.nominal` over object intersections works for `Proof` and `Accepted`. `PasswordCredential.types.test.ts` holds the five properties: a test plugin `Steward` (`dependsOn: [Password]`, requires the module) composes with `Password` and is refused without it, a `Stowaway` that requires it without `dependsOn` is refused, `Proof`/`Accepted` cannot be forged and `linkFor`/`set`/`replace` refuse a raw `Redacted`, `verify` takes `users.findByEmail(...)` and `Effect.succeedSome({ id })`, and `makeTestLayer()` provides the module. Property 2 uses a test plugin, not `AdminAccounts` (that is ticket 12's `AuthComposition.test.ts` case). Hosts whose layer type is emitted must name the exposed service: both examples gained `export type PasswordServices = PasswordCredential.PasswordCredential` (TS2883 otherwise), as they do for Organization's.
+
+**Ticket 03, red tests.** The four ADR-EA-028 cases shipped green with ticket 04. Seed "replace an existing credential" was written and seen red for the stated reason (`the operator's second password was dropped: expected false to be true`); it is kept, uncommitted, as `.scratch/27-password-credential/ticket-03-red-seed-replace.patch` (in this worktree) for ticket 13 (apply with `git apply`; note it re-seeds with `force: true`). The admin policy cases (breached → `AdminWeakPassword ["appears in known breaches"]`; `Password.config({ minLength: 16 })` refuses 12 characters) cannot be written red today: `@awthaq/admin` has no `@awthaq/password` dependency to compose `Password.config` with, so they are red by construction and land with ticket 12. The breached seeded password case needs `PasswordCredential` in `SqlApp`, so it also lands with ticket 13.
+
+**Shipped (tickets 05–11).**
+- 05 `PasswordConfig.ts` (verbatim; re-exported from `Password.ts`).
+- 06 `PasswordCredential` with `verify`/`rehashIfStale`, exposed; `signIn` through it; V1–V7, F1–F5 (F5 with the clock-advancing hasher, no fallback), R1–R4 (R1/R2 keep the real argon2 parameter checks).
+- 07 `changePassword`/`reauthenticate` verify through it; the dummy, calibration and floor leave `Password.ts`; `PasswordNoCredential.test.ts` deleted.
+- 08 `accept`/`linkFor`; `checkPolicy`/`isBreached` moved verbatim as private `policyHints`; P1–P11 (the unavailable modes as one table, 10 cases) and W6; `PasswordPolicy.test.ts` deleted, FAMS-003 moved to `Password.test.ts`.
+- 09 `replace`, `has` and the shared `write`; `confirmReset`, `requestReset` through them; W3, W4/W7, W5, W8; "a well-formed reset token for no live row costs no password hash" in `PasswordRecovery.test.ts`.
+- 10 `changePassword` is one `SqlTransaction` unit (`SqlError` → `StoreUnavailable("Password.changePassword")`); S3 in the new `PasswordCredentialSql.test.ts` (seen red first: the old password no longer signed in).
+- 11 `set`; W1, W2 (W7 and W8 extended to `set`); S1, S2; `StoreContract.accounts` "insertIfAbsent that loses a race inside an enclosing transaction leaves it usable" (Ref, SQLite, WAL file, libSQL; Postgres in CI); `PasswordCredentialSql.test.ts` in `scripts/test-pg.sh`. Changeset C2 (`password-credential-module.md`) is complete for these tickets.
+
+**After the wave.** `Password.ts` 1,208 lines (§5.4 grep 0, `orDie` 1); `PasswordCredential.ts` 381. `findCredentialHash`/`updateCredentialHash` in library source: `PasswordCredential.ts` plus `AdminAccounts.ts`'s one update (ticket 12). Files testing `onUnavailable`: `PasswordCredential.test.ts`, `PasswordRecovery.test.ts`. `signInTimingFloor` appears in `PasswordCredential.test.ts`, `PasswordTenantConfig.test.ts` and `PasswordCredentialSql.test.ts` (the last only sets `"off"`). Password tests 146 → 174.
+
+**Deviations.**
+- `Proof.hash` is `Redacted<PhcHash>` (the stored value as read), not a bare `PhcHash`; `rehashIfStale` unwraps it for `needsRehash`.
+- `confirmReset`: §8.1's choice for batch-2's redeemer. `beforeClaim` answers `void`, so `accept` runs there and hands its `Accepted` to `use` through a `Deferred` (`Deferred.await` inside `use`; the redeemer always runs `beforeClaim` first). Chosen over widening core's `VerificationLink.redeemer` (an overloaded `beforeClaim: Effect<B>`/`use(link, b)` needs either a cast or a rewrite of the returned generic arrow; not worth a core change for one caller). Typed, no defect path.
+- `StoreContract`'s `AccountCase` now requires `SqlTransaction` (as `UserCase` does), so the `Ref` runner provides `SqlTransaction.layerNoop`; changeset line for `@awthaq/test`.
+- `Password.layer` keeps `PasswordHasher` in `ports` although `make` no longer reads it (the exposed layer does; it joins `RIn` through `exposes.layer`, §3.5).
+- `requestReset` asks `has` only after the `to`-address check, as before (an address-less user gets no mail either way).
+- `scripts/test-pg.sh` gained the suite, but `pnpm test:pg` was not run locally (no Postgres; see below).
+
+**Only Postgres CI proves:** S1 under READ COMMITTED (both `set`s see no account, one `insertIfAbsent` loses `ON CONFLICT DO NOTHING` and re-reads to an update); S2's and S3's rollback on a real Postgres transaction; the new `StoreContract.accounts` case (a refused insert does not abort the enclosing Postgres transaction, the property `set`'s retry relies on).
+
+**Open questions applied.** Q4 (changePassword one unit): in this plan, ticket 10. Q1, Q2, Q3, Q5, Q6, Q9 are for tickets 12–13; nothing in 05–11 depends on them. Q6's regression (KDF inside the unit) now also covers `changePassword`'s new unit (R3).
+
+**For tickets 12–18.** `AdminAccounts` reads the policy via `AdminGate` (`cleared.config.passwordPolicy`, `internal/AdminGate.ts:107, :146, :161`) and writes through `AccountStore` (not `Accounts`) inside its own `SqlTransaction`; ticket 12 deletes `passwordPolicy` from the gate's config. `PasswordCredential.set` takes only an `Accepted` from `credential.accept`, which fails `PasswordApi.WeakPassword`. The React BDD `useInvalidate` scenario fails on this base with or without these changes (re-run alone, three times).
