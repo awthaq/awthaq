@@ -6,6 +6,7 @@
 // valid, software-authenticator payloads (`packages/ports/test/webauthnFixtures.ts`):
 // a packed self-attestation carrying a real AAGUID and transports, then real
 // assertions with a moving — and a regressing — signature counter.
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
@@ -126,7 +127,10 @@ describe("Passkey over the real WebAuthn port", () => {
         ]);
         // TC-003: the real options carry the plugin's explicit timeout.
         assert.strictEqual(options.timeout, 270_000);
-      }).pipe(Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn, config))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn, config)),
+      ),
   );
 
   it.effect(
@@ -140,7 +144,10 @@ describe("Passkey over the real WebAuthn port", () => {
         assert.strictEqual(issued.session.userId, user.id);
         const stored = yield* credentials.findById(credentialId);
         assert.isTrue(Option.isSome(stored) && stored.value.counter === 7);
-      }).pipe(Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn, config))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn, config)),
+      ),
   );
 
   it.effect(
@@ -165,7 +172,10 @@ describe("Passkey over the real WebAuthn port", () => {
         // Durably audited too (6bd3f1d), not only published.
         const rows = yield* auditLog.list({ eventTag: "auth.passkey.counterAnomaly" });
         assert.strictEqual(rows.length, 1);
-      }).pipe(Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn, config))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn, config)),
+      ),
   );
 
   it.effect("CB-004: under 'reject' the same real regression fails PasskeyCounterAnomaly", () =>
@@ -175,6 +185,7 @@ describe("Passkey over the real WebAuthn port", () => {
       const failure = yield* assertWith("real-reject@example.com", 3).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyCounterAnomaly");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         buildLayer(WebAuthn.layerSimpleWebAuthn, { ...config, counterAnomalyPolicy: "reject" }),
       ),
@@ -215,7 +226,10 @@ describe("Passkey over the real WebAuthn port", () => {
           })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "PasskeyAttestationRejected");
-      }).pipe(Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn, config))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn, config)),
+      ),
   );
 
   it.effect("CB-002: a UP=0 ordinary registration is refused by the real library", () =>
@@ -251,6 +265,6 @@ describe("Passkey over the real WebAuthn port", () => {
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyVerificationFailed");
-    }).pipe(Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(WebAuthn.layerSimpleWebAuthn))),
   );
 });

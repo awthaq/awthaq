@@ -1,4 +1,5 @@
 // ADR-EA-028: a store outage during passkey sign-in is a typed `StoreUnavailable` (503), never a defect.
+import { TestAuth } from "@awthaq/test";
 import { Errors, Sessions } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -36,6 +37,7 @@ describe("ADR-EA-028: passkey sign-in during a store outage", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "StoreUnavailable");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         buildLayer(mockWebAuthn(), undefined, { coreOverride: sessionsDownWhen(down) }),
       ),
