@@ -7,6 +7,7 @@
 // so a rotation never needs a hard cut-over.
 
 import { Users } from "@awthaq/core";
+import { Defects } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -33,6 +34,7 @@ export interface ApiKeyClientRecord {
 }
 
 export interface ApiKeyClientRecordsShape {
+  /** A record whose client id already exists is a defect (ids are fresh UUIDv7s), on every adapter. */
   readonly insert: (
     record: ApiKeyClientRecord,
   ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
@@ -74,6 +76,15 @@ const newestFirst = (
     return byTime !== 0 ? byTime : a.clientId < b.clientId ? 1 : a.clientId > b.clientId ? -1 : 0;
   });
 
+type Clients = HashMap.HashMap<string, ApiKeyClientRecord>;
+
+/** The memory twin of SQL's primary-key violation: a caller-minted id is never reused. */
+const duplicateId = (clientId: string) =>
+  Defects.invariantViolation(
+    "ApiKeyClientRecords.duplicateId",
+    `awthaq: ApiKeyClientRecords already holds a client with id ${clientId}`,
+  );
+
 export const layerMemory = Layer.effect(
   ApiKeyClientRecords,
   Effect.gen(function* () {
@@ -86,7 +97,15 @@ export const layerMemory = Layer.effect(
         }),
       );
     return ApiKeyClientRecords.of({
-      insert: (record) => Ref.update(state, HashMap.set(record.clientId, record)),
+      insert: (record) =>
+        Effect.flatMap(
+          Ref.modify(state, (records): [boolean, Clients] =>
+            HashMap.has(records, record.clientId)
+              ? [false, records]
+              : [true, HashMap.set(records, record.clientId, record)],
+          ),
+          (stored) => (stored ? Effect.void : duplicateId(record.clientId)),
+        ),
       findById: (clientId) => Ref.get(state).pipe(Effect.map(HashMap.get(clientId))),
       listByOwner: (ownerId) =>
         Ref.get(state).pipe(
@@ -216,7 +235,11 @@ export const layerSql = Layer.effect(
           previousExpiresAt: Option.getOrNull(record.previousExpiresAt),
           createdAt: record.createdAt,
           revokedAt: Option.getOrNull(record.revokedAt),
-        }).pipe(unavailable("previousExpiresAt")),
+        }).pipe(
+          // A reused id is a bug in the caller, not an outage: a defect, like the memory layer's.
+          Effect.catchIf(StoreFailure.isUniqueViolation, (error) => Effect.die(error)),
+          unavailable("insert"),
+        ),
       findById: (clientId) =>
         findByIdQuery(clientId).pipe(Effect.map(Option.map(toRecord)), unavailable("findById")),
       listByOwner: (ownerId) =>

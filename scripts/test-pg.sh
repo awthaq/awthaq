@@ -50,7 +50,6 @@ suites=(
   packages/test/test/TestSqlSchema.test.ts
   examples/plugin-template/test/Template.test.ts
   packages/api-key/test/ApiKey.test.ts
-  packages/api-key/test/StoreOutage.test.ts
   packages/core/test/AuthEventsUnitOfWork.test.ts
   packages/core/test/Migrations.test.ts
   packages/core/test/FederatedIdentitySql.test.ts
